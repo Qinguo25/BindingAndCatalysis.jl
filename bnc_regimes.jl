@@ -79,56 +79,6 @@ find_valid_regime(Bnc::Bnc) = find_valid_regime(Bnc._valid_L_idx, Bnc.d, Bnc.n)
 
 #-----------------------------------------------fucntions with dominance regime-------------------------------------------------------
 
-#Pure helper functions for converting between matrix and index-value pairs.
-function _Mtx2idx_val(Mtx::Matrix{<:T}) where T
-    row_num, col_num  = size(Mtx)
-    idx = Vector{Int}(undef, row_num)
-    val = Vector{T}(undef, row_num)
-    for i in 1:row_num
-        for j in 1:col_num
-            if Mtx[i, j] != 0
-                idx[i] = j
-                val[i] = Mtx[i, j]
-                break 
-            end
-        end
-    end
-    return idx,val
-end
-function _idx_val2Mtx(idx::Vector{Int}, val::T=1, col_num::Union{Int,Nothing}=nothing) where T
-    n = length(idx)
-    col_num = isnothing(col_num) ? n : col_num # if col_num is not provided, use the maximum idx value
-    Mtx = zeros(T, n, col_num)
-    for i in 1:n
-        if idx[i] != 0
-            Mtx[i, idx[i]] = val
-        end
-    end
-    return Mtx
-    
-end
-function _idx_val2Mtx(idx::Vector{Int}, val::Vector{<:T}, col_num::Union{Int,Nothing}=nothing) where T
-    # Convert idx and val to a matrix of size (d, n)
-    n = length(idx)
-    col_num = isnothing(col_num) ? n : col_num
-    @assert length(val) == n "val must have the same length as idx"
-    Mtx = zeros(T, n, col_num)
-    for i in 1:n
-        if idx[i] != 0
-            Mtx[i, idx[i]] = val[i]
-        end
-    end
-    return Mtx
-end
-
-function _check_valid_idx(idx::Vector{Int},Mtx::Matrix{<:Any})
-    # Check if the idx is valid for the given Mtx
-    @assert length(idx) == size(Mtx, 1) "idx must have the same length as the number of rows in Mtx"
-    for i in 1:length(idx)
-        @assert Mtx[i, idx[i]] != 0 "Mtx must have non-zero entries at the idx positions"
-    end
-    return true
-end
 #----end of helper functions.
 
 

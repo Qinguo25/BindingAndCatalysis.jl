@@ -123,7 +123,7 @@ end
 function independent_row_idx(N::AbstractMatrix{T}) where T
     # find linear independent rows of a matrix N and return the index
     Nt_lu = lu(N',check=false)
-    issuccess(Nt_lu) && return N
+    issuccess(Nt_lu) && return collect(1:size(N, 1))
     tol = 1e-8
     pivot_indices = findall(abs.(diag(Nt_lu.U)) .> tol)
     return pivot_indices
@@ -131,14 +131,76 @@ end
 
 function _ode_solution_wrapper(
     solution::ODESolution
-)::Tuple{Vector{Float64}, Matrix{Float64}}
+    )::Tuple{Vector{Float64}, Matrix{Float64}}
     """
     A wrapper function to convert the ODESolution to a t vector and u matrix
     """
     return solution.t, stack(solution.u)'
 end
 
+#Pure helper functions for converting between matrix and index-value pairs.
+function _Mtx2idx_val(Mtx::Matrix{<:T}) where T
+    row_num, col_num  = size(Mtx)
+    idx = Vector{Int}(undef, row_num)
+    val = Vector{T}(undef, row_num)
+    for i in 1:row_num
+        for j in 1:col_num
+            if Mtx[i, j] != 0
+                idx[i] = j
+                val[i] = Mtx[i, j]
+                break 
+            end
+        end
+    end
+    return idx,val
+end
+function _idx_val2Mtx(idx::Vector{Int}, val::T=1, col_num::Union{Int,Nothing}=nothing) where T
+    n = length(idx)
+    col_num = isnothing(col_num) ? n : col_num # if col_num is not provided, use the maximum idx value
+    Mtx = zeros(T, n, col_num)
+    for i in 1:n
+        if idx[i] != 0
+            Mtx[i, idx[i]] = val
+        end
+    end
+    return Mtx
+    
+end
+function _idx_val2Mtx(idx::Vector{Int}, val::Vector{<:T}, col_num::Union{Int,Nothing}=nothing) where T
+    # Convert idx and val to a matrix of size (d, n)
+    n = length(idx)
+    col_num = isnothing(col_num) ? n : col_num
+    @assert length(val) == n "val must have the same length as idx"
+    Mtx = zeros(T, n, col_num)
+    for i in 1:n
+        if idx[i] != 0
+            Mtx[i, idx[i]] = val[i]
+        end
+    end
+    return Mtx
+end
 
+function _check_valid_idx(idx::Vector{Int},Mtx::Matrix{<:Any})
+    # Check if the idx is valid for the given Mtx
+    @assert length(idx) == size(Mtx, 1) "idx must have the same length as the number of rows in Mtx"
+    for i in 1:length(idx)
+        @assert Mtx[i, idx[i]] != 0 "Mtx must have non-zero entries at the idx positions"
+    end
+    return true
+end
+
+function _update_Jt_lu!(Jt_lu,Jt,Bnc::Bnc, x::AbstractArray{<:Real}, q::AbstractArray{<:Real})
+    # helper functions to speed up the calculation of lu decompostion of logder_qK_x.
+    # One shall initialize Jt_lu and Jt before calling this function.
+    # eg:
+    # Jt = copy(Bnc._LNt_sparse)
+    # Jt_lu = copy(Bnc._LNt_lu)
+    Jt_left = @view(Jt.nzval[1:Bnc._val_num])
+    x_view = @view(x[Bnc._I])
+    q_view = @view(q[Bnc._J])
+    @. Jt_left = x_view * Bnc._Lt_sparse.nzval / q_view
+    lu!(Jt_lu, Jt)
+end
 
 # function adjoint_matrix(A)
 #     # Calculate the adjoint of a square matrix A ,for calculate the ray if non-feasible regime

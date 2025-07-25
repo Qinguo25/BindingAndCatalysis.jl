@@ -9,11 +9,6 @@ using StatsBase
 using SparseArrays
 # using Interpolations
 
-include("bnc_numeric.jl")
-include("bnc_helperfunctions.jl")
-include("bnc_regimes.jl")
-include("bnc_symbolics.jl")
-
 # ---------------------Define the struct of binding and catalysis networks----------------------------------
 
 mutable struct Bnc
@@ -37,6 +32,7 @@ mutable struct Bnc
     aT::Union{Matrix{Int},Nothing} # catalysis index and coefficients, rate will be vⱼ=kⱼ∏xᵢ^aT_{j,i}, denote what species catalysis the reaction.
 
     k::Union{Vector{<:Real},Nothing} # rate constants for catalysis reactions
+    cat_x_idx::Union{Vector{Int},Nothing} # index of the species that catalysis the reaction, if not provided, will be inferred from S
 
     r_cat::Union{Int,Nothing} # number of catalysis reactions/species
 
@@ -62,11 +58,13 @@ mutable struct Bnc
     _IN::Vector{Int} # row indices of non-zero elements in _Nt_sparse
     _JN::Vector{Int} # column indices of non-zero elements in _Nt_sparse
     _VN::Vector{Float64} # values of non-zero elements in _Nt_sparse
-    
     _valid_L_idx::Vector{Vector{Int}} #record the non-zero position for L
 
+    _S_sparse::Union{SparseMatrixCSC{Float64,Int},Nothing} # sparse version of S, used for fast calculation
+    _aT_sparse::Union{SparseMatrixCSC{Float64,Int},Nothing}  # sparse version of aT, used for fast calculation
+
     # Inner constructor 
-    function Bnc(N, L, x_sym, q_sym, K_sym, S, aT, k)
+    function Bnc(N, L, x_sym, q_sym, K_sym, S, aT, k, cat_x_idx)
         # get desired values
         r, n = size(N)
         d, n_L = size(L)
@@ -105,8 +103,7 @@ mutable struct Bnc
             @assert isnothing(r_cat) || length(k) == r_cat "k must have the same length as r_cat"
         end
 
-
-        #helper parameters 
+        #helper parameters
         _anchor_log_x = zeros(n)
         _anchor_log_qK = vcat(vec(log10.(sum(L; dims=2))), zeros(r))
         _is_change_of_K_involved = isnothing(S) || !all(@view(S[r+1:end, :]) .== 0)
@@ -123,11 +120,13 @@ mutable struct Bnc
         _LNt_sparse = sparse_hcat(_Lt_sparse, _Nt_sparse) # sparse version of [L;N]^t
         _LNt_lu = lu(_LNt_sparse) # LU decomposition of _LNt_sparse, used for fast calculation
         # Create the new object with all fields specified
+        _S_sparse = isnothing(S) ? nothing : sparse(S) # sparse version of S, used for fast calculation
+        _aT_sparse = isnothing(aT) ? nothing : sparse(aT) #
         new(N, L, 
             r, n, d,
             x_sym, q_sym, K_sym,
             direction,
-            S, aT, k, r_cat,
+            S, aT, k,cat_x_idx, r_cat,
             _anchor_log_x,_anchor_log_qK,
             _is_change_of_K_involved,
             _Lt_sparse,
@@ -135,7 +134,8 @@ mutable struct Bnc
             _LNt_lu,
             _I, _J, _V, _val_num,
             _Nt_sparse, _IN, _JN, _VN,
-            _valid_L_idx
+            _valid_L_idx,
+            _S_sparse, _aT_sparse
         )
     end
 end
@@ -149,7 +149,8 @@ function Bnc(;
     K_sym::Union{Vector{<:Any},Nothing}=nothing,
     S::Union{Matrix{Int},Nothing}=nothing,
     aT::Union{Matrix{Int},Nothing}=nothing,
-    k::Union{Vector{<:Real},Nothing}=nothing
+    k::Union{Vector{<:Real},Nothing}=nothing,
+    cat_x_idx::Union{Vector{Int},Nothing}=nothing,
 )::Bnc
     isnothing(N) ? (N = N_from_L(L)) : begin # if N is not provided, derive it from L
         r = size(N,1)
@@ -173,9 +174,34 @@ function Bnc(;
     q_sym = isnothing(q_sym) ? Symbolics.variables(:q, 1:d) : name_converter(q_sym) # convert q_sym to a vector of symbols
     K_sym = isnothing(K_sym) ? Symbolics.variables(:K, 1:r) : name_converter(K_sym) # convert K_sym to a vector of symbols
 
-    #fufill S matrix if S doesn't invovling K 
-    if ~isnothing(S)
-        n = size(N, 2)
+    S, aT, k, cat_x_idx = _catalysis_handler(n,S, aT, k, cat_x_idx)
+
+    # @show N,L,x_sym,q_sym,K_sym,S,aT,k
+    Bnc(N, L, x_sym, q_sym, K_sym, S, aT, k, cat_x_idx)
+end
+
+function _catalysis_handler(
+    n::Int,
+    S::Union{Matrix{Int},Nothing}=nothing,
+    aT::Union{Matrix{Int},Nothing}=nothing,
+    k::Union{Vector{<:Real},Nothing}=nothing,
+    cat_x_idx::Union{Vector{Int},Nothing}=nothing)
+    #fufill S matrix if S doesn't invovling K
+    
+    if !isnothing(aT) && !isnothing(cat_x_idx) #both aT and cat_x_idx are provided
+        tmp,_ = _Mtx2idx_val(aT)
+        @assert tmp == cat_x_idx "cat_x_idx must be the same as the index of aT"
+    end
+    if isnothing(aT) && !isnothing(cat_x_idx)# if aT is not provided, derive it from cat_x_idx
+        println("catalysis coefficients is set to 1 for all catalysis species as aT is not provided.")
+        aT = _idx_val2Mtx(cat_x_idx, 1, n) 
+    end
+    if isnothing(cat_x_idx) && !isnothing(aT)
+        cat_x_idx, _ = _Mtx2idx_val(aT) # if cat_x_idx is not provided, derive it from aT
+    end
+
+    #fufill S to fulllength to contain K.
+    if !isnothing(S)
         (nrow_S, ncol_S) = size(S)
         if nrow_S < n
             # If S is not provided or has fewer columns than n, fill it with zeros, make sure S has n rows.
@@ -183,17 +209,23 @@ function Bnc(;
         end
     end
 
-    # @show N,L,x_sym,q_sym,K_sym,S,aT,k
-    Bnc(N, L, x_sym, q_sym, K_sym, S, aT, k)
+    if isnothing(k) && !isnothing(cat_x_idx)
+        # If k is not provided, set it to a vector of ones with length equal to the number of catalysis reactions
+        k = ones(length(cat_x_idx))
+        @warn("k is not provided, initialized to ones")
+    end
+    return S, aT, k, cat_x_idx
 end
-
 
 
 # fill_name(appendix::String, count::Int=1)::Vector{Symbol} = [Symbol(appendix * string(i)) for i in 1:count]
 # fill_name(appendix::String, original_name::Union{Vector{Symbol}}=nothing) = [Symbol(appendix * string(name)) for name in original_name]
 # fill_name(appendix::Symbol, args...) = fill_name(string(appendix), args...)
 
-
+include("bnc_helperfunctions.jl")
+include("bnc_numeric.jl")
+include("bnc_regimes.jl")
+include("bnc_symbolics.jl")
 
 
 

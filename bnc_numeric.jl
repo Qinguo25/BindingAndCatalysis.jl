@@ -45,36 +45,58 @@ end
 
 # ----------------Functions for mapping between qK space and x space----------------------------------
 
-function x2qK(Bnc::Bnc, x::AbstractArray{<:Real,1};
+
+
+
+function x2qK(Bnc::Bnc, x::AbstractArray{<:Real};
     input_logspace::Bool=false,
     output_logspace::Bool=false,
-)::Vector{<:Real}
-    if input_logspace
-        if output_logspace
-            K = Bnc._Nt_sparse' * x
-            q = log10.(Bnc._Lt_sparse' * exp10.(x))
+    only_q::Bool=false,
+)::AbstractArray{<:Real}
+    if !only_q
+        if input_logspace
+            if output_logspace
+                K = Bnc._Nt_sparse' * x
+                q = log10.(Bnc._Lt_sparse' * exp10.(x))
+            else
+                K = exp10.(Bnc._Nt_sparse' * x)
+                q = Bnc._Lt_sparse' * exp10.(x)
+            end
         else
-            K = exp10.(Bnc._Nt_sparse' * x)
-            q = Bnc._Lt_sparse' * exp10.(x)
+            if output_logspace
+                K = Bnc._Nt_sparse' * log10.(x)
+                q = log10.(Bnc._Lt_sparse' * x)
+            else
+                K = exp10.(Bnc._Nt_sparse' * log10.(x))
+                q = Bnc._Lt_sparse' * x
+            end
         end
+        return vcat(q, K)
     else
-        if output_logspace
-            K = Bnc._Nt_sparse' * log10.(x)
-            q = log10.(Bnc._Lt_sparse' * x)
+        if input_logspace
+            if output_logspace
+                q = log10.(Bnc._Lt_sparse' * exp10.(x))
+            else
+                q = Bnc._Lt_sparse' * exp10.(x)
+            end
         else
-            K = exp10.(Bnc._Nt_sparse' * log10.(x))
-            q = Bnc._Lt_sparse' * x
+            if output_logspace
+                q = log10.(Bnc._Lt_sparse' * x)
+            else
+                q = Bnc._Lt_sparse' * x
+            end
         end
+        return q
     end
-    return vcat(q, K)
 end
+
 
 function qK2x(Bnc::Bnc, qK::AbstractArray{<:Real,1};
     input_logspace::Bool=false,
     output_logspace::Bool=false,
     startlogx::Union{Vector{<:Real},Nothing}=nothing,
     startlogqK::Union{Vector{<:Real},Nothing}=nothing,
-    reltol=1e-8, abstol=1e-9)::Vector{<:Real}
+    kwargs...)::Vector{<:Real}
 
     #---Solve the homotopy ODE to find x from qK.---
 
@@ -92,10 +114,9 @@ function qK2x(Bnc::Bnc, qK::AbstractArray{<:Real,1};
         endlogqK;
         startlogx=startlogx,
         alg=Tsit5(),
-        reltol=reltol,
-        abstol=abstol,
         save_everystep=false,
         save_start=false,
+        kwargs...
     )
     x = output_logspace ? sol.u[end] : exp10.(sol.u[end])
     return x
@@ -128,51 +149,48 @@ function x_traj_with_qK_change(
     end_point::Vector{<:Real};
     input_logspace::Bool=false,
     output_logspace::Bool=false,
-    alg=nothing, # Default to nothing, will use Tsit5() if not provided
-    reltol=1e-8,
-    abstol=1e-9,
+    # alg=nothing, # Default to nothing, will use Tsit5() if not provided
+    # reltol=1e-8,
+    # abstol=1e-9,
     kwargs...
 )::Tuple{Vector{Float64}, Matrix{Float64}}
     startlogqK = input_logspace ? start_point : log10.(start_point)
     endlogqK = input_logspace ? end_point : log10.(end_point)
     solution = _logx_traj_with_logqK_change(Bnc, startlogqK, endlogqK;
-        alg=alg,
-        reltol=reltol,
-        abstol=abstol,
+        # alg=alg,
+        # reltol=reltol,
+        # abstol=abstol,
         dense=false,
         kwargs...
     )
-    
     if !output_logspace
         foreach(u -> u .= exp10.(u), solution.u)
     end
-
     return _ode_solution_wrapper(solution)
 end
 
-function x_traj_with_q_chage(
+
+function x_traj_with_q_change(
     Bnc::Bnc,
     start_q::Vector{<:Real},
     end_q::Vector{<:Real};
     K::Union{Vector{<:Real},Nothing}=nothing,
     logK::Union{Vector{<:Real},Nothing}=nothing,
     input_logspace::Bool=false,
-    output_logspace::Bool=false,
-    alg=nothing, # Default to nothing, will use Tsit5() if not provided
-    reltol=1e-8,
-    abstol=1e-9,
+    # output_logspace::Bool=false,
+    # alg=nothing, # Default to nothing, will use Tsit5() if not provided
+    # reltol=1e-8,
+    # abstol=1e-9,
     kwargs...
 )::Tuple{Vector{Float64}, Matrix{Float64}}
     # Prepare the start and end points
     K_prepared = input_logspace ? (isnothing(logK) ? log10.(K) : logK) : (isnothing(K) ? K : exp10.(K))
-    
-    x_traj_with_qK_change(Bnc, [start_q;K_prepared], [end_q;K_prepared]; input_logspace=input_logspace, output_logspace=output_logspace,
-        alg=alg, reltol=reltol, abstol=abstol, kwargs...)
+
+    x_traj_with_qK_change(Bnc, [start_q;K_prepared], [end_q;K_prepared]; input_logspace=input_logspace,kwargs...)
 end
 
-
 function _logx_traj_with_logqK_change(Bnc::Bnc,
-    startlogqK::Vector{<:Real},
+    startlogqK::Union{Vector{<:Real},Nothing},
     endlogqK::Vector{<:Real};
     # Optional parameters for the initial log(x) values
     startlogx::Union{Vector{<:Real},Nothing}=nothing,
@@ -236,6 +254,45 @@ end
 
 
 #----------------Functions for modeling when envolving catalysis reactions----------------------
+
+
+function x_traj_cat(Bnc::Bnc, qK0_or_q0::Vector{<:Real}, tspan::Tuple{Real,Real};
+    K::Union{Vector{<:Real},Nothing}=nothing,
+    logK::Union{Vector{<:Real},Nothing}=nothing,
+    input_logspace::Bool=false,
+    output_logspace::Bool=false,
+    kwargs...
+    )
+    # prepare the qK0 and calculate start logx0
+    if isnothing(K) && isnothing(logK)
+        @assert length(qK0_or_q0) == Bnc.n "qK0 must have length n, or you shall pass K as keyword argument"
+        qK0 = qK0_or_q0
+    else
+        @assert length(qK0_or_q0)== Bnc.d "q0 must have length d"
+        K_prepared = input_logspace ? (isnothing(logK) ? log10.(K) : logK) : (isnothing(K) ? K : exp10.(K))
+        qK0 = vcat(qK0_or_q0, K_prepared)
+    end
+    startlogx = qK2x(Bnc, qK0; input_logspace=input_logspace, output_logspace=true)
+    
+    #---Solve the ODE to find the time curve of log(x) as catalysis happens
+    sol = catalysis_logx(Bnc, startlogx, tspan;
+        dense = false, #manually handle later
+        kwargs...
+    )
+    if !output_logspace
+        foreach(u -> u .= exp10.(u), sol.u)
+    end
+    
+    return _ode_solution_wrapper(sol)
+end
+
+function qK_traj_cat(Bnc::Bnc, args...; only_q::Bool=false, output_logspace::Bool=false, kwargs...)::Tuple{Vector{Float64}, Matrix{Float64}}
+    t,u = x_traj_cat(Bnc, args...; output_logspace=true, kwargs...)
+    u = x2qK(Bnc, u',input_logspace=true, output_logspace=output_logspace, only_q=only_q)'
+    return (t,u)
+end
+
+
 struct TimecurveParam{V<:Vector{Float64},
     SV1<:SubArray,SV2<:SubArray,SV3<:SubArray,SV4<:SubArray}
 
@@ -253,10 +310,10 @@ struct TimecurveParam{V<:Vector{Float64},
 end
 
 function catalysis_logx(Bnc::Bnc, logx0::Vector{<:Real}, tspan::Tuple{Real,Real};
-    k::Union{Vector{<:Real},Nothing}=nothing,
-    S::Union{Matrix{Int},Nothing}=nothing,
-    aT::Union{Matrix{Int},Nothing}=nothing,
-    override::Bool=false,
+    # k::Union{Vector{<:Real},Nothing}=nothing,
+    # S::Union{Matrix{Int},Nothing}=nothing,
+    # aT::Union{Matrix{Int},Nothing}=nothing,
+    # override::Bool=false,
     alg=nothing, # Default to nothing, will use Tsit5() if not provided
     reltol=1e-8,
     abstol=1e-9,
@@ -265,24 +322,29 @@ function catalysis_logx(Bnc::Bnc, logx0::Vector{<:Real}, tspan::Tuple{Real,Real}
 
     # ---Solve the ODE to find the time curve of log(x) with respect to qK change.---
 
-    #--Prepare parameters---
-    if override
-        if ~isnothing(k)
-            Bnc.k = k
-        end
-        if ~isnothing(S)
-            Bnc.S = S
-        end
-        if ~isnothing(aT)
-            Bnc.aT = aT
-        end
-    end
-    k = isnothing(k) ? Bnc.k : k
-    S = isnothing(S) ? Bnc.S : S
-    aT = isnothing(aT) ? Bnc.aT : aT
-    
+    # #--Prepare parameters---
+    # if override
+    #     if ~isnothing(k)
+    #         Bnc.k = k
+    #     end
+    #     if ~isnothing(S)
+    #         Bnc.S = S
+    #     end
+    #     if ~isnothing(aT)
+    #         Bnc.aT = aT
+    #     end
+    # end
+    # k = isnothing(k) ? Bnc.k : k
+    # S = isnothing(S) ? Bnc.S : S
+    # aT = isnothing(aT) ? Bnc.aT : aT
     #initialize J_buffer
     # J = Matrix{Float64}(undef, Bnc.n, Bnc.n)
+    # k = Bnc.k
+    if isnothing(Bnc.S)||isnothing(Bnc.aT)||isnothing(Bnc.k)
+        @error("S or aT or k is not defined, cannot perform catalysis logx calculation")
+    end
+
+    k = Bnc.k
     x = Vector{Float64}(undef, Bnc.n)
     K = Vector{Float64}(undef, Bnc.r)
     v = Vector{Float64}(undef, length(k)) # catalysis flux vector
@@ -325,10 +387,9 @@ function catalysis_logx(Bnc::Bnc, logx0::Vector{<:Real}, tspan::Tuple{Real,Real}
             lu!(Jt_lu, Jt) # recalculate the LU decomposition of Jt
 
             # dlogx .= J \ (S * (k .* exp10.(aT * logx)))
-            mul!(v, aT, logx)
+            mul!(v, Bnc._aT_sparse, logx)
             @. v = k * exp10(v) # calculate the catalysis rate vector
-            mul!(Sv, S, v) # reuse x as a temporary buffer, but need change if x is used in other places, like to act call back for ODESolution
-
+            mul!(Sv, Bnc._S_sparse, v) # reuse x as a temporary buffer, but need change if x is used in other places, like to act call back for ODESolution
             ldiv!(dlogx, Jt_lu', Sv) # Use the LU decomposition for fast calculation
         end
     else
@@ -346,9 +407,9 @@ function catalysis_logx(Bnc::Bnc, logx0::Vector{<:Real}, tspan::Tuple{Real,Real}
             @. Jt_left = x_view * Bnc._Lt_sparse.nzval 
             lu!(Jt_lu, Jt) # recalculate the LU decomposition of Jt
             
-            mul!(v, aT, logx)
+            mul!(v, Bnc._aT_sparse, logx)
             @. v = k * exp10(v) # calculate the catalysis rate vector
-            mul!(Sv, S, v) # reuse x as a temporary buffer, but need change if x is used in other places, like to act call back for ODESolution
+            mul!(Sv, Bnc._S_sparse, v) # reuse x as a temporary buffer, but need change if x is used in other places, like to act call back for ODESolution
 
             ldiv!(dlogx, Jt_lu', Sv)
         end
@@ -358,6 +419,56 @@ function catalysis_logx(Bnc::Bnc, logx0::Vector{<:Real}, tspan::Tuple{Real,Real}
     sol = solve(prob, alg; reltol=reltol, abstol=abstol, kwargs...)
     return sol
 end
+
+
+# ---------------------------------------------------------------Get regime data from resulting matrix---------------------------------------
+
+function get_reaction_order(Bnc::Bnc, x_mat::Matrix{<:Real}, q_mat::Union{Matrix{<:Real},Nothing}=nothing;
+    x_idx::Union{Vector{Int},Nothing}=nothing,
+    qK_idx::Union{Vector{Int},Nothing}=nothing,
+    only_q::Bool=false,
+)   
+    q_mat = isnothing(q_mat) ? x2qK(Bnc, x_mat'; input_logspace=false, output_logspace=false, only_q=true)' : q_mat
+    x_idx = isnothing(x_idx) ? (1:Bnc.n) : x_idx
+    qK_idx = isnothing(qK_idx) ? (1:Bnc.n) : qK_idx
+    if only_q
+        qK_idx = qK_idx[findall(i->i<=Bnc.d, qK_idx)] # only keep the indices for q
+    end
+
+    flag = length(qK_idx) <= length(x_idx)
+
+    A = sparse(_idx_val2Mtx(collect(x_idx),1,Bnc.n)) # x*n
+    B = sparse(_idx_val2Mtx(collect(qK_idx),1,Bnc.n)) # q * n
+
+    regimes = Array{Float64,3}(undef,size(x_mat, 1),length(x_idx), length(qK_idx)) # initialize the regimes array to storage. t have to be the last value to make storage continuous
+    tmp_regime = flag ? Matrix{Float64}(undef, Bnc.n, length(qK_idx)) : Matrix{Float64}(undef, Bnc.n, length(x_idx))
+    # temporary matrix to store the result of regime
+    # Get the regimes from the resulting matrix,where a regime is calculated for each row.
+    
+    
+    
+    Jt = copy(Bnc._LNt_sparse)
+    Jt_lu = copy(Bnc._LNt_lu)
+    if flag # qK_idx is shorter
+        for (i, (x, q)) in enumerate(zip(eachrow(x_mat), eachrow(q_mat)))
+            _update_Jt_lu!(Jt_lu, Jt, Bnc, x, q)
+            ldiv!(tmp_regime, Jt_lu', B')
+            regimes[i,:,:] .= A * tmp_regime
+        end
+    else
+        for (i, (x, q)) in enumerate(zip(eachrow(x_mat), eachrow(q_mat)))
+            _update_Jt_lu!(Jt_lu, Jt, Bnc, x, q)
+            ldiv!(tmp_regime, Jt_lu, A')
+            regimes[i,:,:] .= (B * tmp_regime)'
+        end
+    end
+    return regimes
+end
+
+
+
+
+
 
 
 

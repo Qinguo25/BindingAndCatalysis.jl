@@ -26,20 +26,20 @@ end
 
 
 
-show_x_space_conditions_for_regime(Bnc::Bnc; regime::Regime) = show_x_space_conditions_for_regime(Bnc; regime=regime.regime)
-function show_x_space_conditions_for_regime(Bnc::Bnc; regime::Vector{Int})
+show_x_space_conditions(Bnc::Bnc; regime::Regime) = show_x_space_conditions(Bnc; regime=regime.regime)
+function show_x_space_conditions(Bnc::Bnc; regime::Vector{Int})
     # Show the conditions for the x space for the given regime.
     return x_ineq_mtx(Bnc; regime=regime) * log10.(Bnc.x_sym) .< 0
 end
 
-function show_qK_space_conditions_for_regime(Bnc::Bnc; regime::Regime)
+function show_qK_space_conditions(Bnc::Bnc; regime::Regime)
     regime.singularity != 0 ? @error("Regime is singular, cannot show qK space conditions") : nothing
     A = x_ineq_mtx(Bnc; regime=regime)
     Mtd_N = regime.logder_qK_x
     return simplify.(A * (Mtd_N \ log10.([Bnc.q_sym ./ a; Bnc.K_sym])) .< 0)
 end
 
-function show_qK_space_conditions_for_regime(Bnc::Bnc; regime::Vector{Int})
+function show_qK_space_conditions(Bnc::Bnc; regime::Vector{Int})
     A = x_ineq_mtx(Bnc; regime=regime)
     Mtd, a = Mtd_a_from_regime(Bnc, regime; check=true)
     Mtd_N = [Mtd; Bnc.N]
