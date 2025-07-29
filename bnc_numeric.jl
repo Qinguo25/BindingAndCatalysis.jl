@@ -92,6 +92,8 @@ end
 
 
 function qK2x(Bnc::Bnc, qK::AbstractArray{<:Real,1};
+    K::Union{Vector{<:Real},Nothing}=nothing,
+    logK::Union{Vector{<:Real},Nothing}=nothing,
     input_logspace::Bool=false,
     output_logspace::Bool=false,
     startlogx::Union{Vector{<:Real},Nothing}=nothing,
@@ -100,6 +102,7 @@ function qK2x(Bnc::Bnc, qK::AbstractArray{<:Real,1};
 
     #---Solve the homotopy ODE to find x from qK.---
 
+
     # Define the start point 
     if isnothing(startlogqK) || isnothing(startlogx)
         # If no starting point is provided, use the default
@@ -107,7 +110,19 @@ function qK2x(Bnc::Bnc, qK::AbstractArray{<:Real,1};
         startlogqK = Bnc._anchor_log_qK
     end
 
-    endlogqK = input_logspace ? qK : log10.(qK) # Convert qK to log space if not already
+    # Define the end point
+    processed_logqK = input_logspace ? qK : log10.(qK)
+    local log_K_to_append = nothing
+    if !isnothing(logK)
+        if !isnothing(K)
+            @warn("Both K and logK are provided; using logK.")
+        end
+        log_K_to_append = logK
+    elseif !isnothing(K)
+        log_K_to_append = log.(K)
+    end
+    endlogqK = isnothing(log_K_to_append) ? processed_logqK : vcat(processed_logqK, log_K_to_append)
+
 
     sol = _logx_traj_with_logqK_change(Bnc,
         startlogqK,
@@ -118,8 +133,14 @@ function qK2x(Bnc::Bnc, qK::AbstractArray{<:Real,1};
         save_start=false,
         kwargs...
     )
+    
     x = output_logspace ? sol.u[end] : exp10.(sol.u[end])
     return x
+end
+
+function qK2x(Bnc::Bnc, qK::AbstractArray{<:Real,2};kwargs...)::AbstractArray{<:Real}
+    f = x -> qK2x(Bnc, x; kwargs...)
+    return matrix_iter(f, qK;byrow=false,multithread=false)
 end
 
 
@@ -232,7 +253,7 @@ function _logx_traj_with_logqK_change(Bnc::Bnc,
     )
     
     # Define the ODE system for the homotopy process
-    function homotopy_process!(dlogx, logx, p, t)
+    homotopy_process! = function (dlogx, logx, p, t)
         @unpack ΔlogqK, x, q, Jt, Jt_lu,x_view, q_view, startlogq, Δlogq, Jt_left = p
         #update q & x
         @. q = exp10(startlogq + t * Δlogq)
@@ -414,6 +435,7 @@ function catalysis_logx(Bnc::Bnc, logx0::Vector{<:Real}, tspan::Tuple{Real,Real}
             ldiv!(dlogx, Jt_lu', Sv)
         end
     end
+
     # Create the ODE problem
     prob = ODEProblem(Catalysis_process!, logx0, tspan, params)
     sol = solve(prob, alg; reltol=reltol, abstol=abstol, kwargs...)
@@ -427,7 +449,12 @@ function get_reaction_order(Bnc::Bnc, x_mat::Matrix{<:Real}, q_mat::Union{Matrix
     x_idx::Union{Vector{Int},Nothing}=nothing,
     qK_idx::Union{Vector{Int},Nothing}=nothing,
     only_q::Bool=false,
-)   
+)::Array{Float64,3}
+    # Get the reaction order from the resulting matrix, where a regime is calculated for each row
+    # x_mat: Matrix of x values, each row is a different time point
+    # q_mat: Matrix of qK values, each row is a different time point
+    # x_idx: Indices of x to be calculated, default is all indices
+    # qK_idx: Indices of qK to be calculated, default is all indices
     q_mat = isnothing(q_mat) ? x2qK(Bnc, x_mat'; input_logspace=false, output_logspace=false, only_q=true)' : q_mat
     x_idx = isnothing(x_idx) ? (1:Bnc.n) : x_idx
     qK_idx = isnothing(qK_idx) ? (1:Bnc.n) : qK_idx
@@ -445,19 +472,19 @@ function get_reaction_order(Bnc::Bnc, x_mat::Matrix{<:Real}, q_mat::Union{Matrix
     # temporary matrix to store the result of regime
     # Get the regimes from the resulting matrix,where a regime is calculated for each row.
     
-    
-    
     Jt = copy(Bnc._LNt_sparse)
     Jt_lu = copy(Bnc._LNt_lu)
     if flag # qK_idx is shorter
         for (i, (x, q)) in enumerate(zip(eachrow(x_mat), eachrow(q_mat)))
-            _update_Jt_lu!(Jt_lu, Jt, Bnc, x, q)
+            _update_Jt!(Jt, Bnc, x, q)
+            lu!(Jt_lu, Jt) # recalculate the LU decomposition of Jt
             ldiv!(tmp_regime, Jt_lu', B')
             regimes[i,:,:] .= A * tmp_regime
         end
     else
         for (i, (x, q)) in enumerate(zip(eachrow(x_mat), eachrow(q_mat)))
-            _update_Jt_lu!(Jt_lu, Jt, Bnc, x, q)
+            _update_Jt!(Jt, Bnc, x, q)
+            lu!(Jt_lu, Jt) # recalculate the LU decomposition of Jt
             ldiv!(tmp_regime, Jt_lu, A')
             regimes[i,:,:] .= (B * tmp_regime)'
         end
@@ -465,6 +492,18 @@ function get_reaction_order(Bnc::Bnc, x_mat::Matrix{<:Real}, q_mat::Union{Matrix
     return regimes
 end
 
+
+function get_regime(Bnc::Bnc, x_mat::AbstractArray{<:Real}, q_mat::Union{AbstractArray{<:Real},Nothing}=nothing)
+    n_rows = size(x_mat, 1)
+    Jt = copy(Bnc._LNt_sparse)
+    regimes = [Vector{Int}(undef, Bnc.d) for _ in 1:n_rows]
+    q_mat = isnothing(q_mat) ? x2qK(Bnc, x_mat'; input_logspace=false, output_logspace=false, only_q=true)' : q_mat
+    for (i, (x, q)) in enumerate(zip(eachrow(x_mat), eachrow(q_mat)))
+        _update_Jt!(Jt, Bnc, x, q)
+        regimes[i] .= find_max_indices_per_column(Jt,Bnc.d)
+    end
+    return regimes
+end
 
 
 

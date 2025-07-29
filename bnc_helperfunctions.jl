@@ -56,6 +56,17 @@ function _adj_singular_matrix(M::Matrix{<:Real})::Tuple{Matrix{<:Real},Int}
     end
 end
 
+function randomize(size::Tuple{Int,Int}, log_lower=-6, log_upper=6; log_space::Bool=true)::Matrix{<:Real}
+    """
+    Generate a random matrix of size (m, n) with values between 10^log_lower and 10^log_upper, in log space
+    """
+    m, n = size
+    if log_space
+        return exp10.(rand(m, n) .* (log_upper - log_lower) .+ log_lower)
+    else
+        return rand(m, n) .* (exp10(log_upper) - exp10(log_lower)) .+ exp10(log_lower)
+    end
+end
 function randomize(n::Int, log_lower=-6, log_upper=6; log_space::Bool=true)::Vector{<:Real}
     """
     Generate a random vector of size n with values between 10^log_lower and 10^log_upper, in log space
@@ -189,7 +200,7 @@ function _check_valid_idx(idx::Vector{Int},Mtx::Matrix{<:Any})
     return true
 end
 
-function _update_Jt_lu!(Jt_lu,Jt,Bnc::Bnc, x::AbstractArray{<:Real}, q::AbstractArray{<:Real})
+function _update_Jt!(Jt,Bnc::Bnc, x::AbstractArray{<:Real}, q::AbstractArray{<:Real})
     # helper functions to speed up the calculation of lu decompostion of logder_qK_x.
     # One shall initialize Jt_lu and Jt before calling this function.
     # eg:
@@ -199,7 +210,100 @@ function _update_Jt_lu!(Jt_lu,Jt,Bnc::Bnc, x::AbstractArray{<:Real}, q::Abstract
     x_view = @view(x[Bnc._I])
     q_view = @view(q[Bnc._J])
     @. Jt_left = x_view * Bnc._Lt_sparse.nzval / q_view
-    lu!(Jt_lu, Jt)
+    return nothing
+    # lu!(Jt_lu, Jt)
+end
+
+function find_max_indices_per_column(S::SparseMatrixCSC{Tv, Ti},n::Union{Int,Nothing}=nothing) where {Tv, Ti}
+    # Get the number of columns from the sparse matrix
+    n = isnothing(n) ? size(S, 2) : n
+    # Pre-allocate the result
+    max_indices = zeros(Ti, n)
+    # Access the raw CSC data structures for efficiency
+    colptr = S.colptr
+    rowval = S.rowval
+    nzval = S.nzval
+    # Iterate over each column of the matrix
+    for j in 1:n
+        # Determine the range of indices in nzval and rowval for the current column j
+        # This range points to the non-zero elements of column j.
+        col_range = colptr[j] : (colptr[j+1] - 1)
+        if !isempty(col_range) #skip empty columns
+            col_values = view(nzval, col_range)
+            # We only need the index, so we ignore the value with _.
+            _, local_max_idx = findmax(col_values)
+            # The global index is the start of the column's range plus the local index minus one.
+            global_max_idx = col_range[1] + local_max_idx - 1
+            max_indices[j] = rowval[global_max_idx]
+        end
+    end
+    return max_indices
+end
+
+function matrix_iter(f::Function, M::AbstractArray{<:Any,2}; byrow::Bool=true,multithread::Bool=true)
+    # Get the number of rows from the input matrix
+    if byrow
+        num_rows = size(M, 1)
+        # Check if the matrix is empty
+        if num_rows == 0
+            return Matrix{Any}(undef, 0, 0) # Or return an appropriately typed empty matrix
+        end
+        first_row = first(eachrow(M))
+        # Apply the function to the first row to get a sample result
+        first_result = f(first_row)
+        # Determine the size of the output matrix
+        # The number of rows in the result matrix is the length of the vector returned by f.
+        # The number of columns is the number of rows in the input matrix.
+        result_cols = length(first_result)
+        result_rows = num_rows
+        # Pre-allocate the result matrix with the correct type and size
+        # This is key for performance!
+        result = Matrix{eltype(first_result)}(undef, result_rows, result_cols)
+        # Place the first result in the first column
+        result[1,:] = first_result
+        # Loop through the rest of the rows (from the 2nd row onwards)
+        # We use `enumerate` to get the index `i` (starting from 2)
+        # and `Iterators.drop` to skip the first row which we've already processed.
+        if multithread
+            current_BLAS_threads = BLAS.get_num_threads()
+            BLAS.set_num_threads(1) # Set to 1 to avoid multithreading
+            # --- FIXED PART (byrow) ---
+            Threads.@threads for i in 2:num_rows
+                result[i, :] = f(@view M[i, :])
+            end
+            BLAS.set_num_threads(current_BLAS_threads) # Restore the original number of threads
+        else
+            # This part was already okay, but we use views for consistency
+            for i in 2:num_rows
+                result[i, :] = f(@view M[i, :])
+            end
+        end
+        return result
+    else
+        num_cols = size(M, 2)
+        # Check if the matrix is empty
+        if num_cols == 0
+            return Matrix{Any}(undef, 0, 0) # Or return an appropriately typed empty matrix
+        end
+        first_col = first(eachcol(M))
+        first_result = f(first_col)
+        result_rows = length(first_result)
+        result_cols = num_cols
+        result = Matrix{eltype(first_result)}(undef, result_rows, result_cols)
+        result[:, 1] = first_result
+        if multithread
+            current_BLAS_threads = BLAS.get_num_threads()
+            Threads.@threads for j in 2:num_cols
+                result[:, j] = f(@view M[:, j])
+            end
+            BLAS.set_num_threads(current_BLAS_threads)
+        else
+            for j in 2:num_cols
+                result[:, j] = f(@view M[:, j])
+            end
+        end
+        return result
+    end
 end
 
 # function adjoint_matrix(A)

@@ -186,6 +186,7 @@ function create_regime(Bnc::Bnc; regime::Vector{Int})::Regime
 end
 
 x_ineq_mtx(Bnc::Bnc; regime::Regime, check::Bool=true) =  x_ineq_mtx(Bnc; regime=regime.regime, check=check)
+
 function x_ineq_mtx(Bnc::Bnc; regime::Vector{Int}, check::Bool=true)::Matrix{<:Real}
     """
     return a matrix of ineq in x space for regime expressed as Ax < 0

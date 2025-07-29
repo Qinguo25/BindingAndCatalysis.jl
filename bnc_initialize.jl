@@ -63,6 +63,10 @@ mutable struct Bnc
     _S_sparse::Union{SparseMatrixCSC{Float64,Int},Nothing} # sparse version of S, used for fast calculation
     _aT_sparse::Union{SparseMatrixCSC{Float64,Int},Nothing}  # sparse version of aT, used for fast calculation
 
+
+    valid_regimes::Vector{Vector{Int}}
+    regimes_data::Dict{Vector{Int},Regime}
+
     # Inner constructor 
     function Bnc(N, L, x_sym, q_sym, K_sym, S, aT, k, cat_x_idx)
         # get desired values
@@ -122,6 +126,9 @@ mutable struct Bnc
         # Create the new object with all fields specified
         _S_sparse = isnothing(S) ? nothing : sparse(S) # sparse version of S, used for fast calculation
         _aT_sparse = isnothing(aT) ? nothing : sparse(aT) #
+
+        valid_regimes = Vector{Vector{Int}}[] # An empty vector of vectors
+        regimes_data = Dict{Vector{Int}, Regime}() # An empty dictionary
         new(N, L, 
             r, n, d,
             x_sym, q_sym, K_sym,
@@ -135,10 +142,12 @@ mutable struct Bnc
             _I, _J, _V, _val_num,
             _Nt_sparse, _IN, _JN, _VN,
             _valid_L_idx,
-            _S_sparse, _aT_sparse
+            _S_sparse, _aT_sparse,
+            valid_regimes, regimes_data
         )
     end
 end
+
 
 # Define a separate outer function for keyword-based construction, needs to be refine later.
 function Bnc(;
