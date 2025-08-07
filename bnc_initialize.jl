@@ -7,12 +7,114 @@ using LinearAlgebra
 using DifferentialEquations
 using StatsBase
 using SparseArrays
+using JuMP
 # using Interpolations
 
 # ---------------------Define the struct of binding and catalysis networks----------------------------------
 
-mutable struct Bnc
-    # Parameters of the binding networks
+"""
+Catalysis data structure
+"""
+struct CatalysisData
+    # Parameters for the catalysis networks
+    S::Matrix{Int} # catalysis change in qK space, each column is a reaction
+    aT::Matrix{Int} # catalysis index and coefficients, rate will be vⱼ=kⱼ∏xᵢ^aT_{j,i}, denote what species catalysis the reaction.
+
+    k::Vector{<:Real} # rate constants for catalysis reactions
+    cat_x_idx::Vector{Int} # index of the species that catalysis the reaction, if not provided, will be inferred from S
+
+    r_cat::Int # number of catalysis reactions/species
+    _S_sparse::SparseMatrixCSC{Float64,Int} # sparse version of S, used for fast calculation
+    _aT_sparse::SparseMatrixCSC{Float64,Int}  # sparse version of aT, used for fast calculation
+
+    function CatalysisData(n::Int, S, aT, k, cat_x_idx)
+        
+        # fufill aT and cat_x_idx, either derive one from another
+        if isnothing(aT) && !isnothing(cat_x_idx)
+            println("catalysis coefficients is set to 1 for all catalysis species as aT is not provided.")
+            aT = _idx_val2Mtx(cat_x_idx, 1, n)
+        elseif isnothing(cat_x_idx) && !isnothing(aT)
+            cat_x_idx, _ = _Mtx2idx_val(aT)
+        elseif !isnothing(aT) && !isnothing(cat_x_idx)
+            tmp,_ = _Mtx2idx_val(aT)
+            @assert tmp == cat_x_idx "cat_x_idx must be the same as the index of aT"
+        end 
+
+        if isnothing(S)
+            @error "S must be provided"
+        end
+        if isnothing(aT)
+            @error "aT or cat_x_idx must be provided"
+        end
+
+        #fufill k if not provided.
+        if isnothing(k) 
+            k = ones(size(aT, 1))
+            @warn("k is not provided, initialized to ones")
+        end
+
+        #fufill S to fulllength to contain K, could be nothing
+        if !isnothing(S) && size(S, 1) < n
+             S = vcat(S, zeros(Int, n - size(S, 1), size(S, 2)))
+        end
+        
+        # Validation
+        n_cat,r_cat = size(S)
+        @assert n_cat == n "S should have n rows"
+        @assert size(aT, 1) == r_cat "Mismatch in catalysis reaction count"
+        @assert size(aT,2) == n "Mismatch catalysis species, aT should have n columns"
+        @assert length(k) == r_cat "Mismatch in catalysis reaction count"
+
+        # Create sparse matrices
+        _S_sparse = sparse(Float64.(S))
+        _aT_sparse = sparse(Float64.(aT))
+
+        new(S, aT, k, cat_x_idx, r_cat, _S_sparse, _aT_sparse)
+    end
+end
+
+
+@kwdef mutable struct Vertex
+    # --- Initial / Identifying Properties ---
+    perm::Vector{Int} # The regime vector
+    
+    # --- Basic Calculated Properties (from _create_vertex) ---
+    P::Matrix{Int}
+    P0::Vector{<:Real}
+    M::Matrix{Int} # The derivative of ∂log(qK)/∂log(x) or M := [P;N]
+    M0::Vector{<:Real} # log(qK) = M * log(x) + M0
+    C_x::Matrix{Int} # The inequalities in x space, C_x * log(x) + C0_x > 0
+    C0_x::Vector{<:Real}
+
+    # LU decomposition of M for fast calculation, if M is singular, it will be nothing.
+    _M_lu::LU{<:Real, <:AbstractMatrix{<:Real}, <:AbstractVector{Int64}} 
+
+    # --- Expensive Calculated Properties (from _ensure_full_properties!) ---
+    singularity::Int # singularity of M, initialize with -1 if not invertible.
+    H::Matrix{Float64} # M*H=H*M=0 if singularity=1, else H=inv(M), also ∂log(x)/∂log(qK)
+    H0::Vector{Float64} # log(x) = H * log(qK) + H0
+    C_qK::Matrix{Float64} # The inequalities in qK space, C_qK * log(qK) + C0_qK > 0
+    C0_qK::Vector{Float64}
+    
+    #--- Neighbors ---
+    neighbors::Vector{Vector{Int}} # List of neighboring regime permutations
+
+    # Default constructor to initialize with placeholder values
+    function Vertex(;
+        perm, P, P0, M, M0, C_x, c0_x,
+        _M_lu = lu(M,check=false), # LU decomposition of M for fast calculation of H0
+        singularity = issuccessful(_M_lu) ? 0 : -1, # singularity of M, 1 if M is invertible, -1 otherwise.
+        
+        H = Matrix{Float64}(undef, 0, 0),
+        H0 = Vector{Float64}(undef, 0), C_qK = Matrix{Float64}(undef, 0, 0),
+        C0_qK = Vector{Float64}(undef, 0))
+        neighbors = Vector{Vector{Int}}([Vector{Int}(undef,0)])
+        new(perm, P, P0, M, M0, C_x, c0_x, singularity, H, H0, C_qK, C0_qK, neighbors)
+    end
+end
+
+@kwdef mutable struct Bnc
+    # ----Parameters of the binding networks------
     N::Matrix{Int} # binding reaction matrix
     L::Matrix{Int} # conservation law matrix
 
@@ -20,30 +122,28 @@ mutable struct Bnc
     n::Int # number of variables
     d::Int # number of conserved quantities
 
+    #-------symbols of species -----------
     x_sym::Vector{Num} # species symbols, each column is a species
     q_sym::Vector{Num}
     K_sym::Vector{Num}
 
+    #-------Parameters of the catalysis networks------
+    catalysis::Union{Any,Nothing} # Using Any for placeholder for CatalysisData
+
+    #--------Vertex data--------
+    vertices::Vector{Vector{Int}}
+    vertices_distance::Matrix{Int} # distance between vertices
+    vertices_data::Dict{Vector{Int},Any} # Using Any for placeholder for Vertex
+
+    #------other helper parameters------
     direction::Int8 # direction of the binding reactions, determine the ray direction for invertible regime, calculated by sign of det[L;N]
-
-
-    # Parameters for the catalysis networks
-    S::Union{Matrix{Int},Nothing} # catalysis change in qK space, each column is a reaction
-    aT::Union{Matrix{Int},Nothing} # catalysis index and coefficients, rate will be vⱼ=kⱼ∏xᵢ^aT_{j,i}, denote what species catalysis the reaction.
-
-    k::Union{Vector{<:Real},Nothing} # rate constants for catalysis reactions
-    cat_x_idx::Union{Vector{Int},Nothing} # index of the species that catalysis the reaction, if not provided, will be inferred from S
-
-    r_cat::Union{Int,Nothing} # number of catalysis reactions/species
-
-
 
     # Parameters act as the starting points used for qk mapping
     _anchor_log_x::Vector{<:Real}
     _anchor_log_qK::Vector{<:Real}
+
     #Parameters for mimic calculation process
     _is_change_of_K_involved::Bool  # whether the K is involved in the calculation process
-    
     
     # sparse matrix for speeding up the calculation
     _Lt_sparse::SparseMatrixCSC{Float64,Int} # sparse version of L transpose, used for fast calculation
@@ -52,7 +152,7 @@ mutable struct Bnc
     _I::Vector{Int}
     _J::Vector{Int}
     _V::Vector{Float64} # sparse matrix for speeding up the calculation
-    _val_num::Int # number of non-zero elements in the sparse matrix
+    _val_num_L::Int # number of non-zero elements in the sparse matrix L
 
     _Nt_sparse::SparseMatrixCSC{Float64,Int} # sparse version of N transpose, used for fast calculation
     _IN::Vector{Int} # row indices of non-zero elements in _Nt_sparse
@@ -60,15 +160,8 @@ mutable struct Bnc
     _VN::Vector{Float64} # values of non-zero elements in _Nt_sparse
     _valid_L_idx::Vector{Vector{Int}} #record the non-zero position for L
 
-    _S_sparse::Union{SparseMatrixCSC{Float64,Int},Nothing} # sparse version of S, used for fast calculation
-    _aT_sparse::Union{SparseMatrixCSC{Float64,Int},Nothing}  # sparse version of aT, used for fast calculation
-
-
-    valid_regimes::Vector{Vector{Int}}
-    regimes_data::Dict{Vector{Int},Regime}
-
     # Inner constructor 
-    function Bnc(N, L, x_sym, q_sym, K_sym, S, aT, k, cat_x_idx)
+    function Bnc(N, L, x_sym, q_sym, K_sym, catalysis)
         # get desired values
         r, n = size(N)
         d, n_L = size(L)
@@ -82,71 +175,56 @@ mutable struct Bnc
         @assert length(K_sym) == r "K_sym length must equal number of reactions (r)"
 
         #The direction
-        direction = sign(det([L;N]))
+        direction = sign(det(Float64.([L;N]))) # Ensure matrix is Float64 for det
+        
+        # A simplified check for catalysis.S - replace with your actual logic
+        _is_change_of_K_involved = !isnothing(catalysis) #&& !all(@view(catalysis.S[r+1:end, :]) .== 0)
 
-        # Validate dimensions for catalysis network
-        #check if catalysis networks paramets legal
-        if ~isnothing(S)
-            n_S, r_cat = size(S)
-            @assert n_S == n "S must have the same number of columns as N"
-        else
-            r_cat = nothing
-        end
+        #-------helper parameters-------------
 
-        if ~isnothing(aT)
-            r_aT, n_aT = size(aT)
-            if ~isnothing(r_cat)
-                @assert r_aT == r_cat "aT must have the same number of rows as r_cat"
-            else
-                r_cat = r_aT
-            end
-            @assert n_aT == n "aT must have the same number of rows, as columns of N"
-        end
-
-        if ~isnothing(k)
-            @assert isnothing(r_cat) || length(k) == r_cat "k must have the same length as r_cat"
-        end
-
-        #helper parameters
+        # paramters for default homotopcontinuous starting point.
         _anchor_log_x = zeros(n)
         _anchor_log_qK = vcat(vec(log10.(sum(L; dims=2))), zeros(r))
-        _is_change_of_K_involved = isnothing(S) || !all(@view(S[r+1:end, :]) .== 0)
-        _valid_L_idx = [findall(x->x!=0, @view L[i,:]) for i in 1:d] #record the non-zero position for L
+
+        # pre-calculate the non-zero position for L
+        _valid_L_idx = [findall(!iszero, @view L[i,:]) for i in 1:d] 
         
-        # Create sparse matrices for fast calculation
+        # Create Sparse matrices for further fast calculation
         _Lt_sparse = sparse(L') # sparse version of L transpose
         _I,_J,_V = findnz(_Lt_sparse) # get the row, column and value of the sparse matrix
-        _val_num = length(_V) # number of non-zero elements in the sparse matrix
+        _val_num_L = length(_V) # number of non-zero elements in the sparse matrix
 
         _Nt_sparse = sparse(N') # sparse version of N transpose, used for fast calculation
         _IN, _JN, _VN = findnz(_Nt_sparse) # get the row, column and value of the sparse matrix
 
-        _LNt_sparse = sparse_hcat(_Lt_sparse, _Nt_sparse) # sparse version of [L;N]^t
+        # hcat for sparse matrices requires them to be the same type
+        _LNt_sparse = hcat(sparse(Float64.(_Lt_sparse)), sparse(Float64.(_Nt_sparse))) 
         _LNt_lu = lu(_LNt_sparse) # LU decomposition of _LNt_sparse, used for fast calculation
-        # Create the new object with all fields specified
-        _S_sparse = isnothing(S) ? nothing : sparse(S) # sparse version of S, used for fast calculation
-        _aT_sparse = isnothing(aT) ? nothing : sparse(aT) #
 
-        valid_regimes = Vector{Vector{Int}}[] # An empty vector of vectors
-        regimes_data = Dict{Vector{Int}, Regime}() # An empty dictionary
-        new(N, L, 
-            r, n, d,
-            x_sym, q_sym, K_sym,
+        # --- FIX IS HERE ---
+        # Call `new` with positional arguments, not keyword arguments.
+        # The order must match the field order in the struct definition.
+        new(
+            # Fields 1-5
+            N, L, r, n, d,
+            # Fields 6-9
+            x_sym, q_sym, K_sym, catalysis,
+            # Fields 10-12 (Initialized empty)
+            Vector{Vector{Int}}[],                # vertices
+            Matrix{Int}(undef, 0, 0),             # vertices_distance
+            Dict{Vector{Int}, Any}(),              # vertices_data
+            # Fields 13-28 (Calculated values)
             direction,
-            S, aT, k,cat_x_idx, r_cat,
-            _anchor_log_x,_anchor_log_qK,
+            _anchor_log_x, _anchor_log_qK,
             _is_change_of_K_involved,
-            _Lt_sparse,
-            _LNt_sparse,
-            _LNt_lu,
-            _I, _J, _V, _val_num,
+            _Lt_sparse, _LNt_sparse, _LNt_lu,
+            _I, _J, _V, _val_num_L,
             _Nt_sparse, _IN, _JN, _VN,
-            _valid_L_idx,
-            _S_sparse, _aT_sparse,
-            valid_regimes, regimes_data
+            _valid_L_idx
         )
     end
 end
+
 
 
 # Define a separate outer function for keyword-based construction, needs to be refine later.
@@ -161,7 +239,8 @@ function Bnc(;
     k::Union{Vector{<:Real},Nothing}=nothing,
     cat_x_idx::Union{Vector{Int},Nothing}=nothing,
 )::Bnc
-    isnothing(N) ? (N = N_from_L(L)) : begin # if N is not provided, derive it from L
+    # if N is not provided, derive it from L, if provided, check its linear indenpendency
+    isnothing(N) ? (N = N_from_L(L)) : begin 
         r = size(N,1)
         row_idx = independent_row_idx(N)
         r_new = length(row_idx)
@@ -183,53 +262,51 @@ function Bnc(;
     q_sym = isnothing(q_sym) ? Symbolics.variables(:q, 1:d) : name_converter(q_sym) # convert q_sym to a vector of symbols
     K_sym = isnothing(K_sym) ? Symbolics.variables(:K, 1:r) : name_converter(K_sym) # convert K_sym to a vector of symbols
 
-    S, aT, k, cat_x_idx = _catalysis_handler(n,S, aT, k, cat_x_idx)
+    local catalysis_data::Union{CatalysisData,Nothing}
+    if !isnothing(S) || !isnothing(aT) || !isnothing(k) || !isnothing(cat_x_idx)
+        catalysis_data = CatalysisData(n, S, aT, k, cat_x_idx)
+    else
+        catalysis_data = nothing
+    end
 
-    # @show N,L,x_sym,q_sym,K_sym,S,aT,k
-    Bnc(N, L, x_sym, q_sym, K_sym, S, aT, k, cat_x_idx)
+    Bnc(N, L, x_sym, q_sym, K_sym, catalysis_data)
 end
 
-function _catalysis_handler(
-    n::Int,
+
+function update_catalysis!(Bnc::Bnc;
     S::Union{Matrix{Int},Nothing}=nothing,
     aT::Union{Matrix{Int},Nothing}=nothing,
     k::Union{Vector{<:Real},Nothing}=nothing,
-    cat_x_idx::Union{Vector{Int},Nothing}=nothing)
-    #fufill S matrix if S doesn't invovling K
-    
-    if !isnothing(aT) && !isnothing(cat_x_idx) #both aT and cat_x_idx are provided
-        tmp,_ = _Mtx2idx_val(aT)
-        @assert tmp == cat_x_idx "cat_x_idx must be the same as the index of aT"
-    end
-    if isnothing(aT) && !isnothing(cat_x_idx)# if aT is not provided, derive it from cat_x_idx
-        println("catalysis coefficients is set to 1 for all catalysis species as aT is not provided.")
-        aT = _idx_val2Mtx(cat_x_idx, 1, n) 
-    end
-    if isnothing(cat_x_idx) && !isnothing(aT)
-        cat_x_idx, _ = _Mtx2idx_val(aT) # if cat_x_idx is not provided, derive it from aT
-    end
+    cat_x_idx::Union{Vector{Int},Nothing}=nothing,
+    )
+    """
+    Updates the catalysis data of a `Bnc` object in-place
 
-    #fufill S to fulllength to contain K.
-    if !isnothing(S)
-        (nrow_S, ncol_S) = size(S)
-        if nrow_S < n
-            # If S is not provided or has fewer columns than n, fill it with zeros, make sure S has n rows.
-            S = vcat(S, zeros(Int64, n - nrow_S, ncol_S))
-        end
-    end
+    # Arguments
+    - `bnc::Bnc`: The binding network object to modify.
 
-    if isnothing(k) && !isnothing(cat_x_idx)
-        # If k is not provided, set it to a vector of ones with length equal to the number of catalysis reactions
-        k = ones(length(cat_x_idx))
-        @warn("k is not provided, initialized to ones")
+    # Keyword Arguments
+    - `S::Matrix{Int}`: The new catalysis change matrix.
+    - `aT::Matrix{Int}`: The new catalysis index and coefficient matrix.
+    - `k::Vector{<:Real}`: The new rate constants.
+    - `cat_x_idx::Vector{Int}`: The new index of catalytic species.
+
+    Any fields left as `nothing` will not be updated unless a new `CatalysisData`
+    object needs to be created.
+
+    """
+    if isnothing(bnc.catalysis)
+        bnc.catalysis = CatalysisData(bnc.n, S, aT, k, cat_x_idx)
+    else
+        S = isnothing(S) ? bnc.catalysis.S : S
+        aT = isnothing(aT) ? bnc.catalysis.aT : aT
+        k = isnothing(k) ? bnc.catalysis.k : k
+        cat_x_idx = isnothing(cat_x_idx) ? bnc.catalysis.cat_x_idx : cat_x_idx
+        bnc.catalysis = CatalysisData(bnc.n, S, aT, k, cat_x_idx)
     end
-    return S, aT, k, cat_x_idx
 end
 
 
-# fill_name(appendix::String, count::Int=1)::Vector{Symbol} = [Symbol(appendix * string(i)) for i in 1:count]
-# fill_name(appendix::String, original_name::Union{Vector{Symbol}}=nothing) = [Symbol(appendix * string(name)) for name in original_name]
-# fill_name(appendix::Symbol, args...) = fill_name(string(appendix), args...)
 
 include("bnc_helperfunctions.jl")
 include("bnc_numeric.jl")

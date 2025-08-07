@@ -25,7 +25,7 @@ function name_converter(name::Vector{<:T})::Vector{Num} where T
 end
 
 
-
+# helper funtions to taking inverse when the matrix is singular.
 function _adj_singular_matrix(M::Matrix{<:Real})::Tuple{Matrix{<:Real},Int}
     """
     Calculate the adjoint of a singular matrix M, and return the singularity count.
@@ -56,6 +56,16 @@ function _adj_singular_matrix(M::Matrix{<:Real})::Tuple{Matrix{<:Real},Int}
     end
 end
 
+# function inv_singularity_matrix(M::Matrix{<:Real})
+#     M_lu = lu(M,check=false)
+#     if issuccess(M_lu) # Lu successfully.
+#         return inv(M_lu),0  # singularity is 0, not singular
+#     else
+#         return _adj_singular_matrix(M)  # calculate the adj matrix, singularity is calculated and returned,
+#     end
+# end
+
+
 function randomize(size::Tuple{Int,Int}, log_lower=-6, log_upper=6; log_space::Bool=true)::Matrix{<:Real}
     """
     Generate a random matrix of size (m, n) with values between 10^log_lower and 10^log_upper, in log space
@@ -81,6 +91,7 @@ function randomize(n::Int, log_lower=-6, log_upper=6; log_space::Bool=true)::Vec
     end
 end
 
+
 function arr_to_vector(arr)
     """convert a multidimensional array to a vector or list,
     eg: a matrix to a vector of vector, which contains each colums as a vector,
@@ -95,6 +106,8 @@ function arr_to_vector(arr)
         return [arr_to_vector(s) for s in eachslice(arr, dims=1)]
     end
 end
+
+
 function pythonprint(arr)
     txt = JSON3.write(arr_to_vector(arr), pretty=true, indent=4, escape_unicode=false)
     println(txt)
@@ -206,7 +219,7 @@ function _update_Jt!(Jt,Bnc::Bnc, x::AbstractArray{<:Real}, q::AbstractArray{<:R
     # eg:
     # Jt = copy(Bnc._LNt_sparse)
     # Jt_lu = copy(Bnc._LNt_lu)
-    Jt_left = @view(Jt.nzval[1:Bnc._val_num])
+    Jt_left = @view(Jt.nzval[1:Bnc._val_num_L])
     x_view = @view(x[Bnc._I])
     q_view = @view(q[Bnc._J])
     @. Jt_left = x_view * Bnc._Lt_sparse.nzval / q_view

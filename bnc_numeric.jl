@@ -133,7 +133,7 @@ function qK2x(Bnc::Bnc, qK::AbstractArray{<:Real,1};
         save_start=false,
         kwargs...
     )
-    
+
     x = output_logspace ? sol.u[end] : exp10.(sol.u[end])
     return x
 end
@@ -237,7 +237,7 @@ function _logx_traj_with_logqK_change(Bnc::Bnc,
     q_view = @view q[Bnc._J]
     startlogq = @view(startlogqK[1:Bnc.d])
     Δlogq = @view(ΔlogqK[1:Bnc.d])
-    Jt_left = @view(Jt.nzval[1:Bnc._val_num]) # View for the top part of the Jacobian matrix
+    Jt_left = @view(Jt.nzval[1:Bnc._val_num_L]) # View for the top part of the Jacobian matrix
 
     params = HomotopyParams(
         ΔlogqK, 
@@ -361,7 +361,7 @@ function catalysis_logx(Bnc::Bnc, logx0::Vector{<:Real}, tspan::Tuple{Real,Real}
     #initialize J_buffer
     # J = Matrix{Float64}(undef, Bnc.n, Bnc.n)
     # k = Bnc.k
-    if isnothing(Bnc.S)||isnothing(Bnc.aT)||isnothing(Bnc.k)
+    if isnothing(Bnc.catalysis.S)||isnothing(Bnc.catalysis.aT)||isnothing(Bnc.catalysis.k)
         @error("S or aT or k is not defined, cannot perform catalysis logx calculation")
     end
 
@@ -376,8 +376,8 @@ function catalysis_logx(Bnc::Bnc, logx0::Vector{<:Real}, tspan::Tuple{Real,Real}
 
     x_view = @view x[Bnc._I]
     K_view = @view K[Bnc._JN]
-    Jt_left = @view Jt.nzval[1:Bnc._val_num]
-    Jt_right = @view Jt.nzval[Bnc._val_num+1:end]
+    Jt_left = @view Jt.nzval[1:Bnc._val_num_L]
+    Jt_right = @view Jt.nzval[Bnc._val_num_L+1:end]
 
     
     params = TimecurveParam(
@@ -408,9 +408,9 @@ function catalysis_logx(Bnc::Bnc, logx0::Vector{<:Real}, tspan::Tuple{Real,Real}
             lu!(Jt_lu, Jt) # recalculate the LU decomposition of Jt
 
             # dlogx .= J \ (S * (k .* exp10.(aT * logx)))
-            mul!(v, Bnc._aT_sparse, logx)
+            mul!(v, Bnc.catalysis._aT_sparse, logx)
             @. v = k * exp10(v) # calculate the catalysis rate vector
-            mul!(Sv, Bnc._S_sparse, v) # reuse x as a temporary buffer, but need change if x is used in other places, like to act call back for ODESolution
+            mul!(Sv, Bnc.catalysis._S_sparse, v) # reuse x as a temporary buffer, but need change if x is used in other places, like to act call back for ODESolution
             ldiv!(dlogx, Jt_lu', Sv) # Use the LU decomposition for fast calculation
         end
     else
@@ -835,8 +835,8 @@ end
 
 #     x_view = @view x[Bnc._I]
 #     K_view = @view K[Bnc._JN]
-#     Jt_left = @view Jt.nzval[1:Bnc._val_num]
-#     Jt_right = @view Jt.nzval[Bnc._val_num+1:end]
+#     Jt_left = @view Jt.nzval[1:Bnc._val_num_L]
+#     Jt_right = @view Jt.nzval[Bnc._val_num_L+1:end]
 
     
 #     params = TimecurveParam(

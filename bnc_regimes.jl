@@ -1,4 +1,7 @@
-#----------------Function to finding dominence regime，one of the hardest part to optimize----------------------
+#------------------------------------------------------------------------------
+#   Function to finding dominence regime，one of the hardest part to optimize
+# -------------------------------------------------------------------------------
+
 
 function have_cyclic_at_node(g::Vector{Vector{Int}}, node::Int, len::Int)::Bool
     # DFS algorithm, 
@@ -28,7 +31,8 @@ function have_cyclic_at_node(g::Vector{Vector{Int}}, node::Int, len::Int)::Bool
     end
     return false
 end
-function find_valid_regime(idx::Vector{Vector{Int}}, d::Int, n::Int)::Vector{Vector{Int}}
+
+function find_all_vertices(idx::Vector{Vector{Int}}, d::Int, n::Int)::Vector{Vector{Int}}
     graph = [Vector{Int}() for _ in 1:n]
     choices = Vector{Int}(undef, d)
     results = Vector{Vector{Int}}()
@@ -69,13 +73,18 @@ function find_valid_regime(idx::Vector{Vector{Int}}, d::Int, n::Int)::Vector{Vec
     return results
 end
 
-function find_valid_regime(L::Matrix{Int})
+function find_all_vertices(L::Matrix{Int})
     d, n = size(L)
     idx = [[idx for (idx, value) in enumerate(row) if value != 0] for row in eachrow(L)]
-    find_valid_regime(idx, d, n)
+    find_all_vertices(idx, d, n)
 end
 
-find_valid_regime(Bnc::Bnc) = find_valid_regime(Bnc._valid_L_idx, Bnc.d, Bnc.n)
+function find_all_vertices(Bnc::Bnc; recalculate::Bool=false)
+    if isempty(Bnc.vertices) || recalculate
+        Bnc.vertices = find_all_vertices(Bnc._valid_L_idx, Bnc.d, Bnc.n)
+    end
+        return Bnc.vertices
+end
 
 #-----------------------------------------------fucntions with dominance regime-------------------------------------------------------
 
@@ -83,130 +92,245 @@ find_valid_regime(Bnc::Bnc) = find_valid_regime(Bnc._valid_L_idx, Bnc.d, Bnc.n)
 
 
 
-function Mtd_a_from_regime(Bnc::Bnc, regime::Vector{Int}; check::Bool=true)::Tuple{Matrix{Int}, Vector{Int}}
-    # Generate the ̃M matrix from the given regime
-    !check || _check_valid_idx(regime, Bnc.L) # check if the regime is valid for the given L matrix
-    M = zeros(Int, Bnc.d, Bnc.n)
-    a = zeros(Int, Bnc.d) # buffer for the a values
+"""
+Creates the P and P0 matrices from a permutation.
+"""
+function _calculate_P_P0(Bnc::Bnc, perm::Vector{Int})::Tuple{Matrix{Int}, Vector{<:Real}}
+    P = zeros(Int, Bnc.d, Bnc.n)
+    P0 = zeros(Int, Bnc.d)
     for i in 1:Bnc.d
-        M[i, regime[i]] = 1
-        a[i] = Bnc.L[i, regime[i]]
+        P[i, perm[i]] = 1
+        P0[i] = log10(Bnc.L[i, perm[i]])
     end
-    return M,a
+    return P, P0
 end
 
-function M_from_regime(Bnc::Bnc, regime::Vector{Int}; check::Bool=true)::Matrix{Int}
-    # Generate the ̃M matrix from the given regime
-    M = zeros(Int, Bnc.d, Bnc.n)
-    !check || _check_valid_idx(regime, Bnc.L)
-    for i in 1:Bnc.d
-        M[i, regime[i]] = Bnc.L[i, regime[i]]
-    end
-    M[Bnc.d+1:end, :] .= Bnc.N
-    return M
-end
+# function _calculate_Ptd(Bnc::Bnc, perm::Vector{Int})::Matrix{Int}
+#     # Generate the ̃P matrix from the given regime
+#     # !check || _check_valid_idx(perm, Bnc.L)
+#     Ptd = zeros(Int, Bnc.d, Bnc.n)
+#     for i in 1:Bnc.d
+#         Ptd[i, perm[i]] = Bnc.L[i, perm[i]]
+#     end
+#     Ptd[Bnc.d+1:end, :] .= Bnc.N
+#     return Ptd
+# end
 
-
-
-function ∂logqK_∂logx_regime(Bnc::Bnc; regime::Union{Vector{Int}, Nothing}=nothing,
-    Mtd::Union{Matrix{Int}, Nothing}=nothing,
-    M::Union{Matrix{Int}, Nothing}=nothing,
-    check::Bool=true)::Matrix{<:Real}
+function _calculate_C_C0_x(Bnc::Bnc,perm::Vector{Int})::Tuple{Matrix{Int}, Vector{<:Real}}
     """
-    Calculate the derivative of log(qK) with respect to log(x) given regime
-    check: if true, check if the regime is valid for the L matrix
-    regime: the regime vector, if not provided , Mtd  will be derived from Mtd or M
+    return a matrix of ineq in x space for regime expressed as Clogx+ c0> 0
+    (logic seems to be complicate.)
+    """
+    # , check::Bool=true
+    # !check || _check_valid_idx(regime, Bnc.L) # check if the regime is valid for the given L matrix
     
-    Return:
-    - logder_qK_x: the derivative of log(qK) with respect to log(x)
-    """
-    if isnothing(Mtd)
-        if isnothing(regime)
-            if isnothing(M)
-                @error("Either regime or M/Mtd must be provided")
-            else
-                Mtd = sign.(M)
-            end
-        else
-            (Mtd , _) = Mtd_a_from_regime(Bnc, regime; check=check)
-        end
-    end
+    num_ineq = Bnc._val_num_L - Bnc.d # inequalities counts from L's number of values minus d.
+    c_mtx = zeros(Int, num_ineq, Bnc.n) # initialize the c_mtx
+    c0 = Vector{Rational{Int}}(undef, num_ineq) # initialize the c0 vector
+    row_ptr = Bnc._Lt_sparse.colptr .- (0:Bnc.d) # From _Lt_sparse.colptr, we can get the row start index for each original row.
 
-    return vcat(Mtd, Bnc.N)
-end
-
-function ∂logx_∂logqK_regime(Bnc::Bnc;
-    logder_qK_x::Union{Matrix{<:Real},Nothing}=nothing,
-    regime::Union{Vector{Int}, Nothing}=nothing,
-    Mtd::Union{Matrix{Int}, Nothing}=nothing,
-    M::Union{Matrix{Int}, Nothing}=nothing,
-    check::Bool=true)::Tuple{Matrix{<:Real},Int}
-    """
-    Calculate the derivative of log(qK) with respect to log(x) given regime
-    check: if true, check if the regime is valid for the L matrix
-    regime: the regime vector, if not provided, will be derived from Mtd or M
-
-    Return:
-    - logder_x_qK: the derivative of log(x) with respect to log(qK)
-    - singularity: singularity of the logder_qK_x.
-    """
-
-    logder_qK_x = isnothing(logder_qK_x) ? ∂logqK_∂logx_regime(Bnc; regime=regime,Mtd=Mtd,M=M, check=check) : logder_qK_x
-    logder_qK_x_fac = lu(logder_qK_x,check=false)
-    if issuccess(logder_qK_x_fac) # Lu successfully.
-        return inv(logder_qK_x_fac),0  # singularity is 0, not singular
-    else
-        return _adj_singular_matrix(logder_qK_x) .* Bnc.direction # calculate the adj matrix, singularity is calculated and returned,
-    end
-end
-
-
-
-@kwdef struct Regime
-    regime::Vector{Int} # The regime vector
-    logder_qK_x::Matrix{<:Real} # The derivative of log(qK) with respect to log(x)
-    logder_x_qK::Matrix{<:Real} # The derivative of log(x) with respect to log(qK)
-    singularity::Int # Whether logder_x_qK is singular
-    # direction::Int # If singular, direction defines its direction.
-    a::Vector{Int} # Values of L on regime defined position
-end
-
-
-
-function create_regime(Bnc::Bnc; regime::Vector{Int})::Regime
-    Mtd, a = Mtd_a_from_regime(Bnc, regime; check=true)
-    logder_qK_x = ∂logqK_∂logx_regime(Bnc; Mtd=Mtd)
-    logder_x_qK, singularity = ∂logx_∂logqK_regime(Bnc; logder_qK_x=logder_qK_x)
-    return Regime(regime = regime, 
-        logder_qK_x = logder_qK_x, 
-        logder_x_qK = logder_x_qK, 
-        singularity = singularity, 
-        # direction = Bnc.direction,
-        a = a)
-end
-
-x_ineq_mtx(Bnc::Bnc; regime::Regime, check::Bool=true) =  x_ineq_mtx(Bnc; regime=regime.regime, check=check)
-
-function x_ineq_mtx(Bnc::Bnc; regime::Vector{Int}, check::Bool=true)::Matrix{<:Real}
-    """
-    return a matrix of ineq in x space for regime expressed as Ax < 0
-    """
-    !check || _check_valid_idx(regime, Bnc.L) # check if the regime is valid for the given L matrix
-    idx = Set{Tuple{Int,Int}}()
-    for (valid_idx,rgm) in zip(Bnc._valid_L_idx, regime)
-        for i in valid_idx
-            if i != rgm
-            push!(idx, (rgm,i))
+    for (i,valid_idx,rgm,row_block_start) in zip(1:Bnc.d, Bnc._valid_L_idx, perm, row_ptr)
+        # i: block_index, each original L's row is a block.
+        # valid_idx: all the valid indices for the current block, Vector{Vector{Int}}.
+        # rgm: the current regime index.
+        # row_block_start: the start row idx for the current block in c_mtx.
+        # k = 0 # finished rows count for the current block, used to update row.
+        
+        # Within block
+        row = row_block_start # current row index in c_mtx, start from the block start index.
+        for col in valid_idx
+            if col != rgm
+                # Calculate the correct row index for the output matrix
+                c_mtx[row, col] = -1
+                c_mtx[row, rgm] = 1
+                c0[row] = log10(Bnc.L[i, rgm] / Bnc.L[i, col])
+                row += 1
             end
         end
     end
-    mtx = zeros(eltype(Bnc.L), length(idx), Bnc.n)
-    for (i, (rgm, j)) in enumerate(idx)
-        mtx[i, rgm] = -1
-        mtx[i, j] = 1
-    end
-    return mtx
+    return c_mtx,c0
 end
+
+
+"""
+Creates a new, partially-filled Vertex object.
+This function performs the initial, less expensive calculations.
+"""
+
+function _create_vertex(Bnc::Bnc, perm::Vector{Int})::Vertex
+    P, P0 = _calculate_P_P0(Bnc, perm)
+    C_x, C0_x = _calculate_C_C0_x(Bnc, perm)
+
+    M = vcat(P, Bnc.N)
+    M0 = vcat(P0, zeros(Bnc.r))
+
+    # Initialize a partial vertex. "Full" properties are empty placeholders.
+    return Vertex(
+        perm = perm,
+        M = M, M0 = M0, P = P, P0 = P0, C_x = C_x, C0_x = C0_x
+    )
+end
+
+function _ensure_full_properties!(vtx::Vertex)
+    # Check if already calculated
+    if !isempty(vtx.H)
+        return
+    end
+
+    if vtx.singularity == -1 # unsuccessful LU decomposition, means singular
+        vtx.H, vtx.singularity = _adj_singular_matrix(vtx.M)
+    elseif vtx.singularity == 0
+        vtx.H = inv(vtx._M_lu) # Calculate the inverse matrix from pre-computed LU decomposition of M
+        vtx.H0 = vtx.H * vtx.M0
+        vtx.C_qK = vtx.C_x * vtx.H
+        vtx.C0_qK = vtx.C0_x - vtx.C_x * vtx.H0 # Correctly use vtx.C0_x
+    end
+end
+
+"""
+Retrieves a vertex from cache or creates it if it doesn't exist.
+"""
+function get_vertex!(Bnc::Bnc, perm::Vector{Int})::Vertex
+    return get!(Bnc.vertices_data, perm) do
+        _create_vertex(Bnc, perm)
+    end
+end
+
+
+"""
+Gets P and P0, creating the vertex if necessary.
+"""
+function get_P_P0!(Bnc::Bnc; perm::Vector{Int})
+    vtx = get_vertex!(Bnc, perm)
+    return vtx.P, vtx.P0
+end
+
+"""
+Gets M and M0, creating the vertex if necessary.
+"""
+function get_M_M0!(Bnc::Bnc; perm::Vector{Int})
+    vtx = get_vertex!(Bnc, perm)
+    return vtx.M, vtx.M0
+end
+
+"""
+Gets C_x and C0_x, creating the vertex if necessary.
+"""
+function get_C_C0_x!(Bnc::Bnc; perm::Vector{Int})
+    vtx = get_vertex!(Bnc, perm)
+    return vtx.C_x, vtx.C0_x
+end
+
+"""
+Gets C_qK and C0_qK, ensuring the full vertex is calculated.
+"""
+function get_C_C0_qK!(Bnc::Bnc; perm::Vector{Int})
+    vtx = get_vertex!(Bnc, perm)
+    _ensure_full_properties!(vtx)
+    if vtx.singularity == 0
+        @error("Vertex is singular, cannot get C_qK and C0_qK")
+    end
+    return vtx.C_qK, vtx.C0_qK
+end
+
+
+"""
+Gets H and H0, ensuring the full vertex is calculated.
+"""
+function get_H_H0!(Bnc::Bnc; perm::Vector{Int})
+    vtx = get_vertex!(Bnc, perm)
+    _ensure_full_properties!(vtx)
+    if vtx.singularity == 0
+        @error("Vertex is singular, cannot get H0")
+    end # This will compute if needed
+    return vtx.H, vtx.H0
+end
+
+function get_H!(Bnc::Bnc; perm::Vector{Int})
+    vtx = get_vertex!(Bnc, perm)
+    _ensure_full_properties!(vtx)
+    if vtx.singularity > 1
+        @error("Vertex's singularity is bigger than 1, cannot get H")
+    end # This will compute if needed
+    return vtx.H
+end
+
+function get_all_neighbors!(Bnc::Bnc; perm::Vector{Int})
+    # Get the neighbors of the vertex represented by perm
+    vtx = get_vertex!(Bnc, perm)
+    if isempty(vtx.neighbors)
+        
+    end
+    return vtx.P
+end
+
+
+
+# function ∂logqK_∂logx_regime(Bnc::Bnc; regime::Union{Vector{Int}, Nothing}=nothing,
+#     Mtd::Union{Matrix{Int}, Nothing}=nothing,
+#     M::Union{Matrix{Int}, Nothing}=nothing,
+#     check::Bool=true)::Matrix{<:Real}
+#     """
+#     Calculate the derivative of log(qK) with respect to log(x) given regime
+#     check: if true, check if the regime is valid for the L matrix
+#     regime: the regime vector, if not provided , Mtd  will be derived from Mtd or M
+    
+#     Return:
+#     - logder_qK_x: the derivative of log(qK) with respect to log(x)
+#     """
+#     if isnothing(Mtd)
+#         if isnothing(regime)
+#             if isnothing(M)
+#                 @error("Either regime or M/Mtd must be provided")
+#             else
+#                 Mtd = sign.(M)
+#             end
+#         else
+#             (Mtd , _) = P_P0_from_vertex(Bnc, regime; check=check)
+#         end
+#     end
+
+#     return vcat(Mtd, Bnc.N)
+# end
+
+
+
+
+
+
+
+
+
+# fucntion c_mtx_C0_x(Bnc::Bnc; regime::Vertex,kwargs) 
+#     if Bnc.regimes
+#     else 
+
+# c_mtx_C0_x(Bnc; regime=regime.regime, check=check)
+
+
+# function x_ineq_mtx(Bnc::Bnc; regime::Vector{Int}, check::Bool=true)::Tuple{Matrix{Int}, Vector{Rational{Int64}}}
+#     """
+#     return a matrix of ineq in x space for regime expressed as Ax < 0
+#     """
+#     !check || _check_valid_idx(regime, Bnc.L) # check if the regime is valid for the given L matrix
+#     idx = Set{Tuple{Int,Int}}()
+#     for (valid_idx,rgm) in zip(Bnc._valid_L_idx, regime)
+#         for i in valid_idx
+#             if i != rgm
+#             push!(idx, (rgm,i))
+#             end
+#         end
+#     end
+#     mtx = zeros(Int,length(idx), Bnc.n)
+#     c0 = Vector{Rational{Int}}(undef, length(idx))
+#     for (i, (rgm, j)) in enumerate(idx)
+#         mtx[i, rgm] = -1
+#         mtx[i, j] = 1
+#         c0[i] = Bnc.L[i,rgm] // Bnc.L[i,j]
+#     end
+#     return mtx,c0
+# end
+
 
 
 # using Base.Threads
