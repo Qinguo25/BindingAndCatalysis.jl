@@ -74,17 +74,21 @@ struct CatalysisData
 end
 
 
-@kwdef mutable struct Vertex
+mutable struct Vertex
     # --- Initial / Identifying Properties ---
     perm::Vector{Int} # The regime vector
+    idx::Int # Index of the vertex in the Bnc.vertices list
     
     # --- Basic Calculated Properties (from _create_vertex) ---
     P::Matrix{Int}
-    P0::Vector{<:Real}
+    # P0::Vector{<:Real}
+    P0::Vector{Num} 
     M::Matrix{Int} # The derivative of ∂log(qK)/∂log(x) or M := [P;N]
-    M0::Vector{<:Real} # log(qK) = M * log(x) + M0
+    # M0::Vector{<:Real} # log(qK) = M * log(x) + M0
+    M0::Vector{Num} # log(qK) = M * log(x) + M0, using Num for symbolic calculations
     C_x::Matrix{Int} # The inequalities in x space, C_x * log(x) + C0_x > 0
-    C0_x::Vector{<:Real}
+    # C0_x::Vector{<:Real}
+    C0_x::Vector{Num} # C0_x is the constant term in the inequalities, using Num for symbolic calculations
 
     # LU decomposition of M for fast calculation, if M is singular, it will be nothing.
     _M_lu::LU{<:Real, <:AbstractMatrix{<:Real}, <:AbstractVector{Int64}} 
@@ -92,28 +96,32 @@ end
     # --- Expensive Calculated Properties (from _ensure_full_properties!) ---
     singularity::Int # singularity of M, initialize with -1 if not invertible.
     H::Matrix{Float64} # M*H=H*M=0 if singularity=1, else H=inv(M), also ∂log(x)/∂log(qK)
-    H0::Vector{Float64} # log(x) = H * log(qK) + H0
+    H0::Vector{Num} # log(x) = H * log(qK) + H0
     C_qK::Matrix{Float64} # The inequalities in qK space, C_qK * log(qK) + C0_qK > 0
-    C0_qK::Vector{Float64}
+    C0_qK::Vector{Num}
     
     #--- Neighbors ---
-    neighbors::Vector{Vector{Int}} # List of neighboring regime permutations
+    neighbors_idx::Vector{Int} # idx of neighbors of the vertex
+    finite_neighbors_idx::Vector{Int} # idx of neighbors of the vertex that are finite (singularity == 0)
+    infinite_neighbors_idx::Vector{Int} # idx of neighbors of the vertex that are infinite (singularity > 0)
 
     # Default constructor to initialize with placeholder values
-    function Vertex(;
-        perm, P, P0, M, M0, C_x, c0_x,
-        _M_lu = lu(M,check=false), # LU decomposition of M for fast calculation of H0
-        singularity = issuccessful(_M_lu) ? 0 : -1, # singularity of M, 1 if M is invertible, -1 otherwise.
-        
-        H = Matrix{Float64}(undef, 0, 0),
-        H0 = Vector{Float64}(undef, 0), C_qK = Matrix{Float64}(undef, 0, 0),
-        C0_qK = Vector{Float64}(undef, 0))
-        neighbors = Vector{Vector{Int}}([Vector{Int}(undef,0)])
-        new(perm, P, P0, M, M0, C_x, c0_x, singularity, H, H0, C_qK, C0_qK, neighbors)
+    function Vertex(;perm, P, P0, M, M0, C_x, C0_x,idx)
+        _M_lu = lu(M,check=false) # LU decomposition of M for fast calculation of H0
+        singularity = issuccess(_M_lu) ? 0 : -1 # singularity of M, 0 if M is invertible, -1 otherwise.
+        new(perm,idx, P, P0, M, M0, C_x, C0_x, _M_lu, singularity, 
+            Matrix{Float64}(undef, 0, 0), # H
+            Vector{Num}(undef, 0),       # H0
+            Matrix{Float64}(undef, 0, 0), # C_qK
+            Vector{Num}(undef, 0),       # C0_qK
+            Vector{Int}(undef, 0),       # neighbors_idx
+            Vector{Int}(undef, 0),       # finite_neighbors_idx
+            Vector{Int}(undef, 0)        # infinite_neighbors_idx
+        )
     end
 end
 
-@kwdef mutable struct Bnc
+mutable struct Bnc
     # ----Parameters of the binding networks------
     N::Matrix{Int} # binding reaction matrix
     L::Matrix{Int} # conservation law matrix
@@ -133,6 +141,7 @@ end
     #--------Vertex data--------
     vertices::Vector{Vector{Int}}
     vertices_distance::Matrix{Int} # distance between vertices
+    vertices_change_dir_x::Matrix{Int} # how the vertices should change to reach its neighbor vertices.
     vertices_data::Dict{Vector{Int},Any} # Using Any for placeholder for Vertex
 
     #------other helper parameters------
@@ -144,6 +153,8 @@ end
 
     #Parameters for mimic calculation process
     _is_change_of_K_involved::Bool  # whether the K is involved in the calculation process
+
+    _perm_idx_map::Dict{Vector{Int},Int} # map from permutation vector to its index in the vertices list
     
     # sparse matrix for speeding up the calculation
     _Lt_sparse::SparseMatrixCSC{Float64,Int} # sparse version of L transpose, used for fast calculation
@@ -212,11 +223,13 @@ end
             # Fields 10-12 (Initialized empty)
             Vector{Vector{Int}}[],                # vertices
             Matrix{Int}(undef, 0, 0),             # vertices_distance
+            Matrix{Int}(undef, 0, 0),             # vertices_change_dir_x
             Dict{Vector{Int}, Any}(),              # vertices_data
             # Fields 13-28 (Calculated values)
             direction,
             _anchor_log_x, _anchor_log_qK,
             _is_change_of_K_involved,
+            Dict{Vector{Int},Int}(),            # _perm_idx_map
             _Lt_sparse, _LNt_sparse, _LNt_lu,
             _I, _J, _V, _val_num_L,
             _Nt_sparse, _IN, _JN, _VN,

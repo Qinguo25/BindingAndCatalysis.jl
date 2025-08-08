@@ -75,48 +75,98 @@ end
 
 function find_all_vertices(L::Matrix{Int})
     d, n = size(L)
-    idx = [[idx for (idx, value) in enumerate(row) if value != 0] for row in eachrow(L)]
+    idx = [[idx for (idx, value) in enumerate(row) if value != 0] for row in eachrow(L)] #[findall(!iszero, row) for row in eachrow(L)]
     find_all_vertices(idx, d, n)
 end
 
-function find_all_vertices(Bnc::Bnc; recalculate::Bool=false)
+function find_all_vertices!(Bnc::Bnc; recalculate::Bool=false)
     if isempty(Bnc.vertices) || recalculate
         Bnc.vertices = find_all_vertices(Bnc._valid_L_idx, Bnc.d, Bnc.n)
+        Bnc._perm_idx_map = Dict(a=>idx for (idx, a) in enumerate(Bnc.vertices)) # Map from vertex to its index
     end
-        return Bnc.vertices
+    return Bnc.vertices
 end
 
-#-----------------------------------------------fucntions with dominance regime-------------------------------------------------------
 
-#----end of helper functions.
+
+
+#-----------------------------------------------------------------------------------
+#   Functions to calculate the relationship between vertices
+#-----------------------------------------------------------------------------------
+"""
+Calculates the distance between two vertexes.
+"""
+function _distance_between(vtx1::Vector{Int},vtx2::Vector{Int})::Int
+    return sum(vtx1 .!= vtx2)
+end
+
+function get_vertices_distance!(Bnc::Bnc)::Matrix{Int}
+    # Calculate the distance matrix for all vertices in Bnc
+    if isempty(Bnc.vertices_distance)
+        Bnc.vertices_distance = pairwise_distance(Bnc.vertices, _distance_between; is_symmetric=true)
+    end
+    return Bnc.vertices_distance
+end
+
+"""
+Calculate the x space change needed to change from one vertex to another.
+The number idx of (i,j) deontes if regime i want to reach regime j, it shall rise its idx species.
+Source: row; Target: column.
+"""
+function get_vertices_change_dir_x!(Bnc::Bnc)::Matrix{Int}
+    if !isempty(Bnc.vertices_change_dir_x)
+        return Bnc.vertices_change_dir_x
+    end
+    d_mtx = get_vertices_distance!(Bnc)
+    num_vertices = size(d_mtx, 1)
+    # Initialize the change direction matrix
+    vertices_change_dir_x = zeros(Int, num_vertices, num_vertices)
+    Threads.@threads for i in 1:num_vertices
+        v_source = Bnc.vertices[i]
+        for j in (i+1):num_vertices
+            if d_mtx[i, j] == 1 #neighbors
+                v_target = Bnc.vertices[j]
+                for (x, y) in zip(v_source, v_target)
+                    if x != y
+                        vertices_change_dir_x[i, j] = y
+                        vertices_change_dir_x[j, i] = x 
+                        break
+                    end
+                end
+            end
+        end
+    end
+    Bnc.vertices_change_dir_x = vertices_change_dir_x
+    return vertices_change_dir_x
+end
+
+
+
+#------------------------------------------------------
+#         fucntions with single vertex
+# -------------------------------------------------------
 
 
 
 """
 Creates the P and P0 matrices from a permutation.
 """
-function _calculate_P_P0(Bnc::Bnc, perm::Vector{Int})::Tuple{Matrix{Int}, Vector{<:Real}}
+function _calculate_P_P0(Bnc::Bnc, perm::Vector{Int})::Tuple{Matrix{Int}, Vector{Num}}
     P = zeros(Int, Bnc.d, Bnc.n)
-    P0 = zeros(Int, Bnc.d)
+    # P0 = zeros(Rational, Bnc.d)
+    P0 = Vector{Num}(undef, Bnc.d)
     for i in 1:Bnc.d
         P[i, perm[i]] = 1
-        P0[i] = log10(Bnc.L[i, perm[i]])
+        # P0[i] = log10(Bnc.L[i, perm[i]])
+        P0[i] = log10_sym(Bnc.L[i, perm[i]])
     end
     return P, P0
 end
 
-# function _calculate_Ptd(Bnc::Bnc, perm::Vector{Int})::Matrix{Int}
-#     # Generate the ̃P matrix from the given regime
-#     # !check || _check_valid_idx(perm, Bnc.L)
-#     Ptd = zeros(Int, Bnc.d, Bnc.n)
-#     for i in 1:Bnc.d
-#         Ptd[i, perm[i]] = Bnc.L[i, perm[i]]
-#     end
-#     Ptd[Bnc.d+1:end, :] .= Bnc.N
-#     return Ptd
-# end
-
-function _calculate_C_C0_x(Bnc::Bnc,perm::Vector{Int})::Tuple{Matrix{Int}, Vector{<:Real}}
+"""
+Creates the C and C0 matrices from a permutation.
+"""
+function _calculate_C_C0_x(Bnc::Bnc,perm::Vector{Int})::Tuple{Matrix{Int}, Vector{Num}}
     """
     return a matrix of ineq in x space for regime expressed as Clogx+ c0> 0
     (logic seems to be complicate.)
@@ -126,7 +176,7 @@ function _calculate_C_C0_x(Bnc::Bnc,perm::Vector{Int})::Tuple{Matrix{Int}, Vecto
     
     num_ineq = Bnc._val_num_L - Bnc.d # inequalities counts from L's number of values minus d.
     c_mtx = zeros(Int, num_ineq, Bnc.n) # initialize the c_mtx
-    c0 = Vector{Rational{Int}}(undef, num_ineq) # initialize the c0 vector
+    c0 = Vector{Num}(undef, num_ineq) # initialize the c0 vector
     row_ptr = Bnc._Lt_sparse.colptr .- (0:Bnc.d) # From _Lt_sparse.colptr, we can get the row start index for each original row.
 
     for (i,valid_idx,rgm,row_block_start) in zip(1:Bnc.d, Bnc._valid_L_idx, perm, row_ptr)
@@ -143,7 +193,8 @@ function _calculate_C_C0_x(Bnc::Bnc,perm::Vector{Int})::Tuple{Matrix{Int}, Vecto
                 # Calculate the correct row index for the output matrix
                 c_mtx[row, col] = -1
                 c_mtx[row, rgm] = 1
-                c0[row] = log10(Bnc.L[i, rgm] / Bnc.L[i, col])
+                # c0[row] = log10(Bnc.L[i, rgm] / Bnc.L[i, col])
+                c0[row] = log10_sym(Bnc.L[i, rgm] // Bnc.L[i, col])
                 row += 1
             end
         end
@@ -152,12 +203,16 @@ function _calculate_C_C0_x(Bnc::Bnc,perm::Vector{Int})::Tuple{Matrix{Int}, Vecto
 end
 
 
+
 """
 Creates a new, partially-filled Vertex object.
 This function performs the initial, less expensive calculations.
 """
-
 function _create_vertex(Bnc::Bnc, perm::Vector{Int})::Vertex
+    !isempty(Bnc._perm_idx_map) || find_all_vertices!(Bnc)
+    
+    idx = Bnc._perm_idx_map[perm]
+     # Index of the vertex in the Bnc.vertices list
     P, P0 = _calculate_P_P0(Bnc, perm)
     C_x, C0_x = _calculate_C_C0_x(Bnc, perm)
 
@@ -166,6 +221,7 @@ function _create_vertex(Bnc::Bnc, perm::Vector{Int})::Vertex
 
     # Initialize a partial vertex. "Full" properties are empty placeholders.
     return Vertex(
+        idx = idx,
         perm = perm,
         M = M, M0 = M0, P = P, P0 = P0, C_x = C_x, C0_x = C0_x
     )
@@ -187,20 +243,69 @@ function _ensure_full_properties!(vtx::Vertex)
     end
 end
 
+
+
 """
 Retrieves a vertex from cache or creates it if it doesn't exist.
 """
-function get_vertex!(Bnc::Bnc, perm::Vector{Int})::Vertex
-    return get!(Bnc.vertices_data, perm) do
+function get_vertex!(Bnc::Bnc, perm::Vector{Int};full::Bool=false)::Vertex
+    vtx = get!(Bnc.vertices_data, perm) do 
         _create_vertex(Bnc, perm)
     end
+
+    if full
+        _ensure_full_properties!(vtx)
+        get_all_neighbors!(Bnc, perm)
+    end
+
+    return vtx
+end
+
+
+
+
+function get_all_neighbors!(Bnc::Bnc, perm::Vector{Int})
+    # Get the neighbors of the vertex represented by perm
+    vtx = get_vertex!(Bnc, perm)
+    if isempty(vtx.neighbors_idx)
+        d_mat = get_vertices_distance!(Bnc)
+        vtx.neighbors_idx = findall(d_mat[Bnc._perm_idx_map[perm], :] .== 1)
+        finite_neighbors = Int[]
+        infinite_neighbors = Int[]
+        for idx in vtx.neighbors_idx
+            if get_singularity!(Bnc,Bnc.vertices[idx]) == 0
+                push!(finite_neighbors, idx)
+            else
+                push!(infinite_neighbors, idx)
+            end
+        end
+        vtx.finite_neighbors_idx = finite_neighbors
+        vtx.infinite_neighbors_idx = infinite_neighbors
+    end
+    return Bnc.vertices[vtx.neighbors_idx]
+end
+
+function get_finite_neighbors!(Bnc::Bnc, perm::Vector{Int})
+    vtx = get_vertex!(Bnc, perm)
+    if isempty(vtx.neighbors_idx)
+        get_all_neighbors!(Bnc, perm)
+    end
+    return Bnc.vertices[vtx.finite_neighbors_idx]
+end
+
+function get_infinite_neighbors!(Bnc::Bnc, perm::Vector{Int})
+    vtx = get_vertex!(Bnc, perm)
+    if isempty(vtx.neighbors_idx)
+        get_all_neighbors!(Bnc, perm)
+    end
+    return Bnc.vertices[vtx.infinite_neighbors_idx]
 end
 
 
 """
 Gets P and P0, creating the vertex if necessary.
 """
-function get_P_P0!(Bnc::Bnc; perm::Vector{Int})
+function get_P_P0!(Bnc::Bnc, perm::Vector{Int})
     vtx = get_vertex!(Bnc, perm)
     return vtx.P, vtx.P0
 end
@@ -208,7 +313,7 @@ end
 """
 Gets M and M0, creating the vertex if necessary.
 """
-function get_M_M0!(Bnc::Bnc; perm::Vector{Int})
+function get_M_M0!(Bnc::Bnc, perm::Vector{Int})
     vtx = get_vertex!(Bnc, perm)
     return vtx.M, vtx.M0
 end
@@ -216,7 +321,7 @@ end
 """
 Gets C_x and C0_x, creating the vertex if necessary.
 """
-function get_C_C0_x!(Bnc::Bnc; perm::Vector{Int})
+function get_C_C0_x!(Bnc::Bnc, perm::Vector{Int})
     vtx = get_vertex!(Bnc, perm)
     return vtx.C_x, vtx.C0_x
 end
@@ -224,29 +329,31 @@ end
 """
 Gets C_qK and C0_qK, ensuring the full vertex is calculated.
 """
-function get_C_C0_qK!(Bnc::Bnc; perm::Vector{Int})
+function get_C_C0_qK!(Bnc::Bnc, perm::Vector{Int})
     vtx = get_vertex!(Bnc, perm)
     _ensure_full_properties!(vtx)
-    if vtx.singularity == 0
-        @error("Vertex is singular, cannot get C_qK and C0_qK")
+    if vtx.singularity >= 2
+        @error("Vertex got singluarity $(vtx.singularity), cannot get C_qK and C0_qK")
     end
     return vtx.C_qK, vtx.C0_qK
 end
+
+get_singularity!(Bnc::Bnc,perm::Vector{Int}) = get_vertex!(Bnc, perm).singularity
 
 
 """
 Gets H and H0, ensuring the full vertex is calculated.
 """
-function get_H_H0!(Bnc::Bnc; perm::Vector{Int})
+function get_H_H0!(Bnc::Bnc, perm::Vector{Int})
     vtx = get_vertex!(Bnc, perm)
     _ensure_full_properties!(vtx)
-    if vtx.singularity == 0
+    if vtx.singularity > 0
         @error("Vertex is singular, cannot get H0")
     end # This will compute if needed
     return vtx.H, vtx.H0
 end
 
-function get_H!(Bnc::Bnc; perm::Vector{Int})
+function get_H!(Bnc::Bnc, perm::Vector{Int})
     vtx = get_vertex!(Bnc, perm)
     _ensure_full_properties!(vtx)
     if vtx.singularity > 1
@@ -255,14 +362,7 @@ function get_H!(Bnc::Bnc; perm::Vector{Int})
     return vtx.H
 end
 
-function get_all_neighbors!(Bnc::Bnc; perm::Vector{Int})
-    # Get the neighbors of the vertex represented by perm
-    vtx = get_vertex!(Bnc, perm)
-    if isempty(vtx.neighbors)
-        
-    end
-    return vtx.P
-end
+
 
 
 

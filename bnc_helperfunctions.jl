@@ -106,13 +106,12 @@ function arr_to_vector(arr)
         return [arr_to_vector(s) for s in eachslice(arr, dims=1)]
     end
 end
-
-
 function pythonprint(arr)
     txt = JSON3.write(arr_to_vector(arr), pretty=true, indent=4, escape_unicode=false)
     println(txt)
     return nothing
 end
+
 
 
 function N_generator(r::Int, n::Int; min_binder::Int=2, max_binder::Int=2)::Matrix{Int}
@@ -161,6 +160,46 @@ function _ode_solution_wrapper(
     """
     return solution.t, stack(solution.u)'
 end
+
+
+function pairwise_distance(data::AbstractVector, dist_func::Function; is_symmetric::Bool=true)
+    n = length(data)
+    # Handle empty input gracefully
+    if n == 0
+        return Matrix{Any}(undef, 0, 0)
+    end
+    # Determine the output type by calculating one distance value first.
+    # This creates a type-stable matrix, which is more efficient.
+    T = typeof(dist_func(data[1], data[1]))
+    dist_matrix = Matrix{T}(undef, n, n)
+    if is_symmetric
+        Threads.@threads for i in 1:n
+            for j in i:n
+                # Calculate the distance
+                d = dist_func(data[i], data[j])
+                # Assign to both [i, j] and [j, i]
+                dist_matrix[i, j] = d
+                dist_matrix[j, i] = d
+            end
+        end
+    else
+        Threads.@threads for i in 1:n
+            for j in 1:n
+                dist_matrix[i, j] = dist_func(data[i], data[j])
+            end
+        end
+    end
+    return dist_matrix
+end
+
+
+log10_sym(x) = x==1 ? Num(0) : Symbolics.wrap(Symbolics.Term(log10, [x,]))
+exp10_sym(x) = Symbolics.wrap(Symbolics.Term(exp10, [x,]))
+
+
+
+
+
 
 #Pure helper functions for converting between matrix and index-value pairs.
 function _Mtx2idx_val(Mtx::Matrix{<:T}) where T
@@ -319,47 +358,22 @@ function matrix_iter(f::Function, M::AbstractArray{<:Any,2}; byrow::Bool=true,mu
     end
 end
 
-# function adjoint_matrix(A)
-#     # Calculate the adjoint of a square matrix A ,for calculate the ray if non-feasible regime
-#     n = size(A, 1)
-#     if size(A, 1) != size(A, 2)
-#         error("square matrix required for adjoint calculation")
-#     end
-#     adj_A = zeros(eltype(A), n, n)
-#     for i in 1:n, j in 1:n
-#         minor_matrix = @view A[[1:i-1; i+1:end], [1:j-1; j+1:end]]
-#         adj_A[j, i] = (-1)^(i + j) * det(minor_matrix)
-#     end
-#     return adj_A
-# end
+"""
+Helper function to convert a sum of log10 terms into a product form.
+from ∑a log b to log ∏b^a
 
-# function L_generator(d::Int, n::Int; min_nonatom::Int=0, max_nonatom::Union{Nothing,Int}=nothing, allow_multi::Bool = true)::Matrix{Int}
-#     max_nonatom = isnothing(max_nonatom) ? n-d : max_nonatom
-#     @assert n >= d "n must be greater than d"
-#     @assert min_nonatom >= 0 && max_nonatom >= min_nonatom "min_nonatom and max_nonatom must be at least 0"
-#     @assert max_nonatom <= n-d "max_nonatom must be smaller than n-d"
-#     #initialize the matrix 
-#     L1 = Diagonal(ones(Int, d)) # the first d rows are identity matrix
-#     L2 = zeros(Int, d, n-d)
-#     for i in 1:d
-#         nonatom_num = sample(min_nonatom:max_nonatom)
-#         if allow_multi
-#             for j in 1:nonatom_num
-#                 L2[i, sample(1:(n-d))] += 1
-#             end
-#         else
-#             L2[i, sample(1:(n-d), nonatom_num; replace=false)] .= 1
-#         end
-#     end
-#     return hcat(L1, L2)
-# end
+The final expression contains ∏b^a term.
+"""
+function handle_log_weighted_sum(expr)
+    get_single = @rule(+(~~xs) => [~~xs...])
+    get_coeff = SymbolicUtils.Chain([@rule(~c * log10(~b) => (~b)^(~c)), @rule(log10(~b) => (~b))])
+    terms = get_single(expr)
+    subs_expr = get_coeff.(terms) |> prod
+    if contains(string(subs_expr), "log10")
+        @error "Failed to convert the expression to product form"
+    else
+        return subs_expr
+    end
+end
 
-# S_generator(n::Int,r_cat::Int; d::Union{Int,nothing} = nothing, transform_only::bool=false, involving_K::Bool=false)::Matrix{Int}
-#     S = zeros(Int, n, r_cat)
-#     idx = Vector{Int}(undef, 2)
-#     row_end = involving_K ? n : n - d
-#     for i in 1:r_cat
-#         S[sample!(1:row_end,idx),i] = 
-#     # assign first 
-#     end  
-# end 
+

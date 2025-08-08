@@ -32,13 +32,22 @@ end
 #---------------------------------------------------------
 
 
-function show_x_space_constrains(Bnc::Bnc, perm::Vector{Int})
+function show_x_space_constrains(Bnc::Bnc, perm::Vector{Int};log_space::Bool=true)
     C_x, C_0 =  get_C_C0_x!(Bnc,perm)
     # Show the conditions for the x space for the given regime.
-    return C_x * log10.(Bnc.x_sym).+C_0 .> 0
+    if log_space
+        return C_x * log10.(Bnc.x_sym).+C_0 .> 0
+    else
+        return handle_log_weighted_sum.(C_x * log10.(Bnc.x_sym).+C_0) .> 1
+    end
 end
 
-function show_qK_space_constrains(Bnc::Bnc, perm::Vector{Int})
+function show_qK_space_constrains(Bnc::Bnc, perm::Vector{Int};log_space::Bool=true)
     C_qK, C0_qK = get_C_C0_qK!(Bnc, perm)
-    return C_qK * log10.(Bnc.q_sym; Bnc.K_sym) .+ C0_qK .> 0
+    if log_space
+        return C_qK * log10.([Bnc.q_sym; Bnc.K_sym]) .+ C0_qK .> 0
+    else
+        return handle_log_weighted_sum.(C_qK * log10.([Bnc.q_sym; Bnc.K_sym]) .+ C0_qK) .> 1
+    end
 end
+
