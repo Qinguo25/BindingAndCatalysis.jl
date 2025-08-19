@@ -1,9 +1,9 @@
 #----------------Functions for calculates the derivative of log(x) with respect to log(qK) and vice versa----------------------
 
 function ∂logqK_∂logx(Bnc::Bnc;
-    x::Union{Vector{<:Real},Nothing}=nothing,
-    qK::Union{Vector{<:Real},Nothing}=nothing,
-    q::Union{Vector{<:Real},Nothing}=nothing)::Matrix{<:Real}
+    x::Union{AbstractVector{<:Real},Nothing}=nothing,
+    qK::Union{AbstractVector{<:Real},Nothing}=nothing,
+    q::Union{AbstractVector{<:Real},Nothing}=nothing)::Matrix{<:Real}
 
     # 1. Ensure x is defined
     if isnothing(x)
@@ -34,14 +34,15 @@ end
 
 
 function ∂logx_∂logqK(Bnc::Bnc;
-    x::Union{Vector{<:Real},Nothing}=nothing,
-    qK::Union{Vector{<:Real},Nothing}=nothing,
-    q::Union{Vector{<:Real},Nothing}=nothing)::Matrix{<:Real}
+    x::Union{AbstractVector{<:Real},Nothing}=nothing,
+    qK::Union{AbstractVector{<:Real},Nothing}=nothing,
+    q::Union{AbstractVector{<:Real},Nothing}=nothing)::Matrix{<:Real}
 
     inv(∂logqK_∂logx(Bnc; x=x, q=q, qK=qK))
 end
 
-
+logder_x_qK(args...;kwargs...) = ∂logx_∂logqK(args...;kwargs...)
+logder_qK_x(args...;kwargs...) = ∂logqK_∂logx(args...;kwargs...)
 
 # ----------------Functions for mapping between qK space and x space----------------------------------
 
@@ -139,6 +140,7 @@ function qK2x(Bnc::Bnc, qK::AbstractArray{<:Real,1};
 end
 
 function qK2x(Bnc::Bnc, qK::AbstractArray{<:Real,2};kwargs...)::AbstractArray{<:Real}
+    # batch mapping of qK2x for each column of qK and return as matrix.
     f = x -> qK2x(Bnc, x; kwargs...)
     return matrix_iter(f, qK;byrow=false,multithread=false)
 end
@@ -170,17 +172,13 @@ function x_traj_with_qK_change(
     end_point::Vector{<:Real};
     input_logspace::Bool=false,
     output_logspace::Bool=false,
-    # alg=nothing, # Default to nothing, will use Tsit5() if not provided
-    # reltol=1e-8,
-    # abstol=1e-9,
     kwargs...
-)::Tuple{Vector{Float64}, Matrix{Float64}}
+)
+    # println("x_traj_with_qK_change get kwargs: ", kwargs)
+
     startlogqK = input_logspace ? start_point : log10.(start_point)
     endlogqK = input_logspace ? end_point : log10.(end_point)
     solution = _logx_traj_with_logqK_change(Bnc, startlogqK, endlogqK;
-        # alg=alg,
-        # reltol=reltol,
-        # abstol=abstol,
         dense=false,
         kwargs...
     )
@@ -203,8 +201,9 @@ function x_traj_with_q_change(
     # reltol=1e-8,
     # abstol=1e-9,
     kwargs...
-)::Tuple{Vector{Float64}, Matrix{Float64}}
+)
     # Prepare the start and end points
+    # println("x_traj_with_q_change get kwargs: ", kwargs)
     K_prepared = input_logspace ? (isnothing(logK) ? log10.(K) : logK) : (isnothing(K) ? K : exp10.(K))
 
     x_traj_with_qK_change(Bnc, [start_q;K_prepared], [end_q;K_prepared]; input_logspace=input_logspace,kwargs...)
@@ -213,7 +212,7 @@ end
 function _logx_traj_with_logqK_change(Bnc::Bnc,
     startlogqK::Union{Vector{<:Real},Nothing},
     endlogqK::Vector{<:Real};
-    # Optional parameters for the initial log(x) values
+    # Optional parameters for the initial log(x) values,act as initial point for ode solving
     startlogx::Union{Vector{<:Real},Nothing}=nothing,
     # Optional parameters for the ODE solver
     alg=nothing, # Default to nothing, will use Tsit5() if not provided
@@ -221,7 +220,7 @@ function _logx_traj_with_logqK_change(Bnc::Bnc,
     abstol=1e-9,
     kwargs... #other Optional arguments for ODE solver
 )::ODESolution
-
+    # println("_logx_traj_with_logqK_change get kwargs: ", kwargs)
     #---Solve the homotopy ODE to find x from qK.---
 
     #--Prepare parameters---
@@ -264,7 +263,7 @@ function _logx_traj_with_logqK_change(Bnc::Bnc,
         lu!(Jt_lu, Jt) # recalculate the LU decomposition of Jt
         ldiv!(dlogx, Jt_lu',ΔlogqK)
     end
-
+    # @show saveat
     # Solve the ODE using the DifferentialEquations.jl package
     tspan = (0.0, 1.0)
     prob = ODEProblem(homotopy_process!, startlogx, tspan, params)
@@ -272,9 +271,98 @@ function _logx_traj_with_logqK_change(Bnc::Bnc,
     return sol
 end
 
+# function _logx_traj_with_logqK_change(Bnc::Bnc,
+#     startlogqK::Union{Vector{<:Real},Nothing},
+#     endlogqK::Vector{<:Real};
+#     # Optional parameters for the initial log(x) values
+#     startlogx::Union{Vector{<:Real},Nothing}=nothing,
+#     # Optional parameters for the ODE solver
+#     alg=nothing, # Default to nothing, will use Tsit5() if not provided
+#     reltol=1e-8,
+#     abstol=1e-9,
+#     save_reaction_order::Bool=true,
+#     kwargs... #other Optional arguments for ODE solver
+# )::ODESolution
+
+#     #---Solve the homotopy ODE to find x from qK.---
+
+#     #--Prepare parameters---
+#     startlogx = isnothing(startlogx) ? qK2x(Bnc, startlogqK; input_logspace=true, output_logspace=true) : startlogx
+    
+#     ΔlogqK = endlogqK - startlogqK
+#     x = Vector{Float64}(undef, Bnc.n)
+#     q = Vector{Float64}(undef, Bnc.d)
+#     Jt = copy(Bnc._LNt_sparse)
+#     Jt_lu = copy(Bnc._LNt_lu) # LU decomposition of Jt, used for fast calculation
+
+#     x_view = @view x[Bnc._I]
+#     q_view = @view q[Bnc._J]
+#     startlogq = @view(startlogqK[1:Bnc.d])
+#     Δlogq = @view(ΔlogqK[1:Bnc.d])
+#     Jt_left = @view(Jt.nzval[1:Bnc._val_num_L]) # View for the top part of the Jacobian matrix
+
+#     params = HomotopyParams(
+#         ΔlogqK, 
+#         x, #x_buffer
+#         q, #q_buffer
+#         Jt, #Jt
+#         Jt_lu, #Jt_lu
+#         x_view,
+#         q_view,
+#         startlogq, #startlogq
+#         Δlogq, #Δlogq
+#         Jt_left # Jt_left
+#     )
+    
+#     # Define the ODE system for the homotopy process
+#     homotopy_process! = function (dlogx, logx, p, t)
+#         @unpack ΔlogqK, x, q, Jt, Jt_lu,x_view, q_view, startlogq, Δlogq, Jt_left = p
+#         #update q & x
+#         @. q = exp10(startlogq + t * Δlogq)
+#         @. x = exp10(logx)
+#         #update Jt(sparse version)
+#         @. Jt_left = x_view * Bnc._Lt_sparse.nzval / q_view  # Bnc._Lt_sparse.nzval = Bnc._V
+#         # Update the dlogx
+#         lu!(Jt_lu, Jt) # recalculate the LU decomposition of Jt
+#         ldiv!(dlogx, Jt_lu',ΔlogqK)
+#     end
+
+#     saved_values = nothing
+#     callback = nothing
+#     if save_reaction_order
+#         # This object will store the computed reaction orders at each step
+#         saved_values = SavedValues(Float64, Matrix{Float64})
+        
+#         # Define what to save. We want the full reaction order matrix d(logx)/d(logqK)
+#         # which is Jt'^{-1}
+#         saving_func = function(logx, t, integrator)
+#             # Jt is already updated and factorized inside homotopy_process!
+#             # We can access it through the integrator's parameters
+#             Jt_lu_current = integrator.p.Jt_lu
+#             # We want to compute inv(Jt') which is equivalent to solving Jt' * X = I
+#             # The result is the reaction order matrix.
+#             return inv(Array(Jt_lu_current'))
+#         end
+
+#         # Create the callback
+#         callback = SavingCallback(saving_func, saved_values, saveat=get(kwargs, :saveat, []))
+#     end
+    
+#     # Combine callbacks if others are passed
+#     full_callback = isnothing(callback) ? get(kwargs, :callback, nothing) : CallbackSet(get(kwargs, :callback, nothing), callback)
+
+#     # Solve the ODE
+#     tspan = (0.0, 1.0)
+#     prob = ODEProblem(homotopy_process!, startlogx, tspan, params)
+#     sol = solve(prob, alg; reltol=reltol, abstol=abstol, callback=full_callback, kwargs...)
+#     return sol, saved_values
+# end
 
 
-#----------------Functions for modeling when envolving catalysis reactions----------------------
+#--------------------------------------------------------------------------------
+#      Functions for modeling when envolving catalysis reactions, 
+#--------------------------------------------------------------------------------
+
 
 
 function x_traj_cat(Bnc::Bnc, qK0_or_q0::Vector{<:Real}, tspan::Tuple{Real,Real};
@@ -450,7 +538,7 @@ function get_reaction_order(Bnc::Bnc, x_mat::Matrix{<:Real}, q_mat::Union{Matrix
     qK_idx::Union{Vector{Int},Nothing}=nothing,
     only_q::Bool=false,
 )::Array{Float64,3}
-    # Get the reaction order from the resulting matrix, where a regime is calculated for each row
+    # Get the reaction order from the resulting matrix, where a regime is calculated for each row by formula.
     # x_mat: Matrix of x values, each row is a different time point
     # q_mat: Matrix of qK values, each row is a different time point
     # x_idx: Indices of x to be calculated, default is all indices
@@ -493,20 +581,127 @@ function get_reaction_order(Bnc::Bnc, x_mat::Matrix{<:Real}, q_mat::Union{Matrix
 end
 
 
-function get_regime(Bnc::Bnc, x_mat::AbstractArray{<:Real}, q_mat::Union{AbstractArray{<:Real},Nothing}=nothing)
-    n_rows = size(x_mat, 1)
-    Jt = copy(Bnc._LNt_sparse)
-    regimes = [Vector{Int}(undef, Bnc.d) for _ in 1:n_rows]
-    q_mat = isnothing(q_mat) ? x2qK(Bnc, x_mat'; input_logspace=false, output_logspace=false, only_q=true)' : q_mat
-    for (i, (x, q)) in enumerate(zip(eachrow(x_mat), eachrow(q_mat)))
-        _update_Jt!(Jt, Bnc, x, q)
-        regimes[i] .= find_max_indices_per_column(Jt,Bnc.d)
+# function get_vertex_x(Bnc::Bnc, x_mat::AbstractMatrix{<:Real}; asymtotic::Bool=true)
+#     n_rows = size(x_mat, 1)
+#     regimes = [Vector{Int}(undef, Bnc.d) for _ in 1:n_rows]
+
+#     # if asymtotic
+#     #     L = Bnc._L_sparse_val_one
+#     #     func = _update_Jt_ignore_val!
+#     # else
+#     #     L = Bnc._Lt_sparse'
+#     #     func = _update_Jt!
+#     # end
+
+#     # # @show Bnc._L_sparse_val_one, asymtotic, Bnc._Lt_sparse'
+#     # q_mat = isnothing(q_mat) ? x_mat*L' : q_mat
+#     Jt = copy(Bnc._Lt_sparse)
+#     for (i, x) in enumerate(eachrow(x_mat))
+#         _update_Jt!(Jt, Bnc, x; asymtotic=asymtotic)
+#         regimes[i] .= find_max_indices_per_column(Jt,Bnc.d)
+#     end
+#     return regimes
+# end
+
+function get_vertex_x(Bnc::Bnc, x::AbstractVector{<:Real},input_logspace::Bool=false; asymtotic::Bool=true)::Vector{Int}
+    
+    # if asymtotic
+    #     L = Bnc._L_sparse_val_one
+    #     func = _update_Jt_ignore_val!
+    # else
+    #     L = Bnc._Lt_sparse'
+    #     func = _update_Jt!
+    # end
+    # q = isnothing(q) ? L * x : q
+
+    x = input_logspace ? exp10.(x) : x
+    Jt = copy(Bnc._Lt_sparse)
+    _update_Jt!(Jt, Bnc, x; asymtotic=asymtotic)
+    return find_max_indices_per_column(Jt)
+end
+
+
+# function get_vertex_x_slow(Bnc::Bnc, x::AbstractVector{<:Real}; asymtotic::Bool=true)
+#     vtx = find_all_vertices!(Bnc)
+#     if !asymtotic
+#         for idx in vtx
+#             C,C0 = get_C_C0_x!(Bnc, idx) # ensure C and C0 are calculated
+#             if all(C * log10.(x) .+ C0 .> 0)
+#                 return idx
+#             end
+#         end
+#     else
+#         for idx in vtx
+#             C,_ = get_C_C0_x!(Bnc, idx) # ensure C and C0 are calculated
+#             if all(C * log10.(x) .> 0)
+#                 return idx
+#             end
+#         end
+#     end
+#     @error("No finite neighbor found for $x")
+# end
+
+
+# function get_vertex_qK(Bnc::Bnc, x::AbstractMatrix{<:Real}; kwargs...) 
+#     [get_vertex_qK_slow(Bnc, row; kwargs...) for row in eachrow(x)]
+# end
+
+function get_vertex_qK_slow(Bnc::Bnc, x::AbstractVector{<:Real}; input_logspace::Bool=false, asymtotic::Bool=true, q_calc_asym::Bool=false)
+    vtx = find_all_vertices!(Bnc)
+    # @show vtx
+    
+    if asymtotic
+        vtx = vtx[Bnc.vertices_real_idx]
     end
-    return regimes
+
+    x = input_logspace ? exp10.(x) : x
+    
+    logqK = q_calc_asym ? [log10.(model._L_sparse_val_one * x); model.N * log10.(x)] : x2qK(model,x; input_logspace=false, output_logspace=true)
+    
+    if !asymtotic
+        for idx in vtx
+            if get_singularity!(Bnc, idx) != 0
+                continue # skip singular vertices
+            end
+            C,C0 = get_C_C0_qK!(Bnc, idx) # ensure C and C0 are calculated
+            # @show C, C0, logqK
+            if all(C * logqK .+ C0 .> -floatmin(Float64))
+                return idx
+            end
+        end
+    else
+        for idx in vtx
+            if get_singularity!(Bnc, idx) != 0
+                continue # skip singular vertices
+            end
+            C,_ = get_C_C0_qK!(Bnc, idx) # ensure C and C0 are calculated
+            # @show C, logqK
+            if all(C * logqK .> -floatmin(Float64)) # seems we need to add sign to make sure all points went into one vertex
+                return idx
+            end
+        end
+    end
+    @error("No finite neighbor found for $x")
 end
 
 
 
+
+function get_vertex_qK(Bnc::Bnc,x::Vector{<:Real}, q::Union{Vector{<:Real},Nothing}=nothing)::Vector{Int}
+    q = isnothing(q) ? Bnc._Lt_sparse' * x : q
+    vtx_x = get_vertex_x(Bnc, x, q)
+    singularity = get_singularity!(Bnc,vtx_x)
+    if singularity != 0
+        finite_neighbors = get_finite_neighbors!(Bnc, vtx_x)
+        for neighbor in finite_neighbors
+                C,C0 = get_C_C0_qK!(Bnc,neighbor)
+                if all(C * log10.(q) .+ C0 .> 0)
+                    return neighbor
+                end
+            end
+        end
+        @error("No finite neighbor found for x vertex $vtx_x could caused by non-symtotic conditons")
+end
 
 
 

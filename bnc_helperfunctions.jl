@@ -154,11 +154,11 @@ end
 
 function _ode_solution_wrapper(
     solution::ODESolution
-    )::Tuple{Vector{Float64}, Matrix{Float64}}
+    )::Tuple{Vector{Float64}, Vector{Vector{Float64}}}
     """
     A wrapper function to convert the ODESolution to a t vector and u matrix
     """
-    return solution.t, stack(solution.u)'
+    return solution.t, solution.u
 end
 
 
@@ -252,45 +252,68 @@ function _check_valid_idx(idx::Vector{Int},Mtx::Matrix{<:Any})
     return true
 end
 
-function _update_Jt!(Jt,Bnc::Bnc, x::AbstractArray{<:Real}, q::AbstractArray{<:Real})
+function _update_Jt!(Jt,Bnc::Bnc, x::AbstractArray{<:Real}, q::Union{AbstractArray{<:Real},Nothing}=nothing;asymtotic::Bool=false)
     # helper functions to speed up the calculation of lu decompostion of logder_qK_x.
-    # One shall initialize Jt_lu and Jt before calling this function.
     # eg:
     # Jt = copy(Bnc._LNt_sparse)
-    # Jt_lu = copy(Bnc._LNt_lu)
     Jt_left = @view(Jt.nzval[1:Bnc._val_num_L])
     x_view = @view(x[Bnc._I])
-    q_view = @view(q[Bnc._J])
-    @. Jt_left = x_view * Bnc._Lt_sparse.nzval / q_view
+    if asymtotic
+        if isnothing(q)
+            @. Jt_left = x_view 
+        else
+            @. Jt_left = x_view ./ q[Bnc._J]
+        end
+    else
+        if isnothing(q)
+            @. Jt_left = x_view * Bnc._Lt_sparse.nzval
+        else
+            @. Jt_left = x_view * Bnc._Lt_sparse.nzval ./ q[Bnc._J]
+        end
+    end
     return nothing
     # lu!(Jt_lu, Jt)
 end
 
-function find_max_indices_per_column(S::SparseMatrixCSC{Tv, Ti},n::Union{Int,Nothing}=nothing) where {Tv, Ti}
-    # Get the number of columns from the sparse matrix
-    n = isnothing(n) ? size(S, 2) : n
-    # Pre-allocate the result
-    max_indices = zeros(Ti, n)
-    # Access the raw CSC data structures for efficiency
+# function _update_Jt_ignore_val!(Jt,Bnc::Bnc, x::AbstractArray{<:Real}, q::AbstractArray{<:Real})
+#     # helper functions to speed up the calculation of lu decompostion of logder_qK_x.
+#     # Jt = copy(Bnc._LNt_sparse)
+#     Jt_left = @view(Jt.nzval[1:Bnc._val_num_L])
+#     x_view = @view(x[Bnc._I])
+#     # q_view = @view(q[Bnc._J])
+#     @. Jt_left = x_view #/ q_view
+#     return nothing
+#     # lu!(Jt_lu, Jt)
+# end
+
+
+function find_max_indices_per_column(S::SparseMatrixCSC{Tv, Ti}, first_n_col::Union{Int,Nothing}=nothing) where {Tv, Ti}
+    first_n_col = isnothing(first_n_col) ? size(S, 2) : first_n_col
+    max_indices = zeros(Ti, first_n_col)
+
     colptr = S.colptr
     rowval = S.rowval
-    nzval = S.nzval
-    # Iterate over each column of the matrix
-    for j in 1:n
-        # Determine the range of indices in nzval and rowval for the current column j
-        # This range points to the non-zero elements of column j.
-        col_range = colptr[j] : (colptr[j+1] - 1)
-        if !isempty(col_range) #skip empty columns
-            col_values = view(nzval, col_range)
-            # We only need the index, so we ignore the value with _.
-            _, local_max_idx = findmax(col_values)
-            # The global index is the start of the column's range plus the local index minus one.
-            global_max_idx = col_range[1] + local_max_idx - 1
-            max_indices[j] = rowval[global_max_idx]
+    nzval  = S.nzval
+
+    @inbounds for j in 1:first_n_col
+        col_start = colptr[j]
+        col_end   = colptr[j+1] - 1
+        if col_start <= col_end
+            max_val = typemin(Tv)
+            max_row = rowval[col_start]
+            for idx in col_start:col_end
+                v = nzval[idx]
+                if v > max_val
+                    max_val = v
+                    max_row = rowval[idx]
+                end
+            end
+            max_indices[j] = max_row
         end
     end
     return max_indices
 end
+
 
 function matrix_iter(f::Function, M::AbstractArray{<:Any,2}; byrow::Bool=true,multithread::Bool=true)
     # Get the number of rows from the input matrix
@@ -358,15 +381,17 @@ function matrix_iter(f::Function, M::AbstractArray{<:Any,2}; byrow::Bool=true,mu
     end
 end
 
+
+
 """
-Helper function to convert a sum of log10 terms into a product form.
+Symbolic helper function to convert a sum of log10 terms into a product form.
 from ∑a log b to log ∏b^a
 
 The final expression contains ∏b^a term.
 """
 function handle_log_weighted_sum(expr)
     get_single = @rule(+(~~xs) => [~~xs...])
-    get_coeff = SymbolicUtils.Chain([@rule(~c * log10(~b) => (~b)^(~c)), @rule(log10(~b) => (~b))])
+    get_coeff = SymbolicUtils.Chain([@rule(~x => exp10(~x)),@rule(~c * log10(~b) => (~b)^(~c)), @rule(log10(~b) => (~b))])
     terms = get_single(expr)
     subs_expr = get_coeff.(terms) |> prod
     if contains(string(subs_expr), "log10")
@@ -377,3 +402,31 @@ function handle_log_weighted_sum(expr)
 end
 
 
+# """
+# Helper funtions to taking a classification vector and return a vector of colors by :viridis color map.
+# """
+# function classification_to_colors(classification::Vector{Int}, color_map::String="viridis")
+#     # Convert a classification vector to a vector of colors using the specified color map
+#     # The color_map can be "viridis", "plasma", "inferno", "magma", or "cividis"
+#     if color_map == "viridis"
+#         return cgrad(:viridis, length(unique(classification)))[classification]
+#     elseif color_map == "plasma"
+#         return cgrad(:plasma, length(unique(classification)))[classification]
+#     elseif color_map == "inferno"
+#         return cgrad(:inferno, length(unique(classification)))[classification]
+#     elseif color_map == "magma"
+#         return cgrad(:magma, length(unique(classification)))[classification]
+#     elseif color_map == "cividis"
+#         return cgrad(:cividis, length(unique(classification)))[classification]
+#     else
+#         @error "Unknown color map: $color_map"
+#     end
+# end
+
+"""
+Helper functions to find difference between two vectors
+"""
+function vector_difference(v1::AbstractVector{T}, v2::AbstractVector{T}) where T
+    diff_index = findall(v1 .!= v2)
+    return countmap(zip(v1[diff_index], v2[diff_index]))
+end
