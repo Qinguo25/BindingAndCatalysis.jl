@@ -8,6 +8,7 @@ using DifferentialEquations
 using StatsBase
 using SparseArrays
 using JuMP
+using DataStructures:Queue,enqueue!,dequeue!,isempty
 # using Interpolations
 
 # ---------------------Define the struct of binding and catalysis networks----------------------------------
@@ -74,29 +75,30 @@ struct CatalysisData
 end
 
 
-mutable struct Vertex{T}
+mutable struct Vertex{F,T}
     # --- Initial / Identifying Properties ---
-    perm::Vector{Int} # The regime vector
+    perm::Vector{T} # The regime vector
     idx::Int # Index of the vertex in the Bnc.vertices list
     real::Bool # Whether the vertex is real or fake vertex.
     
     # --- Basic Calculated Properties ---
-    P::Matrix{Int}
-    P0::Vector{T} # Changed from Num to T
-    M::Matrix{Int}
-    M0::Vector{T} # Changed from Num to T
-    C_x::Matrix{Int}
-    C0_x::Vector{T} # Changed from Num to T
+    P::SparseMatrixCSC{Int, Int}
+    P0::Vector{F} 
+    M::SparseMatrixCSC{Int, Int}
+    M0::Vector{F} #
+    C_x::SparseMatrixCSC{Int, Int}
+    C0_x::Vector{F} 
 
     # LU decomposition of M
-    _M_lu::LU
+    # _M_lu::LU
+    _M_lu::SparseArrays.UMFPACK.UmfpackLU{Float64, Int}
 
     # --- Expensive Calculated Properties ---
-    singularity::Int
-    H::Matrix{Float64}
-    H0::Vector{T} # Changed from Num to T
-    C_qK::Matrix{Float64}
-    C0_qK::Vector{T} # Changed from Num to T
+    singularity::T
+    H::SparseMatrixCSC{Float64, Int} # Taking inverse, can have Float.
+    H0::Vector{F} 
+    C_qK::SparseMatrixCSC{Float64, Int}
+    C0_qK::Vector{F} 
     
     #--- Neighbors ---
     neighbors_idx::Vector{Int}
@@ -104,16 +106,14 @@ mutable struct Vertex{T}
     infinite_neighbors_idx::Vector{Int}
 
     # The inner constructor also needs to be updated for the parametric type
-    function Vertex{T}(;perm, P, P0, M, M0, C_x, C0_x, idx,real) where {T<:Real}
-        _M_lu = lu(Float64.(M), check=false) # It's good practice to ensure M is Float64 for LU
-        singularity = issuccess(_M_lu) ? 0 : -1
-        
+    function Vertex{F,T}(;perm, P, P0, M, M0, C_x, C0_x, idx,real,singularity) where {F<:Real ,T<:Integer}
+        _M_lu = lu(M, check=false) # It's good practice to ensure M is Float64 for LU
         # Use new{T} to construct an instance of Vertex{T}
-        new{T}(perm, idx,real, P, P0, M, M0, C_x, C0_x, _M_lu, singularity,
-            Matrix{Float64}(undef, 0, 0), # H
-            Vector{T}(undef, 0),          # H0
-            Matrix{Float64}(undef, 0, 0), # C_qK
-            Vector{T}(undef, 0),          # C0_qK
+        new{F,T}(perm, idx,real, P, P0, M, M0, C_x, C0_x, _M_lu, singularity,
+            SparseMatrixCSC{Float64, Int}(undef, 0, 0), # H
+            Vector{F}(undef, 0),          # H0
+            SparseMatrixCSC{Float64, Int}(undef, 0, 0), # C_qK
+            Vector{F}(undef, 0),          # C0_qK
             Int[], # neighbors_idx (using empty literal is cleaner)
             Int[], # finite_neighbors_idx
             Int[]  # infinite_neighbors_idx
@@ -121,7 +121,9 @@ mutable struct Vertex{T}
     end
 end
 
-mutable struct Bnc
+
+
+mutable struct Bnc{T}
     # ----Parameters of the binding networks------
     N::Matrix{Int} # binding reaction matrix
     L::Matrix{Int} # conservation law matrix
@@ -139,16 +141,17 @@ mutable struct Bnc
     catalysis::Union{Any,Nothing} # Using Any for placeholder for CatalysisData
 
     #--------Vertex data--------
-    vertices_all::Vector{Vector{Int}} # all feasible regimes.
-    vertices_real_idx::Vector{Int} # Index of those are real vertices.
-    vertices_singularity::Vector{Int} # All vertices' singularity.
-    vertices_idx::Dict{Vector{Int},Int} # map from permutation vector to its idx in the vertices list
+    vertices_perm::Vector{Vector{T}} # all feasible regimes.
+    vertices_idx::Dict{Vector{T},Int} # map from permutation vector to its idx in the vertices list
+    vertices_real_flag::Vector{Bool} # While this vertice is real
+    vertices_singularity::Vector{T} # While this vertice is singular.
     
-    vertices_distance::Matrix{Int} # distance between vertices
-    vertices_change_dir_x::Matrix{Int} # how the vertices should change under x space to reach its neighbor vertices.
-    vertices_change_dir_qK::Matrix{Int} # how the vertices should change under qK space to reach its neighbor vertices.
+    
+    vertices_distance::Matrix{T} # distance between vertices
+    vertices_change_dir_x::Matrix{T} # how the vertices should change under x space to reach its neighbor vertices.
+    vertices_change_dir_qK::Matrix{T} # how the vertices should change under qK space to reach its neighbor vertices.
 
-    vertices_data::Dict{Vector{Int},Any} # Using Any for placeholder for Vertex
+    vertices_data::Dict{Vector{T},Any} # Using Any for placeholder for Vertex
 
     #------other helper parameters------
     direction::Int8 # direction of the binding reactions, determine the ray direction for invertible regime, calculated by sign of det[L;N]
@@ -178,9 +181,10 @@ mutable struct Bnc
     _valid_L_idx::Vector{Vector{Int}} #record the non-zero position for L
 
     _L_sparse_val_one::SparseMatrixCSC{Int,Int} # sparse version of L with only non-zero elements set to 1, used for fast calculation
+    _N_sparse::SparseMatrixCSC{Int,Int}
 
     # Inner constructor 
-    function Bnc(N, L, x_sym, q_sym, K_sym, catalysis)
+    function Bnc{T}(N, L, x_sym, q_sym, K_sym, catalysis) where {T<:Integer}
         # get desired values
         r, n = size(N)
         d, n_L = size(L)
@@ -222,24 +226,22 @@ mutable struct Bnc
 
         # Create a sparse matrix for L with only non-zero elements set to 1
         _L_sparse_val_one = sparse(sign.(L)) # sparse version of L with
+        _N_sparse = sparse(N) # sparse version of N, used for fast calculation
 
-        # --- FIX IS HERE ---
-        # Call `new` with positional arguments, not keyword arguments.
-        # The order must match the field order in the struct definition.
         new(
             # Fields 1-5
             N, L, r, n, d,
             # Fields 6-9
             x_sym, q_sym, K_sym, catalysis,
             # Fields 10-12 (Initialized empty)
-            Vector{Vector{Int}}[],                # vertices_all
-            Int[],                          # vertices_real_idx
-            Int[],                          # vertices_singularity
-            Dict{Vector{Int},Int}(),            # verices_idx
-            Matrix{Int}(undef, 0, 0),             # vertices_distance
-            Matrix{Int}(undef, 0, 0),             # vertices_change_dir_x
-            Matrix{Int}(undef, 0, 0),             # vertices_change_dir_qK
-            Dict{Vector{Int}, Any}(),              # vertices_data
+            Vector{T}[],                # vertices_perm
+            Dict{Vector{T},Int}(),            # verices_idx
+            Bool[],                          # vertices_real_flag
+            T[],                          # vertices_singularity
+            Matrix{T}(undef, 0, 0),             # vertices_distance
+            Matrix{T}(undef, 0, 0),             # vertices_change_dir_x
+            Matrix{T}(undef, 0, 0),             # vertices_change_dir_qK
+            Dict{Vector{T}, Any}(),              # vertices_data
             # Fields 13-28 (Calculated values)
             direction,
             _anchor_log_x, _anchor_log_qK,
@@ -249,7 +251,8 @@ mutable struct Bnc
             _I, _J, _V, _val_num_L,
             _Nt_sparse, _IN, _JN, _VN,
             _valid_L_idx,
-            _L_sparse_val_one
+            _L_sparse_val_one,
+            _N_sparse,
         )
     end
 end
@@ -298,7 +301,8 @@ function Bnc(;
         catalysis_data = nothing
     end
 
-    Bnc(N, L, x_sym, q_sym, K_sym, catalysis_data)
+    T = get_int_type(n) 
+    Bnc{T}(N, L, x_sym, q_sym, K_sym, catalysis_data)
 end
 
 

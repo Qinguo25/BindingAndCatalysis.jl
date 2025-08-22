@@ -164,10 +164,6 @@ end
 
 function pairwise_distance(data::AbstractVector, dist_func::Function; is_symmetric::Bool=true)
     n = length(data)
-    # Handle empty input gracefully
-    if n == 0
-        return Matrix{Any}(undef, 0, 0)
-    end
     # Determine the output type by calculating one distance value first.
     # This creates a type-stable matrix, which is more efficient.
     T = typeof(dist_func(data[1], data[1]))
@@ -197,7 +193,21 @@ log10_sym(x) = x==1 ? Num(0) : Symbolics.wrap(Symbolics.Term(log10, [x,]))
 exp10_sym(x) = Symbolics.wrap(Symbolics.Term(exp10, [x,]))
 
 
-
+function get_int_type(n)
+    # Get the integer type based on the number of bits
+    m = n+1
+    if m <= typemax(Int8)
+        return Int8
+    elseif m <= typemax(Int16)
+        return Int16
+    elseif m <= typemax(Int32)
+        return Int32
+    elseif m <= typemax(Int64)
+        return Int64
+    else
+        return Int128
+    end
+end
 
 
 
@@ -275,16 +285,16 @@ function _update_Jt!(Jt,Bnc::Bnc, x::AbstractArray{<:Real}, q::Union{AbstractArr
     # lu!(Jt_lu, Jt)
 end
 
-# function _update_Jt_ignore_val!(Jt,Bnc::Bnc, x::AbstractArray{<:Real}, q::AbstractArray{<:Real})
-#     # helper functions to speed up the calculation of lu decompostion of logder_qK_x.
-#     # Jt = copy(Bnc._LNt_sparse)
-#     Jt_left = @view(Jt.nzval[1:Bnc._val_num_L])
-#     x_view = @view(x[Bnc._I])
-#     # q_view = @view(q[Bnc._J])
-#     @. Jt_left = x_view #/ q_view
-#     return nothing
-#     # lu!(Jt_lu, Jt)
-# end
+function _update_Jt_ignore_val!(Jt,Bnc::Bnc, x::AbstractArray{<:Real}, q::AbstractArray{<:Real})
+    # helper functions to speed up the calculation of lu decompostion of logder_qK_x.
+    Jt = copy(Bnc._LNt_sparse)
+    Jt_left = @view(Jt.nzval[1:Bnc._val_num_L])
+    x_view = @view(x[Bnc._I])
+    # q_view = @view(q[Bnc._J])
+    @. Jt_left = x_view #/ q_view
+    return nothing
+    # lu!(Jt_lu, Jt)
+end
 
 
 function find_max_indices_per_column(S::SparseMatrixCSC{Tv, Ti}, first_n_col::Union{Int,Nothing}=nothing) where {Tv, Ti}
@@ -428,5 +438,7 @@ Helper functions to find difference between two vectors
 """
 function vector_difference(v1::AbstractVector{T}, v2::AbstractVector{T}) where T
     diff_index = findall(v1 .!= v2)
-    return countmap(zip(v1[diff_index], v2[diff_index]))
+    mp = countmap(zip(v1[diff_index], v2[diff_index]))
+    mp_sort = sort(collect(mp), by=x->x.second, rev=true)
+    return mp_sort
 end
