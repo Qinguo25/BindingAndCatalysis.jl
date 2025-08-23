@@ -262,39 +262,18 @@ function _check_valid_idx(idx::Vector{Int},Mtx::Matrix{<:Any})
     return true
 end
 
-function _update_Jt!(Jt,Bnc::Bnc, x::AbstractArray{<:Real}, q::Union{AbstractArray{<:Real},Nothing}=nothing;asymtotic::Bool=false)
-    # helper functions to speed up the calculation of lu decompostion of logder_qK_x.
-    # eg:
-    # Jt = copy(Bnc._LNt_sparse)
-    Jt_left = @view(Jt.nzval[1:Bnc._val_num_L])
-    x_view = @view(x[Bnc._I])
-    if asymtotic
-        if isnothing(q)
-            @. Jt_left = x_view 
-        else
-            @. Jt_left = x_view ./ q[Bnc._J]
-        end
-    else
-        if isnothing(q)
-            @. Jt_left = x_view * Bnc._Lt_sparse.nzval
-        else
-            @. Jt_left = x_view * Bnc._Lt_sparse.nzval ./ q[Bnc._J]
-        end
-    end
-    return nothing
-    # lu!(Jt_lu, Jt)
-end
 
-function _update_Jt_ignore_val!(Jt,Bnc::Bnc, x::AbstractArray{<:Real}, q::AbstractArray{<:Real})
-    # helper functions to speed up the calculation of lu decompostion of logder_qK_x.
-    Jt = copy(Bnc._LNt_sparse)
-    Jt_left = @view(Jt.nzval[1:Bnc._val_num_L])
-    x_view = @view(x[Bnc._I])
-    # q_view = @view(q[Bnc._J])
-    @. Jt_left = x_view #/ q_view
-    return nothing
-    # lu!(Jt_lu, Jt)
-end
+
+# function _update_Jt_ignore_val!(Jt,Bnc::Bnc, x::AbstractArray{<:Real}, q::AbstractArray{<:Real})
+#     # helper functions to speed up the calculation of lu decompostion of logder_qK_x.
+#     Jt = copy(Bnc._LNt_sparse)
+#     Jt_left = @view(Jt.nzval[1:Bnc._val_num_L])
+#     x_view = @view(x[Bnc._I])
+#     # q_view = @view(q[Bnc._J])
+#     @. Jt_left = x_view #/ q_view
+#     return nothing
+#     # lu!(Jt_lu, Jt)
+# end
 
 
 function find_max_indices_per_column(S::SparseMatrixCSC{Tv, Ti}, first_n_col::Union{Int,Nothing}=nothing) where {Tv, Ti}
@@ -311,7 +290,7 @@ function find_max_indices_per_column(S::SparseMatrixCSC{Tv, Ti}, first_n_col::Un
         if col_start <= col_end
             max_val = typemin(Tv)
             max_row = rowval[col_start]
-            for idx in col_start:col_end
+            @inbounds for idx in col_start:col_end
                 v = nzval[idx]
                 if v > max_val
                     max_val = v
@@ -441,4 +420,14 @@ function vector_difference(v1::AbstractVector{T}, v2::AbstractVector{T}) where T
     mp = countmap(zip(v1[diff_index], v2[diff_index]))
     mp_sort = sort(collect(mp), by=x->x.second, rev=true)
     return mp_sort
+end
+
+"""
+CUDA helper to get access to SM number and maximum threads per SM.
+"""
+function GPU_SM_threads_num()
+    dev = CUDA.device()
+    SM = attribute(dev, CUDA.DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT)
+    max_threads = attribute(dev, CUDA.DEVICE_ATTRIBUTE_MAX_THREADS_PER_BLOCK)
+    return SM, max_threads
 end

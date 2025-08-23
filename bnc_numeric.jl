@@ -145,8 +145,6 @@ function qK2x(Bnc::Bnc, qK::AbstractArray{<:Real,2};kwargs...)::AbstractArray{<:
     return matrix_iter(f, qK;byrow=false,multithread=false)
 end
 
-
-
 #----------------Functions using homotopyContinuous to moving across x space along with qK change----------------------
 struct HomotopyParams{V<:Vector{Float64},
     SV1<:SubArray,SV2<:SubArray,SV3<:SubArray,SV4<:SubArray,SV5<:SubArray}
@@ -562,16 +560,25 @@ function get_reaction_order(Bnc::Bnc, x_mat::Matrix{<:Real}, q_mat::Union{Matrix
     
     Jt = copy(Bnc._LNt_sparse)
     Jt_lu = copy(Bnc._LNt_lu)
+
+    Jt_left = @view(Jt.nzval[1:Bnc._val_num_L])
+    
+    function _update_Jt!(Jt_left, x::AbstractArray{<:Real}, q::AbstractArray{<:Real})
+        x_view = @view(x[Bnc._I])
+        @. Jt_left = x_view * Bnc._Lt_sparse.nzval ./ q[Bnc._J]
+        return nothing
+    end
+
     if flag # qK_idx is shorter
         for (i, (x, q)) in enumerate(zip(eachrow(x_mat), eachrow(q_mat)))
-            _update_Jt!(Jt, Bnc, x, q)
+            _update_Jt!(Jt_left, x, q)
             lu!(Jt_lu, Jt) # recalculate the LU decomposition of Jt
             ldiv!(tmp_regime, Jt_lu', B')
             regimes[i,:,:] .= A * tmp_regime
         end
     else
         for (i, (x, q)) in enumerate(zip(eachrow(x_mat), eachrow(q_mat)))
-            _update_Jt!(Jt, Bnc, x, q)
+            _update_Jt!(Jt_left, x, q)
             lu!(Jt_lu, Jt) # recalculate the LU decomposition of Jt
             ldiv!(tmp_regime, Jt_lu, A')
             regimes[i,:,:] .= (B * tmp_regime)'
@@ -603,43 +610,35 @@ end
 #     return regimes
 # end
 
-function get_vertex_x(Bnc::Bnc, x::AbstractVector{<:Real},input_logspace::Bool=false; asymtotic::Bool=true)::Vector{Int}
-    
-    # if asymtotic
-    #     L = Bnc._L_sparse_val_one
-    #     func = _update_Jt_ignore_val!
-    # else
-    #     L = Bnc._Lt_sparse'
-    #     func = _update_Jt!
-    # end
-    # q = isnothing(q) ? L * x : q
-
+function get_vertex_x(Bnc::Bnc{T}, x::AbstractVector{<:Real};input_logspace::Bool=false,asymtotic::Bool=true)::Vector{T} where T
     x = input_logspace ? exp10.(x) : x
-    Jt = copy(Bnc._Lt_sparse)
-    _update_Jt!(Jt, Bnc, x; asymtotic=asymtotic)
-    return find_max_indices_per_column(Jt)
+    Lt = Bnc._Lt_sparse
+
+    d = size(Lt, 2)
+    max_indices = zeros(T, d)
+
+    colptr = Lt.colptr
+    rowval = Lt.rowval
+    nzval  = asymtotic ? @view(x[Bnc._I]) : @view(x[Bnc._I]) .* Lt.nzval
+
+    @inbounds for j in 1:d
+        col_start_idx = colptr[j]
+        col_end_idx   = colptr[j+1] - 1
+        if col_start_idx <= col_end_idx
+            val_row_idx = rowval[col_start_idx]
+            val_max = nzval[col_start_idx]
+            @inbounds for idx in col_start_idx+1:col_end_idx
+                v = nzval[idx]
+                if v > val_max
+                    val_max = v
+                    val_row_idx = rowval[idx]
+                end
+            end
+            max_indices[j] = val_row_idx
+        end
+    end
+    return max_indices
 end
-
-
-# function get_vertex_x_slow(Bnc::Bnc, x::AbstractVector{<:Real}; asymtotic::Bool=true)
-#     vtx = find_all_vertices!(Bnc)
-#     if !asymtotic
-#         for idx in vtx
-#             C,C0 = get_C_C0_x!(Bnc, idx) # ensure C and C0 are calculated
-#             if all(C * log10.(x) .+ C0 .> 0)
-#                 return idx
-#             end
-#         end
-#     else
-#         for idx in vtx
-#             C,_ = get_C_C0_x!(Bnc, idx) # ensure C and C0 are calculated
-#             if all(C * log10.(x) .> 0)
-#                 return idx
-#             end
-#         end
-#     end
-#     @error("No finite neighbor found for $x")
-# end
 
 
 # function get_vertex_qK(Bnc::Bnc, x::AbstractMatrix{<:Real}; kwargs...) 
@@ -651,7 +650,7 @@ function get_vertex_qK_slow(Bnc::Bnc, x::AbstractVector{<:Real}; input_logspace:
     # @show vtx
     
     if asymtotic
-        vtx = vtx[Bnc.vertices_real_idx]
+        vtx = @view vtx[Bnc.vertices_real_flag]
     end
 
     x = input_logspace ? exp10.(x) : x
@@ -687,9 +686,10 @@ end
 
 
 
-function get_vertex_qK(Bnc::Bnc,x::Vector{<:Real}, q::Union{Vector{<:Real},Nothing}=nothing)::Vector{Int}
-    q = isnothing(q) ? Bnc._Lt_sparse' * x : q
-    vtx_x = get_vertex_x(Bnc, x, q)
+function get_vertex_qK(Bnc::Bnc,x::Vector{<:Real}, qK::Union{Vector{<:Real},Nothing}=nothing;kwargs...)::Vector{Int}
+    qK = isnothing(qK) ? x2qK(x,kwargs...,output_logspace=true) : log10.(qK)
+    vtx_x = get_vertex_x(Bnc)
+
     singularity = get_singularity!(Bnc,vtx_x)
     if singularity != 0
         finite_neighbors = get_finite_neighbors!(Bnc, vtx_x)
@@ -703,7 +703,13 @@ function get_vertex_qK(Bnc::Bnc,x::Vector{<:Real}, q::Union{Vector{<:Real},Nothi
         @error("No finite neighbor found for x vertex $vtx_x could caused by non-symtotic conditons")
 end
 
-
+function _within_vertex_qK(Bnc::Bnc, perm::Vector{<:Integer},qK::AbstractVector{<:Real})
+    """
+    Check if the vertex represented by perm is within the Bnc.
+    """
+    find_all_vertices!(Bnc)
+    return haskey(Bnc.vertices_idx, perm)
+end
 
 
 

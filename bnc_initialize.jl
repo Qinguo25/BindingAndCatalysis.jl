@@ -7,7 +7,8 @@ using LinearAlgebra
 using DifferentialEquations
 using StatsBase
 using SparseArrays
-using JuMP
+# using JuMP
+# using CUDA # Speedup calculation for distance matrix
 using DataStructures:Queue,enqueue!,dequeue!,isempty
 # using Interpolations
 
@@ -91,7 +92,7 @@ mutable struct Vertex{F,T}
 
     # LU decomposition of M
     # _M_lu::LU
-    _M_lu::SparseArrays.UMFPACK.UmfpackLU{Float64, Int}
+    # _M_lu::SparseArrays.UMFPACK.UmfpackLU{Float64, Int}
 
     # --- Expensive Calculated Properties ---
     singularity::T
@@ -107,9 +108,11 @@ mutable struct Vertex{F,T}
 
     # The inner constructor also needs to be updated for the parametric type
     function Vertex{F,T}(;perm, P, P0, M, M0, C_x, C0_x, idx,real,singularity) where {F<:Real ,T<:Integer}
-        _M_lu = lu(M, check=false) # It's good practice to ensure M is Float64 for LU
+        # _M_lu = lu(M, check=false) # It's good practice to ensure M is Float64 for LU
         # Use new{T} to construct an instance of Vertex{T}
-        new{F,T}(perm, idx,real, P, P0, M, M0, C_x, C0_x, _M_lu, singularity,
+        new{F,T}(perm, idx,real, P, P0, M, M0, C_x, C0_x,
+            # _M_lu,
+            singularity,
             SparseMatrixCSC{Float64, Int}(undef, 0, 0), # H
             Vector{F}(undef, 0),          # H0
             SparseMatrixCSC{Float64, Int}(undef, 0, 0), # C_qK
@@ -147,9 +150,9 @@ mutable struct Bnc{T}
     vertices_singularity::Vector{T} # While this vertice is singular.
     
     
-    vertices_distance::Matrix{T} # distance between vertices
-    vertices_change_dir_x::Matrix{T} # how the vertices should change under x space to reach its neighbor vertices.
-    vertices_change_dir_qK::Matrix{T} # how the vertices should change under qK space to reach its neighbor vertices.
+    vertices_neighbor_mat::SparseMatrixCSC{Bool, Int} # distance between vertices
+    vertices_change_dir_x::SparseMatrixCSC{T, Int} # how the vertices should change under x space to reach its neighbor vertices.
+    vertices_change_dir_qK::SparseMatrixCSC{T, Int} # how the vertices should change under qK space to reach its neighbor vertices.
 
     vertices_data::Dict{Vector{T},Any} # Using Any for placeholder for Vertex
 
@@ -238,9 +241,9 @@ mutable struct Bnc{T}
             Dict{Vector{T},Int}(),            # verices_idx
             Bool[],                          # vertices_real_flag
             T[],                          # vertices_singularity
-            Matrix{T}(undef, 0, 0),             # vertices_distance
-            Matrix{T}(undef, 0, 0),             # vertices_change_dir_x
-            Matrix{T}(undef, 0, 0),             # vertices_change_dir_qK
+            SparseMatrixCSC{Bool, Int}(undef, 0, 0),             # vertices_neighbor_mat
+            SparseMatrixCSC{T, Int}(undef, 0, 0),             # vertices_change_dir_x
+            SparseMatrixCSC{T, Int}(undef, 0, 0),             # vertices_change_dir_qK
             Dict{Vector{T}, Any}(),              # vertices_data
             # Fields 13-28 (Calculated values)
             direction,
