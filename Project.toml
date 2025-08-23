@@ -1,7 +1,9 @@
 [deps]
 BenchmarkTools = "6e4b80f9-dd63-53aa-95a3-0cdb28fa8baf"
+CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba"
 ConstructionBase = "187b0558-2788-49d3-abe0-74a17ed4e7c9"
 DataInterpolations = "82cc6244-b520-54b8-b5a6-8a565e85f1d0"
+DataStructures = "864edb3b-99cc-5e75-8d2d-829cb0a9cfe8"
 DifferentialEquations = "0c46a032-eb83-5123-abaf-570d42b7fbaa"
 FileIO = "5789e2e9-d7fb-5bc7-8068-2c6fae9b9549"
 GLFW = "f7f18e0c-5ee9-5ccd-a5bf-e8befd85ed98"
