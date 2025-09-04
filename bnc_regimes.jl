@@ -181,76 +181,118 @@ function find_all_vertices(L::Matrix{Int} ; eps=1e-9, dominance_ratio=Inf, asymt
     end
 end
 
-function calc_singularity(perm)
-    length(perm) -length(Set(perm))
-end
+
 """
 find all vertices in Bnc, and store them in Bnc.vertices_perm.
 With its idx Dict in Bnc.vertices_idx.
 Also calculate if the vertex is real or fake, and its singularity.
 """
-function find_all_vertices!(Bnc::Bnc;) # cheap enough for now
+function find_all_vertices!(Bnc::Bnc{T};) where T # cheap enough for now
     if isempty(Bnc.vertices_perm) || isempty(Bnc.vertices_real_flag)
+        print("Start finding all vertices, it may takes a while.\n")
+    
+        # finding non-asymtotic vettices, which gives all vertices both real and fake, singular and non-singular
         Bnc.vertices_perm = find_all_vertices(Bnc.L; asymtotic=false)
+
+        # Create the idx for each vertex
         Bnc.vertices_idx = Dict(a=>idx for (idx, a) in enumerate(Bnc.vertices_perm)) # Map from vertex to its index
+
+        # finding asymtotic vertices, which is the real vertices.
         real_vtx = Set(find_all_vertices(Bnc.L; asymtotic=true))
         Bnc.vertices_real_flag = Bnc.vertices_perm .∈ Ref(real_vtx)
-        Bnc.vertices_singularity = Bnc.vertices_perm .|> calc_singularity
+        
+        # Caltulate the singularity for each vertices
+        singularity = Vector{T}(undef, length(Bnc.vertices_perm))
+
+        function calc_singularity(perm)
+            # helper function for helping calculate singularity when vertex is real.
+            length(perm) -length(Set(perm))
+        end
+
+        Threads.@threads for i in  1:length(Bnc.vertices_perm)
+            is_real = Bnc.vertices_real_flag[i]
+            if is_real
+                singularity[i] = calc_singularity(Bnc.vertices_perm[i])
+            else
+                singularity[i] = -1 # fake vertices are marked with -1
+            end
+        end
+            
+        Bnc.vertices_singularity = singularity
+        print("Done, with $(length(Bnc.vertices_perm)) vertices found and $(length(real_vtx)) real vertices.\n")
     end
     return Bnc.vertices_perm
 end
 
-
+function _calc_Nc_Nρ(Bnc,perm)
+    c = perm
+    ρ = [i for i in 1:Bnc.n if i ∉ Set(c)]
+    Nc = @view Bnc.N[:,c]
+    Nρ = @view Bnc.N[:,ρ]
+    return Nc, Nρ, c, ρ
+end
 #-----------------------------------------------------------------------------------
 #   Functions to calculate the relationship between vertices
 #-----------------------------------------------------------------------------------
 
-function _calc_neighbor_mat(data::Vector{<:AbstractVector{T}})::SparseMatrixCSC{Bool,Int} where {T}
+function _calc_neighbor_mat(data::Vector{<:AbstractVector{T}}) where {T}
     n = length(data)
     # Each thread collects pairs for the upper triangle of the matrix
     thread_rows = [Int[] for _ in 1:Threads.nthreads()]
     thread_cols = [Int[] for _ in 1:Threads.nthreads()]
+    thread_diff_rows = [T[] for _ in 1:Threads.nthreads()]
+
     Threads.@threads for i in 1:n
         tid = Threads.threadid()
         local_r = thread_rows[tid]
         local_c = thread_cols[tid]
+        local_diff_r = thread_diff_rows[tid]
         # Iterate only over the upper triangle (j > i) to avoid redundant checks
         vi = data[i]
         for j in i+1:n
-            # Use the efficient, non-allocating helper function.
-            # Julia will automatically call the fast BitVector version if applicable!
             vj = data[j]
-            dist = T(0)
-                @inbounds for i in eachindex(vi, vj)
-                    dist +=(vi[i] != vj[i])
-                    if dist > 1
+            
+            dist = Int8(0)
+
+            diff_r = 0
+            @inbounds for k in eachindex(vi, vj)
+                if vi[k] != vj[k]
+                    dist += 1
+                    if dist == 1
+                        diff_r = k   # record first difference
+                    else
                         break
                     end
                 end
+            end
+
             if dist == 1
                 push!(local_r, i)
                 push!(local_c, j)
+                push!(local_diff_r,diff_r)
             end
         end
     end
     # Merge results from all threads
     I = reduce(vcat, thread_rows)
     J = reduce(vcat, thread_cols)
+    vals = reduce(vcat, thread_diff_rows)
 
     # Build the full symmetric matrix from the upper triangle parts at the end
-    rows = [I; J]
-    cols = [J; I]
-    vals = ones(Bool, length(rows))
-
-    return sparse(rows, cols, vals, n, n)
+    # rows = [I; J]
+    # cols = [J; I]
+    # vals = ones(Bool, length(I))
+    # perms = sortperm(1:length(rows),by=k->(cols[k],rows[k]))
+    return SparseArrays.sparse!(I, J, vals, n, n)#, invperm(perms)
 end
+
 function get_vertices_neighbor_mat!(Bnc::Bnc;)
     # Calculate the distance matrix for all vertices in Bnc
     find_all_vertices!(Bnc) # Ensure vertices are calculated
     if isempty(Bnc.vertices_neighbor_mat)
-        print("Start calculating vertex neighbor matrix, It may takes a while.")
+        print("Start calculating vertex neighbor matrix, It may takes a while.\n")
         Bnc.vertices_neighbor_mat = _calc_neighbor_mat(Bnc.vertices_perm)
-        print("Done.")
+        print("Done.\n")
     end
     return Bnc.vertices_neighbor_mat
 end
@@ -260,30 +302,50 @@ Calculate the x space change needed to change from one vertex to another.
 The number idx of (i,j) deontes if regime i want to reach regime j, it shall rise its idx species.And also decrease its (j,i) species.
 Source: row; Target: column.
 """
-function get_vertices_change_dir_x!(Bnc::Bnc{T}) where T
+function get_vertices_change_dir_x!(Bnc::Bnc{T}) where T #Could be optimized to incoperated into neighbor finding process.
     if !isempty(Bnc.vertices_change_dir_x)
         return Bnc.vertices_change_dir_x
     end
-    d_mtx = get_vertices_neighbor_mat!(Bnc)
+    # print("1\n")
+    d_mtx = get_vertices_neighbor_mat!(Bnc) # upper diagnal mtx
     # Initialize the change direction matrix
+    # I,J,_ = findnz(triu(d_mtx))
     I,J,_ = findnz(d_mtx)
-    n_val = length(I)
-    half_point = Int(n_val/2)
+    n = Bnc.n
+    val_len = length(I)
 
-    vals = Vector{T}(undef,n_val)
-    Threads.@threads for k in 1:half_point
-        v_source = Bnc.vertices_perm[I[k]]
-        v_target = Bnc.vertices_perm[J[k]]
+    vals = Vector{SparseVector{Int8, T}}(undef, val_len)
+
+    Threads.@threads for k in 1:val_len
+        from_idx = I[k]
+        to_idx = J[k]
+
+        from_vtx = Bnc.vertices_perm[from_idx]
+        to_vtx = Bnc.vertices_perm[to_idx]
+
         # Find the first differing element
-        for (x, y) in zip(v_source, v_target)
-            if x != y
-                vals[k] = y  # Target value for source vertex
-                vals[k+half_point] = x  # Source value for target vertex
+        for (x, y) in zip(from_vtx, to_vtx)
+            if x == y
+                continue
+            elseif x < y
+                vals[k] = SparseVector(n,T[x,y],Int8[-1,1])
+                break
+            else
+                vals[k] = SparseVector(n,T[y,x],Int8[1,-1])
                 break
             end
         end
     end
-    Bnc.vertices_change_dir_x = sparse(I, J, vals, size(d_mtx)...)
+    Bnc.vertices_change_dir_x = SparseArrays.sparse!(I,J, vals, size(d_mtx)...)
+end
+
+function get_change_dir_x(Bnc::Bnc, from, to)
+    from = get_idx(Bnc, from)
+    to = get_idx(Bnc, to)
+    d_mat = get_vertices_change_dir_x!(Bnc)
+    rev = from < to ? false : true
+    dir = rev ? -d_mat[to, from] : d_mat[from, to]
+    return dir
 end
 
 function get_vertices_change_dir_qK!(Bnc::Bnc{T}) where T
@@ -291,28 +353,54 @@ function get_vertices_change_dir_qK!(Bnc::Bnc{T}) where T
         return Bnc.vertices_change_dir_qK
     end
     d_mat = get_vertices_change_dir_x!(Bnc)
-    # Calculate the change direction matrix for qK
-    I, J, V = findnz(d_mat)
-    n_val = length(I)
-    half_point = Int(n_val / 2)
+    I,J,V = findnz(d_mat)
+    n_vals = length(I)
+    vals = Vector{SparseVector{Float64, T}}(undef, n_vals)
 
-    vals = Vector{T}(undef, n_val)
-    Threads.@threads for k in 1:half_point
-        v_source_idx = I[k] #perms
-        v_target_idx = J[k] #perms
-        dir_forw_x = V[k]
-        dir_back_x = V[k + half_point]
-        # Find the first differing element
-        dir_qK_fow = get_H!(Bnc,)
-        for (x, y) in zip(v_source, v_target)
-            if x != y
-                vals[k] = y  # Target value for source vertex
-                vals[k + half_point] = x  # Source value for target vertex
-                break
+    # Threads.@threads 
+    for k in 1:n_vals
+        v_source_idx = I[k] #perms_idx
+        v_target_idx = J[k] #perms_idx
+        dir = V[k]
+
+        print("start calculating from source to target: $v_source_idx -> $v_target_idx \n")
+
+        if get_singularity!(Bnc,v_source_idx) != 0 
+            if get_singularity!(Bnc,v_target_idx) != 0
+                @warn("Both $v_source_idx and $v_target_idx are singular, cannot get change direction between them for qK")
+                total_flow = spzeros(Bnc.n)
+            else #
+                print("Source vertex $v_source_idx is singular, only use target vertex $v_target_idx to calculate flow \n") 
+                # flow_qK_target = get_H!(Bnc, v_target_idx)[dir,:] - get_H!(Bnc, v_target_idx)[dir_back_x,:]
+                total_flow = get_H!(Bnc,v_target_idx)' * dir
+            end
+        else
+            if get_singularity!(Bnc,v_target_idx) != 0
+                print("Target vertex $v_target_idx is singular, only use source vertex $v_source_idx to calculate flow \n")
+                # flow_qK_source = get_H!(Bnc, v_source_idx)[dir,:] - get_H!(Bnc, v_source_idx)[dir_back_x,:]
+                total_flow = get_H!(Bnc,v_source_idx)' * dir
+            else
+                flow_qK_source = get_H!(Bnc,v_source_idx)' * dir
+                # @show get_H!(Bnc, v_source_idx)[dir,:]|>Array
+                # @show -get_H!(Bnc, v_source_idx)[dir_back_x,:]|>Array
+
+                flow_qK_target = get_H!(Bnc, v_target_idx)' * dir
+                # @show get_H!(Bnc, v_target_idx)[dir,:]|>Array
+                # @show -get_H!(Bnc, v_target_idx)[dir_back_x,:]|>Array
+
+                # @show Array(flow_qK_source)
+                # @show Array(flow_qK_target)
+                total_flow = flow_qK_source + flow_qK_target
             end
         end
+
+        print("Total flow is: ")
+        print(Array(total_flow))
+
+        tgt_qK1 = droptol!(total_flow,1e-9)
+        vals[k] = tgt_qK1
     end
-    Bnc.vertices_change_dir_qK = sparse(I, J, vals, size(d_mat)...)
+    Bnc.vertices_change_dir_qK = SparseArrays.sparse!(I, J, vals, size(d_mat)...)
 end
 
 #-------------------------------------------------------------------------------------
@@ -541,6 +629,7 @@ function _ensure_full_properties!(vtx::Vertex)
     end
 end
 
+
 """
 Retrieves a vertex from cache or creates it if it doesn't exist.
 """
@@ -548,15 +637,12 @@ function get_vertex!(Bnc::Bnc, perm::Vector{<:Integer};full::Bool=true)::Vertex
     vtx = get!(Bnc.vertices_data, perm) do 
         _create_vertex(Bnc, perm)
     end
-
     if full
         _ensure_full_properties!(vtx)
         get_all_neighbors!(Bnc, perm)
     end
-
     return vtx
 end
-
 function get_vertex!(Bnc::Bnc, idx::Int; kwargs...)
     """
     Get a vertex by its index in Bnc.vertices_perm.
@@ -564,37 +650,44 @@ function get_vertex!(Bnc::Bnc, idx::Int; kwargs...)
     find_all_vertices!(Bnc)
     return get_vertex!(Bnc, Bnc.vertices_perm[idx]; kwargs...)
 end
+function get_vertex!(Bnc::Bnc, vtx::Vertex; kwargs...)
+    return get_vertex!(Bnc, vtx.perm; kwargs...)
+end
 
 
 
 
-
-function get_vertex_idx(Bnc,perm::Vector{<:Integer})
+function get_idx(Bnc,perm::Vector{<:Integer})
     find_all_vertices!(Bnc)
     return Bnc.vertices_idx[perm]
 end
-function get_vertex_idx(Bnc::Bnc, idx::Int)
+function get_idx(Bnc::Bnc, idx::T) where T<:Integer
    return idx
 end
+function get_idx(Bnc::Bnc, vtx::Vertex)
+    return vtx.idx
+end
 
 
-function get_vertex_perm(Bnc,perm::Vector{<:Integer})
+
+function get_perm(Bnc,perm::Vector{<:Integer})
     return perm
 end
-function get_vertex_perm(Bnc::Bnc, idx::Int)
+function get_perm(Bnc::Bnc, idx::Int)
     return find_all_vertices!(Bnc)[idx]
+end
+function get_perm(Bnc::Bnc, vtx::Vertex)
+    return vtx.perm
 end
 
 
 
-function get_all_neighbors!(Bnc::Bnc, perm)
+function get_all_neighbors!(Bnc::Bnc, perm; return_idx::Bool=false)
     # Get the neighbors of the vertex represented by perm
     vtx = get_vertex!(Bnc, perm ; full=false)
     if isempty(vtx.neighbors_idx)
-        d_mat = get_vertices_neighbor_mat!(Bnc)
-
-        vtx.neighbors_idx = findall(d_mat[vtx.idx, :])
-
+        d_mat = Symmetric(get_vertices_neighbor_mat!(Bnc), :U) # generate symmetric view
+        vtx.neighbors_idx = findall(!iszero, d_mat[vtx.idx, :])
         finite_neighbors = Int[]
         infinite_neighbors = Int[]
         for idx in vtx.neighbors_idx
@@ -608,20 +701,28 @@ function get_all_neighbors!(Bnc::Bnc, perm)
         vtx.finite_neighbors_idx = finite_neighbors
         vtx.infinite_neighbors_idx = infinite_neighbors
     end
-    return Bnc.vertices_perm[vtx.neighbors_idx]
+
+    idx = vtx.neighbors_idx
+    return return_idx ? idx : Bnc.vertices_perm[idx]
 end
 
-function get_finite_neighbors!(Bnc::Bnc, perm)
-    get_all_neighbors!(Bnc, perm)
-    return Bnc.vertices_perm[vtx.finite_neighbors_idx]
-end
-
-function get_infinite_neighbors!(Bnc::Bnc, perm)
-    vtx = get_vertex!(Bnc, perm)
+function get_finite_neighbors!(Bnc::Bnc, perm; return_idx::Bool=false)
+    vtx = get_vertex!(Bnc, perm;full=false)
     if isempty(vtx.neighbors_idx)
         get_all_neighbors!(Bnc, perm)
     end
-    return Bnc.vertices_perm[vtx.infinite_neighbors_idx]
+    idx = vtx.finite_neighbors_idx
+    return return_idx ? idx : Bnc.vertices_perm[idx]
+end
+
+function get_infinite_neighbors!(Bnc::Bnc, perm; return_idx::Bool=false,singularity_max::Union{Int,Nothing}=nothing)
+    vtx = get_vertex!(Bnc, perm;full=false)
+    if isempty(vtx.neighbors_idx)
+        get_all_neighbors!(Bnc, perm)
+    end
+    idx = vtx.infinite_neighbors_idx
+    idx = isnothing(singularity_max) ? idx : filter(i->Bnc.vertices_singularity[i] <= singularity_max, idx)
+    return return_idx ? idx : Bnc.vertices_perm[idx]
 end
 
 """
@@ -662,7 +763,7 @@ end
 
 function get_singularity!(Bnc::Bnc,perm)
     find_all_vertices!(Bnc)
-    idx = get_vertex_idx(Bnc, perm)
+    idx = get_idx(Bnc, perm)
     return Bnc.vertices_singularity[idx]
 end
 
@@ -689,7 +790,7 @@ function get_H!(Bnc::Bnc, perm)
 end
 
 #-------------------------------------------------------------------------------------
-#         fucntions of getting vertex with certein properties
+#         fucntions of getting vertices with certein properties
 # ------------------------------------------------------------------------------------
 function get_vertices_mapping_dict(Bnc::Bnc)
     """
@@ -708,69 +809,60 @@ function get_all_vertices_singularity!(Bnc::Bnc)
 end
 
 
-function get_singular_vertices_idx(Bnc::Bnc)
+function get_singular_vertices(Bnc::Bnc; return_idx::Bool=false)
     """
     Get the indices of all singular vertices.
+    Default to return perms
     """
-    return findall(!iszero, get_all_vertices_singularity!(Bnc))
+    idx = findall(!iszero, get_all_vertices_singularity!(Bnc))
+    return return_idx ? idx : Bnc.vertices_perm[idx]
 end
+get_singular_vertices_idx(Bnc::Bnc) = get_singular_vertices(Bnc; return_idx=true)
 
-function get_nonsingular_vertices_idx(Bnc::Bnc)
+
+function get_nonsingular_vertices(Bnc::Bnc; return_idx::Bool=false)
     """
     Get the indices of all nonsingular vertices.
     """
     singularity = get_all_vertices_singularity!(Bnc)
-    return findall(iszero, singularity)
+    idx =  findall(iszero, singularity)
+    return return_idx ? idx : Bnc.vertices_perm[idx]
 end
+get_nonsingular_vertices_idx(Bnc::Bnc) = get_nonsingular_vertices(Bnc; return_idx=true)
 
-function get_singular_vertex(Bnc::Bnc)
-    """
-    Get the perms of all singular vertices.
-    """
-    idx = get_singular_vertices_idx(Bnc)
-    return Bnc.vertices_perm[idx]
-end
 
-function get_nonsingular_vertex(Bnc::Bnc)
-    """
-    Get the perms of all nonsingular vertices.
-    """
-    idx = get_nonsingular_vertices_idx(Bnc)
-    return Bnc.vertices_perm[idx]
-end
-
-function get_real_vertex_idx(Bnc::Bnc)
+function get_real_vertices(Bnc::Bnc; return_idx::Bool=false)
     """
     Get the idx of all real vertices.
     """
     find_all_vertices!(Bnc)
-    return findall(Bnc.vertices_real_flag)
+    idx = findall(Bnc.vertices_real_flag)
+    return return_idx ? idx : Bnc.vertices_perm[idx]
 end
+get_real_vertices_idx(Bnc::Bnc) = get_real_vertices(Bnc; return_idx=true)
 
-function get_fake_vertex_idx(Bnc::Bnc)
+
+function get_fake_vertices(Bnc::Bnc; return_idx::Bool=false)
     """
     Get the idx of all fake vertices.
     """
     find_all_vertices!(Bnc)
-    return findall(!, Bnc.vertices_real_flag)
+    idx = findall(!, Bnc.vertices_real_flag)
+    return return_idx ? idx : Bnc.vertices_perm[idx]
 end
+get_fake_vertices_idx(Bnc::Bnc) = get_fake_vertices(Bnc; return_idx=true)
 
-function get_real_vertex(Bnc::Bnc)
+
+function get_vertices(Bnc::Bnc; singular::Union{Bool,Nothing}=nothing, real::Union{Bool,Nothing}=nothing, return_idx::Bool=false)
     """
-    Get the perms of all real vertices.
-    """
-    idx = get_real_vertex_idx(Bnc)
-    return Bnc.vertices_perm[idx]
+    get vertices with certain properties.
+    """ 
+    singular_flag = isnothing(singular) ? trues(length(Bnc.vertices_perm)) : (singular .== (get_all_vertices_singularity!(Bnc) .> 0))
+    real_flag = isnothing(real) ? trues(length(Bnc.vertices_perm)) : (real .== Bnc.vertices_real_flag)
+    flag = singular_flag .& real_flag
+    idx = findall(flag)
+    return return_idx ? idx : Bnc.vertices_perm[idx]
 end
-
-function get_fake_vertex(Bnc::Bnc)
-    """
-    Get the perms of all fake vertices.
-    """
-    idx = get_fake_vertex_idx(Bnc)
-    return Bnc.vertices_perm[idx]
-end
-
 
 
 # function ∂logqK_∂logx_regime(Bnc::Bnc; regime::Union{Vector{Int}, Nothing}=nothing,

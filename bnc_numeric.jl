@@ -224,7 +224,7 @@ function _logx_traj_with_logqK_change(Bnc::Bnc,
     #--Prepare parameters---
     startlogx = isnothing(startlogx) ? qK2x(Bnc, startlogqK; input_logspace=true, output_logspace=true) : startlogx
     
-    ΔlogqK = endlogqK - startlogqK
+    ΔlogqK = Float64.(endlogqK - startlogqK)
     x = Vector{Float64}(undef, Bnc.n)
     q = Vector{Float64}(undef, Bnc.d)
     Jt = copy(Bnc._LNt_sparse)
@@ -610,7 +610,7 @@ end
 #     return regimes
 # end
 
-function get_vertex_x(Bnc::Bnc{T}, x::AbstractVector{<:Real};input_logspace::Bool=false,asymtotic::Bool=true)::Vector{T} where T
+function assign_vertex_x(Bnc::Bnc{T}, x::AbstractVector{<:Real};input_logspace::Bool=false,asymtotic::Bool=true)::Vector{T} where T
     x = input_logspace ? exp10.(x) : x
     Lt = Bnc._Lt_sparse
 
@@ -645,7 +645,7 @@ end
 #     [get_vertex_qK_slow(Bnc, row; kwargs...) for row in eachrow(x)]
 # end
 
-function get_vertex_qK_slow(Bnc::Bnc, x::AbstractVector{<:Real}; input_logspace::Bool=false, asymtotic::Bool=true, q_calc_asym::Bool=false)
+function assign_vertex_qK(Bnc::Bnc, x::AbstractVector{<:Real}; input_logspace::Bool=false, asymtotic::Bool=true, q_calc_asym::Bool=false,eps=floatmin(Float64))
     vtx = find_all_vertices!(Bnc)
     # @show vtx
     
@@ -664,7 +664,8 @@ function get_vertex_qK_slow(Bnc::Bnc, x::AbstractVector{<:Real}; input_logspace:
             end
             C,C0 = get_C_C0_qK!(Bnc, idx) # ensure C and C0 are calculated
             # @show C, C0, logqK
-            if all(C * logqK .+ C0 .> -floatmin(Float64))
+            # @show minimum(C * logqK .+ C0)
+            if all(C * logqK .+ C0 .> -eps)
                 return idx
             end
         end
@@ -675,7 +676,7 @@ function get_vertex_qK_slow(Bnc::Bnc, x::AbstractVector{<:Real}; input_logspace:
             end
             C,_ = get_C_C0_qK!(Bnc, idx) # ensure C and C0 are calculated
             # @show C, logqK
-            if all(C * logqK .> -floatmin(Float64)) # seems we need to add sign to make sure all points went into one vertex
+            if all(C * logqK .> -eps) # seems we need to add sign to make sure all points went into one vertex
                 return idx
             end
         end
@@ -686,22 +687,22 @@ end
 
 
 
-function get_vertex_qK(Bnc::Bnc,x::Vector{<:Real}, qK::Union{Vector{<:Real},Nothing}=nothing;kwargs...)::Vector{Int}
-    qK = isnothing(qK) ? x2qK(x,kwargs...,output_logspace=true) : log10.(qK)
-    vtx_x = get_vertex_x(Bnc)
+# function get_vertex_qK(Bnc::Bnc,x::Vector{<:Real}, qK::Union{Vector{<:Real},Nothing}=nothing;kwargs...)::Vector{Int}
+#     qK = isnothing(qK) ? x2qK(x,kwargs...,output_logspace=true) : log10.(qK)
+#     vtx_x = assign_vertex_x(Bnc)
 
-    singularity = get_singularity!(Bnc,vtx_x)
-    if singularity != 0
-        finite_neighbors = get_finite_neighbors!(Bnc, vtx_x)
-        for neighbor in finite_neighbors
-                C,C0 = get_C_C0_qK!(Bnc,neighbor)
-                if all(C * log10.(q) .+ C0 .> 0)
-                    return neighbor
-                end
-            end
-        end
-        @error("No finite neighbor found for x vertex $vtx_x could caused by non-symtotic conditons")
-end
+#     singularity = get_singularity!(Bnc,vtx_x)
+#     if singularity != 0
+#         finite_neighbors = get_finite_neighbors!(Bnc, vtx_x)
+#         for neighbor in finite_neighbors
+#                 C,C0 = get_C_C0_qK!(Bnc,neighbor)
+#                 if all(C * log10.(q) .+ C0 .> 0)
+#                     return neighbor
+#                 end
+#             end
+#         end
+#         @error("No finite neighbor found for x vertex $vtx_x could caused by non-symtotic conditons")
+# end
 
 function _within_vertex_qK(Bnc::Bnc, perm::Vector{<:Integer},qK::AbstractVector{<:Real})
     """

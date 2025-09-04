@@ -116,29 +116,22 @@ end
 
 function N_generator(r::Int, n::Int; min_binder::Int=2, max_binder::Int=2)::Matrix{Int}
     @assert n > r "n must be greater than r"
-    @assert n >= 3 "at least 3 species"
-    @assert r >= 1 "at least 1 reactions"
     @assert min_binder >= 1 && max_binder >= min_binder "min_binder and max_binder must be at least 1"
     @assert min_binder <= n - r "min_binder must be smaller than n-r"
     #initialize the matrix
-    N = zeros(Int, r, n)
-    i_temp = max(max_binder + 1 + r - n, 1) # the row num before which max_binder <= n-r+i-1 
-
-    for i in 1:i_temp # iter across row
-        N[i, n-r+i] = -1
-        binder_num = sample(min_binder:(n-r+i-1))
-        N[i, sample(1:(n-r+i-1), binder_num; replace=false)] .= 1
-    end
-    for i in (i_temp+1):r # iter acorss row
-        N[i, n-r+i] = -1
-        binder_num = sample(min_binder:max_binder)
-        N[i, sample(1:(n-r+i-1), binder_num; replace=false)] .= 1
+    d = n-r
+    N = [zeros(r,d) -I(r)]
+    Threads.@threads for i in 1:r
+        idx = sample(1:d+i-1,rand(min_binder:max_binder); replace=true)
+        for j in idx
+            N[i,j] +=1
+        end
     end
     return N
 end
 
-function L_generator(d::Int, n::Int; min_binder::Int=2, max_binder::Int=2)::Matrix{Int}
-    N = N_generator(n - d, n; min_binder=min_binder, max_binder=max_binder)
+function L_generator(d::Int, n::Int; kwargs...)::Matrix{Int}
+    N = N_generator(n - d, n; kwargs...)
     L = L_from_N(N)
     return L
 end
@@ -431,3 +424,8 @@ function GPU_SM_threads_num()
     max_threads = attribute(dev, CUDA.DEVICE_ATTRIBUTE_MAX_THREADS_PER_BLOCK)
     return SM, max_threads
 end
+
+
+#---------------------------------------------------
+#
+#---------------------------------------------------

@@ -150,11 +150,13 @@ mutable struct Bnc{T}
     vertices_singularity::Vector{T} # While this vertice is singular.
     
     
-    vertices_neighbor_mat::SparseMatrixCSC{Bool, Int} # distance between vertices
-    vertices_change_dir_x::SparseMatrixCSC{T, Int} # how the vertices should change under x space to reach its neighbor vertices.
-    vertices_change_dir_qK::SparseMatrixCSC{T, Int} # how the vertices should change under qK space to reach its neighbor vertices.
+    vertices_neighbor_mat::SparseMatrixCSC{T, Int} # distance between vertices, upper triangular
+    vertices_change_dir_x::SparseMatrixCSC{SparseVector{Int8,T}, Int} # how the vertices should change under x space to reach its neighbor vertices, upper triangular
+    vertices_change_dir_qK::SparseMatrixCSC{SparseVector{Float64,T}, Int} # how the vertices should change under qK space to reach its neighbor vertices, upper triangular
+    # _vertices_sym_invperm::Vector{Int}
 
     vertices_data::Dict{Vector{T},Any} # Using Any for placeholder for Vertex
+    _vertices_perm_Ninv_dict::Dict{Set{T}, SparseMatrixCSC{Float64, Int}} # cache the N_inv for each vertex permutation
 
     #------other helper parameters------
     direction::Int8 # direction of the binding reactions, determine the ray direction for invertible regime, calculated by sign of det[L;N]
@@ -242,9 +244,11 @@ mutable struct Bnc{T}
             Bool[],                          # vertices_real_flag
             T[],                          # vertices_singularity
             SparseMatrixCSC{Bool, Int}(undef, 0, 0),             # vertices_neighbor_mat
-            SparseMatrixCSC{T, Int}(undef, 0, 0),             # vertices_change_dir_x
-            SparseMatrixCSC{T, Int}(undef, 0, 0),             # vertices_change_dir_qK
+            SparseMatrixCSC{SparseVector{Int8,T}, Int}(undef, 0, 0),             # vertices_change_dir_x
+            SparseMatrixCSC{SparseVector{Float64,T}, Int}(undef, 0, 0),             # vertices_change_dir_qK
+            # Int[],                           # _vertices_sym_invperm
             Dict{Vector{T}, Any}(),              # vertices_data
+            Dict{Set{T}, SparseMatrixCSC{Float64, Int}}(), # _vertices_perm_Ninv_dict
             # Fields 13-28 (Calculated values)
             direction,
             _anchor_log_x, _anchor_log_qK,
