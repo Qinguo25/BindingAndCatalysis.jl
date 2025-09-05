@@ -156,7 +156,7 @@ mutable struct Bnc{T}
     # _vertices_sym_invperm::Vector{Int}
 
     vertices_data::Dict{Vector{T},Any} # Using Any for placeholder for Vertex
-    _vertices_perm_Ninv_dict::Dict{Set{T}, SparseMatrixCSC{Float64, Int}} # cache the N_inv for each vertex permutation
+    _vertices_Nρ_inv_dict::Dict{Vector{T}, Tuple{SparseMatrixCSC{Float64, Int},T}} # cache the N_inv for each vertex permutation
 
     #------other helper parameters------
     direction::Int8 # direction of the binding reactions, determine the ray direction for invertible regime, calculated by sign of det[L;N]
@@ -248,7 +248,7 @@ mutable struct Bnc{T}
             SparseMatrixCSC{SparseVector{Float64,T}, Int}(undef, 0, 0),             # vertices_change_dir_qK
             # Int[],                           # _vertices_sym_invperm
             Dict{Vector{T}, Any}(),              # vertices_data
-            Dict{Set{T}, SparseMatrixCSC{Float64, Int}}(), # _vertices_perm_Ninv_dict
+            Dict{Vector{T}, Tuple{SparseMatrixCSC{Float64, Int},T}}(), # _vertices_perm_Ninv_dict
             # Fields 13-28 (Calculated values)
             direction,
             _anchor_log_x, _anchor_log_qK,

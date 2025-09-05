@@ -588,11 +588,11 @@ function get_reaction_order(Bnc::Bnc, x_mat::Matrix{<:Real}, q_mat::Union{Matrix
 end
 
 
-# function get_vertex_x(Bnc::Bnc, x_mat::AbstractMatrix{<:Real}; asymtotic::Bool=true)
+# function get_vertex_x(Bnc::Bnc, x_mat::AbstractMatrix{<:Real}; asymptotic::Bool=true)
 #     n_rows = size(x_mat, 1)
 #     regimes = [Vector{Int}(undef, Bnc.d) for _ in 1:n_rows]
 
-#     # if asymtotic
+#     # if asymptotic
 #     #     L = Bnc._L_sparse_val_one
 #     #     func = _update_Jt_ignore_val!
 #     # else
@@ -600,17 +600,17 @@ end
 #     #     func = _update_Jt!
 #     # end
 
-#     # # @show Bnc._L_sparse_val_one, asymtotic, Bnc._Lt_sparse'
+#     # # @show Bnc._L_sparse_val_one, asymptotic, Bnc._Lt_sparse'
 #     # q_mat = isnothing(q_mat) ? x_mat*L' : q_mat
 #     Jt = copy(Bnc._Lt_sparse)
 #     for (i, x) in enumerate(eachrow(x_mat))
-#         _update_Jt!(Jt, Bnc, x; asymtotic=asymtotic)
+#         _update_Jt!(Jt, Bnc, x; asymptotic=asymptotic)
 #         regimes[i] .= find_max_indices_per_column(Jt,Bnc.d)
 #     end
 #     return regimes
 # end
 
-function assign_vertex_x(Bnc::Bnc{T}, x::AbstractVector{<:Real};input_logspace::Bool=false,asymtotic::Bool=true)::Vector{T} where T
+function assign_vertex_x(Bnc::Bnc{T}, x::AbstractVector{<:Real};input_logspace::Bool=false,asymptotic::Bool=true)::Vector{T} where T
     x = input_logspace ? exp10.(x) : x
     Lt = Bnc._Lt_sparse
 
@@ -619,7 +619,7 @@ function assign_vertex_x(Bnc::Bnc{T}, x::AbstractVector{<:Real};input_logspace::
 
     colptr = Lt.colptr
     rowval = Lt.rowval
-    nzval  = asymtotic ? @view(x[Bnc._I]) : @view(x[Bnc._I]) .* Lt.nzval
+    nzval  = asymptotic ? @view(x[Bnc._I]) : @view(x[Bnc._I]) .* Lt.nzval
 
     @inbounds for j in 1:d
         col_start_idx = colptr[j]
@@ -645,43 +645,29 @@ end
 #     [get_vertex_qK_slow(Bnc, row; kwargs...) for row in eachrow(x)]
 # end
 
-function assign_vertex_qK(Bnc::Bnc, x::AbstractVector{<:Real}; input_logspace::Bool=false, asymtotic::Bool=true, q_calc_asym::Bool=false,eps=floatmin(Float64))
-    vtx = find_all_vertices!(Bnc)
-    # @show vtx
+function assign_vertex_qK(Bnc::Bnc, x::AbstractVector{<:Real}; input_logspace::Bool=false, asymptotic::Bool=true, eps=floatmin(Float64)) 
+    real_only = asymptotic ? true : nothing
+    all_vertice_idx = get_vertices(Bnc, singular=false, real = real_only, return_idx = false)
+    # @show all_vertice_idx
+    logqK = x2qK(Bnc,x; input_logspace=input_logspace, output_logspace=true)
     
-    if asymtotic
-        vtx = @view vtx[Bnc.vertices_real_flag]
-    end
+    record = Vector{Float64}(undef,length(all_vertice_idx))
+    for (i, idx) in enumerate(all_vertice_idx)
+        C, C0 = get_C_C0_qK!(Bnc, idx) 
+        
+        min_val = if !asymptotic
+            minimum(C * logqK .+ C0)
+        else
+            minimum(C * logqK)
+        end
+        record[i] = min_val
 
-    x = input_logspace ? exp10.(x) : x
-    
-    logqK = q_calc_asym ? [log10.(model._L_sparse_val_one * x); model.N * log10.(x)] : x2qK(model,x; input_logspace=false, output_logspace=true)
-    
-    if !asymtotic
-        for idx in vtx
-            if get_singularity!(Bnc, idx) != 0
-                continue # skip singular vertices
-            end
-            C,C0 = get_C_C0_qK!(Bnc, idx) # ensure C and C0 are calculated
-            # @show C, C0, logqK
-            # @show minimum(C * logqK .+ C0)
-            if all(C * logqK .+ C0 .> -eps)
-                return idx
-            end
-        end
-    else
-        for idx in vtx
-            if get_singularity!(Bnc, idx) != 0
-                continue # skip singular vertices
-            end
-            C,_ = get_C_C0_qK!(Bnc, idx) # ensure C and C0 are calculated
-            # @show C, logqK
-            if all(C * logqK .> -eps) # seems we need to add sign to make sure all points went into one vertex
-                return idx
-            end
+        if record[i] > -eps
+            return idx
         end
     end
-    @error("No finite neighbor found for $x")
+    @warn("All vertex conditions failed for x=$x. Returning the best-fit vertex.")
+    return all_vertice_idx[findmax(record)[2]]
 end
 
 
