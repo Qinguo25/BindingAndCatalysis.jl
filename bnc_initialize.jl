@@ -95,7 +95,7 @@ mutable struct Vertex{F,T}
     # _M_lu::SparseArrays.UMFPACK.UmfpackLU{Float64, Int}
 
     # --- Expensive Calculated Properties ---
-    singularity::T
+    nullity::T
     H::SparseMatrixCSC{Float64, Int} # Taking inverse, can have Float.
     H0::Vector{F} 
     C_qK::SparseMatrixCSC{Float64, Int}
@@ -107,12 +107,12 @@ mutable struct Vertex{F,T}
     infinite_neighbors_idx::Vector{Int}
 
     # The inner constructor also needs to be updated for the parametric type
-    function Vertex{F,T}(;perm, P, P0, M, M0, C_x, C0_x, idx,real,singularity) where {F<:Real ,T<:Integer}
+    function Vertex{F,T}(;perm, P, P0, M, M0, C_x, C0_x, idx,real,nullity) where {F<:Real ,T<:Integer}
         # _M_lu = lu(M, check=false) # It's good practice to ensure M is Float64 for LU
         # Use new{T} to construct an instance of Vertex{T}
         new{F,T}(perm, idx,real, P, P0, M, M0, C_x, C0_x,
             # _M_lu,
-            singularity,
+            nullity,
             SparseMatrixCSC{Float64, Int}(undef, 0, 0), # H
             Vector{F}(undef, 0),          # H0
             SparseMatrixCSC{Float64, Int}(undef, 0, 0), # C_qK
@@ -147,7 +147,7 @@ mutable struct Bnc{T}
     vertices_perm::Vector{Vector{T}} # all feasible regimes.
     vertices_idx::Dict{Vector{T},Int} # map from permutation vector to its idx in the vertices list
     vertices_real_flag::Vector{Bool} # While this vertice is real
-    vertices_singularity::Vector{T} # While this vertice is singular.
+    vertices_nullity::Vector{T} # While this vertice is singular.
     
     
     vertices_neighbor_mat::SparseMatrixCSC{T, Int} # distance between vertices, upper triangular
@@ -242,7 +242,7 @@ mutable struct Bnc{T}
             Vector{T}[],                # vertices_perm
             Dict{Vector{T},Int}(),            # verices_idx
             Bool[],                          # vertices_real_flag
-            T[],                          # vertices_singularity
+            T[],                          # vertices_nullity
             SparseMatrixCSC{Bool, Int}(undef, 0, 0),             # vertices_neighbor_mat
             SparseMatrixCSC{SparseVector{Int8,T}, Int}(undef, 0, 0),             # vertices_change_dir_x
             SparseMatrixCSC{SparseVector{Float64,T}, Int}(undef, 0, 0),             # vertices_change_dir_qK

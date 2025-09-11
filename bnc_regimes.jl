@@ -185,7 +185,7 @@ end
 """
 find all vertices in Bnc, and store them in Bnc.vertices_perm.
 With its idx Dict in Bnc.vertices_idx.
-Also calculate if the vertex is real or fake, and its singularity.
+Also calculate if the vertex is real or fake, and its nullity.
 """
 function find_all_vertices!(Bnc::Bnc{T};) where T # cheap enough for now
     if isempty(Bnc.vertices_perm) || isempty(Bnc.vertices_real_flag)
@@ -199,10 +199,10 @@ function find_all_vertices!(Bnc::Bnc{T};) where T # cheap enough for now
         real_vtx = Set(find_all_vertices(Bnc.L; asymptotic=true))
         Bnc.vertices_real_flag = Bnc.vertices_perm .∈ Ref(real_vtx)
         
-        # Caltulate the singularity for each vertices
-        singularity = Vector{T}(undef, length(Bnc.vertices_perm))
-        function calc_singularity(perm)
-            # helper function for helping calculate singularity when vertex is real.
+        # Caltulate the nullity for each vertices
+        nullity = Vector{T}(undef, length(Bnc.vertices_perm))
+        function calc_nullity(perm)
+            # helper function for helping calculate nullity when vertex is real.
             length(perm) -length(Set(perm))
         end
 
@@ -210,15 +210,15 @@ function find_all_vertices!(Bnc::Bnc{T};) where T # cheap enough for now
             perm = Bnc.vertices_perm[i]
             is_real = Bnc.vertices_real_flag[i]
             if is_real
-                singularity[i] = calc_singularity(perm)
+                nullity[i] = calc_nullity(perm)
             else
-                singularity_P = calc_singularity(perm)
-                _ , singularity_N =  _get_Nρ_inv_from_perm!(Bnc,perm) 
-                singularity[i] = singularity_P + singularity_N
+                nullity_P = calc_nullity(perm)
+                _ , nullity_N =  _get_Nρ_inv_from_perm!(Bnc,perm) 
+                nullity[i] = nullity_P + nullity_N
             end
         end
-        # @show singularity
-        Bnc.vertices_singularity = singularity
+        # @show nullity
+        Bnc.vertices_nullity = nullity
         print("Done, with $(length(Bnc.vertices_perm)) vertices found and $(length(real_vtx)) real vertices.\n")
     end
     return Bnc.vertices_perm
@@ -237,21 +237,21 @@ end
 # function _get_Nρ_inv!(Bnc::Bnc{T},key::AbstractVector{<:Integer}) where T
 
 #     function _calc_Nρ_inv(Nρ)
-#         #calc [Nρ^{-1}] and if singular/non-square return singularity
+#         #calc [Nρ^{-1}] and if singular/non-square return nullity
 #         #check if Nρ is square
 #         r,r_ncol = size(Nρ)
 #         if r != r_ncol # non-square_matrix
-#             singularity = r - rank(Nρ)
-#             return spzeros(0,0), singularity
+#             nullity = r - rank(Nρ)
+#             return spzeros(0,0), nullity
 #         else
 #             Nρ_lu = lu(Nρ,check=false)
 #             if issuccess(Nρ_lu)
-#                 singularity = 0
+#                 nullity = 0
 #                 Nρ_inv = sparse(inv(Array(Nρ)))
-#                 return Nρ_inv, singularity
+#                 return Nρ_inv, nullity
 #             else
-#                 singularity = r - rank(Nρ)
-#                 return spzeros(0,0), singularity
+#                 nullity = r - rank(Nρ)
+#                 return spzeros(0,0), nullity
 #             end
 #         end
 #     end
@@ -265,17 +265,17 @@ function _get_Nρ_inv!(Bnc::Bnc{T}, key::AbstractVector{<:Integer}) where T
     function _calc_Nρ_inv(Nρ)
         r, r_ncol = size(Nρ)
         if r != r_ncol
-            singularity = r - rank(Nρ)
-            return spzeros(0, 0), singularity
+            nullity = r - rank(Nρ)
+            return spzeros(0, 0), nullity
         else
             Nρ_lu = lu(Nρ; check=false)
             if issuccess(Nρ_lu)
-                singularity = 0
+                nullity = 0
                 Nρ_inv = sparse(inv(Array(Nρ)))
-                return Nρ_inv, singularity
+                return Nρ_inv, nullity
             else
-                singularity = r - rank(Nρ)
-                return spzeros(0, 0), singularity
+                nullity = r - rank(Nρ)
+                return spzeros(0, 0), nullity
             end
         end
     end
@@ -422,8 +422,8 @@ function get_vertices_change_dir_qK!(Bnc::Bnc{T}) where T
 
         print("start calculating from source to target: $v_source_idx -> $v_target_idx \n")
 
-        if get_singularity!(Bnc,v_source_idx) != 0 
-            if get_singularity!(Bnc,v_target_idx) != 0
+        if get_nullity!(Bnc,v_source_idx) != 0 
+            if get_nullity!(Bnc,v_target_idx) != 0
                 @warn("Both $v_source_idx and $v_target_idx are singular, cannot get change direction between them for qK")
                 total_flow = spzeros(Bnc.n)
             else #
@@ -432,7 +432,7 @@ function get_vertices_change_dir_qK!(Bnc::Bnc{T}) where T
                 total_flow = get_H!(Bnc,v_target_idx)' * dir
             end
         else
-            if get_singularity!(Bnc,v_target_idx) != 0
+            if get_nullity!(Bnc,v_target_idx) != 0
                 print("Target vertex $v_target_idx is singular, only use source vertex $v_source_idx to calculate flow \n")
                 # flow_qK_source = get_H!(Bnc, v_source_idx)[dir,:] - get_H!(Bnc, v_source_idx)[dir_back_x,:]
                 total_flow = get_H!(Bnc,v_source_idx)' * dir
@@ -653,7 +653,7 @@ function _create_vertex(Bnc::Bnc{T}, perm::Vector{<:Integer})::Vertex where T
     find_all_vertices!(Bnc)
     idx = Bnc.vertices_idx[perm] # Index of the vertex in the Bnc.vertices_perm list
     real = Bnc.vertices_real_flag[idx] # Check if the vertex is real or fake
-    singularity = Bnc.vertices_singularity[idx] # Get the singularity of the vertex
+    nullity = Bnc.vertices_nullity[idx] # Get the nullity of the vertex
     
     P, P0 = _calculate_P_P0(Bnc, perm); 
     C_x, C0_x = _calculate_C_C0_x(Bnc, perm)
@@ -664,7 +664,7 @@ function _create_vertex(Bnc::Bnc{T}, perm::Vector{<:Integer})::Vertex where T
     M0 = vcat(P0, zeros(F, Bnc.r))
     # Initialize a partial vertex. "Full" properties are empty placeholders.
     return Vertex{F,T}(
-        singularity = singularity,
+        nullity = nullity,
         idx = idx,
         perm = perm, 
         real = real,
@@ -689,7 +689,7 @@ function _ensure_full_properties!(Bnc::Bnc, vtx::Vertex)
     if !isempty(vtx.H)
         return
     end
-    if vtx.singularity == 0
+    if vtx.nullity == 0
         H = inv(Array(vtx.M)) # dense matrix 
         # H = _calc_H(Bnc, vtx.perm)
         vtx.H = droptol!(sparse(H),1e-10) # Calculate the inverse matrix from pre-computed LU decomposition of M
@@ -762,7 +762,7 @@ function get_all_neighbors!(Bnc::Bnc, perm; return_idx::Bool=false)
         finite_neighbors = Int[]
         infinite_neighbors = Int[]
         for idx in vtx.neighbors_idx
-            if get_singularity!(Bnc, Bnc.vertices_perm[idx]) == 0
+            if get_nullity!(Bnc, Bnc.vertices_perm[idx]) == 0
                 push!(finite_neighbors, idx)
             else
                 push!(infinite_neighbors, idx)
@@ -786,13 +786,13 @@ function get_finite_neighbors!(Bnc::Bnc, perm; return_idx::Bool=false)
     return return_idx ? idx : Bnc.vertices_perm[idx]
 end
 
-function get_infinite_neighbors!(Bnc::Bnc, perm; return_idx::Bool=false,singularity_max::Union{Int,Nothing}=nothing)
+function get_infinite_neighbors!(Bnc::Bnc, perm; return_idx::Bool=false,nullity_max::Union{Int,Nothing}=nothing)
     vtx = get_vertex!(Bnc, perm;full=false)
     if isempty(vtx.neighbors_idx)
         get_all_neighbors!(Bnc, perm)
     end
     idx = vtx.infinite_neighbors_idx
-    idx = isnothing(singularity_max) ? idx : filter(i->Bnc.vertices_singularity[i] <= singularity_max, idx)
+    idx = isnothing(nullity_max) ? idx : filter(i->Bnc.vertices_nullity[i] <= nullity_max, idx)
     return return_idx ? idx : Bnc.vertices_perm[idx]
 end
 
@@ -826,16 +826,16 @@ Gets C_qK and C0_qK, ensuring the full vertex is calculated.
 function get_C_C0_qK!(Bnc::Bnc, perm)
     vtx = get_vertex!(Bnc, perm; full=false)
     _ensure_full_properties!(Bnc,vtx)
-    if vtx.singularity >= 2
-        @error("Vertex got singluarity $(vtx.singularity), cannot get C_qK and C0_qK")
+    if vtx.nullity >= 2
+        @error("Vertex got singluarity $(vtx.nullity), cannot get C_qK and C0_qK")
     end
     return vtx.C_qK, vtx.C0_qK
 end
 
-function get_singularity!(Bnc::Bnc,perm)
+function get_nullity!(Bnc::Bnc,perm)
     find_all_vertices!(Bnc)
     idx = get_idx(Bnc, perm)
-    return Bnc.vertices_singularity[idx]
+    return Bnc.vertices_nullity[idx]
 end
 
 
@@ -845,7 +845,7 @@ Gets H and H0, ensuring the full vertex is calculated.
 function get_H_H0!(Bnc::Bnc, perm)
     vtx = get_vertex!(Bnc, perm; full=false)
     _ensure_full_properties!(Bnc,vtx)
-    if vtx.singularity > 0
+    if vtx.nullity > 0
         @error("Vertex is singular, cannot get H0")
     end # This will compute if needed
     return vtx.H, vtx.H0
@@ -854,8 +854,8 @@ end
 function get_H!(Bnc::Bnc, perm)
     vtx = get_vertex!(Bnc, perm; full=false)
     _ensure_full_properties!(Bnc,vtx)
-    if vtx.singularity > 1
-        @error("Vertex's singularity is bigger than 1, cannot get H")
+    if vtx.nullity > 1
+        @error("Vertex's nullity is bigger than 1, cannot get H")
     end # This will compute if needed
     return vtx.H
 end
@@ -871,12 +871,12 @@ function get_vertices_mapping_dict(Bnc::Bnc)
     return Bnc.vertices_idx
 end
 
-function get_all_vertices_singularity!(Bnc::Bnc)
+function get_all_vertices_nullity!(Bnc::Bnc)
     """
-    Calculate the singularity of all vertices in Bnc.
+    Calculate the nullity of all vertices in Bnc.
     """
     find_all_vertices!(Bnc)
-    return Bnc.vertices_singularity
+    return Bnc.vertices_nullity
 end
 
 
@@ -885,7 +885,7 @@ function get_singular_vertices(Bnc::Bnc; return_idx::Bool=false)
     Get the indices of all singular vertices.
     Default to return perms
     """
-    idx = findall(!iszero, get_all_vertices_singularity!(Bnc))
+    idx = findall(!iszero, get_all_vertices_nullity!(Bnc))
     return return_idx ? idx : Bnc.vertices_perm[idx]
 end
 get_singular_vertices_idx(Bnc::Bnc) = get_singular_vertices(Bnc; return_idx=true)
@@ -895,8 +895,8 @@ function get_nonsingular_vertices(Bnc::Bnc; return_idx::Bool=false)
     """
     Get the indices of all nonsingular vertices.
     """
-    singularity = get_all_vertices_singularity!(Bnc)
-    idx =  findall(iszero, singularity)
+    nullity = get_all_vertices_nullity!(Bnc)
+    idx =  findall(iszero, nullity)
     return return_idx ? idx : Bnc.vertices_perm[idx]
 end
 get_nonsingular_vertices_idx(Bnc::Bnc) = get_nonsingular_vertices(Bnc; return_idx=true)
@@ -928,7 +928,7 @@ function get_vertices(Bnc::Bnc; singular::Union{Bool,Nothing}=nothing, real::Uni
     """
     get vertices with certain properties.
     """ 
-    singular_flag = isnothing(singular) ? trues(length(Bnc.vertices_perm)) : (singular .== (get_all_vertices_singularity!(Bnc) .> 0))
+    singular_flag = isnothing(singular) ? trues(length(Bnc.vertices_perm)) : (singular .== (get_all_vertices_nullity!(Bnc) .> 0))
     real_flag = isnothing(real) ? trues(length(Bnc.vertices_perm)) : (real .== Bnc.vertices_real_flag)
     flag = singular_flag .& real_flag
     idx = findall(flag)

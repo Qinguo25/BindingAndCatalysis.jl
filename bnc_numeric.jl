@@ -677,8 +677,8 @@ end
 #     qK = isnothing(qK) ? x2qK(x,kwargs...,output_logspace=true) : log10.(qK)
 #     vtx_x = assign_vertex_x(Bnc)
 
-#     singularity = get_singularity!(Bnc,vtx_x)
-#     if singularity != 0
+#     nullity = get_nullity!(Bnc,vtx_x)
+#     if nullity != 0
 #         finite_neighbors = get_finite_neighbors!(Bnc, vtx_x)
 #         for neighbor in finite_neighbors
 #                 C,C0 = get_C_C0_qK!(Bnc,neighbor)
