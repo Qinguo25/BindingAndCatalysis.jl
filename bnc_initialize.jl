@@ -4,7 +4,8 @@
 using Symbolics
 using Parameters
 using LinearAlgebra
-using DifferentialEquations
+# using DifferentialEquations
+using OrdinaryDiffEq
 using StatsBase
 using SparseArrays
 # using JuMP
