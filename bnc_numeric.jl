@@ -103,12 +103,12 @@ function qK2x(Bnc::Bnc, qK::AbstractArray{<:Real,1};
 
     #---Solve the homotopy ODE to find x from qK.---
 
-
     # Define the start point 
     if isnothing(startlogqK) || isnothing(startlogx)
         # If no starting point is provided, use the default
-        startlogx = Bnc._anchor_log_x
-        startlogqK = Bnc._anchor_log_qK
+        # Make deep copies to avoid shared state in threaded environment
+        startlogx = copy(Bnc._anchor_log_x)
+        startlogqK = copy(Bnc._anchor_log_qK)
     end
 
     # Define the end point
@@ -123,7 +123,6 @@ function qK2x(Bnc::Bnc, qK::AbstractArray{<:Real,1};
         log_K_to_append = log.(K)
     end
     endlogqK = isnothing(log_K_to_append) ? processed_logqK : vcat(processed_logqK, log_K_to_append)
-
 
     sol = _logx_traj_with_logqK_change(Bnc,
         startlogqK,
@@ -141,8 +140,9 @@ end
 
 function qK2x(Bnc::Bnc, qK::AbstractArray{<:Real,2};kwargs...)::AbstractArray{<:Real}
     # batch mapping of qK2x for each column of qK and return as matrix.
+    # Make thread-safe by creating separate copies for each thread
     f = x -> qK2x(Bnc, x; kwargs...)
-    return matrix_iter(f, qK;byrow=false,multithread=false)
+    return matrix_iter(f, qK;byrow=false,multithread=true)
 end
 
 #----------------Functions using homotopyContinuous to moving across x space along with qK change----------------------
@@ -225,16 +225,28 @@ function _logx_traj_with_logqK_change(Bnc::Bnc,
     startlogx = isnothing(startlogx) ? qK2x(Bnc, startlogqK; input_logspace=true, output_logspace=true) : startlogx
     
     ΔlogqK = Float64.(endlogqK - startlogqK)
+    
+    # Create thread-local copies of all mutable data structures
     x = Vector{Float64}(undef, Bnc.n)
     q = Vector{Float64}(undef, Bnc.d)
-    Jt = copy(Bnc._LNt_sparse)
-    Jt_lu = copy(Bnc._LNt_lu) # LU decomposition of Jt, used for fast calculation
+    
+    # Make deep copies of sparse matrices to avoid shared state
+    Jt= deepcopy(Bnc._LNt_sparse)
+    Jt_lu = deepcopy(Bnc._LNt_lu)
+    # Jt = SparseMatrixCSC(Bnc._LNt_sparse.m, Bnc._LNt_sparse.n, copy(Bnc._LNt_sparse.colptr), 
+    #             copy(Bnc._LNt_sparse.rowval), copy(Bnc._LNt_sparse.nzval))
+    
+    # # Create a fresh LU factorization for this thread
+    # Jt_lu = lu(Jt)
 
     x_view = @view x[Bnc._I]
     q_view = @view q[Bnc._J]
     startlogq = @view(startlogqK[1:Bnc.d])
     Δlogq = @view(ΔlogqK[1:Bnc.d])
     Jt_left = @view(Jt.nzval[1:Bnc._val_num_L]) # View for the top part of the Jacobian matrix
+
+    # Copy the Lt_sparse nzval to avoid shared access
+    Lt_sparse_nzval = copy(Bnc._Lt_sparse.nzval)
 
     params = HomotopyParams(
         ΔlogqK, 
@@ -255,8 +267,8 @@ function _logx_traj_with_logqK_change(Bnc::Bnc,
         #update q & x
         @. q = exp10(startlogq + t * Δlogq)
         @. x = exp10(logx)
-        #update Jt(sparse version)
-        @. Jt_left = x_view * Bnc._Lt_sparse.nzval / q_view  # Bnc._Lt_sparse.nzval = Bnc._V
+        #update Jt(sparse version) - use the local copy of nzval
+        @. Jt_left = x_view * Lt_sparse_nzval / q_view
         # Update the dlogx
         lu!(Jt_lu, Jt) # recalculate the LU decomposition of Jt
         ldiv!(dlogx, Jt_lu',ΔlogqK)
@@ -268,93 +280,6 @@ function _logx_traj_with_logqK_change(Bnc::Bnc,
     sol = solve(prob, alg; reltol=reltol, abstol=abstol, kwargs...)
     return sol
 end
-
-# function _logx_traj_with_logqK_change(Bnc::Bnc,
-#     startlogqK::Union{Vector{<:Real},Nothing},
-#     endlogqK::Vector{<:Real};
-#     # Optional parameters for the initial log(x) values
-#     startlogx::Union{Vector{<:Real},Nothing}=nothing,
-#     # Optional parameters for the ODE solver
-#     alg=nothing, # Default to nothing, will use Tsit5() if not provided
-#     reltol=1e-8,
-#     abstol=1e-9,
-#     save_reaction_order::Bool=true,
-#     kwargs... #other Optional arguments for ODE solver
-# )::ODESolution
-
-#     #---Solve the homotopy ODE to find x from qK.---
-
-#     #--Prepare parameters---
-#     startlogx = isnothing(startlogx) ? qK2x(Bnc, startlogqK; input_logspace=true, output_logspace=true) : startlogx
-    
-#     ΔlogqK = endlogqK - startlogqK
-#     x = Vector{Float64}(undef, Bnc.n)
-#     q = Vector{Float64}(undef, Bnc.d)
-#     Jt = copy(Bnc._LNt_sparse)
-#     Jt_lu = copy(Bnc._LNt_lu) # LU decomposition of Jt, used for fast calculation
-
-#     x_view = @view x[Bnc._I]
-#     q_view = @view q[Bnc._J]
-#     startlogq = @view(startlogqK[1:Bnc.d])
-#     Δlogq = @view(ΔlogqK[1:Bnc.d])
-#     Jt_left = @view(Jt.nzval[1:Bnc._val_num_L]) # View for the top part of the Jacobian matrix
-
-#     params = HomotopyParams(
-#         ΔlogqK, 
-#         x, #x_buffer
-#         q, #q_buffer
-#         Jt, #Jt
-#         Jt_lu, #Jt_lu
-#         x_view,
-#         q_view,
-#         startlogq, #startlogq
-#         Δlogq, #Δlogq
-#         Jt_left # Jt_left
-#     )
-    
-#     # Define the ODE system for the homotopy process
-#     homotopy_process! = function (dlogx, logx, p, t)
-#         @unpack ΔlogqK, x, q, Jt, Jt_lu,x_view, q_view, startlogq, Δlogq, Jt_left = p
-#         #update q & x
-#         @. q = exp10(startlogq + t * Δlogq)
-#         @. x = exp10(logx)
-#         #update Jt(sparse version)
-#         @. Jt_left = x_view * Bnc._Lt_sparse.nzval / q_view  # Bnc._Lt_sparse.nzval = Bnc._V
-#         # Update the dlogx
-#         lu!(Jt_lu, Jt) # recalculate the LU decomposition of Jt
-#         ldiv!(dlogx, Jt_lu',ΔlogqK)
-#     end
-
-#     saved_values = nothing
-#     callback = nothing
-#     if save_reaction_order
-#         # This object will store the computed reaction orders at each step
-#         saved_values = SavedValues(Float64, Matrix{Float64})
-        
-#         # Define what to save. We want the full reaction order matrix d(logx)/d(logqK)
-#         # which is Jt'^{-1}
-#         saving_func = function(logx, t, integrator)
-#             # Jt is already updated and factorized inside homotopy_process!
-#             # We can access it through the integrator's parameters
-#             Jt_lu_current = integrator.p.Jt_lu
-#             # We want to compute inv(Jt') which is equivalent to solving Jt' * X = I
-#             # The result is the reaction order matrix.
-#             return inv(Array(Jt_lu_current'))
-#         end
-
-#         # Create the callback
-#         callback = SavingCallback(saving_func, saved_values, saveat=get(kwargs, :saveat, []))
-#     end
-    
-#     # Combine callbacks if others are passed
-#     full_callback = isnothing(callback) ? get(kwargs, :callback, nothing) : CallbackSet(get(kwargs, :callback, nothing), callback)
-
-#     # Solve the ODE
-#     tspan = (0.0, 1.0)
-#     prob = ODEProblem(homotopy_process!, startlogx, tspan, params)
-#     sol = solve(prob, alg; reltol=reltol, abstol=abstol, callback=full_callback, kwargs...)
-#     return sol, saved_values
-# end
 
 
 #--------------------------------------------------------------------------------
@@ -417,10 +342,6 @@ struct TimecurveParam{V<:Vector{Float64},
 end
 
 function catalysis_logx(Bnc::Bnc, logx0::Vector{<:Real}, tspan::Tuple{Real,Real};
-    # k::Union{Vector{<:Real},Nothing}=nothing,
-    # S::Union{Matrix{Int},Nothing}=nothing,
-    # aT::Union{Matrix{Int},Nothing}=nothing,
-    # override::Bool=false,
     alg=nothing, # Default to nothing, will use Tsit5() if not provided
     reltol=1e-8,
     abstol=1e-9,
@@ -428,25 +349,6 @@ function catalysis_logx(Bnc::Bnc, logx0::Vector{<:Real}, tspan::Tuple{Real,Real}
 )::ODESolution
 
     # ---Solve the ODE to find the time curve of log(x) with respect to qK change.---
-
-    # #--Prepare parameters---
-    # if override
-    #     if ~isnothing(k)
-    #         Bnc.k = k
-    #     end
-    #     if ~isnothing(S)
-    #         Bnc.S = S
-    #     end
-    #     if ~isnothing(aT)
-    #         Bnc.aT = aT
-    #     end
-    # end
-    # k = isnothing(k) ? Bnc.k : k
-    # S = isnothing(S) ? Bnc.S : S
-    # aT = isnothing(aT) ? Bnc.aT : aT
-    #initialize J_buffer
-    # J = Matrix{Float64}(undef, Bnc.n, Bnc.n)
-    # k = Bnc.k
     if isnothing(Bnc.catalysis.S)||isnothing(Bnc.catalysis.aT)||isnothing(Bnc.catalysis.k)
         @error("S or aT or k is not defined, cannot perform catalysis logx calculation")
     end
@@ -456,10 +358,15 @@ function catalysis_logx(Bnc::Bnc, logx0::Vector{<:Real}, tspan::Tuple{Real,Real}
     K = Vector{Float64}(undef, Bnc.r)
     v = Vector{Float64}(undef, length(k)) # catalysis flux vector
     Sv = Vector{Float64}(undef, Bnc.n) # catalysis rate vector
-    Jt = copy(Bnc._LNt_sparse) # Use the sparse version of the Jacobian matrix
-    Jt_lu = copy(Bnc._LNt_lu) # LU decomposition of Jt
+    Jt = deepcopy(Bnc._LNt_sparse) # Use the sparse version of the Jacobian matrix
+    Jt_lu = deepcopy(Bnc._LNt_lu) # LU decomposition of Jt
+    _LNt_sparse_nzval = copy(Bnc._LNt_sparse.nzval) # copy the nzval to avoid shared access
+    _aT_sparse = deepcopy(Bnc.catalysis._aT_sparse) # copy the aT_sparse to avoid shared access
+    _S_sparse = deepcopy(Bnc.catalysis._S_sparse) # copy the S_sparse to avoid shared access
+    Nt_sparse = deepcopy(Bnc._Nt_sparse) # copy the Nt_sparse to avoid shared access
+    _is_change_of_K_involved = Bnc._is_change_of_K_involved
+    
     # create view for the J_buffer
-
     x_view = @view x[Bnc._I]
     K_view = @view K[Bnc._JN]
     Jt_left = @view Jt.nzval[1:Bnc._val_num_L]
@@ -481,42 +388,41 @@ function catalysis_logx(Bnc::Bnc, logx0::Vector{<:Real}, tspan::Tuple{Real,Real}
     )
 
     # Define the ODE system for the time curve
-    if Bnc._is_change_of_K_involved
+    if _is_change_of_K_involved
         Catalysis_process! = function (dlogx, logx, p, t)
             @unpack x, K, v, Sv, Jt, Jt_left, Jt_right = p
             #update the values
             x .= exp10.(logx)
-            K .= exp10.(Bnc._Nt_sparse' * logx)
-            
+            K .= exp10.(Nt_sparse' * logx)
+
             # Update the Jacobian matrix J
-            @. Jt_left = x_view * Bnc._Lt_sparse.nzval 
-            @. Jt_right = Bnc._Nt_sparse.nzval * K_view
+            @. Jt_left = x_view * _LNt_sparse_nzval 
+            @. Jt_right = _LNt_sparse_nzval * K_view
             lu!(Jt_lu, Jt) # recalculate the LU decomposition of Jt
 
             # dlogx .= J \ (S * (k .* exp10.(aT * logx)))
-            mul!(v, Bnc.catalysis._aT_sparse, logx)
+            mul!(v, _aT_sparse, logx)
             @. v = k * exp10(v) # calculate the catalysis rate vector
-            mul!(Sv, Bnc.catalysis._S_sparse, v) # reuse x as a temporary buffer, but need change if x is used in other places, like to act call back for ODESolution
+            mul!(Sv, _S_sparse, v) # reuse x as a temporary buffer, but need change if x is used in other places, like to act call back for ODESolution
             ldiv!(dlogx, Jt_lu', Sv) # Use the LU decomposition for fast calculation
         end
     else
         # If K is not involved, we can skip the K update
-
-        params.K .= exp10.(Bnc._Nt_sparse' * logx0) #initialize K_view once
+        params.K .= exp10.(_Nt_sparse' * logx0) #initialize K_view once
         # @show length(Bnc._Nt_sparse.nzval) length(params.K_view) length(params.Jt_right)
-        @. params.Jt_right = Bnc._Nt_sparse.nzval * params.K_view #initialize Jt_right once
+        @. params.Jt_right = _Nt_sparse.nzval * params.K_view #initialize Jt_right once
 
         Catalysis_process! = function (dlogx, logx, p, t)
             @unpack x, v, Sv, Jt, Jt_left = p
             #update the values
             x .= exp10.(logx)
             # Update the Jacobian matrix J
-            @. Jt_left = x_view * Bnc._Lt_sparse.nzval 
+            @. Jt_left = x_view *  _LNt_sparse_nzval 
             lu!(Jt_lu, Jt) # recalculate the LU decomposition of Jt
-            
-            mul!(v, Bnc._aT_sparse, logx)
+
+            mul!(v, _aT_sparse, logx)
             @. v = k * exp10(v) # calculate the catalysis rate vector
-            mul!(Sv, Bnc._S_sparse, v) # reuse x as a temporary buffer, but need change if x is used in other places, like to act call back for ODESolution
+            mul!(Sv, _S_sparse, v) # reuse x as a temporary buffer, but need change if x is used in other places, like to act call back for ODESolution
 
             ldiv!(dlogx, Jt_lu', Sv)
         end
@@ -670,6 +576,30 @@ function assign_vertex_qK(Bnc::Bnc, x::AbstractVector{<:Real}; input_logspace::B
     return all_vertice_idx[findmax(record)[2]]
 end
 
+function assign_vertex_qK(Bnc::Bnc; qK::AbstractVector{<:Real}, input_logspace::Bool=false, asymptotic::Bool=true, eps=floatmin(Float64)) 
+    real_only = asymptotic ? true : nothing
+    all_vertice_idx = get_vertices(Bnc, singular=false, real = real_only, return_idx = false)
+    # @show all_vertice_idx
+    logqK = input_logspace ? qK : log10.(qK)
+    
+    record = Vector{Float64}(undef,length(all_vertice_idx))
+    for (i, idx) in enumerate(all_vertice_idx)
+        C, C0 = get_C_C0_qK!(Bnc, idx) 
+        
+        min_val = if !asymptotic
+            minimum(C * logqK .+ C0)
+        else
+            minimum(C * logqK)
+        end
+        record[i] = min_val
+
+        if record[i] > -eps
+            return idx
+        end
+    end
+    @warn("All vertex conditions failed for x=$x. Returning the best-fit vertex.")
+    return all_vertice_idx[findmax(record)[2]]
+end
 
 
 
