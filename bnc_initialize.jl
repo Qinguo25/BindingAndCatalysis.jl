@@ -11,6 +11,7 @@ using SparseArrays
 # using CUDA # Speedup calculation for distance matrix
 using DataStructures:Queue,enqueue!,dequeue!,isempty
 # using Interpolations
+using NLsolve
 
 # ---------------------Define the struct of binding and catalysis networks----------------------------------
 

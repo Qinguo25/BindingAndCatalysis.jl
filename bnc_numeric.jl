@@ -92,6 +92,110 @@ function x2qK(Bnc::Bnc, x::AbstractArray{<:Real};
 end
 
 
+function _logqK2logx_nlsolver(Bnc::Bnc, endlogqK::AbstractArray{<:Real,1};
+    startlogx::Union{Vector{<:Real},Nothing}=nothing,
+    tol=1e-10,
+    maxiter=100,
+    kwargs...
+)::Vector{<:Real}
+    n = Bnc.n
+    d = Bnc.d
+    r = Bnc.r
+    #---Solve the nonlinear equation to find x from qK.---
+
+    startlogx = isnothing(startlogx) ? copy(Bnc._anchor_log_x) : startlogx
+
+    end_logq = @view endlogqK[1:d]
+    end_logK = @view endlogqK[d+1:end]
+    F = Vector{Float64}(undef, n)
+    function f!(F,logx)
+        # [log(Lx)-logq; Nlogx-logK]
+        F[1:d] .= log10.(Bnc._Lt_sparse' * exp10.(logx)) .- end_logq
+        F[d+1,end] .= Bnc.N * logx - end_logK
+        return nothing
+    end
+
+    x = Vector{Float64}(undef, n)
+    q = Vector{Float64}(undef, d)
+    x_view = @view(x[Bnc._I])
+    q_view = @view(q[Bnc._J])
+    Jt = deepcopy(Bnc._LNt_sparse)
+    Jt_left = @view(Jt.nzval[1:Bnc._val_num_L])
+    Lt_nz  = Bnc._Lt_sparse.nzval
+    function j!(Jt, logx)
+        @.x = exp10.(logx)
+        @.q = Bnc._Lt_sparse' * x
+        @. Jt_left = x_view * Lt_nz / q_view
+        return nothing
+    end
+
+    df = OnceDifferentiable(f!, j!, startlogx, F, Jt')
+    result = nlsolve(df, startlogx; xtol=tol, ftol=tol, maxiters=maxiter,kwargs...)
+    if !result.converged
+        @warn("Method did not converge within $maxiter iterations.")
+    end
+    return result.zero
+end
+
+
+function _logqK2logx_manual(Bnc::Bnc, endlogqK::AbstractArray{<:Real,1};
+    startlogx::Union{Vector{<:Real},Nothing}=nothing,
+    tol=1e-10,
+    maxiter=100,
+    kwargs...
+)::Vector{<:Real}
+    n = Bnc.n
+    d = Bnc.d
+    r = Bnc.r
+    #---Solve the nonlinear equation to find x from qK.---
+
+    startlogx = isnothing(startlogx) ? copy(Bnc._anchor_log_x) : startlogx
+
+    end_logq = @view endlogqK[1:d]
+    end_logK = @view endlogqK[d+1:end]
+    F = Vector{Float64}(undef, n)
+    function f!(F,logx)
+        # [log(Lx)-logq; Nlogx-logK]
+        F[1:d] .= log10.(Bnc._Lt_sparse' * exp10.(logx)) .- end_logq
+        F[d+1,end] .= Bnc.N * logx - end_logK
+        return nothing
+    end
+
+    x = Vector{Float64}(undef, n)
+    q = Vector{Float64}(undef, d)
+    x_view = @view(x[Bnc._I])
+    q_view = @view(q[Bnc._J])
+    Jt = deepcopy(Bnc._LNt_sparse)
+    Jt_lu = deepcopy(Bnc._LNt_lu)
+    Jt_left = @view(Jt.nzval[1:Bnc._val_num_L])
+    Lt_nz  = Bnc._Lt_sparse.nzval
+    function j!(Jt, logx)
+        @.x = exp10.(logx)
+        @.q = Bnc._Lt_sparse' * x
+        @. Jt_left = x_view * Lt_nz / q_view
+        return nothing
+    end
+
+    Δlogx = Vector{Float64}(undef, n)
+    for i in 1:maxiter
+        f!(F, startlogx)
+        j!(Jt, startlogx)
+        if norm(F) < tol
+           return startlogx
+        end
+        lu!(Jt_lu, Jt, check=false)
+        if issuccess(Jt_lu)                 # refactor with updated values
+            ldiv!(Δlogx, Jt_lu', F)      # solve J * dlogx = rhs via Jt' = J
+        else
+            ldiv!(Δlogx, qr(Jt'), F)    # try QR
+        end
+        startlogx .-= Δlogx
+    end
+    @warn("Method did not converge within $maxiter iterations.")
+    return startlogx
+end
+
+
 function qK2x(Bnc::Bnc, qK::AbstractArray{<:Real,1};
     K::Union{Vector{<:Real},Nothing}=nothing,
     logK::Union{Vector{<:Real},Nothing}=nothing,
@@ -99,8 +203,12 @@ function qK2x(Bnc::Bnc, qK::AbstractArray{<:Real,1};
     output_logspace::Bool=false,
     startlogx::Union{Vector{<:Real},Nothing}=nothing,
     startlogqK::Union{Vector{<:Real},Nothing}=nothing,
+    method::Union{Symbol,nothing}=:Homotopy,
     kwargs...)::Vector{<:Real}
-
+    """
+    Map from qK space to x space.
+    Available methods includes: :Homotopy, :Newton, :Manual
+    """
     #---Solve the homotopy ODE to find x from qK.---
 
     # Define the start point 
@@ -124,15 +232,31 @@ function qK2x(Bnc::Bnc, qK::AbstractArray{<:Real,1};
     end
     endlogqK = isnothing(log_K_to_append) ? processed_logqK : vcat(processed_logqK, log_K_to_append)
 
-    sol = _logx_traj_with_logqK_change(Bnc,
-        startlogqK,
-        endlogqK;
-        startlogx=startlogx,
-        alg=Tsit5(),
-        save_everystep=false,
-        save_start=false,
-        kwargs...
-    )
+    if method == :Homotopy
+        sol = _logx_traj_with_logqK_change(Bnc,
+            startlogqK,
+            endlogqK;
+            startlogx=startlogx,
+            alg=Tsit5(),
+            save_everystep=false,
+            save_start=false,
+            kwargs...
+        )
+        x = sol.u[end]
+    elseif method == :Manual
+        x = _logqK2logx_Manual(Bnc,
+            endlogqK;
+            startlogx=startlogx,
+            kwargs...
+        )
+    else
+        x = _logqK2logx_nlsolver(Bnc, 
+            endlogqK;
+            startlogx=startlogx,
+            method=method,
+            kwargs...
+        )
+    end
 
     x = output_logspace ? sol.u[end] : exp10.(sol.u[end])
     return x
@@ -205,6 +329,134 @@ function x_traj_with_q_change(
     K_prepared = input_logspace ? (isnothing(logK) ? log10.(K) : logK) : (isnothing(K) ? K : exp10.(K))
 
     x_traj_with_qK_change(Bnc, [start_q;K_prepared], [end_q;K_prepared]; input_logspace=input_logspace,kwargs...)
+end
+
+
+function _logx_traj_with_logqK_change(
+    Bnc::Bnc,
+    startlogqK::Union{Vector{<:Real},Nothing},
+    endlogqK::Vector{<:Real};
+    # Optional parameters for the initial log(x) values, act as initial point for ODE solving
+    startlogx::Union{Vector{<:Real},Nothing}=nothing,
+    # Optional parameters for the ODE solver
+    alg=nothing,                # Default to a stiff solver (Rodas5P()) if not provided
+    reltol=1e-9,
+    abstol=1e-11,
+    kwargs...                   # other Optional arguments for ODE solver
+)::ODESolution
+    # Prepare starting x if not given (keep the original behavior)
+    startlogx = isnothing(startlogx) ? qK2x(Bnc, startlogqK; input_logspace=true, output_logspace=true) : startlogx
+
+    # Homotopy path in log-space
+    ΔlogqK = Float64.(endlogqK .- startlogqK)
+    d = Bnc.d
+    r = Bnc.r
+    n = Bnc.n
+
+    # Views for q/K components along the straight-line path
+    startlogq = @view(startlogqK[1:d])
+    startlogK = @view(startlogqK[d+1:end])
+    Δlogq     = @view(ΔlogqK[1:d])
+    ΔlogK     = @view(ΔlogqK[d+1:end])
+
+    # Thread-local buffers and sparse structure to build the Jacobian J(u,t) implicitly via its transpose
+    x = Vector{Float64}(undef, n)
+    q = Vector{Float64}(undef, d)
+
+    # Copy the sparsity pattern [L'; N'] and factorization objects
+    Jt     = deepcopy(Bnc._LNt_sparse)                 # stores J' sparsely
+    Jt_lu  = deepcopy(Bnc._LNt_lu)                     # UMFPACK LU for Jt
+    Lt_nz  = Bnc._Lt_sparse.nzval                # nonzeros of L' (values)
+    Jt_left = @view(Jt.nzval[1:Bnc._val_num_L])         # top block (corresponds to J_top')
+    x_view = @view(x[Bnc._I])                          # x at positions matching L' nonzeros
+    q_view = @view(q[Bnc._J])                          # q at positions matching L' nonzeros
+
+    # Right-hand side is constant along the path
+    # d logx/dt = ∂logx/∂logqK * d logqK/dt 
+    #           = ∂logx/∂logqK * ΔlogqK/1
+    rhs = ΔlogqK
+
+    # ODE RHS: du/dt solves J(u,t) * du = rhs
+    function f!(dlogx, logx, p, t) # update dlogx based on current logx
+        # Update q(t) and x(t)
+        @. q = exp10(startlogq + t * Δlogq)
+        @. x = exp10(logx)
+        # Update top-block of J using the efficient mapping over L nonzeros
+        # J_top = Diag(1./q) * L * Diag(x)
+        # We store J' so Jt_left[k] = (J_top')[row,col] = (x[j]*L[i,j]/q[i]) at L'(j,i)
+        @. Jt_left = x_view * Lt_nz / q_view
+        # Try sparse LU; if it fails (near singular), fall back to dense QR on J
+        lu!(Jt_lu, Jt, check=false)
+        if issuccess(Jt_lu)                 # refactor with updated values
+            ldiv!(dlogx, Jt_lu', rhs)      # solve J * dlogx = rhs via Jt' = J
+        else
+            ldiv!(dlogx, qr(Jt'), rhs) # try QR
+        end
+        return nothing
+    end
+
+    # Define the constraint g(u,t) = 0 for projection:
+    # u stands for logx 
+    # g(u,t) = [ log10(L*10.^u) - log10 q(t) ; N*u - log10 K(t) ]
+    function g!(out, u, p, t)
+        # q(t) and K(t)
+        logq_t = @. startlogq + t * Δlogq
+        logK_t = @. startlogK + t * ΔlogK
+
+        # Compute L*10.^u and N*u efficiently from cached sparsity
+        q_local = Bnc._Lt_sparse' * exp10.(u)     # = L * x
+        out[1:d] .= log10.(q_local) .- logq_t
+        out[d+1:end] .= (Bnc._Nt_sparse' * u) .- logK_t
+        return nothing
+    end
+
+    # Jacobian of g(u,t) wrt u:
+    # ∂g/∂u = [ Diag(1./(L*10.^u)) * L * Diag(10.^u) ; N ]
+    function g_jac!(J, u, p, t)
+        # Top block (dense fill)
+        xloc = exp10.(u)
+        qloc = Bnc._Lt_sparse' * xloc  # L*x
+        invq = @. 1.0 / qloc
+        # Zero the top d×n
+        @inbounds @simd for i in 1:d, j in 1:n
+            J[i, j] = 0.0
+        end
+        # Fill using nonzeros of L via Lt pattern:
+        # For a nonzero of Lt at (rowLt=j, colLt=i) with value v = L[i,j]
+        # J_top[i,j] += invq[i] * v * x[j]
+        I_lt = Bnc._I
+        J_lt = Bnc._J
+        V_lt = Bnc._V
+        @inbounds for k in 1:length(V_lt)
+            jL = I_lt[k]     # column index in L
+            iL = J_lt[k]     # row index in L
+            v  = V_lt[k]
+            J[iL, jL] += invq[iL] * v * xloc[jL]
+        end
+        # Bottom block is N
+        J[(d+1):end, :] .= Bnc.N
+        return nothing
+    end
+
+    # Projection callback to remove drift and keep you on the manifold
+    proj_cb = DiffEqCallbacks.ManifoldProjection(
+        g!, g_jac!;
+        max_newton_iters=10,
+        abstol=1e-12,
+        reltol=1e-10
+    )
+
+    # Build and solve the ODE
+    tspan = (0.0, 1.0)
+    prob = ODEProblem(f!, startlogx, tspan)
+    solver = isnothing(alg) ? Rodas5P() : alg
+    sol = solve(prob, solver;
+        reltol=reltol,
+        abstol=abstol,
+        callback=proj_cb,
+        kwargs...
+    )
+    return sol
 end
 
 function _logx_traj_with_logqK_change(Bnc::Bnc,
@@ -568,7 +820,7 @@ function assign_vertex_qK(Bnc::Bnc, x::AbstractVector{<:Real}; input_logspace::B
         end
         record[i] = min_val
 
-        if record[i] > -eps
+        if record[i] >= -eps
             return idx
         end
     end
@@ -576,7 +828,7 @@ function assign_vertex_qK(Bnc::Bnc, x::AbstractVector{<:Real}; input_logspace::B
     return all_vertice_idx[findmax(record)[2]]
 end
 
-function assign_vertex_qK(Bnc::Bnc; qK::AbstractVector{<:Real}, input_logspace::Bool=false, asymptotic::Bool=true, eps=floatmin(Float64)) 
+function assign_vertex_qK(Bnc::Bnc; qK::AbstractVector{<:Real}, input_logspace::Bool=false, asymptotic::Bool=true, eps=0) 
     real_only = asymptotic ? true : nothing
     all_vertice_idx = get_vertices(Bnc, singular=false, real = real_only, return_idx = false)
     # @show all_vertice_idx
@@ -593,11 +845,11 @@ function assign_vertex_qK(Bnc::Bnc; qK::AbstractVector{<:Real}, input_logspace::
         end
         record[i] = min_val
 
-        if record[i] > -eps
+        if record[i] >= -eps
             return idx
         end
     end
-    @warn("All vertex conditions failed for x=$x. Returning the best-fit vertex.")
+    @warn("All vertex conditions failed for logqK=$logqK. Returning the best-fit vertex.")
     return all_vertice_idx[findmax(record)[2]]
 end
 
