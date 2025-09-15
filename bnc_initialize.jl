@@ -175,7 +175,6 @@ mutable struct Bnc{T}
     
     # sparse matrix for speeding up the calculation
     _L_sparse::SparseMatrixCSC{Int,Int} # sparse version of L, used for fast calculation
-    _Lt_sparse::SparseMatrixCSC{Int,Int} # sparse version of L transpose, used for fast calculation
     _L_sparse_val_one::SparseMatrixCSC{Int,Int} # sparse version of L with only non-zero elements set to 1, used for fast calculation
     _valid_L_idx::Vector{Vector{Int}} #record the non-zero position for L
 
@@ -190,7 +189,7 @@ mutable struct Bnc{T}
     _LN_bottom_rows::Vector{Int} # the corresponding row number in N for _LN_bottom_idx
     _LN_bottom_cols::Vector{Int} # the corresponding column number in N for _LN_bottom_idx
     _LN_top_diag_idx::Vector{Int} # the diagonal index of the top d rows of _LN_sparse, used for fast calculation
-    
+
     _LN_lu::SparseArrays.UMFPACK.UmfpackLU{Float64,Int} # LU decomposition of _LNt_sparse, used for fast calculation
     _val_num_L::Int # number of non-zero elements in the sparse matrix L
 
@@ -225,7 +224,6 @@ mutable struct Bnc{T}
         # pre-calculate the non-zero position for L
 
         _L_sparse = sparse(L) # sparse version of L
-        _Lt_sparse = sparse(L') # sparse version of L transpose
         _L_sparse_val_one = sparse(sign.(L)) # sparse version of L with only non-zero elements set to 1
         _valid_L_idx = [findall(!iszero, @view L[i,:]) for i in 1:d] 
         
@@ -262,7 +260,6 @@ mutable struct Bnc{T}
             _is_change_of_K_involved,
 
             _L_sparse,
-            _Lt_sparse,
             _L_sparse_val_one,
             _valid_L_idx,
 
