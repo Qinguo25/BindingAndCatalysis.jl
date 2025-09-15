@@ -500,38 +500,7 @@ function _calculate_P_P0(Bnc::Bnc{T}, perm::Vector{<:Integer}) where T
     return P, P0
 end
 
-# """
-# Creates the C and C0 matrices from a permutation.
-# """
-# function _calculate_C_C0_x(Bnc::Bnc{T}, perm::Vector{<:Integer}) where T
-#     """
-#     return a matrix of ineq in x space for regime expressed as Clogx+ c0> 0
-#     (logic seems to be complicate.)
-#     """
-#     # , check::Bool=true
-#     # !check || _check_valid_idx(regime, Bnc.L) # check if the regime is valid for the given L matrix
-    
-#     num_ineq = Bnc._val_num_L - Bnc.d # inequalities counts from L's number of values minus d.
-#     c_mtx = zeros(Int, num_ineq, Bnc.n) # initialize the c_mtx
-#     c0 = Vector{Float64}(undef, num_ineq) # initialize the c0 vector
-#     row_ptr = Bnc._Lt_sparse.colptr .- (0:Bnc.d) # From _Lt_sparse.colptr, we can get the row start index for each original row.
 
-#     for (i,valid_idx,rgm,row_block_start) in zip(1:Bnc.d, Bnc._valid_L_idx, perm, row_ptr)
-#         # Within block
-#         row = row_block_start # current row index in c_mtx, start from the block start index.
-#         for col in valid_idx
-#             if col != rgm
-#                 # Calculate the correct row index for the output matrix
-#                 c_mtx[row, col] = -1
-#                 c_mtx[row, rgm] = 1
-#                 # c0[row] = log10(Bnc.L[i, rgm] / Bnc.L[i, col])
-#                 c0[row] = log10(Bnc.L[i, rgm] // Bnc.L[i, col])
-#                 row += 1
-#             end
-#         end
-#     end
-#     return c_mtx,c0
-# end
 """
 Creates the C and C0 matrices from a permutation.
 """
@@ -597,50 +566,6 @@ function _calculate_C_C0_x(Bnc::Bnc{T}, perm::Vector{<:Integer}) where T
     c_mtx = SparseMatrixCSC(num_ineq, Bnc.n, colptr, rowval, nzval)
     return c_mtx, c0
 end
-# function _calculate_P_P0_sym(Bnc::Bnc, perm::Vector{Int})::Tuple{Matrix{Int}, Vector{Num}}
-#     P = zeros(Int, Bnc.d, Bnc.n)
-#     P0 = Vector{Num}(undef, Bnc.d)
-#     for i in 1:Bnc.d
-#         P[i, perm[i]] = 1
-#         P0[i] = log10_sym(Bnc.L[i, perm[i]])
-#     end
-#     return P, P0
-# end
-# function _calculate_C_C0_x_sym(Bnc::Bnc,perm::Vector{Int})::Tuple{Matrix{Int}, Vector{Num}}
-#     """
-#     return a matrix of ineq in x space for regime expressed as Clogx+ c0> 0
-#     (logic seems to be complicate.)
-#     """
-#     # , check::Bool=true
-#     # !check || _check_valid_idx(regime, Bnc.L) # check if the regime is valid for the given L matrix
-    
-#     num_ineq = Bnc._val_num_L - Bnc.d # inequalities counts from L's number of values minus d.
-#     c_mtx = zeros(Int, num_ineq, Bnc.n) # initialize the c_mtx
-#     c0 = Vector{Num}(undef, num_ineq) # initialize the c0 vector
-#     row_ptr = Bnc._Lt_sparse.colptr .- (0:Bnc.d) # From _Lt_sparse.colptr, we can get the row start index for each original row.
-
-#     for (i,valid_idx,rgm,row_block_start) in zip(1:Bnc.d, Bnc._valid_L_idx, perm, row_ptr)
-#         # i: block_index, each original L's row is a block.
-#         # valid_idx: all the valid indices for the current block, Vector{Vector{Int}}.
-#         # rgm: the current regime index.
-#         # row_block_start: the start row idx for the current block in c_mtx.
-#         # k = 0 # finished rows count for the current block, used to update row.
-        
-#         # Within block
-#         row = row_block_start # current row index in c_mtx, start from the block start index.
-#         for col in valid_idx
-#             if col != rgm
-#                 # Calculate the correct row index for the output matrix
-#                 c_mtx[row, col] = -1
-#                 c_mtx[row, rgm] = 1
-#                 # c0[row] = log10(Bnc.L[i, rgm] / Bnc.L[i, col])
-#                 c0[row] = log10_sym(Bnc.L[i, rgm] // Bnc.L[i, col])
-#                 row += 1
-#             end
-#         end
-#     end
-#     return c_mtx,c0
-# end
 
 
 

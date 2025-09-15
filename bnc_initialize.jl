@@ -5,14 +5,15 @@ using Symbolics
 using Parameters
 using LinearAlgebra
 # using DifferentialEquations
-using OrdinaryDiffEq
+import OrdinaryDiffEq as ODE
+import DiffEqCallbacks as CB
 using StatsBase
 using SparseArrays
 # using JuMP
 # using CUDA # Speedup calculation for distance matrix
 using DataStructures:Queue,enqueue!,dequeue!,isempty
 # using Interpolations
-using NLsolve
+using NonlinearSolve
 
 # ---------------------Define the struct of binding and catalysis networks----------------------------------
 
@@ -173,22 +174,28 @@ mutable struct Bnc{T}
     
     
     # sparse matrix for speeding up the calculation
-    _Lt_sparse::SparseMatrixCSC{Float64,Int} # sparse version of L transpose, used for fast calculation
-    _LNt_sparse::SparseMatrixCSC{Float64,Int} # sparse version of [L;N]^t, used for fast calculation
-    _LNt_lu::SparseArrays.UMFPACK.UmfpackLU{Float64,Int} # LU decomposition of _LNt_sparse, used for fast calculation
-    _I::Vector{Int}
-    _J::Vector{Int}
-    _V::Vector{Float64} # sparse matrix for speeding up the calculation
-    _val_num_L::Int # number of non-zero elements in the sparse matrix L
-
-    _Nt_sparse::SparseMatrixCSC{Float64,Int} # sparse version of N transpose, used for fast calculation
-    _IN::Vector{Int} # row indices of non-zero elements in _Nt_sparse
-    _JN::Vector{Int} # column indices of non-zero elements in _Nt_sparse
-    _VN::Vector{Float64} # values of non-zero elements in _Nt_sparse
+    _L_sparse::SparseMatrixCSC{Int,Int} # sparse version of L, used for fast calculation
+    _Lt_sparse::SparseMatrixCSC{Int,Int} # sparse version of L transpose, used for fast calculation
+    _L_sparse_val_one::SparseMatrixCSC{Int,Int} # sparse version of L with only non-zero elements set to 1, used for fast calculation
     _valid_L_idx::Vector{Vector{Int}} #record the non-zero position for L
 
-    _L_sparse_val_one::SparseMatrixCSC{Int,Int} # sparse version of L with only non-zero elements set to 1, used for fast calculation
-    _N_sparse::SparseMatrixCSC{Int,Int}
+    _N_sparse::SparseMatrixCSC{Int,Int} # sparse version of N transpose, used for fast calculation
+    _LN_sparse::SparseMatrixCSC{Float64,Int} # sparse version of [L;N], used for fast calculation
+
+    _LN_top_idx::Vector{Int} # first d row index of _LN_sparse
+    _LN_top_rows::Vector{Int} # the corresponding row number in L for _LN_top_idx
+    _LN_top_cols::Vector{Int} # the corresponding column number in L for _LN_top_idx
+
+    _LN_bottom_idx::Vector{Int} # last r row index of _LN_sparse
+    _LN_bottom_rows::Vector{Int} # the corresponding row number in N for _LN_bottom_idx
+    _LN_bottom_cols::Vector{Int} # the corresponding column number in N for _LN_bottom_idx
+    _LN_top_diag_idx::Vector{Int} # the diagonal index of the top d rows of _LN_sparse, used for fast calculation
+    
+    _LN_lu::SparseArrays.UMFPACK.UmfpackLU{Float64,Int} # LU decomposition of _LNt_sparse, used for fast calculation
+    _val_num_L::Int # number of non-zero elements in the sparse matrix L
+
+    
+    
 
     # Inner constructor 
     function Bnc{T}(N, L, x_sym, q_sym, K_sym, catalysis) where {T<:Integer}
@@ -211,29 +218,27 @@ mutable struct Bnc{T}
         _is_change_of_K_involved = !isnothing(catalysis) #&& !all(@view(catalysis.S[r+1:end, :]) .== 0)
 
         #-------helper parameters-------------
-
         # paramters for default homotopcontinuous starting point.
         _anchor_log_x = zeros(n)
         _anchor_log_qK = vcat(vec(log10.(sum(L; dims=2))), zeros(r))
 
         # pre-calculate the non-zero position for L
+
+        _L_sparse = sparse(L) # sparse version of L
+        _Lt_sparse = sparse(L') # sparse version of L transpose
+        _L_sparse_val_one = sparse(sign.(L)) # sparse version of L with only non-zero elements set to 1
         _valid_L_idx = [findall(!iszero, @view L[i,:]) for i in 1:d] 
         
-        # Create Sparse matrices for further fast calculation
-        _Lt_sparse = sparse(L') # sparse version of L transpose
-        _I,_J,_V = findnz(_Lt_sparse) # get the row, column and value of the sparse matrix
-        _val_num_L = length(_V) # number of non-zero elements in the sparse matrix
+        _N_sparse = sparse(N) # sparse version of N
+        _LN_sparse = Float64.([_L_sparse; _N_sparse])
+        (_LN_top_rows, _LN_top_cols, _LN_top_idx) = rowmask_indices(_LN_sparse, 1,d) # record the position of non-zero elements in L within _LN_sparse
+        (_LN_bottom_rows, _LN_bottom_cols, _LN_bottom_idx) = rowmask_indices(_LN_sparse, d+1,n) # record the position of non-zero elements in N within _LN_sparse
+        _LN_top_diag_idx = diag_indices(_LN_sparse, d)
 
-        _Nt_sparse = sparse(N') # sparse version of N transpose, used for fast calculation
-        _IN, _JN, _VN = findnz(_Nt_sparse) # get the row, column and value of the sparse matrix
-
-        # hcat for sparse matrices requires them to be the same type
-        _LNt_sparse = hcat(sparse(Float64.(_Lt_sparse)), sparse(Float64.(_Nt_sparse))) 
-        _LNt_lu = lu(_LNt_sparse) # LU decomposition of _LNt_sparse, used for fast calculation
-
-        # Create a sparse matrix for L with only non-zero elements set to 1
-        _L_sparse_val_one = sparse(sign.(L)) # sparse version of L with
-        _N_sparse = sparse(N) # sparse version of N, used for fast calculation
+        _LN_lu = lu(_LN_sparse) # LU decomposition of _LNt_sparse, used for fast calculation
+        _val_num_L = length(_L_sparse.nzval) # number of non-zero elements in the sparse matrix
+        
+        # _N_sparse = sparse(N) # sparse version of N, used for fast calculation
 
         new(
             # Fields 1-5
@@ -255,13 +260,21 @@ mutable struct Bnc{T}
             direction,
             _anchor_log_x, _anchor_log_qK,
             _is_change_of_K_involved,
-            
-            _Lt_sparse, _LNt_sparse, _LNt_lu,
-            _I, _J, _V, _val_num_L,
-            _Nt_sparse, _IN, _JN, _VN,
-            _valid_L_idx,
+
+            _L_sparse,
+            _Lt_sparse,
             _L_sparse_val_one,
+            _valid_L_idx,
+
             _N_sparse,
+            _LN_sparse,
+
+            _LN_top_idx,_LN_top_rows,_LN_top_cols,
+            _LN_bottom_idx,_LN_bottom_rows,_LN_bottom_cols,
+            _LN_top_diag_idx,
+
+            _LN_lu,
+            _val_num_L
         )
     end
 end

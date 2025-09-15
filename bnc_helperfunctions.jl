@@ -25,6 +25,67 @@ function name_converter(name::Vector{<:T})::Vector{Num} where T
 end
 
 
+function rowmask_indices(A::SparseMatrixCSC, start_row::Int, end_row::Int)
+    # 获取稀疏矩阵 A 中前 d行 的非零元素的行、列索引及其在 nzval 中的位置
+    rows = Int[]        # 存储行坐标
+    cols = Int[]        # 存储列坐标
+    idxs = Int[]        # 存储 nzval 的索引位置
+
+    for j in 1:size(A,2)              # 遍历列
+        for k in A.colptr[j]:(A.colptr[j+1]-1)  # 遍历列的非零
+            i = A.rowval[k]
+            if i >= start_row && i <= end_row
+                push!(rows, i)
+                push!(cols, j)
+                push!(idxs, k)
+            end
+        end
+    end
+    return rows, cols, idxs
+end
+
+function diag_indices(A::SparseMatrixCSC,end_row::Int)
+    # 获取稀疏矩阵 A 中对角线前end_row行元素在 nzval 中的位置
+    # rows = Int[]        # 存储行坐标
+    # cols = Int[]        # 存储列坐标
+    idxs = Int[]        # 存储 nzval 的索引位置
+
+    for j in 1:size(A,2)              # 遍历列
+        for k in A.colptr[j]:(A.colptr[j+1]-1)  # 遍历列的非零
+            i = A.rowval[k]
+            if i == j && i <= end_row
+                push!(idxs, k)
+            end
+        end
+    end
+    return idxs
+end
+
+function log_sum_exp10(L::AbstractMatrix,logx::AbstractArray)
+    m = maximum(logx)
+    z = exp10.(x .-m)
+    y = L * z
+    return log10.(y) .+ m
+end
+
+function log_sum_exp10!(logq::AbstractVector, L::SparseMatrixCSC, logx::AbstractVector)
+    d, n = size(L)
+    m = maximum(logx)
+    fill!(logq, 0.0)
+    for col = 1:n
+        xj = logx[col] - m
+        ej = exp10(xj)
+        for idx = L.colptr[col]:(L.colptr[col+1]-1)
+            row = L.rowval[idx]
+            logq[row] += L.nzval[idx] * ej
+        end
+    end
+    @inbounds for i in 1:d
+        logq[i] = log10(logq[i]) + m
+    end
+    return logq
+end
+
 # helper funtions to taking inverse when the matrix is singular.
 function _adj_singular_matrix(M::Matrix{<:Real})::Tuple{Matrix{<:Real},Int}
     """
