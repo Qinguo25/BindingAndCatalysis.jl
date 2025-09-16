@@ -430,7 +430,7 @@ function _logx_traj_with_logqK_change(Bnc::Bnc,
     homotopy_process! = function(du, u, p, t)
         @unpack ΔlogqK, logx, logqK, J, J_lu, logx_J_view, logq_J_view, J_top,J_top_diag = p
         #update q & x
-        clamp!(u,-20,20) # make sure not overflow.
+        clamp!(u,-Inf,20) # make sure not overflow.
         @. logx = u
         @. logqK = startlogqK + t * ΔlogqK
         #update J_top(sparse version) - use the local copy of nzval
@@ -438,12 +438,11 @@ function _logx_traj_with_logqK_change(Bnc::Bnc,
         # Update the dlogx
         lu!(J_lu, J,check=false) # recalculate the LU decomposition of J
         if !issuccess(J_lu)
+            if !ensure_manifold
+                @warn("Jacobian is singular, and force invertible by pertubing, please set ensure_manifold=true to decrease numeric error.")
+            end
             @.J_top_diag += eps() # perturb the diagonal elements a bit to avoid singularity
-            lu!(J_lu, J,check=false)
-        end
-        if !issuccess(J_lu)
-            display(J)
-            error("Jacobian is singular, cannot proceed")
+            lu!(J_lu, J)
         end
         ldiv!(du, J_lu, ΔlogqK)
     end
