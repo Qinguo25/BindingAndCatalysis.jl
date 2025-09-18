@@ -233,34 +233,6 @@ function _get_Nρ_inv_from_perm!(Bnc::Bnc{T},perm::AbstractVector{<:Integer}) wh
     return _get_Nρ_inv!(Bnc,key)
 end
 
-
-# function _get_Nρ_inv!(Bnc::Bnc{T},key::AbstractVector{<:Integer}) where T
-
-#     function _calc_Nρ_inv(Nρ)
-#         #calc [Nρ^{-1}] and if singular/non-square return nullity
-#         #check if Nρ is square
-#         r,r_ncol = size(Nρ)
-#         if r != r_ncol # non-square_matrix
-#             nullity = r - rank(Nρ)
-#             return spzeros(0,0), nullity
-#         else
-#             Nρ_lu = lu(Nρ,check=false)
-#             if issuccess(Nρ_lu)
-#                 nullity = 0
-#                 Nρ_inv = sparse(inv(Array(Nρ)))
-#                 return Nρ_inv, nullity
-#             else
-#                 nullity = r - rank(Nρ)
-#                 return spzeros(0,0), nullity
-#             end
-#         end
-#     end
-
-#     get!(Bnc._vertices_Nρ_inv_dict, key) do _
-#         Nρ = @view Bnc.N[:,key]
-#         _calc_Nρ_inv(Nρ)
-#     end
-# end
 function _get_Nρ_inv!(Bnc::Bnc{T}, key::AbstractVector{<:Integer}) where T
     function _calc_Nρ_inv(Nρ)
         r, r_ncol = size(Nρ)
@@ -342,7 +314,9 @@ function _calc_neighbor_mat(data::Vector{<:AbstractVector{T}}) where {T}
 end
 
 function get_vertices_neighbor_mat!(Bnc::Bnc;)
-    # Calculate the distance matrix for all vertices in Bnc
+    """
+    # find the x space neighbor of all vertices in Bnc, the value denotes for two perms, which row they differ at.
+    """
     find_all_vertices!(Bnc) # Ensure vertices are calculated
     if isempty(Bnc.vertices_neighbor_mat)
         print("Start calculating vertex neighbor matrix, It may takes a while.\n")
@@ -352,12 +326,13 @@ function get_vertices_neighbor_mat!(Bnc::Bnc;)
     return Bnc.vertices_neighbor_mat
 end
 
+
+function get_vertices_change_dir_x!(Bnc::Bnc{T}) where T #Could be optimized to incoperated into neighbor finding process.
 """
-Calculate the x space change needed to change from one vertex to another.
-The number idx of (i,j) deontes if regime i want to reach regime j, it shall rise its idx species.And also decrease its (j,i) species.
+Calculate the x space change needed to change from one vertex to another, based on the calculated neighbor matrix, further could be intrgrated into neighbor finding process.
+The value is stroed as SparseVector, with only two non-zero elements, with positive and negative 1. the index denotes the 
 Source: row; Target: column.
 """
-function get_vertices_change_dir_x!(Bnc::Bnc{T}) where T #Could be optimized to incoperated into neighbor finding process.
     if !isempty(Bnc.vertices_change_dir_x)
         return Bnc.vertices_change_dir_x
     end
@@ -728,6 +703,8 @@ function get_P_P0!(Bnc::Bnc, perm)
     vtx = get_vertex!(Bnc, perm; full=false)
     return vtx.P, vtx.P0
 end
+get_P!(Bnc::Bnc, perm) = get_vertex!(Bnc, perm; full=false).P
+get_P0!(Bnc::Bnc, perm) = get_vertex!(Bnc, perm; full=false).P0
 
 """
 Gets M and M0, creating the vertex if necessary.
@@ -736,6 +713,9 @@ function get_M_M0!(Bnc::Bnc, perm)
     vtx = get_vertex!(Bnc, perm; full=false)
     return vtx.M, vtx.M0
 end
+get_M!(Bnc::Bnc, perm) = get_vertex!(Bnc, perm; full=false).M
+get_M0!(Bnc::Bnc, perm) = get_vertex!(Bnc, perm; full=false).M0
+
 
 """
 Gets C_x and C0_x, creating the vertex if necessary.
@@ -744,6 +724,9 @@ function get_C_C0_x!(Bnc::Bnc, perm)
     vtx = get_vertex!(Bnc, perm; full=false)
     return vtx.C_x, vtx.C0_x
 end
+get_C_x!(Bnc::Bnc, perm) = get_vertex!(Bnc, perm; full=false).C_x
+get_C0_x!(Bnc::Bnc, perm) = get_vertex!(Bnc, perm; full=false).C0_x
+
 
 """
 Gets C_qK and C0_qK, ensuring the full vertex is calculated.
@@ -756,7 +739,12 @@ function get_C_C0_qK!(Bnc::Bnc, perm)
     end
     return vtx.C_qK, vtx.C0_qK
 end
+get_C_qK!(Bnc::Bnc, perm) = get_C_C0_qK!(Bnc, perm)[1]
+get_C0_qK!(Bnc::Bnc, perm) = get_C_C0_qK!(Bnc, perm)[2]
 
+"""
+Gets the nullity of a vertex
+"""
 function get_nullity!(Bnc::Bnc,perm)
     find_all_vertices!(Bnc)
     idx = get_idx(Bnc, perm)
@@ -784,6 +772,8 @@ function get_H!(Bnc::Bnc, perm)
     end # This will compute if needed
     return vtx.H
 end
+get_H0!(Bnc::Bnc, perm) = get_H_H0!(Bnc, perm)[2]
+
 
 #-------------------------------------------------------------------------------------
 #         fucntions of getting vertices with certein properties
@@ -1164,4 +1154,32 @@ end
 #         end
 #     end
 #     return Bnc.vertices_distance
+# end
+
+# function _get_Nρ_inv!(Bnc::Bnc{T},key::AbstractVector{<:Integer}) where T
+
+#     function _calc_Nρ_inv(Nρ)
+#         #calc [Nρ^{-1}] and if singular/non-square return nullity
+#         #check if Nρ is square
+#         r,r_ncol = size(Nρ)
+#         if r != r_ncol # non-square_matrix
+#             nullity = r - rank(Nρ)
+#             return spzeros(0,0), nullity
+#         else
+#             Nρ_lu = lu(Nρ,check=false)
+#             if issuccess(Nρ_lu)
+#                 nullity = 0
+#                 Nρ_inv = sparse(inv(Array(Nρ)))
+#                 return Nρ_inv, nullity
+#             else
+#                 nullity = r - rank(Nρ)
+#                 return spzeros(0,0), nullity
+#             end
+#         end
+#     end
+
+#     get!(Bnc._vertices_Nρ_inv_dict, key) do _
+#         Nρ = @view Bnc.N[:,key]
+#         _calc_Nρ_inv(Nρ)
+#     end
 # end
