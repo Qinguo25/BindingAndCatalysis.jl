@@ -709,7 +709,7 @@ end
 #     [get_vertex_qK_slow(Bnc, row; kwargs...) for row in eachrow(x)]
 # end
 
-function assign_vertex_qK(Bnc::Bnc, x::AbstractVector{<:Real}; input_logspace::Bool=false, asymptotic::Bool=true, eps=floatmin(Float64)) 
+function assign_vertex_qK(Bnc::Bnc; x::AbstractVector{<:Real}, input_logspace::Bool=false, asymptotic::Bool=true, eps=0) 
     real_only = asymptotic ? true : nothing
     all_vertice_idx = get_vertices(Bnc, singular=false, real = real_only, return_idx = false)
     # @show all_vertice_idx
@@ -734,7 +734,7 @@ function assign_vertex_qK(Bnc::Bnc, x::AbstractVector{<:Real}; input_logspace::B
     return all_vertice_idx[findmax(record)[2]]
 end
 
-function assign_vertex_qK(Bnc::Bnc; qK::AbstractVector{<:Real}, input_logspace::Bool=false, asymptotic::Bool=true, eps=0) 
+function assign_vertex_qK(Bnc::Bnc, qK::AbstractVector{<:Real}, input_logspace::Bool=false, asymptotic::Bool=true, eps=0) 
     real_only = asymptotic ? true : nothing
     all_vertice_idx = get_vertices(Bnc, singular=false, real = real_only, return_idx = false)
     # @show all_vertice_idx

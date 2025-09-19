@@ -127,30 +127,30 @@ end
 # end
 
 
-function randomize(size::Tuple{Int,Int}, log_lower=-6, log_upper=6; log_space::Bool=true)::Matrix{<:Real}
+function randomize(n::Int, size; kwargs...)::Array{Vector{Float64}}
     """
     Generate a random matrix of size (m, n) with values between 10^log_lower and 10^log_upper, in log space
     """
-    m, n = size
-    if log_space
-        return exp10.(rand(m, n) .* (log_upper - log_lower) .+ log_lower)
-    else
-        return rand(m, n) .* (exp10(log_upper) - exp10(log_lower)) .+ exp10(log_lower)
+    N = Array{Vector{Float64}}(undef, size...)
+    
+    Threads.@threads for i in eachindex(N)
+        N[i] = randomize(n,; kwargs...)
     end
+    return N
 end
-function randomize(n::Int, log_lower=-6, log_upper=6; log_space::Bool=true)::Vector{<:Real}
-    """
-    Generate a random vector of size n with values between 10^log_lower and 10^log_upper, in log space
-    """
-    # Generate a random vector of size n with values between 10^log_lower and 10^log_upper
 
+function randomize(n::Int; log_lower=-6, log_upper=6, output_logspace::Bool=true)::Vector{Float64}
+    """
+    Generate a random vector of size n with values between 10^log_lower and 10^log_upper, equally spaced in log space
+    """
     #turn lowerbound and upperbound into bases of e
-    if log_space
+    if !output_logspace
         exp10.(rand(n) .* (log_upper - log_lower) .+ log_lower)
     else
-        rand(n) .* (exp10(log_upper) - exp10(log_lower)) .+ exp10(log_lower)
+        rand(n) .* (log_upper - log_lower) .+ log_lower
     end
 end
+randomize(Bnc::Bnc, size; kwargs...) = randomize(Bnc.n, size; kwargs...)
 
 
 function arr_to_vector(arr)

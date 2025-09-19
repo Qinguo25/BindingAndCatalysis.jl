@@ -618,6 +618,8 @@ function _ensure_full_properties!(Bnc::Bnc, vtx::Vertex)
         vtx.H0 = H * vtx.M0
         vtx.C_qK = droptol!(sparse(vtx.C_x * H),1e-10)
         vtx.C0_qK = vtx.C0_x - vtx.C_x * vtx.H0 # Correctly use vtx.C0_x
+    elseif vtx.nullity ==1
+        H
     end
 end
 
