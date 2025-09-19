@@ -1,5 +1,5 @@
 #------------------------------------------------------------------------------
-#             Functions find all regimes
+#             1. Functions find all regimes and return properties
 # ------------------------------------------------------------------------------
 """
     find_all_vertices(L; eps=1e-9, dominance_ratio=nothing, mode="auto")
@@ -86,7 +86,6 @@ function _vtxs_nonasym(L, ::Val{T} ;eps=1e-9) where T
     dfs(1, Int[])
     return results
 end
-
 find_all_vertices_asym(L;kwargs...) = _vtxs_asym(L,Val(get_int_type(size(L)[2]));kwargs...)
 function _vtxs_asym(L, ::Val{T}) where T
     d, n = size(L)
@@ -168,8 +167,6 @@ function _vtxs_asym(L, ::Val{T}) where T
     dfs(1,T[])
     return results
 end
-
-
 function find_all_vertices(L::Matrix{Int} ; eps=1e-9, dominance_ratio=Inf, asymptotic::Union{Bool,Nothing}=nothing)
 
     asymptotic =  (isnothing(asymptotic) && dominance_ratio == Inf) || (asymptotic == true)
@@ -180,8 +177,6 @@ function find_all_vertices(L::Matrix{Int} ; eps=1e-9, dominance_ratio=Inf, asymp
         return find_all_vertices_nonasym(L,eps=eps)
     end
 end
-
-
 """
 find all vertices in Bnc, and store them in Bnc.vertices_perm.
 With its idx Dict in Bnc.vertices_idx.
@@ -208,14 +203,14 @@ function find_all_vertices!(Bnc::Bnc{T};) where T # cheap enough for now
 
         Threads.@threads for i in  1:length(Bnc.vertices_perm)
             perm = Bnc.vertices_perm[i]
-            is_real = Bnc.vertices_real_flag[i]
-            if is_real
-                nullity[i] = calc_nullity(perm)
-            else
+            # is_real = Bnc.vertices_real_flag[i]
+            # if is_real
+            #     nullity[i] = calc_nullity(perm)
+            # else
                 nullity_P = calc_nullity(perm)
                 _ , nullity_N =  _get_Nρ_inv_from_perm!(Bnc,perm) 
                 nullity[i] = nullity_P + nullity_N
-            end
+            # end
         end
         # @show nullity
         Bnc.vertices_nullity = nullity
@@ -226,13 +221,36 @@ end
 
 
 
+"""
+Return a dict with key: vertex perm, value: its index in Bnc.vertices_perm
+"""
+function get_vertices_mapping_dict(Bnc::Bnc)
+    """
+    get vertices mapping dict
+    """
+    find_all_vertices!(Bnc) # Ensure vertices are calculated
+    return Bnc.vertices_idx
+end
 
+
+"""
+Get the nullity of all vertices in Bnc.
+"""
+function get_all_vertices_nullity!(Bnc::Bnc)
+    """
+    Calculate the nullity of all vertices in Bnc.
+    """
+    find_all_vertices!(Bnc)
+    return Bnc.vertices_nullity
+end
+
+
+#--------------Helper functions speeding up inverse calculation and singular detection---------------
 function _get_Nρ_inv_from_perm!(Bnc::Bnc{T},perm::AbstractVector{<:Integer}) where T
     perm_set = Set(perm)
     key = [i for i in 1:Bnc.n if i ∉ perm_set]
     return _get_Nρ_inv!(Bnc,key)
 end
-
 function _get_Nρ_inv!(Bnc::Bnc{T}, key::AbstractVector{<:Integer}) where T
     function _calc_Nρ_inv(Nρ)
         r, r_ncol = size(Nρ)
@@ -258,9 +276,10 @@ function _get_Nρ_inv!(Bnc::Bnc{T}, key::AbstractVector{<:Integer}) where T
     end
 end
 
-#-----------------------------------------------------------------------------------
-#   Functions to calculate the relationship between vertices
-#-----------------------------------------------------------------------------------
+
+#---------------------------------------------------------------------------------------------
+#   Functions involving vertices relationships, (neighbors finding and changedir finding)
+#---------------------------------------------------------------------------------------------
 
 function _calc_neighbor_mat(data::Vector{<:AbstractVector{T}}) where {T}
     n = length(data)
@@ -312,7 +331,6 @@ function _calc_neighbor_mat(data::Vector{<:AbstractVector{T}}) where {T}
     # perms = sortperm(1:length(rows),by=k->(cols[k],rows[k]))
     return SparseArrays.sparse!(I, J, vals, n, n)#, invperm(perms)
 end
-
 function get_vertices_neighbor_mat!(Bnc::Bnc;)
     """
     # find the x space neighbor of all vertices in Bnc, the value denotes for two perms, which row they differ at.
@@ -325,8 +343,6 @@ function get_vertices_neighbor_mat!(Bnc::Bnc;)
     end
     return Bnc.vertices_neighbor_mat
 end
-
-
 function get_vertices_change_dir_x!(Bnc::Bnc{T}) where T #Could be optimized to incoperated into neighbor finding process.
 """
 Calculate the x space change needed to change from one vertex to another, based on the calculated neighbor matrix, further could be intrgrated into neighbor finding process.
@@ -368,7 +384,6 @@ Source: row; Target: column.
     end
     Bnc.vertices_change_dir_x = SparseArrays.sparse!(I,J, vals, size(d_mtx)...)
 end
-
 function get_change_dir_x(Bnc::Bnc, from, to)
     from = get_idx(Bnc, from)
     to = get_idx(Bnc, to)
@@ -379,7 +394,6 @@ function get_change_dir_x(Bnc::Bnc, from, to)
         return -d_mat[to, from]
     end
 end
-
 function get_vertices_change_dir_qK!(Bnc::Bnc{T}) where T
     if !isempty(Bnc.vertices_change_dir_qK)
         return Bnc.vertices_change_dir_qK
@@ -434,9 +448,21 @@ function get_vertices_change_dir_qK!(Bnc::Bnc{T}) where T
     end
     Bnc.vertices_change_dir_qK = SparseArrays.sparse!(I, J, vals, size(d_mat)...)
 end
+function get_change_dir_qK(Bnc::Bnc, from, to)
+    from = get_idx(Bnc, from)
+    to = get_idx(Bnc, to)
+    d_mat = get_vertices_change_dir_qK!(Bnc)
+    if from < to
+        return d_mat[from, to]
+    else
+        return -d_mat[to, from]
+    end
+end
+
+
 
 #-------------------------------------------------------------------------------------
-#         fucntions with single vertex and lazy calculate  its properties
+#         functions involving single vertex and lazy calculate  its properties
 # ------------------------------------------------------------------------------------
 
 # """
@@ -474,7 +500,6 @@ function _calculate_P_P0(Bnc::Bnc{T}, perm::Vector{<:Integer}) where T
     
     return P, P0
 end
-
 
 """
 Creates the C and C0 matrices from a permutation.
@@ -542,9 +567,6 @@ function _calculate_C_C0_x(Bnc::Bnc{T}, perm::Vector{<:Integer}) where T
     return c_mtx, c0
 end
 
-
-
-
 """
 Creates a new, partially-filled Vertex object.
 This function performs the initial, less expensive calculations.
@@ -599,8 +621,6 @@ function _ensure_full_properties!(Bnc::Bnc, vtx::Vertex)
     end
 end
 
-
-
 """
 Retrieves a vertex from cache or creates it if it doesn't exist.
 """
@@ -627,7 +647,9 @@ end
 
 
 
-
+"""
+Get a vertex's index
+"""
 function get_idx(Bnc,perm::Vector{<:Integer})
     find_all_vertices!(Bnc)
     return Bnc.vertices_idx[perm]
@@ -640,7 +662,9 @@ function get_idx(Bnc::Bnc, vtx::Vertex)
 end
 
 
-
+"""
+Get perm of a vertex
+"""
 function get_perm(Bnc,perm::Vector{<:Integer})
     return perm
 end
@@ -676,7 +700,6 @@ function get_all_neighbors!(Bnc::Bnc, perm; return_idx::Bool=false)
     idx = vtx.neighbors_idx
     return return_idx ? idx : Bnc.vertices_perm[idx]
 end
-
 function get_finite_neighbors!(Bnc::Bnc, perm; return_idx::Bool=false)
     vtx = get_vertex!(Bnc, perm;full=false)
     if isempty(vtx.neighbors_idx)
@@ -685,7 +708,6 @@ function get_finite_neighbors!(Bnc::Bnc, perm; return_idx::Bool=false)
     idx = vtx.finite_neighbors_idx
     return return_idx ? idx : Bnc.vertices_perm[idx]
 end
-
 function get_infinite_neighbors!(Bnc::Bnc, perm; return_idx::Bool=false,nullity_max::Union{Int,Nothing}=nothing)
     vtx = get_vertex!(Bnc, perm;full=false)
     if isempty(vtx.neighbors_idx)
@@ -734,8 +756,8 @@ Gets C_qK and C0_qK, ensuring the full vertex is calculated.
 function get_C_C0_qK!(Bnc::Bnc, perm)
     vtx = get_vertex!(Bnc, perm; full=false)
     _ensure_full_properties!(Bnc,vtx)
-    if vtx.nullity >= 2
-        @error("Vertex got singluarity $(vtx.nullity), cannot get C_qK and C0_qK")
+    if vtx.nullity >= 1
+        @error("Vertex got nullity $(vtx.nullity), currently doesn't support get C_qK and C0_qK")
     end
     return vtx.C_qK, vtx.C0_qK
 end
@@ -776,24 +798,8 @@ get_H0!(Bnc::Bnc, perm) = get_H_H0!(Bnc, perm)[2]
 
 
 #-------------------------------------------------------------------------------------
-#         fucntions of getting vertices with certein properties
-# ------------------------------------------------------------------------------------
-function get_vertices_mapping_dict(Bnc::Bnc)
-    """
-    get vertices mapping dict
-    """
-    find_all_vertices!(Bnc) # Ensure vertices are calculated
-    return Bnc.vertices_idx
-end
-
-function get_all_vertices_nullity!(Bnc::Bnc)
-    """
-    Calculate the nullity of all vertices in Bnc.
-    """
-    find_all_vertices!(Bnc)
-    return Bnc.vertices_nullity
-end
-
+#         functions of getting vertices with certain properties
+# -------------------------------------------------------------------------------------
 
 function get_singular_vertices(Bnc::Bnc; return_idx::Bool=false)
     """
@@ -850,6 +856,12 @@ function get_vertices(Bnc::Bnc; singular::Union{Bool,Nothing}=nothing, real::Uni
     return return_idx ? idx : Bnc.vertices_perm[idx]
 end
 
+
+
+function merge_conditions(Bnc::Bnc, perms...)
+    Result = Vector{Tuple{SparseMatrixCSC{Float64, Int64}, Vector{Float64}}}()
+
+end
 
 # function ∂logqK_∂logx_regime(Bnc::Bnc; regime::Union{Vector{Int}, Nothing}=nothing,
 #     Mtd::Union{Matrix{Int}, Nothing}=nothing,
