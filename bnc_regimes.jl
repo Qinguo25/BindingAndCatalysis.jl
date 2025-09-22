@@ -256,7 +256,9 @@ function _get_Nρ_inv!(Bnc::Bnc{T}, key::AbstractVector{<:Integer}) where T
         _calc_Nρ_inv(Nρ)
     end
 end
-_get_key(Bnc{T}, perm)::Vector{T} = [i for i in 1:Bnc.n if i ∉ perm]
+function _get_key(Bnc::Bnc{T}, perm)::Vector{T} where T 
+   return [i for i in 1:Bnc.n if i ∉ perm]
+end
 _get_Nρ_inv_from_perm!(Bnc, perm) = _get_Nρ_inv!(Bnc, _get_key(Bnc, perm))
 
 
@@ -282,6 +284,7 @@ function get_all_vertices_nullity!(Bnc::Bnc)
     find_all_vertices!(Bnc)
     return Bnc.vertices_nullity
 end
+
 
 
 #---------------------------------------------------------------------------------------------
