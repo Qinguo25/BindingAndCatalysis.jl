@@ -87,33 +87,27 @@ function log_sum_exp10!(logq::AbstractVector, L::SparseMatrixCSC, logx::Abstract
 end
 
 # helper funtions to taking inverse when the matrix is singular.
-function _adj_singular_matrix(M::Matrix{<:Real})::Tuple{Matrix{<:Real},Int}
+function  _adj_singular_matrix(A::AbstractMatrix; atol=1e-12)::Tuple{SparseMatrixCSC,Int}
     """
-    Calculate the adjoint of a singular matrix M, and return the singularity count.
+    Calculate the adjoint of a singular matrix M, and return the nullity.
     """
-    n, m = size(M)
-    @assert n == m "Matrix must be square"
-    M_svd = svd(M;full=true)
-    singular_pos = findall(M_svd.S .< 1e-7)
-    singularity = length(singular_pos)
-    adj = zeros(eltype(M), n, n)
-    if length(singular_pos) > 1
-        @warn("Multiple singular values found")
-        return zeros(n, n), singularity
-    else # sigularity of 1
-        line = M_svd.Vt[singular_pos[1],:] * M_svd.U[:, singular_pos[1]]'
-        # @show line
-        for i in 1:n
-            if abs(line[i,i]) >1e-7
-                idx = vcat(1:i-1,i+1:n)
-                # @show idx
-                amp = det(M[idx,idx])/ line[i,i]
-                # @show amp
-                @. adj = round(line * amp)
-                return adj, singularity
-            end
-        end
-        @error("No non-zero diagonal element found in the singular vector")
+    n, m = size(A)
+    @assert n == m "A must be square"
+    F = svd(Array(A))
+    S = F.S
+    thresh = atol * maximum(S)
+    zero_ids = findall(σ -> σ ≤ thresh, S)
+    nullity = length(zero_ids)
+    if nullity == 1
+        k = zero_ids[1]
+        logσprod = sum(log, S[setdiff(1:n,[k])])
+        σprod = exp(logσprod)
+        u = F.U[:, k]   # 左奇异向量
+        v = F.V[:, k]   # 右奇异向量
+        return σprod * (sparsevec(v) * sparsevec(u)'), 1  # rank-1 矩阵
+        # return σprod * (v * u'), 1  # rank-1 矩阵
+    else
+        return spzeros(0,0), nullity
     end
 end
 

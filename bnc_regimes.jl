@@ -185,40 +185,79 @@ Also calculate if the vertex is real or fake, and its nullity.
 function find_all_vertices!(Bnc::Bnc{T};) where T # cheap enough for now
     if isempty(Bnc.vertices_perm) || isempty(Bnc.vertices_real_flag)
         print("Start finding all vertices, it may takes a while.\n")
-    
+        
+        # all vertices
         # finding non-asymptotic vettices, which gives all vertices both real and fake, singular and non-singular
         Bnc.vertices_perm = find_all_vertices(Bnc.L; asymptotic=false)
         # Create the idx for each vertex
         Bnc.vertices_idx = Dict(a=>idx for (idx, a) in enumerate(Bnc.vertices_perm)) # Map from vertex to its index
         # finding asymptotic vertices, which is the real vertices.
+
+        # asymptotic vertices
         real_vtx = Set(find_all_vertices(Bnc.L; asymptotic=true))
         Bnc.vertices_real_flag = Bnc.vertices_perm .∈ Ref(real_vtx)
-        
+        print("Done, with $(length(Bnc.vertices_perm)) vertices found and $(length(real_vtx)) asymptotic vertices.\n")
+        println("Start calculating nullity for each vertex, it may takes a while.")
+        # build Nρ_inv cache in parallel
+        _build_Nρ_cache_parallel!(Bnc)
         # Caltulate the nullity for each vertices
         nullity = Vector{T}(undef, length(Bnc.vertices_perm))
-        function calc_nullity(perm)
-            # helper function for helping calculate nullity when vertex is real.
-            length(perm) -length(Set(perm))
-        end
-
         Threads.@threads for i in  1:length(Bnc.vertices_perm)
-            perm = Bnc.vertices_perm[i]
-            # is_real = Bnc.vertices_real_flag[i]
-            # if is_real
-            #     nullity[i] = calc_nullity(perm)
-            # else
-                nullity_P = calc_nullity(perm)
-                _ , nullity_N =  _get_Nρ_inv_from_perm!(Bnc,perm) 
-                nullity[i] = nullity_P + nullity_N
-            # end
+            perm_set = Set(Bnc.vertices_perm[i])
+            nullity_P =  Bnc.d -length(perm_set)
+            _ , nullity_N =  _get_Nρ_inv_from_perm!(Bnc,perm_set) 
+            nullity[i] = nullity_P + nullity_N
         end
         # @show nullity
         Bnc.vertices_nullity = nullity
-        print("Done, with $(length(Bnc.vertices_perm)) vertices found and $(length(real_vtx)) real vertices.\n")
+        println("Done.")
     end
     return Bnc.vertices_perm
 end
 
+
+#--------------Helper functions speeding up inverse calculation and singular detection---------------
+function _build_Nρ_cache_parallel!(Bnc::Bnc{T}) where T
+    perm_set = Set(Set(perm) for perm in Bnc.vertices_perm) # Unique sets of permutations
+    keys = [_get_key(Bnc, perm) for perm in perm_set]
+
+    nk = length(keys)
+    inv_list = Vector{SparseMatrixCSC{Float64,Int}}(undef, nk)
+    nullity_list = Vector{T}(undef, nk)
+
+    Threads.@threads for i in eachindex(keys)
+        key = keys[i]
+        Nρ = @view Bnc.N[:, key]
+        inv_list[i], nullity_list[i] = _calc_Nρ_inv(Nρ)
+    end
+
+    for i in eachindex(keys)
+        Bnc._vertices_Nρ_inv_dict[keys[i]] = (inv_list[i], nullity_list[i])
+    end
+    return nothing
+end
+
+function _calc_Nρ_inv(Nρ) # Core function to calculate Nρ_inv or adj matrix
+    r, r_ncol = size(Nρ)
+    if r != r_ncol
+        return spzeros(0,0), r - rank(Nρ)
+    end
+    Nρ_lu = lu(Nρ; check=false)
+    if issuccess(Nρ_lu)
+        return sparse(inv(Array(Nρ))), 0
+    else
+        return _adj_singular_matrix(Nρ)
+    end
+end
+
+function _get_Nρ_inv!(Bnc::Bnc{T}, key::AbstractVector{<:Integer}) where T
+    get!(Bnc._vertices_Nρ_inv_dict, key) do
+        Nρ = @view Bnc.N[:, key]
+        _calc_Nρ_inv(Nρ)
+    end
+end
+_get_key(Bnc{T}, perm)::Vector{T} = [i for i in 1:Bnc.n if i ∉ perm]
+_get_Nρ_inv_from_perm!(Bnc, perm) = _get_Nρ_inv!(Bnc, _get_key(Bnc, perm))
 
 
 """
@@ -242,38 +281,6 @@ function get_all_vertices_nullity!(Bnc::Bnc)
     """
     find_all_vertices!(Bnc)
     return Bnc.vertices_nullity
-end
-
-
-#--------------Helper functions speeding up inverse calculation and singular detection---------------
-function _get_Nρ_inv_from_perm!(Bnc::Bnc{T},perm::AbstractVector{<:Integer}) where T
-    perm_set = Set(perm)
-    key = [i for i in 1:Bnc.n if i ∉ perm_set]
-    return _get_Nρ_inv!(Bnc,key)
-end
-function _get_Nρ_inv!(Bnc::Bnc{T}, key::AbstractVector{<:Integer}) where T
-    function _calc_Nρ_inv(Nρ)
-        r, r_ncol = size(Nρ)
-        if r != r_ncol
-            nullity = r - rank(Nρ)
-            return spzeros(0, 0), nullity
-        else
-            Nρ_lu = lu(Nρ; check=false)
-            if issuccess(Nρ_lu)
-                nullity = 0
-                Nρ_inv = sparse(inv(Array(Nρ)))
-                return Nρ_inv, nullity
-            else
-                nullity = r - rank(Nρ)
-                return spzeros(0, 0), nullity
-            end
-        end
-    end
-
-    get!(Bnc._vertices_Nρ_inv_dict, key) do
-        Nρ = @view Bnc.N[:, key]
-        _calc_Nρ_inv(Nρ)
-    end
 end
 
 
@@ -595,12 +602,21 @@ function _create_vertex(Bnc::Bnc{T}, perm::Vector{<:Integer})::Vertex where T
 end
 
 function _calc_H(Bnc::Bnc,perm::Vector{<:Integer})
-    perm_set = Set(perm)
-    key = [i for i in 1:Bnc.n if i ∉ perm_set]
-    Nρ_inv = _get_Nρ_inv!(Bnc,key)[1] # get Nρ_inv from cache or calculate it.
-    Nc = @view Bnc.N[:,perm]
-    NcNρ_inv_neg = -Nc * Nρ_inv
-    H_un_perm = [[I(Bnc.d) zeros(Bnc.d,Bnc.r)];[NcNρ_inv_neg Nρ_inv]]
+    key = _get_key(Bnc, perm)
+    Nρ_inv,nullity = _get_Nρ_inv!(Bnc,key) # get Nρ_inv from cache or calculate it. # sparse matrix
+    Nc = @view Bnc.N[:,perm] # dense matrix
+    NcNρ_inv_neg = - Nρ_inv * Nc 
+    
+    H_un_perm = if nullity == 0 
+         [[I(Bnc.d) zeros(Bnc.d,Bnc.r)];
+         [NcNρ_inv_neg Nρ_inv]]
+    elseif nullity == 1
+        [[zeros(Bnc.d,Bnc.d) zeros(Bnc.d,Bnc.r)];
+        [NcNρ_inv_neg Nρ_inv]] # adj matrix
+    else
+        error("Nullity greater than 1 not supported")
+    end
+
     perm_inv = invperm([perm;key]) # get the inverse permutation to reorder H
     H = H_un_perm[perm_inv, :]
     return H
@@ -609,17 +625,26 @@ end
 function _ensure_full_properties!(Bnc::Bnc, vtx::Vertex)
     # Check if already calculated
     if !isempty(vtx.H)
-        return
+        return nothing
     end
     if vtx.nullity == 0
-        H = inv(Array(vtx.M)) # dense matrix 
-        # H = _calc_H(Bnc, vtx.perm)
+        # H = inv(Array(vtx.M)) # dense matrix 
+        H = _calc_H(Bnc, vtx.perm)
         vtx.H = droptol!(sparse(H),1e-10) # Calculate the inverse matrix from pre-computed LU decomposition of M
         vtx.H0 = H * vtx.M0
         vtx.C_qK = droptol!(sparse(vtx.C_x * H),1e-10)
         vtx.C0_qK = vtx.C0_x - vtx.C_x * vtx.H0 # Correctly use vtx.C0_x
     elseif vtx.nullity ==1
-        H
+        # we need to check where this nullity comes from.
+        if length(Set(vtx.perm)) == Bnc.d # the nullity comes from N
+            H = _calc_H(Bnc, vtx.perm) 
+            vtx.H = droptol!(sparse(H),1e-10).* Bnc.direction
+        else
+            H = _adj_singular_matrix(vtx.M)[1]
+            vtx.H = droptol!(sparse(H),1e-10).* Bnc.direction
+        end
+    else
+        vtx.H = spzeros(Bnc.n, Bnc.n)
     end
 end
 
