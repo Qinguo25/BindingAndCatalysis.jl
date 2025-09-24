@@ -608,14 +608,14 @@ function _calc_H(Bnc::Bnc,perm::Vector{<:Integer})
     key = _get_key(Bnc, perm)
     Nρ_inv,nullity = _get_Nρ_inv!(Bnc,key) # get Nρ_inv from cache or calculate it. # sparse matrix
     Nc = @view Bnc.N[:,perm] # dense matrix
-    NcNρ_inv_neg = - Nρ_inv * Nc 
+    Nρ_inv_Nc_neg = - Nρ_inv * Nc 
     
     H_un_perm = if nullity == 0 
          [[I(Bnc.d) zeros(Bnc.d,Bnc.r)];
-         [NcNρ_inv_neg Nρ_inv]]
+         [Nρ_inv_Nc_neg Nρ_inv]]
     elseif nullity == 1
         [[zeros(Bnc.d,Bnc.d) zeros(Bnc.d,Bnc.r)];
-        [NcNρ_inv_neg Nρ_inv]] # adj matrix
+        [Nρ_inv_Nc_neg Nρ_inv]] # adj matrix
     else
         error("Nullity greater than 1 not supported")
     end
@@ -642,13 +642,144 @@ function _ensure_full_properties!(Bnc::Bnc, vtx::Vertex)
         if length(Set(vtx.perm)) == Bnc.d # the nullity comes from N
             H = _calc_H(Bnc, vtx.perm) 
             vtx.H = droptol!(sparse(H),1e-10).* Bnc.direction
-        else
+            vtx.C_qK, vtx.C0_qK = _calc_C0_qK_nullity1(Bnc,vtx.perm) # Needs further optimized to integrate within svd, but works so far.
+        else # the nullity comes from P
             H = _adj_singular_matrix(vtx.M)[1]
             vtx.H = droptol!(sparse(H),1e-10).* Bnc.direction
+            vtx.C_qK, vtx.C0_qK = _calc_C0_qK_nullity1(Bnc,vtx.perm) # Needs further optimized to integrate within svd, but works so far.
         end
     else
         vtx.H = spzeros(Bnc.n, Bnc.n)
     end
+end
+
+function _calc_C0_qK_nullity1(Bnc::Bnc,perm, atol=1e-10) 
+    @assert get_nullity!(Bnc, perm) == 1 "The nullity of the system is not 1"
+    
+    M, M_0 = get_M_M0!(Bnc, perm)
+    C, C_0 = get_C_C0_x!(Bnc, perm)
+    M_array = Array(M)
+    F = svd(M_array)
+    # 找到零奇异值的索引
+    zero_idx = findfirst(s -> s < atol * F.S[1], F.S) 
+    # 计算 nullspace 向量和伪逆
+    U_n = F.V[:, zero_idx:zero_idx]  # 右零空间 (nullspace of M)
+    V_n = F.U[:, zero_idx:zero_idx]  # 左零空间 (nullspace of M')
+    
+    # 计算伪逆：M_inv = V * S^+ * U'
+    S_pinv = zeros(size(F.S))
+    for i in 1:zero_idx-1
+        S_pinv[i] = 1.0 / F.S[i]
+    end
+    M_inv = F.V * Diagonal(S_pinv) * F.U'
+    
+    # 计算核心矩阵
+    A = C * U_n  
+    B = C * M_inv
+    C_vec = C_0 - B * M_0  
+    
+    # 找到正负索引
+    A = vec(A) # as A have to get only one column
+    posi = findall(x -> x > atol, A)
+    nega = findall(x -> x < -atol, A)
+    zero = findall(x -> abs(x) <= atol, A)
+
+    # original constraints
+    C_qK_org = B[zero, :]
+    C0_qK_org = C_vec[zero]
+    for i in 1:size(C_qK_org,1)
+        val_to_norm =Inf
+        for j in 1:size(C_qK_org,2)
+            val = abs(C_qK_org[i,j])
+            if val < atol
+                C_qK_org[i,j] = 0.0
+                continue
+            elseif val < val_to_norm
+                val_to_norm = val       
+            end
+        end
+        C_qK_org[i,:] ./= val_to_norm
+        C0_qK_org[i] = abs(C0_qK_org[i]) > atol ? C0_qK_org[i]/val_to_norm : 0.0
+    end
+
+    # Equality constraints
+    C_qK_eq = V_n'
+    C0_qK_eq = (V_n' * M_0)[1] # Only one value
+    val_to_norm = Inf
+    for i in eachindex(C_qK_eq)
+        val = abs(C_qK_eq[i])
+        if val < atol
+            C_qK_eq[i] = 0.0
+            continue
+        elseif val < val_to_norm
+            val_to_norm = val
+        end
+    end
+    C_qK_eq ./= val_to_norm
+    C0_qK_eq = abs(C0_qK_eq) > atol ? C0_qK_eq/val_to_norm : 0.0
+
+    # inequality constraints
+    # 预计算不等式约束的数量
+    n_posi = length(posi)
+    n_nega = length(nega)
+    n_ineq = n_posi * n_nega
+    
+    # 预分配不等式约束数组
+    d = size(B, 2)  # B 的列数
+    
+    # 预计算正负约束的系数
+    posi_coeffs = Matrix{Float64}(undef, n_posi, d)
+    posi_consts = Vector{Float64}(undef, n_posi)
+    for (idx, i) in enumerate(posi)
+        a_val = A[i]
+        posi_coeffs[idx, :] = -B[i, :] / a_val
+        posi_consts[idx] = -C_vec[i] / a_val
+    end
+    
+    nega_coeffs = Matrix{Float64}(undef, n_nega, d)
+    nega_consts = Vector{Float64}(undef, n_nega)
+    for (idx, i) in enumerate(nega)
+        a_val = A[i]
+        nega_coeffs[idx, :] = -B[i, :] / a_val
+        nega_consts[idx] = -C_vec[i] / a_val
+    end
+    
+
+    C_qK_ineq = Matrix{Float64}(undef, n_ineq, d)
+    C0_qK_ineq = Vector{Float64}(undef, n_ineq)
+    # 构建不等式约束：negamat[j] - posimat[i] 和 negac[j] - posic[i]
+    constraint_idx = 1
+    for i in 1:n_posi
+        for j in 1:n_nega
+            row = nega_coeffs[j, :] - posi_coeffs[i, :]
+            cons = nega_consts[j] - posi_consts[i]
+
+            # Normalized to the smallest non-zero value
+            val_to_norm = Inf
+            for i in eachindex(row)
+                val = abs(row[i])
+                if val < atol
+                    row[i] = 0.0
+                    continue
+                elseif val < val_to_norm
+                    val_to_norm = val
+                end
+            end
+
+            row ./= val_to_norm
+            cons = abs(cons) > atol ? cons/val_to_norm : 0.0
+
+            C_qK_ineq[constraint_idx, :] = row
+            C0_qK_ineq[constraint_idx] = cons
+
+            constraint_idx += 1
+        end
+    end
+    # 合并等式和不等式约束
+    C_final = [C_qK_eq; C_qK_ineq; C_qK_org]
+    C0_final = [C0_qK_eq; C0_qK_ineq; C0_qK_org]
+
+    return C_final, C0_final
 end
 
 """
@@ -786,7 +917,7 @@ Gets C_qK and C0_qK, ensuring the full vertex is calculated.
 function get_C_C0_qK!(Bnc::Bnc, perm)
     vtx = get_vertex!(Bnc, perm; full=false)
     _ensure_full_properties!(Bnc,vtx)
-    if vtx.nullity >= 1
+    if vtx.nullity >= 2
         @error("Vertex got nullity $(vtx.nullity), currently doesn't support get C_qK and C0_qK")
     end
     return vtx.C_qK, vtx.C0_qK

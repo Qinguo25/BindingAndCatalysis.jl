@@ -426,18 +426,26 @@ from ∑a log b to log ∏b^a
 
 The final expression contains ∏b^a term.
 """
-function handle_log_weighted_sum(expr)
-    get_single = @rule(+(~~xs) => [~~xs...])
-    get_coeff = SymbolicUtils.Chain([@rule(~x => exp10(~x)),@rule(~c * log10(~b) => (~b)^(~c)), @rule(log10(~b) => (~b))])
-    terms = get_single(expr)
-    subs_expr = get_coeff.(terms) |> prod
-    if contains(string(subs_expr), "log10")
-        @error "Failed to convert the expression to product form"
-    else
-        return subs_expr
+# function handle_log_weighted_sum(expr)
+#     get_single = @rule(+(~~xs) => [~~xs...])
+#     get_coeff = SymbolicUtils.Chain([@rule(~x => exp10(~x)),@rule(~c * log10(~b) => (~b)^(~c)), @rule(log10(~b) => (~b))])
+#     terms = get_single(expr)
+#     subs_expr = get_coeff.(terms) |> prod
+#     if contains(string(subs_expr), "log10")
+#         @error "Failed to convert the expression to product form"
+#     else
+#         return subs_expr
+#     end
+# end
+function handle_log_weighted_sum(C, syms , C0 = nothing)
+    rows = size(C,1)
+    rst = Vector{Num}(undef, rows)
+    C0 = isnothing(C0) ? zeros(Int, rows) : C0
+    for i in 1:rows
+        rst[i] = syms .^ C[i,:] |> prod |> (x-> x*10^C0[i])
     end
+    return rst
 end
-
 
 # """
 # Helper funtions to taking a classification vector and return a vector of colors by :viridis color map.

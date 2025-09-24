@@ -32,22 +32,47 @@ end
 #---------------------------------------------------------
 
 
-function show_x_space_constrains(Bnc::Bnc, perm;log_space::Bool=true,asymptotic::Bool=false)
+function show_dominance_condition(Bnc::Bnc, perm;log_space::Bool=true,asymptotic::Bool=false)
+    P,P_0 = get_P_P0!(Bnc, perm)
+    # Show the dominance conditions for the given regime.
+    if log_space
+        return asymptotic ?   log10.(Bnc.q_sym) .~ P * log10.(Bnc.x_sym) : log10.(Bnc.q_sym) .~ P * log10.(Bnc.x_sym) .+ P_0
+    else
+        return asymptotic ? Bnc.q_sym .~ handle_log_weighted_sum(P, Bnc.x_sym) : Bnc.q_sym .~ handle_log_weighted_sum(P, Bnc.x_sym,P_0)
+    end
+end
+
+function show_x_space_condition(Bnc::Bnc, perm;log_space::Bool=true,asymptotic::Bool=false)
     C_x, C_0 =  get_C_C0_x!(Bnc,perm)
     # Show the conditions for the x space for the given regime.
     if log_space
         return asymptotic ? C_x * log10.(Bnc.x_sym) .>0 : C_x * log10.(Bnc.x_sym).+C_0 .> 0
     else
-        return handle_log_weighted_sum.(C_x * log10.(Bnc.x_sym).+C_0) .> 1
+        return asymptotic ? handle_log_weighted_sum(C_x, Bnc.x_sym).>1 : handle_log_weighted_sum(C_x, Bnc.x_sym,C0) .> 1
     end
 end
 
-function show_qK_space_constrains(Bnc::Bnc, perm;log_space::Bool=true,asymptotic::Bool=false)
+function show_qK_space_condition(Bnc::Bnc, perm;log_space::Bool=true,asymptotic::Bool=false)
     C_qK, C0_qK = get_C_C0_qK!(Bnc, perm)
-    if log_space
-        return asymptotic ? C_qK * log10.([Bnc.q_sym; Bnc.K_sym]) .> 0 : C_qK * log10.([Bnc.q_sym; Bnc.K_sym]) .+ C0_qK .> 0
+    syms = [Bnc.q_sym; Bnc.K_sym]
+    nullity = get_nullity!(Bnc, perm)
+    # @show nullity
+    if nullity == 0
+        if log_space
+            # eq = asymptotic ? C_qK[1:nullity,:] * log10.(syms) .~ 0 : C_qK * log10.(syms) .+ C0_qK[1:nullity,:] .~ 0
+            return asymptotic ? C_qK * log10.(syms) .> 0 : C_qK * log10.(syms) .+ C0_qK .> 0
+        else
+            return  asymptotic ? handle_log_weighted_sum(C_qK, syms) .> 1 : handle_log_weighted_sum(C_qK, syms,C0_qK) .> 1
+        end
     else
-        return handle_log_weighted_sum.(C_qK * log10.([Bnc.q_sym; Bnc.K_sym]) .+ C0_qK) .> 1
+        if log_space
+            eq = asymptotic ? C_qK[1:nullity,:] * log10.(syms) .~ 0 : C_qK[1:nullity,:] * log10.(syms) .+ C0_qK[1:nullity,:] .~ 0
+            uneq = asymptotic ? C_qK[nullity+1:end,:] * log10.(syms) .> 0 : C_qK[nullity+1:end,:] * log10.(syms) .+ C0_qK[nullity+1:end,:] .> 0
+        else
+            eq = asymptotic ? handle_log_weighted_sum(C_qK[1:nullity,:], syms) .~ 1 : handle_log_weighted_sum(C_qK[1:nullity,:], syms,C0_qK[1:nullity,:]) .~ 1
+            uneq = asymptotic ? handle_log_weighted_sum(C_qK[nullity+1:end,:], syms) .> 1 : handle_log_weighted_sum(C_qK[nullity+1:end,:], syms,C0_qK[nullity+1:end,:]) .> 1
+        end
+        return vec([eq; uneq])
     end
 end
 
