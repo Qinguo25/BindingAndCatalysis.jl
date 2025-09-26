@@ -490,5 +490,45 @@ end
 
 
 #---------------------------------------------------
-#
+# Try using DAE solver to solve the logx-logqK conversion problem.
 #---------------------------------------------------
+
+function _logx_traj_with_logqK_change_test(Bnc::Bnc,
+    startlogqK::Union{Vector{<:Real},Nothing},
+    endlogqK::Vector{<:Real};
+    startlogx::Union{Vector{<:Real},Nothing}=nothing,
+    reltol=1e-8,
+    abstol=1e-9,
+    kwargs... 
+)::ODESolution
+    n = Bnc.n
+    d = Bnc.d
+    startlogx = isnothing(startlogx) ? qK2x(Bnc, startlogqK; input_logspace=true, output_logspace=true) : startlogx
+    #Homotopy path in log-space( a straight line)
+    ΔlogqK = Float64.(endlogqK - startlogqK)
+    # Create thread-local copies of all mutable data structures
+    logqK = Vector{Float64}(undef, n)
+
+    L = Bnc.L
+    N = Bnc.N
+    
+    function f(resid,du,u,p,t) # du:δlogx u:logx, 
+        logqK .= t* ΔlogqK .+ startlogqK
+        J = [diagm( 1 ./ exp10.(logqK[1:d])) * L * diagm( exp10.(u) );
+                N ] # J = diag(1/q) * L * diag(x)
+        resid .= J * du .- ΔlogqK
+    end
+
+    function jac(J,du,u,p,gamma,t)
+        logqK .= t* ΔlogqK .+ startlogqK
+        J .= [diagm( 1 ./ exp10.(logqK[1:d])) * L * diagm(exp10.(u) .* (du .+ gamma));
+                N ]
+    end
+
+    func = DAEFunction(f; jac=jac, jac_prototype = sparse([L;N]))
+
+    tspan = (0.0, 1.0)
+    prob = ODE.DAEProblem(func, startlogx, tspan, params)
+    sol = ODE.solve(prob, Sundials.IDA(linear_solver=:KLU); reltol=reltol, abstol=abstol, callback=callback, kwargs...)
+    return sol
+end

@@ -214,6 +214,7 @@ function qK2x(Bnc::Bnc, qK::AbstractArray{<:Real,1};
     output_logspace::Bool=false,
     startlogx::Union{Vector{<:Real},Nothing}=nothing,
     startlogqK::Union{Vector{<:Real},Nothing}=nothing,
+    use_vtx::Bool=false,
     method::Union{Symbol,Missing} = :homotopy,
     reltol = 1e-8,
     abstol = 1e-10,
@@ -245,7 +246,12 @@ function qK2x(Bnc::Bnc, qK::AbstractArray{<:Real,1};
     end
     endlogqK = isnothing(log_K_to_append) ? processed_logqK : vcat(processed_logqK, log_K_to_append)
 
-    if ismissing(method) || method != :homotopy
+
+    if use_vtx
+        perm = assign_vertex_qK(Bnc,endlogqK; input_logspace=true)
+        H,H0 = get_H_H0!(Bnc,perm)
+        x = H* endlogqK .+ H0
+    elseif ismissing(method) || method != :homotopy
         x = _logqK2logx_nlsolve(Bnc, 
             endlogqK;
             startlogx=startlogx,
@@ -709,32 +715,13 @@ end
 #     [get_vertex_qK_slow(Bnc, row; kwargs...) for row in eachrow(x)]
 # end
 
-function assign_vertex_qK(Bnc::Bnc; x::AbstractVector{<:Real}, input_logspace::Bool=false, asymptotic::Bool=true, eps=0) 
-    real_only = asymptotic ? true : nothing
-    all_vertice_idx = get_vertices(Bnc, singular=false, real = real_only, return_idx = false)
+function assign_vertex_qK(Bnc::Bnc ; x::AbstractVector{<:Real}, input_logspace::Bool=false, kwargs...) 
     # @show all_vertice_idx
     logqK = x2qK(Bnc,x; input_logspace=input_logspace, output_logspace=true)
-    
-    record = Vector{Float64}(undef,length(all_vertice_idx))
-    for (i, idx) in enumerate(all_vertice_idx)
-        C, C0 = get_C_C0_qK!(Bnc, idx) 
-        
-        min_val = if !asymptotic
-            minimum(C * logqK .+ C0)
-        else
-            minimum(C * logqK)
-        end
-        record[i] = min_val
-
-        if record[i] >= -eps
-            return idx
-        end
-    end
-    @warn("All vertex conditions failed for x=$x. Returning the best-fit vertex.")
-    return all_vertice_idx[findmax(record)[2]]
+    return assign_vertex_qK(Bnc, logqK; input_logspace=true, kwargs...)
 end
 
-function assign_vertex_qK(Bnc::Bnc, qK::AbstractVector{<:Real}, input_logspace::Bool=false, asymptotic::Bool=true, eps=0) 
+function assign_vertex_qK(Bnc::Bnc, qK::AbstractVector{<:Real}; input_logspace::Bool=false, asymptotic::Bool=true, eps=0) 
     real_only = asymptotic ? true : nothing
     all_vertice_idx = get_vertices(Bnc, singular=false, real = real_only, return_idx = false)
     # @show all_vertice_idx
@@ -749,6 +736,8 @@ function assign_vertex_qK(Bnc::Bnc, qK::AbstractVector{<:Real}, input_logspace::
         else
             minimum(C * logqK)
         end
+        # @show idx
+        # @show min_val
         record[i] = min_val
 
         if record[i] >= -eps
