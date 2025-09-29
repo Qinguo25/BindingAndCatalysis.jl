@@ -767,7 +767,7 @@ end
 #         @error("No finite neighbor found for x vertex $vtx_x could caused by non-symtotic conditons")
 # end
 
-function _within_vertex_qK(Bnc::Bnc, perm::Vector{<:Integer},qK::AbstractVector{<:Real})
+function have_perm(Bnc::Bnc, perm::Vector{<:Integer})
     """
     Check if the vertex represented by perm is within the Bnc.
     """
@@ -775,6 +775,52 @@ function _within_vertex_qK(Bnc::Bnc, perm::Vector{<:Integer},qK::AbstractVector{
     return haskey(Bnc.vertices_idx, perm)
 end
 
+#-----------------------------------------------------------------
+# Function of calculating volume of vertices
+#-----------------------------------------------------------------
+
+function calc_volume(Bnc::Bnc, perm; 
+    asymptotic::Bool=true, 
+    confidence_level::Float64=0.95,
+    N=1_000_000,
+    batch_size::Int=100_000,
+    log_lower=-6,
+    log_upper=6
+)::Tuple{Float64,Float64}
+    N = Int(N)
+
+    C, C0 = get_C_C0_qK!(Bnc, perm)
+    n = Bnc.n
+    dist = Uniform(log_lower, log_upper)
+
+    n_batches = cld(N, batch_size)  # 向上取整批次数
+    counts = zeros(Int, n_batches)  # 每批结果
+
+    Threads.@threads for b in 1:n_batches
+        m = (b == n_batches) ? (N - (n_batches-1)*batch_size) : batch_size
+        samples = rand(dist, n, m)
+        vals = asymptotic ? C * samples : C * samples .+ C0
+
+        local_count = 0
+        @inbounds for j in 1:m
+            if all(@view(vals[:, j]) .> 0)
+                local_count += 1
+            end
+        end
+        counts[b] = local_count
+    end
+
+    count = sum(counts)
+    P_hat = count / N
+    z = quantile(Normal(), (1 + confidence_level) / 2)
+
+    # Wilson 置信区间
+    denom = 1 + z^2 / N
+    center = (P_hat + z^2/(2N)) / denom
+    margin = (z / denom) * sqrt(P_hat*(1-P_hat)/N + z^2/(4N^2))
+
+    return (center, margin)
+end
 
 
 

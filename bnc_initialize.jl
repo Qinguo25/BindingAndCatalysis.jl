@@ -14,6 +14,8 @@ using SparseArrays
 using DataStructures:Queue,enqueue!,dequeue!,isempty
 # using Interpolations
 using NonlinearSolve
+using Statistics
+using Distributions
 
 # ---------------------Define the struct of binding and catalysis networks----------------------------------
 
