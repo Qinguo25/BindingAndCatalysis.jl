@@ -30,7 +30,15 @@ end
 #---------------------------------------------------------
 #   Below are regimes associtaed symbolic functions
 #---------------------------------------------------------
-
+function show_x_expression(Bnc::Bnc, perm; log_space::Bool=true,asymptotic::Bool=false)
+    H,H0 = get_H_H0!(Bnc, perm)
+    qK_syms = [Bnc.q_sym; Bnc.K_sym]
+    if log_space
+        return asymptotic ? log10.(Bnc.x_sym) .~ H * log10.(qK_syms) : log10.(Bnc.x_sym) .~ H * (log10.(qK_syms) .+ H0)
+    else
+        return asymptotic ? Bnc.x_sym .~ handle_log_weighted_sum(H, qK_syms) : Bnc.x_sym .~ handle_log_weighted_sum(H, qK_syms, H0)
+    end
+end
 
 function show_dominance_condition(Bnc::Bnc, perm;log_space::Bool=true,asymptotic::Bool=false)
     P,P_0 = get_P_P0!(Bnc, perm)
