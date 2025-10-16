@@ -19,6 +19,7 @@ using Distributions:Uniform, Normal
 
 # ---------------------Define the struct of binding and catalysis networks----------------------------------
 
+
 """
 Catalysis data structure
 """
@@ -108,8 +109,8 @@ mutable struct Vertex{F,T}
     
     #--- Neighbors ---
     neighbors_idx::Vector{Int}
-    finite_neighbors_idx::Vector{Int}
-    infinite_neighbors_idx::Vector{Int}
+    # finite_neighbors_idx::Vector{Int}
+    # infinite_neighbors_idx::Vector{Int}
 
     # The inner constructor also needs to be updated for the parametric type
     function Vertex{F,T}(;perm, P, P0, M, M0, C_x, C0_x, idx,real,nullity) where {F<:Real ,T<:Integer}
@@ -123,13 +124,30 @@ mutable struct Vertex{F,T}
             SparseMatrixCSC{Float64, Int}(undef, 0, 0), # C_qK
             Vector{F}(undef, 0),          # C0_qK
             Int[], # neighbors_idx (using empty literal is cleaner)
-            Int[], # finite_neighbors_idx
-            Int[]  # infinite_neighbors_idx
+            # Int[], # finite_neighbors_idx
+            # Int[]  # infinite_neighbors_idx
         )
     end
 end
 
+mutable struct Edge{T}
+    to::Int
+    diff_r::Int
+    change_dir_x::SparseVector{Int8, T}
+    change_dir_qK::Union{Nothing, SparseVector{Float64, T}}
+    function Edge(to::Int, diff_r::Int, change_dir_x::SparseVector{Int8, T}) where {T}
+        return new{T}(to, diff_r, change_dir_x, nothing)
+    end
+end
 
+# Adjacency list + optional caches
+mutable struct VertexGraph{T} 
+    neighbors::Vector{Vector{Edge{T}}}
+    change_dir_qK_computed::Bool
+    function VertexGraph(neighbors::Vector{Vector{Edge{T}}}) where {T}
+        new{T}(neighbors,false)
+    end
+end
 
 mutable struct Bnc{T}
     # ----Parameters of the binding networks------
@@ -151,14 +169,14 @@ mutable struct Bnc{T}
     #--------Vertex data--------
     vertices_perm::Vector{Vector{T}} # all feasible regimes.
     vertices_idx::Dict{Vector{T},Int} # map from permutation vector to its idx in the vertices list
-    vertices_real_flag::Vector{Bool} # While this vertice is real
-    vertices_nullity::Vector{T} # While this vertice is singular.
-    
-    
-    vertices_neighbor_mat::SparseMatrixCSC{T, Int} # distance between vertices, upper triangular
-    vertices_change_dir_x::SparseMatrixCSC{SparseVector{Int8,T}, Int} # how the vertices should change under x space to reach its neighbor vertices, upper triangular
-    vertices_change_dir_qK::SparseMatrixCSC{SparseVector{Float64,T}, Int} # how the vertices should change under qK space to reach its neighbor vertices, upper triangular
-    # _vertices_sym_invperm::Vector{Int}
+    vertices_asymptotic_flag::Vector{Bool} # While this vertice is real
+    vertices_nullity::Vector{T} # nullity of one vertex.
+    vertices_graph::Union{Any,Nothing} # Using Any for placeholder for VertexGraph
+
+    # vertices_neighbor_mat::SparseMatrixCSC{T, Int} # distance between vertices, upper triangular
+    # vertices_change_dir_x::SparseMatrixCSC{SparseVector{Int8,T}, Int} # how the vertices should change under x space to reach its neighbor vertices, upper triangular
+    # vertices_change_dir_qK::SparseMatrixCSC{SparseVector{Float64,T}, Int} # how the vertices should change under qK space to reach its neighbor vertices, upper triangular
+    # # _vertices_sym_invperm::Vector{Int}
 
     vertices_data::Dict{Vector{T},Any} # Using Any for placeholder for Vertex
     _vertices_Nρ_inv_dict::Dict{Vector{T}, Tuple{SparseMatrixCSC{Float64, Int},T}} # cache the N_inv for each vertex permutation
@@ -178,11 +196,12 @@ mutable struct Bnc{T}
     # sparse matrix for speeding up the calculation
     _L_sparse::SparseMatrixCSC{Int,Int} # sparse version of L, used for fast calculation
     _L_sparse_val_one::SparseMatrixCSC{Int,Int} # sparse version of L with only non-zero elements set to 1, used for fast calculation
-    _valid_L_idx::Vector{Vector{Int}} #record the non-zero position for L
+    _valid_L_idx::Vector{Vector{Int}} #record the non-zero column position for each row.
 
     _N_sparse::SparseMatrixCSC{Int,Int} # sparse version of N transpose, used for fast calculation
     _LN_sparse::SparseMatrixCSC{Float64,Int} # sparse version of [L;N], used for fast calculation
 
+    #------------below are helper parameters for fast updating  value of matrix of the form [L;N] ------------------
     _LN_top_idx::Vector{Int} # first d row index of _LN_sparse
     _LN_top_rows::Vector{Int} # the corresponding row number in L for _LN_top_idx
     _LN_top_cols::Vector{Int} # the corresponding column number in L for _LN_top_idx
@@ -193,9 +212,7 @@ mutable struct Bnc{T}
     _LN_top_diag_idx::Vector{Int} # the diagonal index of the top d rows of _LN_sparse, used for fast calculation
 
     _LN_lu::SparseArrays.UMFPACK.UmfpackLU{Float64,Int} # LU decomposition of _LNt_sparse, used for fast calculation
-    _val_num_L::Int # number of non-zero elements in the sparse matrix L
-
-    
+    # _val_num_L::Int # number of non-zero elements in the sparse matrix L
     
 
     # Inner constructor 
@@ -236,8 +253,6 @@ mutable struct Bnc{T}
         _LN_top_diag_idx = diag_indices(_LN_sparse, d)
 
         _LN_lu = lu(_LN_sparse) # LU decomposition of _LNt_sparse, used for fast calculation
-        _val_num_L = length(_L_sparse.nzval) # number of non-zero elements in the sparse matrix
-        
         # _N_sparse = sparse(N) # sparse version of N, used for fast calculation
 
         new(
@@ -248,11 +263,12 @@ mutable struct Bnc{T}
             # Fields 10-12 (Initialized empty)
             Vector{T}[],                # vertices_perm
             Dict{Vector{T},Int}(),            # verices_idx
-            Bool[],                          # vertices_real_flag
+            Bool[],                          # vertices_asymptotic_flag
             T[],                          # vertices_nullity
-            SparseMatrixCSC{Bool, Int}(undef, 0, 0),             # vertices_neighbor_mat
-            SparseMatrixCSC{SparseVector{Int8,T}, Int}(undef, 0, 0),             # vertices_change_dir_x
-            SparseMatrixCSC{SparseVector{Float64,T}, Int}(undef, 0, 0),             # vertices_change_dir_qK
+            nothing,                         # vertices_graph
+            # SparseMatrixCSC{Bool, Int}(undef, 0, 0),             # vertices_neighbor_mat
+            # SparseMatrixCSC{SparseVector{Int8,T}, Int}(undef, 0, 0),             # vertices_change_dir_x
+            # SparseMatrixCSC{SparseVector{Float64,T}, Int}(undef, 0, 0),             # vertices_change_dir_qK
             # Int[],                           # _vertices_sym_invperm
             Dict{Vector{T}, Any}(),              # vertices_data
             Dict{Vector{T}, Tuple{SparseMatrixCSC{Float64, Int},T}}(), # _vertices_perm_Ninv_dict
@@ -273,10 +289,13 @@ mutable struct Bnc{T}
             _LN_top_diag_idx,
 
             _LN_lu,
-            _val_num_L
         )
     end
 end
+
+
+
+
 
 
 
@@ -325,6 +344,9 @@ function Bnc(;
     T = get_int_type(n) 
     Bnc{T}(N, L, x_sym, q_sym, K_sym, catalysis_data)
 end
+
+
+
 
 
 function update_catalysis!(Bnc::Bnc;

@@ -183,7 +183,7 @@ With its idx Dict in Bnc.vertices_idx.
 Also calculate if the vertex is real or fake, and its nullity.
 """
 function find_all_vertices!(Bnc::Bnc{T};) where T # cheap enough for now
-    if isempty(Bnc.vertices_perm) || isempty(Bnc.vertices_real_flag)
+    if isempty(Bnc.vertices_perm) || isempty(Bnc.vertices_asymptotic_flag)
         print("Start finding all vertices, it may takes a while.\n")
         
         # all vertices
@@ -195,7 +195,7 @@ function find_all_vertices!(Bnc::Bnc{T};) where T # cheap enough for now
 
         # asymptotic vertices
         real_vtx = Set(find_all_vertices(Bnc.L; asymptotic=true))
-        Bnc.vertices_real_flag = Bnc.vertices_perm .∈ Ref(real_vtx)
+        Bnc.vertices_asymptotic_flag = Bnc.vertices_perm .∈ Ref(real_vtx)
         print("Done, with $(length(Bnc.vertices_perm)) vertices found and $(length(real_vtx)) asymptotic vertices.\n")
         println("Start calculating nullity for each vertex, it may takes a while.")
         # build Nρ_inv cache in parallel
@@ -291,173 +291,241 @@ end
 #   Functions involving vertices relationships, (neighbors finding and changedir finding)
 #---------------------------------------------------------------------------------------------
 
-function _calc_neighbor_mat(data::Vector{<:AbstractVector{T}}) where {T}
-    n = length(data)
-    # Each thread collects pairs for the upper triangle of the matrix
-    thread_rows = [Int[] for _ in 1:Threads.nthreads()]
-    thread_cols = [Int[] for _ in 1:Threads.nthreads()]
-    thread_diff_rows = [T[] for _ in 1:Threads.nthreads()]
+#----------------Core computation-------------------------
+function _calc_vertices_graph(data::Vector{<:AbstractVector{T}}) where {T}
+    n_vtxs = length(data)
+    n=length(data[1])
 
-    Threads.@threads for i in 1:n
-        tid = Threads.threadid()
-        local_r = thread_rows[tid]
-        local_c = thread_cols[tid]
-        local_diff_r = thread_diff_rows[tid]
-        # Iterate only over the upper triangle (j > i) to avoid redundant checks
-        vi = data[i]
-        for j in i+1:n
-            vj = data[j]
-            
-            dist = Int8(0)
+    # Tuple(source, Edge)
+    thread_edges = [Vector{Tuple{Int, Edge{T}}}() for _ in 1:Threads.nthreads()] # threads_num of eges.
 
+    Threads.@threads for i in 1:n_vtxs
+        tid = Threads.threadid() #threadid
+        local_edges = thread_edges[tid] # Vector{Tuple{Int, Edge{T}}}()
+        vi = data[i] # source
+
+        for j in i+1:n_vtxs
+            vj = data[j] # target
+            dist = 0 
             diff_r = 0
             @inbounds for k in eachindex(vi, vj)
                 if vi[k] != vj[k]
                     dist += 1
-                    if dist == 1
-                        diff_r = k   # record first difference
-                    else
+                    diff_r = k
+                    if dist > 1
                         break
                     end
                 end
             end
 
             if dist == 1
-                push!(local_r, i)
-                push!(local_c, j)
-                push!(local_diff_r,diff_r)
+                # calculate the dx
+                x, y = vi[diff_r], vj[diff_r]
+                dx = x < y ? SparseVector(n, [x,y], Int8[-1,1]) :
+                             SparseVector(n, [y,x], Int8[1,-1])
+
+                # 双向记录（反对称）
+                push!(local_edges, (i, Edge(j, diff_r, dx)))
+                push!(local_edges, (j, Edge(i, diff_r, -dx)))
             end
         end
     end
-    # Merge results from all threads
-    I = reduce(vcat, thread_rows)
-    J = reduce(vcat, thread_cols)
-    vals = reduce(vcat, thread_diff_rows)
 
-    # Build the full symmetric matrix from the upper triangle parts at the end
-    # rows = [I; J]
-    # cols = [J; I]
-    # vals = ones(Bool, length(I))
-    # perms = sortperm(1:length(rows),by=k->(cols[k],rows[k]))
-    return SparseArrays.sparse!(I, J, vals, n, n)#, invperm(perms)
+    all_edges = reduce(vcat, thread_edges)
+    neighbors = [Vector{Edge{T}}() for _ in 1:n_vtxs]
+
+    for (from, e) in all_edges
+        push!(neighbors[from], e)
+    end
+
+    return VertexGraph(neighbors)
 end
-function get_vertices_neighbor_mat!(Bnc::Bnc;)
+
+function get_vertices_graph!(Bnc::Bnc)
     """
     # find the x space neighbor of all vertices in Bnc, the value denotes for two perms, which row they differ at.
     """
     find_all_vertices!(Bnc) # Ensure vertices are calculated
-    if isempty(Bnc.vertices_neighbor_mat)
-        print("Start calculating vertex neighbor matrix, It may takes a while.\n")
-        Bnc.vertices_neighbor_mat = _calc_neighbor_mat(Bnc.vertices_perm)
+    if isnothing(Bnc.vertices_graph)
+        print("Start calculating verteices graph, It may takes a while.\n")
+        Bnc.vertices_graph = _calc_vertices_graph(Bnc.vertices_perm)
         print("Done.\n")
     end
-    return Bnc.vertices_neighbor_mat
+    return Bnc.vertices_graph
 end
-function get_vertices_change_dir_x!(Bnc::Bnc{T}) where T #Could be optimized to incoperated into neighbor finding process.
-"""
-Calculate the x space change needed to change from one vertex to another, based on the calculated neighbor matrix, further could be intrgrated into neighbor finding process.
-The value is stroed as SparseVector, with only two non-zero elements, with positive and negative 1. the index denotes the 
-Source: row; Target: column.
-"""
-    if !isempty(Bnc.vertices_change_dir_x)
-        return Bnc.vertices_change_dir_x
+
+_calc_vertices_change_dir_x!(Bnc::Bnc) = get_vertices_graph!(Bnc)
+
+function _vertexgraph_to_sparsematrix(G::VertexGraph{T}; weight_fn = e -> 1) where T
+    n = length(G.neighbors)
+    # 预分配估计：平均度 × n
+    nnz = sum(length(v) for v in G.neighbors)
+    I = Vector{Int}(undef, nnz)
+    J = Vector{Int}(undef, nnz)
+    V = Vector{Float64}(undef, nnz)
+    idx = 0
+    for i in 1:n
+        for e in G.neighbors[i]
+            idx += 1
+            I[idx] = i
+            J[idx] = e.to
+            V[idx] = weight_fn(e)
+        end
     end
-    # print("1\n")
-    d_mtx = get_vertices_neighbor_mat!(Bnc) # upper diagnal mtx
-    # Initialize the change direction matrix
-    # I,J,_ = findnz(triu(d_mtx))
-    I,J,_ = findnz(d_mtx)
-    n = Bnc.n
-    val_len = length(I)
+    return sparse(I,J,V, n, n)
+end
 
-    vals = Vector{SparseVector{Int8, T}}(undef, val_len)
-
-    Threads.@threads for k in 1:val_len
-        from_idx = I[k]
-        to_idx = J[k]
-
-        from_vtx = Bnc.vertices_perm[from_idx]
-        to_vtx = Bnc.vertices_perm[to_idx]
-
-        # Find the first differing element
-        for (x, y) in zip(from_vtx, to_vtx)
-            if x == y
+function _calc_vertices_change_dir_qK!(Bnc::Bnc{T}) where T
+    vtx_graph = get_vertices_graph!(Bnc)
+    if vtx_graph.change_dir_qK_computed
+        return vtx_graph
+    end
+    for (vi, edges) in vtx_graph.neighbors
+        for edge in edges
+            if !isnothing(edge.change_dir_qK)
                 continue
-            elseif x < y
-                vals[k] = SparseVector(n,T[x,y],Int8[-1,1])
-                break
-            else
-                vals[k] = SparseVector(n,T[y,x],Int8[1,-1])
-                break
+            end
+            vj = edge.to # target 
+            i = edge.diff_r # different row
+            I,V = findnz(edge.change_dir_x) # should be two elements
+            (j1,j2) = V[1] > V[2] ? (I[2], I[1]) : (I[1], I[2])
+            dir = _calc_change_dir_qK(Bnc, vi, vj,i,j1,j2)
+            edge.change_dir_qK = dir
+        end
+    end
+    vtx_graph.change_dir_qK_computed = true
+    return vtx_graph
+end
+
+function _calc_change_dir_qK(Bnc::Bnc, vi, vt, i, j1, j2)
+    H1,H01 = get_H_H0!
+end
+
+function find_interface_normal(C1, C2)
+    """
+        find_interface_normal(C1, C2)
+
+    自动寻找两个 regime 的交界超平面，并返回：
+    - n0: 单位法向量（指向 regime1 的一侧）
+    - active_rows: 哪些约束是紧约束
+    """
+    m1, n = size(C1)
+    m2, _ = size(C2)
+    function form_superplane(c1, c2; tol=1e-9) # judge if two vector forms superplane
+        k = nothing
+        for a in 1:length(c1)
+            i, j = c1[a], c2[a]
+            if (i == 0 && j != 0) || (i != 0 && j == 0)
+                return false
+            elseif i == 0 && j == 0
+                continue
+            end
+            k_new = i/j
+            if k_new > 0
+                return false
+            elseif k === nothing
+                k = k_new
+            elseif abs(k_new - k) > tol
+                return false
+            end
+        end
+        return k !== nothing
+    end
+    # Step 1: 枚举所有候选行对
+    found_c2 = nothing
+    # found_c01 = nothing
+    found_idx = nothing
+    count = 0
+    for i in 1:m1
+        for j in 1:m2
+            c1 = C1[i,:]#, C01[i]
+            c2 = C2[j,:]#, C02[j]
+            if form_superplane(c1, c2)
+                count += 1
+                @show Array(c1), Array(c2)
+                if count > 1
+                    error("找到了多个候选的 1D 公共法向量")
+                end
+                found_c2, found_idx = c2, (i,j)
             end
         end
     end
-    Bnc.vertices_change_dir_x = SparseArrays.sparse!(I,J, vals, size(d_mtx)...)
+    
+    if count == 0
+        error("没有找到唯一的 1D 公共法向量")
+    else
+        return (found_c2, found_idx)
+    end
 end
+
+
+#-------------fetch values from results--------------------------
+
+function get_vertices_neighbor_mat!(Bnc::Bnc)
+    """
+    # find the x space neighbor of all vertices in Bnc, the value denotes for two perms, which row they differ at.
+    """
+    grh = get_vertices_graph!(Bnc)
+    spmat = _vertexgraph_to_sparsematrix(grh; weight_fn = e -> 1)
+    return spmat
+end
+
 function get_change_dir_x(Bnc::Bnc, from, to)
     from = get_idx(Bnc, from)
     to = get_idx(Bnc, to)
-    d_mat = get_vertices_change_dir_x!(Bnc)
-    if from < to
-        return d_mat[from, to]
-    else
-        return -d_mat[to, from]
-    end
-end
-function get_vertices_change_dir_qK!(Bnc::Bnc{T}) where T
-    if !isempty(Bnc.vertices_change_dir_qK)
-        return Bnc.vertices_change_dir_qK
-    end
-    d_mat = get_vertices_change_dir_x!(Bnc)
-    I,J,V = findnz(d_mat)
-    n_vals = length(I)
-    vals = Vector{SparseVector{Float64, T}}(undef, n_vals)
-
-    # Threads.@threads 
-    for k in 1:n_vals
-        v_source_idx = I[k] #perms_idx
-        v_target_idx = J[k] #perms_idx
-        dir = V[k]
-
-        print("start calculating from source to target: $v_source_idx -> $v_target_idx \n")
-
-        if get_nullity!(Bnc,v_source_idx) != 0 
-            if get_nullity!(Bnc,v_target_idx) != 0
-                @warn("Both $v_source_idx and $v_target_idx are singular, cannot get change direction between them for qK")
-                total_flow = spzeros(Bnc.n)
-            else #
-                print("Source vertex $v_source_idx is singular, only use target vertex $v_target_idx to calculate flow \n") 
-                # flow_qK_target = get_H!(Bnc, v_target_idx)[dir,:] - get_H!(Bnc, v_target_idx)[dir_back_x,:]
-                total_flow = get_H!(Bnc,v_target_idx)' * dir
-            end
-        else
-            if get_nullity!(Bnc,v_target_idx) != 0
-                print("Target vertex $v_target_idx is singular, only use source vertex $v_source_idx to calculate flow \n")
-                # flow_qK_source = get_H!(Bnc, v_source_idx)[dir,:] - get_H!(Bnc, v_source_idx)[dir_back_x,:]
-                total_flow = get_H!(Bnc,v_source_idx)' * dir
-            else
-                flow_qK_source = get_H!(Bnc,v_source_idx)' * dir
-                # @show get_H!(Bnc, v_source_idx)[dir,:]|>Array
-                # @show -get_H!(Bnc, v_source_idx)[dir_back_x,:]|>Array
-
-                flow_qK_target = get_H!(Bnc, v_target_idx)' * dir
-                # @show get_H!(Bnc, v_target_idx)[dir,:]|>Array
-                # @show -get_H!(Bnc, v_target_idx)[dir_back_x,:]|>Array
-
-                # @show Array(flow_qK_source)
-                # @show Array(flow_qK_target)
-                total_flow = flow_qK_source + flow_qK_target
-            end
+    vtx_grh = get_vertices_graph!(Bnc)
+    for edge in vtx_grh.neighbors[from]
+        if edge.to == to
+            return edge.change_dir_x
         end
-
-        print("Total flow is: ")
-        print(Array(total_flow))
-
-        tgt_qK1 = droptol!(total_flow,1e-9)
-        vals[k] = tgt_qK1
     end
-    Bnc.vertices_change_dir_qK = SparseArrays.sparse!(I, J, vals, size(d_mat)...)
+    @error("Vertices $get_perm(Bnc, from) and $get_perm(Bnc, to) are not neighbors in x space.")
 end
+    # Threads.@threads 
+    # for k in 1:n_vals
+    #     v_source_idx = I[k] #perms_idx
+    #     v_target_idx = J[k] #perms_idx
+    #     dir = V[k]
+
+    #     print("start calculating from source to target: $v_source_idx -> $v_target_idx \n")
+
+    #     if get_nullity!(Bnc,v_source_idx) != 0 
+    #         if get_nullity!(Bnc,v_target_idx) != 0
+    #             @warn("Both $v_source_idx and $v_target_idx are singular, cannot get change direction between them for qK")
+    #             total_flow = spzeros(Bnc.n)
+    #         else #
+    #             print("Source vertex $v_source_idx is singular, only use target vertex $v_target_idx to calculate flow \n") 
+    #             # flow_qK_target = get_H!(Bnc, v_target_idx)[dir,:] - get_H!(Bnc, v_target_idx)[dir_back_x,:]
+    #             total_flow = get_H!(Bnc,v_target_idx)' * dir
+    #         end
+    #     else
+    #         if get_nullity!(Bnc,v_target_idx) != 0
+    #             print("Target vertex $v_target_idx is singular, only use source vertex $v_source_idx to calculate flow \n")
+    #             # flow_qK_source = get_H!(Bnc, v_source_idx)[dir,:] - get_H!(Bnc, v_source_idx)[dir_back_x,:]
+    #             total_flow = get_H!(Bnc,v_source_idx)' * dir
+    #         else
+    #             flow_qK_source = get_H!(Bnc,v_source_idx)' * dir
+    #             # @show get_H!(Bnc, v_source_idx)[dir,:]|>Array
+    #             # @show -get_H!(Bnc, v_source_idx)[dir_back_x,:]|>Array
+
+    #             flow_qK_target = get_H!(Bnc, v_target_idx)' * dir
+    #             # @show get_H!(Bnc, v_target_idx)[dir,:]|>Array
+    #             # @show -get_H!(Bnc, v_target_idx)[dir_back_x,:]|>Array
+
+    #             # @show Array(flow_qK_source)
+    #             # @show Array(flow_qK_target)
+    #             total_flow = flow_qK_source + flow_qK_target
+    #         end
+    #     end
+
+    #     print("Total flow is: ")
+    #     print(Array(total_flow))
+
+    #     tgt_qK1 = droptol!(total_flow,1e-9)
+    #     vals[k] = tgt_qK1
+    # end
+    # Bnc.vertices_change_dir_qK = SparseArrays.sparse!(I, J, vals, size(d_mat)...)
+
 function get_change_dir_qK(Bnc::Bnc, from, to)
     from = get_idx(Bnc, from)
     to = get_idx(Bnc, to)
@@ -517,7 +585,7 @@ Creates the C and C0 matrices from a permutation.
 function _calculate_C_C0_x(Bnc::Bnc{T}, perm::Vector{<:Integer}) where T
     # This fucntion is created by chatgpt with numeric verification from dense version.
     # Is the lowest level, maximum-speed version.
-    num_ineq = Bnc._val_num_L - Bnc.d
+    num_ineq = length(Bnc._L_sparse.nzval) - Bnc.d
     nnz = 2 * num_ineq  # exactly two entries per inequality
 
     # Preallocate row indices + values
@@ -584,7 +652,7 @@ This function performs the initial, less expensive calculations.
 function _create_vertex(Bnc::Bnc{T}, perm::Vector{<:Integer})::Vertex where T
     find_all_vertices!(Bnc)
     idx = Bnc.vertices_idx[perm] # Index of the vertex in the Bnc.vertices_perm list
-    real = Bnc.vertices_real_flag[idx] # Check if the vertex is real or fake
+    real = Bnc.vertices_asymptotic_flag[idx] # Check if the vertex is real or fake
     nullity = Bnc.vertices_nullity[idx] # Get the nullity of the vertex
     
     P, P0 = _calculate_P_P0(Bnc, perm); 
@@ -614,9 +682,8 @@ function _calc_H(Bnc::Bnc,perm::Vector{<:Integer})
          [[I(Bnc.d) zeros(Bnc.d,Bnc.r)];
          [Nρ_inv_Nc_neg Nρ_inv]]
     elseif nullity == 1
-        [[zeros(Bnc.d,Bnc.d) zeros(Bnc.d,Bnc.r)];
-        [Nρ_inv_Nc_neg Nρ_inv]] # adj matrix
-    else
+        [[zeros(Bnc.d,Bnc.n)];
+        [Nρ_inv_Nc_neg Nρ_inv]] # Seems there are sign problem within this part.
         error("Nullity greater than 1 not supported")
     end
 
@@ -641,19 +708,19 @@ function _ensure_full_properties!(Bnc::Bnc, vtx::Vertex)
         # we need to check where this nullity comes from.
         if length(Set(vtx.perm)) == Bnc.d # the nullity comes from N
             H = _calc_H(Bnc, vtx.perm) 
-            vtx.H = droptol!(sparse(H),1e-10).* Bnc.direction
-            vtx.C_qK, vtx.C0_qK = _calc_C0_qK_nullity1(Bnc,vtx.perm) # Needs further optimized to integrate within svd, but works so far.
+            vtx.H = droptol!(sparse(H),1e-10)#.* Bnc.direction
+            vtx.C_qK, vtx.C0_qK = _calc_C_C0_qk_nullity1(Bnc,vtx.perm) # Needs further optimized to integrate within svd, but works so far.
         else # the nullity comes from P
             H = _adj_singular_matrix(vtx.M)[1]
-            vtx.H = droptol!(sparse(H),1e-10).* Bnc.direction
-            vtx.C_qK, vtx.C0_qK = _calc_C0_qK_nullity1(Bnc,vtx.perm) # Needs further optimized to integrate within svd, but works so far.
+            vtx.H = droptol!(sparse(H),1e-10)#.* Bnc.direction
+            vtx.C_qK, vtx.C0_qK = _calc_C_C0_qk_nullity1(Bnc,vtx.perm) # Needs further optimized to integrate within svd, but works so far.
         end
     else
         vtx.H = spzeros(Bnc.n, Bnc.n)
     end
 end
 
-function _calc_C0_qK_nullity1(Bnc::Bnc,perm, atol=1e-10) 
+function _calc_C_C0_qk_nullity1(Bnc::Bnc,perm, atol=1e-10) 
     @assert get_nullity!(Bnc, perm) == 1 "The nullity of the system is not 1"
     
     M, M_0 = get_M_M0!(Bnc, perm)
@@ -842,42 +909,40 @@ function get_all_neighbors!(Bnc::Bnc, perm; return_idx::Bool=false)
     # Get the neighbors of the vertex represented by perm
     vtx = get_vertex!(Bnc, perm ; full=false)
     if isempty(vtx.neighbors_idx)
-        d_mat = Symmetric(get_vertices_neighbor_mat!(Bnc), :U) # generate symmetric view
-        vtx.neighbors_idx = findall(!iszero, d_mat[vtx.idx, :])
-        finite_neighbors = Int[]
-        infinite_neighbors = Int[]
-        for idx in vtx.neighbors_idx
-            if get_nullity!(Bnc, Bnc.vertices_perm[idx]) == 0
-                push!(finite_neighbors, idx)
-            else
-                push!(infinite_neighbors, idx)
-            end
-        end
-
-        vtx.finite_neighbors_idx = finite_neighbors
-        vtx.infinite_neighbors_idx = infinite_neighbors
+        vtx_grh = get_vertices_graph!(Bnc)
+        vtx.neighbors_idx = vtx_grh.neighbors[vtx.idx] .|> e -> e.to
     end
 
     idx = vtx.neighbors_idx
     return return_idx ? idx : Bnc.vertices_perm[idx]
 end
-function get_finite_neighbors!(Bnc::Bnc, perm; return_idx::Bool=false)
-    vtx = get_vertex!(Bnc, perm;full=false)
-    if isempty(vtx.neighbors_idx)
-        get_all_neighbors!(Bnc, perm)
-    end
-    idx = vtx.finite_neighbors_idx
+function get_finite_neighbors(Bnc::Bnc, perm; return_idx::Bool=false)
+    nb_idx = get_all_neighbors!(Bnc, perm; return_idx=true)
+    idx = filter(i->Bnc.vertices_nullity[i] == 0, nb_idx)
     return return_idx ? idx : Bnc.vertices_perm[idx]
 end
-function get_infinite_neighbors!(Bnc::Bnc, perm; return_idx::Bool=false,nullity_max::Union{Int,Nothing}=nothing)
-    vtx = get_vertex!(Bnc, perm;full=false)
-    if isempty(vtx.neighbors_idx)
-        get_all_neighbors!(Bnc, perm)
-    end
-    idx = vtx.infinite_neighbors_idx
-    idx = isnothing(nullity_max) ? idx : filter(i->Bnc.vertices_nullity[i] <= nullity_max, idx)
+
+function get_infinite_neighbors(Bnc::Bnc, perm; return_idx::Bool=false) # nullity_max::Union{Int,Nothing}=nothing
+    nb_idx = get_all_neighbors!(Bnc, perm; return_idx=true)
+    idx = filter(i->Bnc.vertices_nullity[i] > 0, nb_idx)
     return return_idx ? idx : Bnc.vertices_perm[idx]
 end
+
+function get_neighbors(Bnc::Bnc, perm; singular::Union{Bool,Nothing}=nothing, asymptotic::Union{Bool,Nothing}=nothing, return_idx::Bool=false)
+    """
+    Get the neighbors of a vertex with certain properties.
+    - singular: true for singular, false for non-singular, nothing for all
+    - asymptotic: true for real, false for fake, nothing for all
+    """
+    idx = get_all_neighbors!(Bnc, perm; return_idx=true)
+    idx = filter(i -> (
+        (isnothing(singular) || (singular == (Bnc.vertices_nullity[i] > 0))) &&
+        (isnothing(asymptotic) || (asymptotic == Bnc.vertices_asymptotic_flag[i]))
+    ), idx)
+    return return_idx ? idx : Bnc.vertices_perm[idx]
+end
+
+
 
 """
 Gets P and P0, creating the vertex if necessary.
@@ -989,7 +1054,7 @@ function get_real_vertices(Bnc::Bnc; return_idx::Bool=false)
     Get the idx of all real vertices.
     """
     find_all_vertices!(Bnc)
-    idx = findall(Bnc.vertices_real_flag)
+    idx = findall(Bnc.vertices_asymptotic_flag)
     return return_idx ? idx : Bnc.vertices_perm[idx]
 end
 get_real_vertices_idx(Bnc::Bnc) = get_real_vertices(Bnc; return_idx=true)
@@ -1000,359 +1065,19 @@ function get_fake_vertices(Bnc::Bnc; return_idx::Bool=false)
     Get the idx of all fake vertices.
     """
     find_all_vertices!(Bnc)
-    idx = findall(!, Bnc.vertices_real_flag)
+    idx = findall(!, Bnc.vertices_asymptotic_flag)
     return return_idx ? idx : Bnc.vertices_perm[idx]
 end
 get_fake_vertices_idx(Bnc::Bnc) = get_fake_vertices(Bnc; return_idx=true)
 
 
-function get_vertices(Bnc::Bnc; singular::Union{Bool,Nothing}=nothing, real::Union{Bool,Nothing}=nothing, return_idx::Bool=false)
+function get_vertices(Bnc::Bnc; singular::Union{Bool,Nothing}=nothing, asymptotic::Union{Bool,Nothing}=nothing, return_idx::Bool=false)
     """
     get vertices with certain properties.
     """ 
     singular_flag = isnothing(singular) ? trues(length(Bnc.vertices_perm)) : (singular .== (get_all_vertices_nullity!(Bnc) .> 0))
-    real_flag = isnothing(real) ? trues(length(Bnc.vertices_perm)) : (real .== Bnc.vertices_real_flag)
+    real_flag = isnothing(asymptotic) ? trues(length(Bnc.vertices_perm)) : (asymptotic .== Bnc.vertices_asymptotic_flag)
     flag = singular_flag .& real_flag
     idx = findall(flag)
     return return_idx ? idx : Bnc.vertices_perm[idx]
 end
-
-
-
-function merge_conditions(Bnc::Bnc, perms...)
-    Result = Vector{Tuple{SparseMatrixCSC{Float64, Int64}, Vector{Float64}}}()
-
-end
-
-# function ∂logqK_∂logx_regime(Bnc::Bnc; regime::Union{Vector{Int}, Nothing}=nothing,
-#     Mtd::Union{Matrix{Int}, Nothing}=nothing,
-#     M::Union{Matrix{Int}, Nothing}=nothing,
-#     check::Bool=true)::Matrix{<:Real}
-#     """
-#     Calculate the derivative of log(qK) with respect to log(x) given regime
-#     check: if true, check if the regime is valid for the L matrix
-#     regime: the regime vector, if not provided , Mtd  will be derived from Mtd or M
-    
-#     Return:
-#     - logder_qK_x: the derivative of log(qK) with respect to log(x)
-#     """
-#     if isnothing(Mtd)
-#         if isnothing(regime)
-#             if isnothing(M)
-#                 @error("Either regime or M/Mtd must be provided")
-#             else
-#                 Mtd = sign.(M)
-#             end
-#         else
-#             (Mtd , _) = P_P0_from_vertex(Bnc, regime; check=check)
-#         end
-#     end
-
-#     return vcat(Mtd, Bnc.N)
-# end
-
-
-
-
-
-
-
-
-
-# fucntion c_mtx_C0_x(Bnc::Bnc; regime::Vertex,kwargs) 
-#     if Bnc.regimes
-#     else 
-
-# c_mtx_C0_x(Bnc; regime=regime.regime, check=check)
-
-
-# function x_ineq_mtx(Bnc::Bnc; regime::Vector{Int}, check::Bool=true)::Tuple{Matrix{Int}, Vector{Rational{Int64}}}
-#     """
-#     return a matrix of ineq in x space for regime expressed as Ax < 0
-#     """
-#     !check || _check_valid_idx(regime, Bnc.L) # check if the regime is valid for the given L matrix
-#     idx = Set{Tuple{Int,Int}}()
-#     for (valid_idx,rgm) in zip(Bnc._valid_L_idx, regime)
-#         for i in valid_idx
-#             if i != rgm
-#             push!(idx, (rgm,i))
-#             end
-#         end
-#     end
-#     mtx = zeros(Int,length(idx), Bnc.n)
-#     c0 = Vector{Rational{Int}}(undef, length(idx))
-#     for (i, (rgm, j)) in enumerate(idx)
-#         mtx[i, rgm] = -1
-#         mtx[i, j] = 1
-#         c0[i] = Bnc.L[i,rgm] // Bnc.L[i,j]
-#     end
-#     return mtx,c0
-# end
-
-
-
-# using Base.Threads
-# function find_valid_regime_parallel(idx::Vector{Vector{Int}}, d::Int, n::Int)::Vector{Vector{Int}}
-#     # A Channel is a thread-safe FIFO queue to collect results from all threads.
-#     results_channel = Channel{Vector{Int}}(Inf)
-
-#     # Use @threads to parallelize the loop over the first dimension's choices.
-#     # Each thread will handle one or more initial choices from `idx[1]`.
-#     @threads for v_initial in idx[1]
-#         # --- THREAD-LOCAL STATE ---
-#         # Each thread gets its own graph and choices array to prevent race conditions.
-#         graph = [Vector{Int}() for _ in 1:n]
-#         choices = Vector{Int}(undef, d)
-
-#         # --- INITIAL SETUP FOR THIS THREAD ---
-#         # Set the first choice and update the graph accordingly.
-#         choices[1] = v_initial
-#         target_nodes_initial = [w for w in idx[1] if w != v_initial]
-#         for node in target_nodes_initial
-#             push!(graph[node], v_initial)
-#         end
-
-#         # If the initial choice already creates a cycle, this path is invalid.
-#         if have_cyclic_at_node(graph, v_initial, n)
-#             continue # This thread moves to its next assigned v_initial.
-#         end
-
-#         # --- RECURSIVE BACKTRACKING (within a single thread) ---
-#         # This recursive function is defined locally and closes over its
-#         # thread-local `graph` and `choices`.
-#         function backtrack_from_level2!(i)
-#             # Base case: A valid configuration for all `d` dimensions is found.
-#             if i == d + 1
-#                 put!(results_channel, copy(choices))
-#                 return
-#             end
-
-#             # Explore choices for the current level `i`.
-#             for v in idx[i]
-#                 target_nodes = [w for w in idx[i] if w != v]
-                
-#                 # 1. MAKE MOVE: Add edges for the current choice.
-#                 for node in target_nodes
-#                     push!(graph[node], v)
-#                 end
-
-#                 # 2. CHECK & RECURSE: If no cycle, recurse to the next level.
-#                 if !have_cyclic_at_node(graph, v, n)
-#                     choices[i] = v
-#                     backtrack_from_level2!(i + 1)
-#                 end
-
-#                 # 3. BACKTRACK: Revert the graph to its previous state.
-#                 for node in target_nodes
-#                     pop!(graph[node])
-#                 end
-#             end
-#         end
-
-#         # Start the recursive search from the second level.
-#         backtrack_from_level2!(2)
-#     end
-
-#     # All threads are finished, so no more results will be added.
-#     close(results_channel)
-
-#     # Collect all results from the channel into a final vector.
-#     return collect(results_channel)
-# end
-
-# using Graphs
-# function find_valid_regime(L::Matrix{Int})
-#     # Slower may because of repeatedly inherently repeat check. 
-#     (d,n) = size(L)
-#     idx = [[idx for (idx, value) in enumerate(row) if value != 0] for row in eachrow(L) ] #!!! extremely key, avoid repeated add, or bug when removing it.
-#     graph = SimpleDiGraph(n)
-#     ict = IncrementalCycleTracker(graph, dir = :out)
-#     choices = Vector{Int}(undef, d)
-#     results = Vector{Vector{Int}}()
-#     function backtrack!(i)
-#         if i == d+1 
-#             push!(results, copy(choices))  # 使用副本避免后续修改影响结果
-#             return nothing
-#         end
-
-#         for v in idx[i]
-#             target_nodes = [w for w in idx[i] if w != v && ~(w in outneighbors(graph,v))] # target_nodes
-#             if add_edge_checked!(ict, v, target_nodes) # add successfully
-#                 choices[i] = v
-#                 backtrack!(i + 1)
-#             end
-
-#             for node in target_nodes
-#                 rem_edge!(graph, v, node)
-#             end
-#         end
-#     end
-#     backtrack!(1)
-#     return results
-# end
-
-
-#------------------------------------------------------------------------------
-#   Function to finding dominence regime，one of the hardest part to optimize
-# -------------------------------------------------------------------------------
-
-
-# function have_cyclic_at_node(g::Vector{Vector{Int}}, node::Int, len::Int)::Bool
-#     # DFS algorithm, 
-#     # modified from https://github.com/JuliaGraphs/Graphs.jl/blob/2d6f4d56b06cb597ebd5c40c5a8db783f1b83991/src/traversals/dfs.jl#L4-L11
-#     # 0 if not visited, 1 if in the current dfs path, 2 if fully explored
-#     vcolor = zeros(UInt8, len)
-#     vertex_stack = [node]
-#     while !isempty(vertex_stack)
-#         u = vertex_stack[end]
-#         if vcolor[u] == 0
-#             vcolor[u] = 1
-#             for n in g[u]
-#                 # we hit a loop when reaching back a vertex of the main path
-#                 if vcolor[n] == 1
-#                     return true
-#                 elseif vcolor[n] == 0
-#                     # we store neighbors, but these are not yet on the path
-#                     push!(vertex_stack, n)
-#                 end
-#             end
-#         else
-#             pop!(vertex_stack)
-#             if vcolor[u] == 1
-#                 vcolor[u] = 2
-#             end
-#         end
-#     end
-#     return false
-# end
-
-# function find_all_vertices(idx::Vector{Vector{Int}}, d::Int, n::Int)::Vector{Vector{Int}}
-#     graph = [Vector{Int}() for _ in 1:n]
-#     choices = Vector{Int}(undef, d)
-#     results = Vector{Vector{Int}}()
-#     """
-#     A backtracking algorithm to find all valid regimes given the index of valid choices for each row.
-#     idx: valid choices index for each row,
-#     d: number of rows of initial matrix,
-#     n: number of columns of initial matrix, or we can say number of nodes for this application.
-#     """
-#     function backtrack!(i)
-#         # All rows are fine
-#         if i == d + 1
-#             # @show choices
-#             push!(results, copy(choices))
-#             return nothing
-#         end
-
-#         for v in idx[i]
-#             # add edges for current row. and record.
-
-#             target_nodes = [w for w in idx[i] if w != v] # target_nodes
-
-#             for node in target_nodes
-#                 push!(graph[node], v) # add edge node -> v
-#             end
-
-#             if ~have_cyclic_at_node(graph, v, n)
-#                 choices[i] = v
-#                 backtrack!(i + 1)
-#             end
-
-#             for node in target_nodes
-#                 pop!(graph[node])
-#             end
-#         end
-#     end
-#     backtrack!(1)
-#     return results
-# end
-
-# function find_all_vertices(L::Matrix{Int}; kwargs...)
-#     d, n = size(L)
-#     idx = [[idx for (idx, value) in enumerate(row) if value != 0] for row in eachrow(L)] #[findall(!iszero, row) for row in eachrow(L)]
-#     find_all_vertices(idx, d, n;kwargs...)
-# end
-
-# function pairwise_distance_cpu(data::Vector{<:AbstractVector{T}}) where {T}
-#     n = length(data)
-#     dist_matrix = zeros(T, n, n)
-#     Threads.@threads for i in 1:n
-#         for j in i+1:n
-#             d = sum(data[i] .!= data[j])
-#             dist_matrix[i,j] = d
-#             dist_matrix[j,i] = d
-#         end
-#     end
-#     return dist_matrix
-# end
-# function pairwise_distance_gpu(data::Vector{<:AbstractVector{T}}) where {T}
-#     mat = CuArray(reduce(hcat,data))  # d × n, each column is a vertex
-#     d, n = size(mat)
-#     dist_matrix = CUDA.zeros(T, n, n)
-#     SM, threads = GPU_SM_threads_num()
-#     blocks = min(cld(n * n, threads), SM*2)
-#     @cuda threads=threads blocks=blocks kernel_hamming!(dist_matrix, mat, n, d)
-#     return Array(dist_matrix)
-# end
-# function kernel_hamming!(dist_matrix, mat, n, d)
-#     # 1. Calculate a 1D global index and stride
-#     # This is the standard grid-stride loop pattern
-#     linear_idx = (blockIdx().x - 1) * blockDim().x + threadIdx().x
-#     stride = gridDim().x * blockDim().x
-#     # 2. Loop over the entire workload
-#     for k in linear_idx:stride:(n*n)
-#         i = mod1(k, n)        # Column index (from 1 to n)
-#         j = cld(k, n)         # Row index (from 1 to n)
-#         # The core calculation remains the same
-#         s = 0
-#         @inbounds for l in 1:d
-#             s += (mat[l,i] != mat[l,j])
-#         end
-#         dist_matrix[i,j] = s
-#     end
-#     return nothing
-# end
-
-# """
-# Calculates the distance between two vertexes.
-# """
-# function get_vertices_distance!(Bnc::Bnc; use_gpu::Bool=true)
-#     # Calculate the distance matrix for all vertices in Bnc
-#     find_all_vertices!(Bnc) # Ensure vertices are calculated
-#     if isempty(Bnc.vertices_distance)
-#         if use_gpu
-#             Bnc.vertices_distance = pairwise_distance_gpu(Bnc.vertices_perm)
-#         else
-#             Bnc.vertices_distance = pairwise_distance_cpu(Bnc.vertices_perm)
-#         end
-#     end
-#     return Bnc.vertices_distance
-# end
-
-# function _get_Nρ_inv!(Bnc::Bnc{T},key::AbstractVector{<:Integer}) where T
-
-#     function _calc_Nρ_inv(Nρ)
-#         #calc [Nρ^{-1}] and if singular/non-square return nullity
-#         #check if Nρ is square
-#         r,r_ncol = size(Nρ)
-#         if r != r_ncol # non-square_matrix
-#             nullity = r - rank(Nρ)
-#             return spzeros(0,0), nullity
-#         else
-#             Nρ_lu = lu(Nρ,check=false)
-#             if issuccess(Nρ_lu)
-#                 nullity = 0
-#                 Nρ_inv = sparse(inv(Array(Nρ)))
-#                 return Nρ_inv, nullity
-#             else
-#                 nullity = r - rank(Nρ)
-#                 return spzeros(0,0), nullity
-#             end
-#         end
-#     end
-
-#     get!(Bnc._vertices_Nρ_inv_dict, key) do _
-#         Nρ = @view Bnc.N[:,key]
-#         _calc_Nρ_inv(Nρ)
-#     end
-# end

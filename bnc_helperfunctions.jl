@@ -102,9 +102,11 @@ function  _adj_singular_matrix(A::AbstractMatrix; atol=1e-12)::Tuple{SparseMatri
         k = zero_ids[1]
         logσprod = sum(log, S[setdiff(1:n,[k])])
         σprod = exp(logσprod)
+        sign_correction = det(F.U) * det(F.V) # to ensure the sign is right.
         u = F.U[:, k]   # 左奇异向量
         v = F.V[:, k]   # 右奇异向量
-        return σprod * (sparsevec(v) * sparsevec(u)'), 1  # rank-1 矩阵
+        adj_A = (sign_correction *σprod) * (sparsevec(v) * sparsevec(u)') 
+        return droptol!(adj_A,1e-10), 1  # rank-1 矩阵
         # return σprod * (v * u'), 1  # rank-1 矩阵
     else
         return spzeros(0,0), nullity
@@ -309,20 +311,6 @@ function _check_valid_idx(idx::Vector{Int},Mtx::Matrix{<:Any})
     end
     return true
 end
-
-
-
-# function _update_Jt_ignore_val!(Jt,Bnc::Bnc, x::AbstractArray{<:Real}, q::AbstractArray{<:Real})
-#     # helper functions to speed up the calculation of lu decompostion of logder_qK_x.
-#     Jt = copy(Bnc._LNt_sparse)
-#     Jt_left = @view(Jt.nzval[1:Bnc._val_num_L])
-#     x_view = @view(x[Bnc._I])
-#     # q_view = @view(q[Bnc._J])
-#     @. Jt_left = x_view #/ q_view
-#     return nothing
-#     # lu!(Jt_lu, Jt)
-# end
-
 
 function find_max_indices_per_column(S::SparseMatrixCSC{Tv, Ti}, first_n_col::Union{Int,Nothing}=nothing) where {Tv, Ti}
     first_n_col = isnothing(first_n_col) ? size(S, 2) : first_n_col
