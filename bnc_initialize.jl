@@ -17,6 +17,11 @@ using NonlinearSolve
 using Statistics:quantile
 using Distributions:Uniform, Normal
 
+using Polyhedra#:vrep,hrep,eliminate,MixedMatHRep,MixedMatVRep,polyhedron,Polyhedron
+using CDDLib
+
+using JSON3
+
 # ---------------------Define the struct of binding and catalysis networks----------------------------------
 
 

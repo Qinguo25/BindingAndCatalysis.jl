@@ -683,10 +683,9 @@ function _calc_H(Bnc::Bnc,perm::Vector{<:Integer})
          [Nρ_inv_Nc_neg Nρ_inv]]
     elseif nullity == 1
         [[zeros(Bnc.d,Bnc.n)];
-        [Nρ_inv_Nc_neg Nρ_inv]] # Seems there are sign problem within this part.
+        [Nρ_inv_Nc_neg Nρ_inv]] # Seems there are sign problem within this part.(fixed)
         error("Nullity greater than 1 not supported")
     end
-
     perm_inv = invperm([perm;key]) # get the inverse permutation to reorder H
     H = H_un_perm[perm_inv, :]
     return H
@@ -709,18 +708,19 @@ function _ensure_full_properties!(Bnc::Bnc, vtx::Vertex)
         if length(Set(vtx.perm)) == Bnc.d # the nullity comes from N
             H = _calc_H(Bnc, vtx.perm) 
             vtx.H = droptol!(sparse(H),1e-10)#.* Bnc.direction
-            vtx.C_qK, vtx.C0_qK = _calc_C_C0_qk_nullity1(Bnc,vtx.perm) # Needs further optimized to integrate within svd, but works so far.
+            vtx.C_qK, vtx.C0_qK = _calc_C_C0_qk_nullity1(Bnc,vtx.perm) # Needs further optimized
         else # the nullity comes from P
             H = _adj_singular_matrix(vtx.M)[1]
             vtx.H = droptol!(sparse(H),1e-10)#.* Bnc.direction
-            vtx.C_qK, vtx.C0_qK = _calc_C_C0_qk_nullity1(Bnc,vtx.perm) # Needs further optimized to integrate within svd, but works so far.
+            vtx.C_qK, vtx.C0_qK = _calc_C_C0_qk_nullity1(Bnc,vtx.perm) # Needs further optimized
         end
-    else
-        vtx.H = spzeros(Bnc.n, Bnc.n)
+    else # nullity>1 , H, HO is nolonger avaliable
+        vtx.H = spzeros(Bnc.n, Bnc.n) # fill value as a sign that this regime is fully computed
+        vtx.C_qK, vtx.C0_qK = _calc_C_C0_qK_singular(Bnc, vtx.perm)
     end
 end
 
-function _calc_C_C0_qk_nullity1(Bnc::Bnc,perm, atol=1e-10) 
+function _calc_C_C0_qk_nullity1(Bnc::Bnc,perm, atol=1e-10)
     @assert get_nullity!(Bnc, perm) == 1 "The nullity of the system is not 1"
     
     M, M_0 = get_M_M0!(Bnc, perm)
@@ -983,7 +983,8 @@ function get_C_C0_qK!(Bnc::Bnc, perm)
     vtx = get_vertex!(Bnc, perm; full=false)
     _ensure_full_properties!(Bnc,vtx)
     if vtx.nullity >= 2
-        @error("Vertex got nullity $(vtx.nullity), currently doesn't support get C_qK and C0_qK")
+        
+        # @error("Vertex got nullity $(vtx.nullity), currently doesn't support get C_qK and C0_qK")
     end
     return vtx.C_qK, vtx.C0_qK
 end
@@ -1005,19 +1006,19 @@ Gets H and H0, ensuring the full vertex is calculated.
 """
 function get_H_H0!(Bnc::Bnc, perm)
     vtx = get_vertex!(Bnc, perm; full=false)
-    _ensure_full_properties!(Bnc,vtx)
     if vtx.nullity > 0
         @error("Vertex is singular, cannot get H0")
     end # This will compute if needed
+    _ensure_full_properties!(Bnc,vtx)
     return vtx.H, vtx.H0
 end
 
 function get_H!(Bnc::Bnc, perm)
     vtx = get_vertex!(Bnc, perm; full=false)
-    _ensure_full_properties!(Bnc,vtx)
     if vtx.nullity > 1
         @error("Vertex's nullity is bigger than 1, cannot get H")
     end # This will compute if needed
+    _ensure_full_properties!(Bnc,vtx)
     return vtx.H
 end
 get_H0!(Bnc::Bnc, perm) = get_H_H0!(Bnc, perm)[2]
@@ -1081,3 +1082,84 @@ function get_vertices(Bnc::Bnc; singular::Union{Bool,Nothing}=nothing, asymptoti
     idx = findall(flag)
     return return_idx ? idx : Bnc.vertices_perm[idx]
 end
+
+
+
+#-------------------------------------------------------------
+# Functions using Polyhedra.jl  to calculate and fufill the 
+#-------------------------------------------------------------
+
+function _calc_C_C0_qK_singular(model, vtx)
+    M,M0 = get_M_M0!(model,vtx)
+    C,C0 = get_C_C0_x!(model,vtx)
+    n = model.n
+    n_C = size(C0,1)
+    rg_y = BitSet(1:n)
+    poly = hrep([[-M I(n)];[-C zeros(n_C, n)]], [M0;C0],rg_y) |> x->polyhedron(x,CDDLib.Library())
+    poly_elim = eliminate(poly,rg_y)
+    rlt = MixedMatHRep(hrep(poly_elim))
+    # perm = [rlt.linset, ]
+    A, b, linset = (rlt.A, rlt.b, rlt.linset)
+    perm = [collect(linset) ; [i for i in 1:5 if i ∉ linset]] # make sure the eqrelation is at the beginning
+    A = sparse(-A[perm,:]) |> x->droptol!(x,1e-5)
+    return A,b
+end
+
+function get_one_inner_point(Bnc,perm;kwargs...)
+    poly = get_polyhedra(Bnc,perm)
+    return get_one_inner_point(poly;kwargs...)
+end
+
+function get_one_inner_point(poly::T,rand_line=true) where T<:Polyhedron
+    vrep_poly = MixedMatVRep(vrep(poly))
+    point = [mean(p) for p in eachcol(vrep_poly.V)]
+    ray_avg = zeros(size(point,1))
+    for (i, ray) in enumerate(eachrow(vrep_poly.R))
+        if i ∉ vrep_poly.Rlinset
+            norm_ray = norm(ray)
+            sigma = rand()-0.5
+            ray_avg .+= (ray ./ norm_ray .* (1+sigma) )
+        else
+            if rand_line
+                norm_ray = norm(ray)
+                sigma = rand()-0.5
+                ray_avg .+= (ray ./ norm_ray * sigma)
+            end
+        end
+    end
+    norm_ray_avg = norm(ray_avg)
+    @. ray_avg = ray_avg / norm_ray_avg .* 3
+    return (point.+ ray_avg)
+end
+
+
+
+function get_polyhedra(model,perm)::Polyhedron 
+    A, b = get_C_C0_qK!(model,perm)
+    nullity = get_nullity!(model,perm)
+    if nullity ==0
+        return hrep(-A,b) |> x-> polyhedron(x,CDDLib.Library())
+    else
+        linset = BitSet(1:nullity)
+        return hrep(-A,b,linset) |> x-> polyhedron(x,CDDLib.Library())
+    end
+end
+
+
+#-------------------------------------------------------------
+#Other higher lever functions
+#----------------------------------------------------------------
+function summary_vertex(Bnc::Bnc, perm)
+    idx= get_idx(model,perm)
+    perm = get_perm(model,idx)
+    is_real = get_vertex!(model,idx).real
+    nullity = get_nullity!(model,idx)
+    println("idx=$idx,perm=$perm, is_real=$is_real, nullity=$nullity")
+    return nothing
+end
+function summary_vertices(Bnc::Bnc;kwargs...)
+    vtx = get_vertices(Bnc;kwargs...)
+    vtx .|> x->summary_vertex(Bnc,x)
+    return nothing
+end
+    

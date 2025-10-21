@@ -1,5 +1,3 @@
-using JSON3
-
 #helper function to convert N matrix to L matrix if L is not provided.
 function L_from_N(N::Matrix{Int})::Matrix{Int}
     r, n = size(N)
@@ -475,6 +473,26 @@ function GPU_SM_threads_num()
     max_threads = attribute(dev, CUDA.DEVICE_ATTRIBUTE_MAX_THREADS_PER_BLOCK)
     return SM, max_threads
 end
+
+
+
+#-----------------------------------
+# Draw plot helper functions
+#--------------------------------------
+
+
+# find bounds for lattice
+function find_bounds(lattice)
+    using ImageFiltering
+    col_asym_x_bounds = imfilter(lattice, Kernel.Laplacian(), "replicate") # findboundary
+    edge_map = col_asym_x_bounds .!= 0
+    return edge_map
+end
+
+
+
+
+
 
 
 #---------------------------------------------------
