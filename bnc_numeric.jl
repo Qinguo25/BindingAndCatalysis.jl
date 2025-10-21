@@ -665,7 +665,7 @@ end
 
 function assign_vertex_qK(Bnc::Bnc, qK::AbstractVector{<:Real}; input_logspace::Bool=false, asymptotic::Bool=true, eps=0) 
     real_only = asymptotic ? true : nothing
-    all_vertice_idx = get_vertices(Bnc, singular=false, real = real_only, return_idx = false)
+    all_vertice_idx = get_vertices(Bnc, singular=false, asymptotic = real_only, return_idx = false)
     # @show all_vertice_idx
     logqK = input_logspace ? qK : log10.(qK)
     
