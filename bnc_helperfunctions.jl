@@ -481,18 +481,12 @@ end
 #--------------------------------------
 
 
-# find bounds for lattice
+# find boundary for regime map, to draw boundary for different regimes.
 function find_bounds(lattice)
-    using ImageFiltering
     col_asym_x_bounds = imfilter(lattice, Kernel.Laplacian(), "replicate") # findboundary
     edge_map = col_asym_x_bounds .!= 0
     return edge_map
 end
-
-
-
-
-
 
 
 #---------------------------------------------------

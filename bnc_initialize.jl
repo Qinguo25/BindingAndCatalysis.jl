@@ -21,7 +21,7 @@ using Polyhedra#:vrep,hrep,eliminate,MixedMatHRep,MixedMatVRep,polyhedron,Polyhe
 using CDDLib
 
 using JSON3
-
+using ImageFiltering
 # ---------------------Define the struct of binding and catalysis networks----------------------------------
 
 
@@ -135,21 +135,21 @@ mutable struct Vertex{F,T}
     end
 end
 
-mutable struct Edge{T}
+mutable struct VertexEdge{T}
     to::Int
     diff_r::Int
     change_dir_x::SparseVector{Int8, T}
     change_dir_qK::Union{Nothing, SparseVector{Float64, T}}
-    function Edge(to::Int, diff_r::Int, change_dir_x::SparseVector{Int8, T}) where {T}
+    function VertexEdge(to::Int, diff_r::Int, change_dir_x::SparseVector{Int8, T}) where {T}
         return new{T}(to, diff_r, change_dir_x, nothing)
     end
 end
 
 # Adjacency list + optional caches
 mutable struct VertexGraph{T} 
-    neighbors::Vector{Vector{Edge{T}}}
+    neighbors::Vector{Vector{VertexEdge{T}}}
     change_dir_qK_computed::Bool
-    function VertexGraph(neighbors::Vector{Vector{Edge{T}}}) where {T}
+    function VertexGraph(neighbors::Vector{Vector{VertexEdge{T}}}) where {T}
         new{T}(neighbors,false)
     end
 end
@@ -173,7 +173,7 @@ mutable struct Bnc{T}
 
     #--------Vertex data--------
     vertices_perm::Vector{Vector{T}} # all feasible regimes.
-    vertices_idx::Dict{Vector{T},Int} # map from permutation vector to its idx in the vertices list
+    vertices_perm_dict::Dict{Vector{T},Int} # map from permutation vector to its idx in the vertices list
     vertices_asymptotic_flag::Vector{Bool} # While this vertice is real
     vertices_nullity::Vector{T} # nullity of one vertex.
     vertices_graph::Union{Any,Nothing} # Using Any for placeholder for VertexGraph
