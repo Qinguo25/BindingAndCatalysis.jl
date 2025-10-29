@@ -18,10 +18,12 @@ using Statistics:quantile
 using Distributions:Uniform, Normal
 
 using Polyhedra#:vrep,hrep,eliminate,MixedMatHRep,MixedMatVRep,polyhedron,Polyhedron
-using CDDLib
+import CDDLib
 
-using JSON3
-using ImageFiltering
+using Graphs
+
+import JSON3
+import ImageFiltering: imfilter, Kernel
 # ---------------------Define the struct of binding and catalysis networks----------------------------------
 
 
@@ -149,12 +151,13 @@ end
 mutable struct VertexGraph{T} 
     neighbors::Vector{Vector{VertexEdge{T}}}
     change_dir_qK_computed::Bool
+    # nullity::Union{Nothing, Vector{T}} # optional cache of nullity for each vertex #Store nullity again.
     function VertexGraph(neighbors::Vector{Vector{VertexEdge{T}}}) where {T}
         new{T}(neighbors,false)
     end
 end
 
-mutable struct Bnc{T}
+mutable struct Bnc{T} # T is the int type to save all the indices
     # ----Parameters of the binding networks------
     N::Matrix{Int} # binding reaction matrix
     L::Matrix{Int} # conservation law matrix
@@ -393,6 +396,8 @@ include("bnc_helperfunctions.jl")
 include("bnc_numeric.jl")
 include("bnc_regimes.jl")
 include("bnc_symbolics.jl")
+include("bnc_graphs.jl")
+
 
 
 

@@ -720,9 +720,7 @@ end
 #-----------------------------------------------------------------
 # Function of calculating volume of vertices
 #-----------------------------------------------------------------
-
-function calc_volume(Bnc::Bnc, perm; 
-    asymptotic::Bool=true, 
+function calc_volume(C::AbstractMatrix{<:Real}, C0::AbstractVector{<:Real}; 
     confidence_level::Float64=0.95,
     N=1_000_000,
     batch_size::Int=100_000,
@@ -731,8 +729,7 @@ function calc_volume(Bnc::Bnc, perm;
 )::Tuple{Float64,Float64}
     N = Int(N)
 
-    C, C0 = get_C_C0_qK!(Bnc, perm)
-    n = Bnc.n
+    n = size(C, 2)
     dist = Uniform(log_lower, log_upper)
 
     n_batches = cld(N, batch_size)  # 向上取整批次数
@@ -741,7 +738,7 @@ function calc_volume(Bnc::Bnc, perm;
     Threads.@threads for b in 1:n_batches
         m = (b == n_batches) ? (N - (n_batches-1)*batch_size) : batch_size
         samples = rand(dist, n, m)
-        vals = asymptotic ? C * samples : C * samples .+ C0
+        vals = C * samples .+ C0
 
         local_count = 0
         @inbounds for j in 1:m
@@ -761,6 +758,28 @@ function calc_volume(Bnc::Bnc, perm;
     center = (P_hat + z^2/(2N)) / denom
     margin = (z / denom) * sqrt(P_hat*(1-P_hat)/N + z^2/(4N^2))
 
+    return (center, margin)
+end
+
+function calc_volume(Bnc::Bnc, perm; 
+    asymptotic::Bool=true, 
+    kwargs...
+)::Tuple{Float64,Float64}
+    C, C0 = get_C_C0_qK!(Bnc, perm)
+    if asymptotic
+        C0 .= 0.0
+    end
+    center, margin = calc_volume(C, C0; kwargs...)
+    return (center, margin)
+end
+
+function calc_volume(poly::Polyhedron;asymptotic::Bool=true, kwargs...)::Tuple{Float64,Float64}
+    p = MixedMatHRep(hrep(poly))
+    C, C0 = -p.A, p.b
+    if asymptotic
+        C0 .= 0.0
+    end
+    center, margin = calc_volume(C, C0; kwargs...)
     return (center, margin)
 end
 

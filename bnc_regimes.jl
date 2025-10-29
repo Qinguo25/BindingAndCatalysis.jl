@@ -1,5 +1,5 @@
 #--------------Core computation functions-------------------------
-function _vtxs_nonasym(L, ::Val{T} ;eps=1e-9) where T
+function _enumerate_vertices_nonasymptotic(L, ::Val{T} ;eps=1e-9) where T
     d, n = size(L)
     # T = get_int_type(n)  # Determine integer type based on n
     # Nonzero indices of each row
@@ -21,11 +21,13 @@ function _vtxs_nonasym(L, ::Val{T} ;eps=1e-9) where T
     results = Vector{Vector{T}}()
 
     function has_neg_cycle(seeds)
-        dist_local = zeros(Float64, n)   # rollback safety
+        # dist_local = zeros(Float64, n)   # rollback safety
+        dist_local = fill(Inf, n)
         q = Queue{T}()
         inq = falses(n)
         cnt = zeros(T, n)
         for u in seeds
+            dist_local[u] = 0.0
             enqueue!(q, u)
             inq[u] = true
         end
@@ -72,7 +74,7 @@ function _vtxs_nonasym(L, ::Val{T} ;eps=1e-9) where T
     dfs(1, Int[])
     return results
 end
-function _vtxs_asym(L, ::Val{T}) where T
+function _enumerate_vertices_asymptotic(L, ::Val{T}) where T
     d, n = size(L)
     J = [findall(x -> x != 0, row) for row in eachrow(L)]
     order = sortperm(J, by = length, rev=true)
@@ -152,7 +154,15 @@ function _vtxs_asym(L, ::Val{T}) where T
     dfs(1,T[])
     return results
 end
-function _calc_Nρ_inv(Nρ) # Core function to calculate Nρ_inv or adj matrix
+"""
+    _calc_Nρ_inverse(Nρ) -> (Nρ_inv::SparseMatrixCSC, nullity::Int)
+
+Compute inverse or adjacency for possibly singular Nρ.
+- If Nρ is square and factorizable: returns sparse(inv(Nρ)), nullity = 0
+- If singular: delegates to _adj_singular_matrix(Nρ) to get adjacency and nullity.
+"""
+function _calc_Nρ_inverse(Nρ)::Tuple{SparseMatrixCSC,Int}
+
     r, r_ncol = size(Nρ)
     if r != r_ncol
         return spzeros(0,0), r - rank(Nρ)
@@ -164,56 +174,83 @@ function _calc_Nρ_inv(Nρ) # Core function to calculate Nρ_inv or adj matrix
         return _adj_singular_matrix(Nρ)
     end
 end
-function _calc_vertices_graph(data::Vector{<:AbstractVector{T}})::VertexGraph where {T}
-    n_vtxs = length(data)
-    n=length(data[1])
+"""
+    _calc_vertex_graph_from_perms(data::Vector{<:AbstractVector{T}}, n::Int) where T
 
-    # Tuple(source, VertexEdge)
-    thread_edges = [Vector{Tuple{Int, VertexEdge{T}}}() for _ in 1:Threads.nthreads()] # threads_num of eges.
+Build VertexGraph from a list of vertex permutations.
+- Groups vertices differing in exactly one row, creates bidirectional edges with change_dir_x.
+"""
+function  _calc_vertex_graph_from_perms(perms::Vector{<:AbstractVector{T}},n::Int) where {T} # optimized by GPT-5, not fullly understood yet.
+    n_vtxs = length(perms)
+    d=length(perms[1])# n = maximum(v -> maximum(v), data)
+    # n = maximum(v -> maximum(v), data)
+    # 线程本地边集，最后归并
+    thread_edges = [Vector{Tuple{Int, VertexEdge{T}}}() for _ in 1:Threads.nthreads()]
 
-    Threads.@threads for i in 1:n_vtxs
-        tid = Threads.threadid() #threadid
-        local_edges = thread_edges[tid] # Vector{Tuple{Int, VertexEdge{T}}}()
-        vi = data[i] # source
+    # 按行分桶：key 为去掉该行后的签名（Tuple），值为该签名下的 (顶点索引, 该行取值)
+    for r in 1:d
+        buckets = Dict{Tuple{Vararg{T}}, Vector{Tuple{Int,T}}}()
 
-        for j in i+1:n_vtxs
-            vj = data[j] # target
-            dist = 0 
-            diff_r = 0
-            @inbounds for k in eachindex(vi, vj)
-                if vi[k] != vj[k]
-                    dist += 1
-                    diff_r = k
-                    if dist > 1
-                        break
+        # 构建桶
+        @inbounds for i in 1:n_vtxs
+            v = perms[i]
+            sig = if r == 1
+                Tuple(v[2:end])
+            elseif r == d
+                Tuple(v[1:end-1])
+            else
+                Tuple((v[1:r-1]..., v[r+1:end]...))
+            end
+            push!(get!(buckets, sig) do
+                Vector{Tuple{Int,T}}()
+            end, (i, v[r]))
+        end
+
+        groups = collect(values(buckets))
+
+        # 并行生成边：同桶内所有不同取值的顶点两两相连
+        Threads.@threads for gi in 1:length(groups)
+            tid = Threads.threadid()
+            local_edges = thread_edges[tid]
+            group = groups[gi]  # ::Vector{Tuple{Int,T}}
+            m = length(group)
+            m <= 1 && continue
+
+            @inbounds for a in 1:m-1
+                i, xi = group[a]
+                for b in a+1:m
+                    j, xj = group[b]
+                    xi == xj && continue
+
+                    if xi < xj
+                        dx = SparseVector(n, [xi, xj], Int8[-1, 1])
+                        push!(local_edges, (i, VertexEdge(j, r, dx)))
+                        push!(local_edges, (j, VertexEdge(i, r, -dx)))
+                    else
+                        dx = SparseVector(n, [xj, xi], Int8[-1, 1])
+                        push!(local_edges, (i, VertexEdge(j, r, -dx)))
+                        push!(local_edges, (j, VertexEdge(i, r, dx)))
                     end
                 end
-            end
-
-            if dist == 1
-                # calculate the dx
-                x, y = vi[diff_r], vj[diff_r]
-                dx = x < y ? SparseVector(n, [x,y], Int8[-1,1]) :
-                             SparseVector(n, [y,x], Int8[1,-1])
-
-                # 双向记录（反对称）
-                push!(local_edges, (i, VertexEdge(j, diff_r, dx)))
-                push!(local_edges, (j, VertexEdge(i, diff_r, -dx)))
             end
         end
     end
 
-    all_edges = reduce(vcat, thread_edges)
+    # 归并线程本地边
+    all_edges = reduce(vcat, thread_edges; init=Tuple{Int, VertexEdge{T}}[])
     neighbors = [Vector{VertexEdge{T}}() for _ in 1:n_vtxs]
-
     for (from, e) in all_edges
         push!(neighbors[from], e)
     end
-
     return VertexGraph(neighbors)
 end
+"""
+    _calc_H(Bnc, perm)
 
-function _calc_H(Bnc::Bnc,perm::Vector{<:Integer})
+Compute H for a vertex permutation using cached Nρ_inv where possible.
+Returns a dense H matrix; caller may sparsify.
+"""
+function _calc_H(Bnc::Bnc,perm::Vector{<:Integer})::SparseMatrixCSC
     key = _get_Nρ_key(Bnc, perm)
     Nρ_inv,nullity = _get_Nρ_inv!(Bnc,key) # get Nρ_inv from cache or calculate it. # sparse matrix
     Nc = @view Bnc.N[:,perm] # dense matrix
@@ -230,10 +267,15 @@ function _calc_H(Bnc::Bnc,perm::Vector{<:Integer})
     end
     perm_inv = invperm([perm;key]) # get the inverse permutation to reorder H
     H = H_un_perm[perm_inv, :]
+    H = droptol!(sparse(H),1e-10)
     return H
 end
+"""
+    _calc_P_and_P0(Bnc, perm)
 
-function _calculate_P_P0(Bnc::Bnc{T}, perm::Vector{<:Integer}) where T
+Build sparse selection matrix P (d×n) and P0 (d-vector) for a permutation.
+"""
+function _calc_P_and_P0(Bnc::Bnc{T}, perm::Vector{<:Integer})::Tuple{SparseMatrixCSC{Int,Int}, Vector{Float64}} where T
     """
     Creates the P and P0 matrices from a permutation.
     """
@@ -253,8 +295,13 @@ function _calculate_P_P0(Bnc::Bnc{T}, perm::Vector{<:Integer}) where T
     
     return P, P0
 end
+"""
+    _calc_C_C0_x(Bnc, perm)
 
-function _calculate_C_C0_x(Bnc::Bnc{T}, perm::Vector{<:Integer}) where T # highly optimized version
+Construct x-space inequality matrix C_x (num_ineq×n) and c0_x (num_ineq).
+Exactly two nonzeros per inequality: (-1 at col, +1 at chosen rgm column).
+"""
+function _calc_C_C0_x(Bnc::Bnc{T}, perm::Vector{<:Integer})::Tuple{SparseMatrixCSC{Int,Int}, Vector{Float64}} where T # highly optimized version
     """
     Creates the C and C0 matrices from a permutation.
     """
@@ -319,12 +366,18 @@ function _calculate_C_C0_x(Bnc::Bnc{T}, perm::Vector{<:Integer}) where T # highl
     c_mtx = SparseMatrixCSC(num_ineq, Bnc.n, colptr, rowval, nzval)
     return c_mtx, c0
 end
+"""
+    _calc_C_C0_qK_singular(Bnc, vtx_perm)
+
+Build qK-space constraints (C_qK, C0_qK) for singular vertices via affine mapping.
+Returns: (C_qK::SparseMatrixCSC, C0_qK::Vector)
+"""
 function _calc_C_C0_qK_singular(Bnc::Bnc, vtx)
     M,M0 = get_M_M0!(Bnc,vtx)
     C,C0 = get_C_C0_x!(Bnc,vtx)
     # n = Bnc.n
     poly_x = hrep(-C,C0) |> x->polyhedron(x,CDDLib.Library())
-    poly_elim = M * poly_x
+    poly_elim = M * poly_x  # If for convenience, one can write `translate(M * poly_x, M0)`, and then C0qK = b
     rlt = MixedMatHRep(hrep(poly_elim))
     A, b, linset = (rlt.A, rlt.b, rlt.linset)
     # @show linset
@@ -337,6 +390,13 @@ end
 
 #------------------Storage layer functions -----------------------------
 
+"""
+    _build_Nρ_cache_parallel!(Bnc)
+
+Precompute and cache Nρ inverse info for all distinct complements of vertices.
+Returns nothing.
+"""
+
 function _build_Nρ_cache_parallel!(Bnc::Bnc{T}) where T
     perm_set = Set(Set(perm) for perm in Bnc.vertices_perm) # Unique sets of permutations
     keys = [_get_Nρ_key(Bnc, perm) for perm in perm_set]
@@ -348,7 +408,7 @@ function _build_Nρ_cache_parallel!(Bnc::Bnc{T}) where T
     Threads.@threads for i in eachindex(keys)
         key = keys[i]
         Nρ = @view Bnc.N[:, key]
-        inv_list[i], nullity_list[i] = _calc_Nρ_inv(Nρ)
+        inv_list[i], nullity_list[i] = _calc_Nρ_inverse(Nρ)
     end
 
     for i in eachindex(keys)
@@ -356,21 +416,33 @@ function _build_Nρ_cache_parallel!(Bnc::Bnc{T}) where T
     end
     return nothing
 end
+
+"""
+    _get_Nρ_inv!(Bnc, key)
+
+Get (Nρ_inv, nullity) from cache or compute.
+"""
 function _get_Nρ_inv!(Bnc::Bnc{T}, key::AbstractVector{<:Integer}) where T
     get!(Bnc._vertices_Nρ_inv_dict, key) do
         Nρ = @view Bnc.N[:, key]
-        _calc_Nρ_inv(Nρ)
+        _calc_Nρ_inverse(Nρ)
     end
 end
+"""
+    _build_vertices_graph!(Bnc)
+
+Ensure vertices are discovered and vertex graph is built and cached in Bnc.
+Returns nothing.
+"""
 function _build_vertices_graph!(Bnc::Bnc)
     find_all_vertices!(Bnc) # Ensure vertices are calculated
     if isnothing(Bnc.vertices_graph)
         print("Start calculating verteices graph, It may takes a while.\n")
-        Bnc.vertices_graph = _calc_vertices_graph(Bnc.vertices_perm)
+        Bnc.vertices_graph =  _calc_vertex_graph_from_perms(Bnc.vertices_perm,Bnc.n)
         print("Done.\n")
     end
 end
-function _fulfill_vertices_graph!(Bnc::Bnc)::VertexGraph
+function _fulfill_vertices_graph!(Bnc::Bnc)
     """
     fill the qK space change dir matrix for all vertices in Bnc.
     """
@@ -386,7 +458,7 @@ function _fulfill_vertices_graph!(Bnc::Bnc)::VertexGraph
         end
 
         # unit vector (Float64) at position i, reused where needed
-        ei = SparseVector(Bnc.n, [i], [1])
+        ei = SparseVector(Bnc.n, [i], [1.0])
 
         if n1 == 0
             H1 = get_H!(Bnc, vi)
@@ -399,10 +471,11 @@ function _fulfill_vertices_graph!(Bnc::Bnc)::VertexGraph
             H1 = get_H!(Bnc, vi)
             dir = H1[j2, :]
         end
-
-        return droptol!(dir, 1e-10)
+        droptol!(dir, 1e-10)
+        return nnz(dir)==0 ? nothing : dir
     end
-    Threads.@threads for (vi, edges) in enumerate(vtx_graph.neighbors)
+    Threads.@threads for vi in 1:length(vtx_graph.neighbors)
+        edges = vtx_graph.neighbors[vi]
         if get_nullity!(Bnc,vi) > 1 # jump off those regimes with nullity >1
             continue
         end
@@ -425,14 +498,47 @@ function _fulfill_vertices_graph!(Bnc::Bnc)::VertexGraph
     end
     vtx_graph.change_dir_qK_computed = true
 end
-
+function _calc_change_col(from::Vector{T},to::Vector{T}) where T<:Integer
+    j1 = 0
+    j2 = 0
+    inconsis = Int[]
+    for (i , (val_a,val_b)) in enumerate(zip(from,to))
+        if val_a == val_b
+            continue
+        else
+            push!(inconsis, i)
+        end
+    end
+    target_inconsis = Set(to[inconsis])
+    if target_inconsis |> length == 1
+        j1,j2 = from[inconsis[1]], to[inconsis[1]]
+        return j1,j2    
+    end
+    for (val1,i1) in zip(from[inconsis], inconsis)
+        if val1 ∈ target_inconsis
+            j2 = to[i1]
+            i2 = inconsis[findfirst(x -> x == val1, to[inconsis])]
+            j1 = from[i2]
+            return j1,j2
+        end
+    end
+end
 #------------------Helper functions -------------------------------------------
+"""
+    _nrho_key_for_perm(Bnc, perm) -> Vector{Int}
+
+Indices of columns not in `perm` (complement) used to form Nρ.
+"""
 function _get_Nρ_key(Bnc::Bnc{T}, perm)::Vector{T} where T 
    return [i for i in 1:Bnc.n if i ∉ perm]
 end
 _get_Nρ_inv_from_perm!(Bnc, perm) = _get_Nρ_inv!(Bnc, _get_Nρ_key(Bnc, perm))
+"""
+    _vertex_graph_to_sparse(G; weight_fn = e->1.0)
 
-function _vertexgraph_to_sparsematrix(G::VertexGraph{T}; weight_fn = e -> 1) where T
+Convert VertexGraph to sparse adjacency (weights from weight_fn).
+"""
+function _vertex_graph_to_sparse(G::VertexGraph{T}; weight_fn = e -> 1) where T
     n = length(G.neighbors)
     # 预分配估计：平均度 × n
     nnz = sum(length(v) for v in G.neighbors)
@@ -441,16 +547,20 @@ function _vertexgraph_to_sparsematrix(G::VertexGraph{T}; weight_fn = e -> 1) whe
     V = Vector{Float64}(undef, nnz)
     idx = 0
     for i in 1:n
-        for e in G.neighbors[i]
+        for e in G.neighbors[i] #Edge
             idx += 1
             I[idx] = i
             J[idx] = e.to
             V[idx] = weight_fn(e)
         end
     end
-    return sparse(I,J,V, n, n)
+    return sparse(I,J,V, n, n) |> dropzeros!
 end
+"""
+    _create_vertex(Bnc, perm) -> Vertex
 
+Create a partially-filled Vertex (P/P0, M/M0, C_x/C0_x are ready).
+"""
 function _create_vertex(Bnc::Bnc{T}, perm::Vector{<:Integer})::Vertex where T
     """
     Creates a new, partially-filled Vertex object.
@@ -461,8 +571,8 @@ function _create_vertex(Bnc::Bnc{T}, perm::Vector{<:Integer})::Vertex where T
     real = Bnc.vertices_asymptotic_flag[idx] # Check if the vertex is real or fake
     nullity = Bnc.vertices_nullity[idx] # Get the nullity of the vertex
     
-    P, P0 = _calculate_P_P0(Bnc, perm); 
-    C_x, C0_x = _calculate_C_C0_x(Bnc, perm)
+    P, P0 = _calc_P_and_P0(Bnc, perm); 
+    C_x, C0_x = _calc_C_C0_x(Bnc, perm)
 
     F = eltype(P0)
 
@@ -477,16 +587,20 @@ function _create_vertex(Bnc::Bnc{T}, perm::Vector{<:Integer})::Vertex where T
         M = M, M0 = M0, P = P, P0 = P0, C_x = C_x, C0_x = C0_x
     )
 end
+"""
+    _ensure_full_properties!(Bnc, vtx)
 
+Ensure Vertex has H/H0 and qK constraints computed and cached.
+Mutates vtx. Returns nothing.
+"""
 function _ensure_full_properties!(Bnc::Bnc, vtx::Vertex)
     # Check if already calculated
     if !isempty(vtx.H)
         return nothing
     end
     if vtx.nullity == 0
-        # H = inv(Array(vtx.M)) # dense matrix 
-        H = _calc_H(Bnc, vtx.perm)
-        vtx.H = droptol!(sparse(H),1e-10) # Calculate the inverse matrix from pre-computed LU decomposition of M
+        H = _calc_H(Bnc, vtx.perm) 
+        vtx.H = H # Calculate the inverse matrix from pre-computed LU decomposition of M
         vtx.H0 = H * vtx.M0
         vtx.C_qK = droptol!(sparse(vtx.C_x * H),1e-10)
         vtx.C0_qK = vtx.C0_x - vtx.C_x * vtx.H0 # Correctly use vtx.C0_x
@@ -494,8 +608,7 @@ function _ensure_full_properties!(Bnc::Bnc, vtx::Vertex)
         if vtx.nullity ==1
             # we need to check where this nullity comes from.
             if length(Set(vtx.perm)) == Bnc.d # the nullity comes from N
-                H = _calc_H(Bnc, vtx.perm) 
-                vtx.H = droptol!(sparse(H),1e-10)#.* Bnc.direction 
+                vtx.H = _calc_H(Bnc, vtx.perm)#.* Bnc.direction 
             else # the nullity comes from P
                 H = _adj_singular_matrix(vtx.M)[1]
                 vtx.H = droptol!(sparse(H),1e-10)#.* Bnc.direction
@@ -518,6 +631,8 @@ end
 #------------------------------------------------------------------------------
 #             1. Functions find all regimes and return properties
 # ------------------------------------------------------------------------------
+find_all_vertices_nonasym(L;kwargs...) = _enumerate_vertices_nonasymptotic(L,Val(get_int_type(size(L)[2]));kwargs...) 
+find_all_vertices_asym(L;kwargs...) = _enumerate_vertices_asymptotic(L,Val(get_int_type(size(L)[2]));kwargs...)
 """
     find_all_vertices(L; eps=1e-9, dominance_ratio=nothing, mode="auto")
 
@@ -528,11 +643,6 @@ Options:
 - dominance_ratio: Float64
 - asymptotic::Bool
 """
-
-find_all_vertices_nonasym(L;kwargs...) = _vtxs_nonasym(L,Val(get_int_type(size(L)[2]));kwargs...) 
-
-find_all_vertices_asym(L;kwargs...) = _vtxs_asym(L,Val(get_int_type(size(L)[2]));kwargs...)
-
 function find_all_vertices(L::Matrix{Int} ; eps=1e-9, dominance_ratio=Inf, asymptotic::Union{Bool,Nothing}=nothing)
     asymptotic =  (isnothing(asymptotic) && dominance_ratio == Inf) || (asymptotic == true)
     eps = asymptotic ? nothing : (dominance_ratio == Inf ? eps : log(dominance_ratio))  # extra slack for weighted mode 
@@ -544,9 +654,15 @@ function find_all_vertices(L::Matrix{Int} ; eps=1e-9, dominance_ratio=Inf, asymp
 end
 
 """
-find all vertices in Bnc, and store them in Bnc.vertices_perm.
-With its idx Dict in Bnc.vertices_perm_dict.
-Also calculate if the vertex is real or fake, and its nullity.
+    find_all_vertices!(Bnc)
+
+Compute and cache:
+- all vertex permutations and index dict
+- asymptotic flags
+- Nρ inverse cache (parallel)
+- vertex nullity
+
+Returns Vector{Vector{Int}} of vertex permutations.
 """
 function find_all_vertices!(Bnc::Bnc{T};) where T # cheap enough for now
     if isempty(Bnc.vertices_perm) || isempty(Bnc.vertices_asymptotic_flag)
@@ -606,12 +722,17 @@ function get_vertices_nullity(Bnc::Bnc)
     return Bnc.vertices_nullity
 end
 
+
+
+
 #---------------------------------------------------------------------------------------------
 #   Functions involving vertices relationships, (neighbors finding and changedir finding)
 #---------------------------------------------------------------------------------------------
-
 """
-get the neighbor of vertices formed graph.
+    get_vertices_graph!(Bnc; fulfill=false) -> VertexGraph
+
+Ensure vertex graph is built; if fulfill=true, also compute qK change directions on edges.
+Returns the cached VertexGraph.
 """
 function get_vertices_graph!(Bnc::Bnc; fulfill::Bool=false)::VertexGraph
     """
@@ -624,57 +745,78 @@ function get_vertices_graph!(Bnc::Bnc; fulfill::Bool=false)::VertexGraph
     end
     return Bnc.vertices_graph
 end
+"""
+    get_vertices_neighbor_mat!(Bnc) -> SparseMatrixCSC
 
-function get_vertices_neighbor_mat!(Bnc::Bnc)
+Return x-space adjacency matrix of the vertex graph (unweighted → 1.0).
+"""
+function get_vertices_neighbor_mat_x!(Bnc::Bnc)
+    """
+    # find the x space neighbor of all vertices in Bnc, the value denotes for two perms, which row they differ at.
+    """
+    grh = get_vertices_graph!(Bnc;fulfill=false)
+    spmat = _vertex_graph_to_sparse(grh; weight_fn = e -> 1)
+    return spmat
+end
+function get_vertices_neighbor_mat_qK!(Bnc::Bnc)
     """
     # find the x space neighbor of all vertices in Bnc, the value denotes for two perms, which row they differ at.
     """
     grh = get_vertices_graph!(Bnc;fulfill=true)
-    spmat = _vertexgraph_to_sparsematrix(grh; weight_fn = e -> 1)
+    f(x::VertexEdge) = isnothing(x.change_dir_qK) ? 0.0 : 1.0
+    spmat = _vertex_graph_to_sparse(grh; weight_fn = f)
     return spmat
 end
-
 
 function get_change_dir_x(Bnc::Bnc, from, to)
     from = get_idx(Bnc, from)
     to = get_idx(Bnc, to)
     vtx_grh = get_vertices_graph!(Bnc)
-    for VertexEdge in vtx_grh.neighbors[from]
-        if VertexEdge.to == to
-            return VertexEdge.change_dir_x
+    for ve in vtx_grh.neighbors[from]
+        if ve.to == to
+            return ve.change_dir_x
         end
     end
     @error("Vertices $get_perm(Bnc, from) and $get_perm(Bnc, to) are not neighbors in x space.")
 end
 
-
-# function get_change_dir_qK(Bnc::Bnc, from, to)
-#     from = get_idx(Bnc, from)
-#     to = get_idx(Bnc, to)
-#     d_mat = get_vertices_change_dir_qK!(Bnc)
-#     if from < to
-#         return d_mat[from, to]
-#     else
-#         return -d_mat[to, from]
-#     end
-# end
-
-
-function vertexgraph_to_graph(vg::VertexGraph)
-    n = length(vg.neighbors)
-    g = SimpleDiGraph(n)
-    for (i, edges) in enumerate(vg.neighbors)
-        for e in edges
-            add_edge!(g, i, e.to)
+function get_change_dir_qK(Bnc::Bnc, from, to)
+    from = get_idx(Bnc, from)
+    to = get_idx(Bnc, to)
+    vtx_grh = get_vertices_graph!(Bnc)
+    for ve in vtx_grh.neighbors[from]
+        if ve.to == to
+            if isnothing(ve.change_dir_qK)
+                @error("Vertices $get_perm(Bnc, from) and $get_perm(Bnc, to) are not neighbors in qK space.")
+            end
+            return ve.change_dir_qK
         end
     end
-    return g
+    # no directly edge found, judge numerically,
+    if !is_neighbor_direct(Bnc,from,to)
+        @error("Vertices $get_perm(Bnc, from) and $get_perm(Bnc, to) are not neighbors in qK space.")
+    else
+        @assert get_nullity!(Bnc, from) ==0 && get_nullity!(Bnc, to) ==0 "They are neighbor but change direaction is currently not supported"
+        (j1,j2) = _calc_change_col(get_perm(Bnc, from), get_perm(Bnc, to))
+        dir = (get_H!(Bnc, from)[j2, :] - get_H!(Bnc, to)[j1, :]) ./ 2
+        return dir
+    end
 end
 
-function vertexgraph_to_graph(Bnc::Bnc)
-    vtx_graph = get_vertices_graph!(Bnc)
-    return vertexgraph_to_graph(vtx_graph)
-end
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -738,6 +880,29 @@ end
 
 
 
+
+
+
+
+
+
+
+
+
+"""
+    get_all_neighbors!(Bnc::Bnc, perm; return_idx::Bool=false)
+
+Return all neighbors of the vertex represented by `perm`.
+
+If the neighbors are not cached in `Bnc`, they will be computed
+and stored in `vtx.neighbors_idx`.
+
+# Keyword arguments
+- `return_idx`: if `true`, return neighbor indices; otherwise, return `vertices_perm[idx]`.
+
+# Returns
+A vector of neighbor indices or vertex permutations.
+"""
 function get_all_neighbors!(Bnc::Bnc, perm; return_idx::Bool=false)
     # Get the neighbors of the vertex represented by perm
     vtx = get_vertex!(Bnc, perm ; full=false)
@@ -749,29 +914,80 @@ function get_all_neighbors!(Bnc::Bnc, perm; return_idx::Bool=false)
     idx = vtx.neighbors_idx
     return return_idx ? idx : Bnc.vertices_perm[idx]
 end
+"""
+    get_finite_neighbors(Bnc::Bnc, perm; return_idx::Bool=false)
+
+Return neighbors of the vertex `perm` that are **finite** (nullity == 0).
+"""
 function get_finite_neighbors(Bnc::Bnc, perm; return_idx::Bool=false)
     nb_idx = get_all_neighbors!(Bnc, perm; return_idx=true)
     idx = filter(i->Bnc.vertices_nullity[i] == 0, nb_idx)
     return return_idx ? idx : Bnc.vertices_perm[idx]
 end
+
+"""
+    get_infinite_neighbors(Bnc::Bnc, perm; return_idx::Bool=false)
+
+Return neighbors of the vertex `perm` that are **infinite** (nullity > 0).
+"""
 function get_infinite_neighbors(Bnc::Bnc, perm; return_idx::Bool=false) # nullity_max::Union{Int,Nothing}=nothing
     nb_idx = get_all_neighbors!(Bnc, perm; return_idx=true)
     idx = filter(i->Bnc.vertices_nullity[i] > 0, nb_idx)
     return return_idx ? idx : Bnc.vertices_perm[idx]
 end
-function get_neighbors(Bnc::Bnc, perm; singular::Union{Bool,Nothing}=nothing, asymptotic::Union{Bool,Nothing}=nothing, return_idx::Bool=false)
-    """
-    Get the neighbors of a vertex with certain properties.
-    - singular: true for singular, false for non-singular, nothing for all
-    - asymptotic: true for real, false for fake, nothing for all
-    """
+
+"""
+    get_neighbors(Bnc::Bnc, perm; singular=nothing, asymptotic::Union{Bool,Nothing}=nothing, return_idx::Bool=false)
+
+Return neighbors of the vertex `perm` that satisfy certain conditions.
+
+# Keyword arguments
+- `singular`:
+    - `true` → only singular vertices (`nullity > 0`)
+    - `false` → only non-singular vertices (`nullity == 0`)
+    - `Int` → vertices with `nullity ≤ singular`
+    - `nothing` → no filter on nullity
+- `asymptotic`:
+    - `true` → only asymptotic (real) vertices
+    - `false` → only fake vertices
+    - `nothing` → no filter
+- `return_idx`: if `true`, return neighbor indices; otherwise, return permutations.
+
+# Example
+```julia
+get_neighbors(Bnc, perm)                       # all neighbors
+get_neighbors(Bnc, perm; singular=true)        # only singular ones
+get_neighbors(Bnc, perm; singular=2)           # nullity ≤ 2
+get_neighbors(Bnc, perm; asymptotic=true)      # only asymptotic ones
+get_neighbors(Bnc, perm; singular=1, asymptotic=false)
+"""
+function get_neighbors(Bnc::Bnc, perm; singular::Union{Bool,Int,Nothing}=nothing, asymptotic::Union{Bool,Nothing}=nothing, return_idx::Bool=false)
     idx = get_all_neighbors!(Bnc, perm; return_idx=true)
-    idx = filter(i -> (
-        (isnothing(singular) || (singular == (Bnc.vertices_nullity[i] > 0))) &&
-        (isnothing(asymptotic) || (asymptotic == Bnc.vertices_asymptotic_flag[i]))
-    ), idx)
+    
+    idx = filter(idx) do i
+        nlt = Bnc.vertices_nullity[i]
+        flag_asym = Bnc.vertices_asymptotic_flag[i]
+
+        ok_singular = isnothing(singular) || (
+            (singular === true  && nlt > 0) ||
+            (singular === false && nlt == 0) ||
+            (singular isa Int   && nlt ≤ singular)
+        )
+
+        ok_asym = isnothing(asymptotic) || (asymptotic == flag_asym)
+        return ok_singular && ok_asym 
+    end
+
     return return_idx ? idx : Bnc.vertices_perm[idx]
 end
+
+
+
+
+
+
+
+
 
 """
 Gets P and P0, creating the vertex if necessary.
@@ -865,6 +1081,11 @@ function get_polyhedra(Bnc::Bnc,perm)::Polyhedron
 end
 
 
+
+
+"""
+Directly judge if two vertices are neighbors by polyhedron intersection.
+"""
 function is_neighbor_direct(Bnc::Bnc,vtx1,vtx2)::Bool
     if get_nullity!(Bnc, vtx1) > 1 || get_nullity!(Bnc, vtx2) > 1
         @warn "Currently we doesn't care neighbor relationships less than your model's dim - 1  ,return false by default"
@@ -882,9 +1103,10 @@ function is_neighbor_direct(Bnc::Bnc,vtx1,vtx2)::Bool
     end
 end
 
-function is_neighbor(Bnc::Bnc,vtx1,vtx2)::Bool
-    @assert get_nullity!(Bnc, vtx1) <= 1 "Currently we only support neighbor detection for vertices with nullity less than or equal to 1"
-    @assert get_nullity!(Bnc, vtx2) <= 1 "Currently we only support neighbor detection for vertices with nullity less than or equal to 1"
+"""
+Judge if two vertices are neighbors.
+"""
+function is_neighbor_x(Bnc::Bnc,vtx1,vtx2)::Bool
     nbs = get_all_neighbors!(Bnc, vtx1; return_idx=true)
     idx2 = get_idx(Bnc, vtx2)
     if idx2 in nbs
@@ -894,58 +1116,117 @@ function is_neighbor(Bnc::Bnc,vtx1,vtx2)::Bool
     end
 end
 
-
+function is_neighbor_qK(Bnc::Bnc,vtx1,vtx2)::Bool
+    @assert get_nullity!(Bnc, vtx1) <= 1 "Currently we only support neighbor detection for vertices with nullity less than or equal to 1"
+    @assert get_nullity!(Bnc, vtx2) <= 1 "Currently we only support neighbor detection for vertices with nullity less than or equal to 1"
+    from = get_idx(Bnc, vtx1)
+    to = get_idx(Bnc, vtx2)
+    vtx_grh = get_vertices_graph!(Bnc)
+    for ve in vtx_grh.neighbors[from]
+        if ve.to == to
+            return isnothing(ve.change_dir_qK) ? false : true
+        end
+    end
+    # no directly edge found, judge numerically,
+    return is_neighbor_direct(Bnc,vtx1,vtx2)
+end
+is_neighbor(Bnc::Bnc,vtx1,vtx2) = is_neighbor_qK(Bnc,vtx1,vtx2)
 
 #-------------------------------------------------------------------------------------
 #         functions of getting vertices with certain properties
 # -------------------------------------------------------------------------------------
 
-function get_singular_vertices(Bnc::Bnc; return_idx::Bool=false)
-    """
-    Get the indices of all singular vertices.
-    Default to return perms
-    """
-    idx = findall(!iszero, get_vertices_nullity(Bnc))
-    return return_idx ? idx : Bnc.vertices_perm[idx]
-end
-get_singular_vertices_idx(Bnc::Bnc) = get_singular_vertices(Bnc; return_idx=true)
-function get_nonsingular_vertices(Bnc::Bnc; return_idx::Bool=false)
-    """
-    Get the indices of all nonsingular vertices.
-    """
-    nullity = get_vertices_nullity(Bnc)
-    idx =  findall(iszero, nullity)
-    return return_idx ? idx : Bnc.vertices_perm[idx]
-end
-get_nonsingular_vertices_idx(Bnc::Bnc) = get_nonsingular_vertices(Bnc; return_idx=true)
-function get_real_vertices(Bnc::Bnc; return_idx::Bool=false)
-    """
-    Get the idx of all real vertices.
-    """
+"""
+    get_singular_vertices(Bnc::Bnc; return_idx=false)
+
+Return all singular vertices (nullity > 0).
+"""
+get_singular_vertices(Bnc::Bnc; return_idx::Bool=false) = get_vertices(Bnc; singular=true, return_idx)
+get_singular_vertices_idx(Bnc::Bnc) = get_vertices(Bnc; singular=true, return_idx=true)
+
+"""
+    get_nonsingular_vertices(Bnc::Bnc; return_idx=false)
+
+Return all nonsingular vertices (nullity == 0).
+"""
+get_nonsingular_vertices(Bnc::Bnc; return_idx::Bool=false) = get_vertices(Bnc; singular=false, return_idx)
+get_nonsingular_vertices_idx(Bnc::Bnc) = get_vertices(Bnc; singular=false, return_idx=true)
+
+"""
+    get_real_vertices(Bnc::Bnc; return_idx=false)
+
+Return all real/asymptotic vertices.
+"""
+get_real_vertices(Bnc::Bnc; return_idx::Bool=false) = get_vertices(Bnc; asymptotic=true, return_idx)
+get_real_vertices_idx(Bnc::Bnc) = get_vertices(Bnc; asymptotic=true, return_idx=true)
+
+
+"""
+    get_fake_vertices(Bnc::Bnc; return_idx=false)
+
+Return all fake (non-asymptotic) vertices.
+"""
+get_fake_vertices(Bnc::Bnc; return_idx::Bool=false) = get_vertices(Bnc; asymptotic=false, return_idx)
+get_fake_vertices_idx(Bnc::Bnc) = get_vertices(Bnc; asymptotic=false, return_idx=true)
+
+"""
+    get_vertices(Bnc::Bnc; singular=nothing, asymptotic=nothing, return_idx=false)
+
+Return all vertices of `Bnc` that satisfy given filters.
+
+# Keyword arguments
+- `singular`:
+    - `true` → only singular vertices (`nullity > 0`)
+    - `false` → only nonsingular vertices (`nullity == 0`)
+    - `Int` → vertices with `nullity ≤ singular`
+    - `nothing` → no filter
+- `asymptotic`:
+    - `true` → only real/asymptotic vertices
+    - `false` → only fake vertices
+    - `nothing` → no filter
+- `return_idx`: if `true`, return vertex indices; otherwise return vertex permutations.
+
+# Example
+```julia
+get_vertices(Bnc)                          # all vertices
+get_vertices(Bnc; singular=true)           # singular only
+get_vertices(Bnc; singular=2)              # nullity ≤ 2
+get_vertices(Bnc; asymptotic=true)         # real/asymptotic vertices
+get_vertices(Bnc; singular=false, asymptotic=false)
+"""
+function get_vertices(Bnc::Bnc; singular::Union{Bool,Int,Nothing}=nothing, asymptotic::Union{Bool,Nothing}=nothing, return_idx::Bool=false)
     find_all_vertices!(Bnc)
-    idx = findall(Bnc.vertices_asymptotic_flag)
+    idx_all = eachindex(Bnc.vertices_perm)
+    idx = filter(idx_all) do i
+        nlt = Bnc.vertices_nullity[i]
+        flag_asym = Bnc.vertices_asymptotic_flag[i]
+
+        ok_singular = isnothing(singular) || (
+            (singular === true  && nlt > 0) ||
+            (singular === false && nlt == 0) ||
+            (singular isa Int   && nlt ≤ singular)
+        )
+
+        ok_asym = isnothing(asymptotic) || (asymptotic == flag_asym)
+        return ok_singular && ok_asym 
+    end
+
     return return_idx ? idx : Bnc.vertices_perm[idx]
 end
-get_real_vertices_idx(Bnc::Bnc) = get_real_vertices(Bnc; return_idx=true)
-function get_fake_vertices(Bnc::Bnc; return_idx::Bool=false)
-    """
-    Get the idx of all fake vertices.
-    """
-    find_all_vertices!(Bnc)
-    idx = findall(!, Bnc.vertices_asymptotic_flag)
-    return return_idx ? idx : Bnc.vertices_perm[idx]
-end
-get_fake_vertices_idx(Bnc::Bnc) = get_fake_vertices(Bnc; return_idx=true)
-function get_vertices(Bnc::Bnc; singular::Union{Bool,Nothing}=nothing, asymptotic::Union{Bool,Nothing}=nothing, return_idx::Bool=false)
-    """
-    get vertices with certain properties.
-    """ 
-    singular_flag = isnothing(singular) ? trues(length(Bnc.vertices_perm)) : (singular .== (get_vertices_nullity(Bnc) .> 0))
-    real_flag = isnothing(asymptotic) ? trues(length(Bnc.vertices_perm)) : (asymptotic .== Bnc.vertices_asymptotic_flag)
-    flag = singular_flag .& real_flag
-    idx = findall(flag)
-    return return_idx ? idx : Bnc.vertices_perm[idx]
-end
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

@@ -84,3 +84,43 @@ function show_qK_space_condition(Bnc::Bnc, perm;log_space::Bool=true,asymptotic:
     end
 end
 
+function show_condition_poly(Bnc::Bnc, poly::Polyhedron,change_dir_idx=nothing; log_space::Bool=true,asymptotic::Bool=false)
+    nullity = nhyperplanes(poly)
+    p = MixedMatHRep(hrep(poly))
+    syms = [Bnc.q_sym; Bnc.K_sym]
+    isnothing(change_dir_idx) || popat!(syms, change_dir_idx)
+    C_qK,C0_qK = -p.A, p.b
+    if nullity == 0
+        if log_space
+            # eq = asymptotic ? C_qK[1:nullity,:] * log10.(syms) .~ 0 : C_qK * log10.(syms) .+ C0_qK[1:nullity,:] .~ 0
+            return asymptotic ? C_qK * log10.(syms) .> 0 : C_qK * log10.(syms) .+ C0_qK .> 0
+        else
+            return  asymptotic ? handle_log_weighted_sum(C_qK, syms) .> 1 : handle_log_weighted_sum(C_qK, syms,C0_qK) .> 1
+        end
+    else
+        if log_space
+            eq = asymptotic ? C_qK[1:nullity,:] * log10.(syms) .~ 0 : C_qK[1:nullity,:] * log10.(syms) .+ C0_qK[1:nullity,:] .~ 0
+            uneq = asymptotic ? C_qK[nullity+1:end,:] * log10.(syms) .> 0 : C_qK[nullity+1:end,:] * log10.(syms) .+ C0_qK[nullity+1:end,:] .> 0
+        else
+            eq = asymptotic ? handle_log_weighted_sum(C_qK[1:nullity,:], syms) .~ 1 : handle_log_weighted_sum(C_qK[1:nullity,:], syms,C0_qK[1:nullity,:]) .~ 1
+            uneq = asymptotic ? handle_log_weighted_sum(C_qK[nullity+1:end,:], syms) .> 1 : handle_log_weighted_sum(C_qK[nullity+1:end,:], syms,C0_qK[nullity+1:end,:]) .> 1
+        end
+        return vec([eq; uneq])
+    end
+end
+
+"""
+Symbolic helper function to convert a sum of log10 terms into a product form.
+from ∑a log b to log ∏b^a
+
+The final expression contains ∏b^a term.
+"""
+function handle_log_weighted_sum(C, syms , C0 = nothing)
+    rows = size(C,1)
+    rst = Vector{Num}(undef, rows)
+    C0 = isnothing(C0) ? zeros(Int, rows) : C0
+    for i in 1:rows
+        rst[i] = syms .^ C[i,:] |> prod |> (x-> x*10^C0[i])
+    end
+    return rst
+end
