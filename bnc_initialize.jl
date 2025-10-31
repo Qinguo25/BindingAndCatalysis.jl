@@ -186,7 +186,8 @@ mutable struct Bnc{T} # T is the int type to save all the indices
     # vertices_change_dir_qK::SparseMatrixCSC{SparseVector{Float64,T}, Int} # how the vertices should change under qK space to reach its neighbor vertices, upper triangular
     # # _vertices_sym_invperm::Vector{Int}
 
-    vertices_data::Dict{Vector{T},Any} # Using Any for placeholder for Vertex
+    vertices_data::Vector{Vertex} # Using Any for placeholder for Vertex
+    _vertices_is_filled::BitVector
     _vertices_Nρ_inv_dict::Dict{Vector{T}, Tuple{SparseMatrixCSC{Float64, Int},T}} # cache the N_inv for each vertex permutation
 
     #------other helper parameters------
@@ -205,6 +206,7 @@ mutable struct Bnc{T} # T is the int type to save all the indices
     _L_sparse::SparseMatrixCSC{Int,Int} # sparse version of L, used for fast calculation
     _L_sparse_val_one::SparseMatrixCSC{Int,Int} # sparse version of L with only non-zero elements set to 1, used for fast calculation
     _valid_L_idx::Vector{Vector{Int}} #record the non-zero column position for each row.
+    _C_partition_idx::Vector{Int}# record the row partition of C matrix of invertible regimes. L[i,:] will stands for C[_C_partition_idx[i]:C_partition_idx[i+1]-1,:]
 
     _N_sparse::SparseMatrixCSC{Int,Int} # sparse version of N transpose, used for fast calculation
     _LN_sparse::SparseMatrixCSC{Float64,Int} # sparse version of [L;N], used for fast calculation
@@ -252,7 +254,12 @@ mutable struct Bnc{T} # T is the int type to save all the indices
 
         _L_sparse = sparse(L) # sparse version of L
         _L_sparse_val_one = sparse(sign.(L)) # sparse version of L with only non-zero elements set to 1
-        _valid_L_idx = [findall(!iszero, @view L[i,:]) for i in 1:d] 
+        _valid_L_idx = [findall(!iszero, @view L[i,:]) for i in 1:d]
+        _C_partition_idx = Vector{Int}(undef, d+1)
+        _C_partition_idx[1] = 1
+        for i in 1:d
+            _C_partition_idx[i+1] = _C_partition_idx[i] + length(_valid_L_idx[i])-1
+        end  
         
         _N_sparse = sparse(N) # sparse version of N
         _LN_sparse = Float64.([_L_sparse; _N_sparse])
@@ -278,7 +285,8 @@ mutable struct Bnc{T} # T is the int type to save all the indices
             # SparseMatrixCSC{SparseVector{Int8,T}, Int}(undef, 0, 0),             # vertices_change_dir_x
             # SparseMatrixCSC{SparseVector{Float64,T}, Int}(undef, 0, 0),             # vertices_change_dir_qK
             # Int[],                           # _vertices_sym_invperm
-            Dict{Vector{T}, Any}(),              # vertices_data
+            Vector{Vertex}(),              # vertices_data
+            BitVector(),                     # _vertices_is_filled
             Dict{Vector{T}, Tuple{SparseMatrixCSC{Float64, Int},T}}(), # _vertices_perm_Ninv_dict
             # Fields 13-28 (Calculated values)
             direction,
@@ -288,6 +296,7 @@ mutable struct Bnc{T} # T is the int type to save all the indices
             _L_sparse,
             _L_sparse_val_one,
             _valid_L_idx,
+            _C_partition_idx,
 
             _N_sparse,
             _LN_sparse,

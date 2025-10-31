@@ -692,22 +692,6 @@ end
 
 
 
-# function get_vertex_qK(Bnc::Bnc,x::Vector{<:Real}, qK::Union{Vector{<:Real},Nothing}=nothing;kwargs...)::Vector{Int}
-#     qK = isnothing(qK) ? x2qK(x,kwargs...,output_logspace=true) : log10.(qK)
-#     vtx_x = assign_vertex_x(Bnc)
-
-#     nullity = get_nullity!(Bnc,vtx_x)
-#     if nullity != 0
-#         finite_neighbors = get_finite_neighbors!(Bnc, vtx_x)
-#         for neighbor in finite_neighbors
-#                 C,C0 = get_C_C0_qK!(Bnc,neighbor)
-#                 if all(C * log10.(q) .+ C0 .> 0)
-#                     return neighbor
-#                 end
-#             end
-#         end
-#         @error("No finite neighbor found for x vertex $vtx_x could caused by non-symtotic conditons")
-# end
 
 function have_perm(Bnc::Bnc, perm::Vector{<:Integer})
     """
@@ -783,269 +767,118 @@ function calc_volume(poly::Polyhedron;asymptotic::Bool=true, kwargs...)::Tuple{F
     return (center, margin)
 end
 
+function calc_volume(polys::Vector{<:Polyhedron};
+    confidence_level::Float64=0.95,
+    N::Int=1_000_000,
+    batch_size::Int=100_000,
+    log_lower=-6,
+    log_upper=6,
+    tol::Float64=1e-10,
+)::Vector{Tuple{Float64,Float64}}
 
+    n = fulldim(polys[1])
+    full_dim_idx = findall(dim.(polys).==n)
+    @show full_dim_idx
 
-#--------------Initial version------------
-# struct HomotopyParams{V<:Vector{<:Real},M<:Matrix{<:Real},
-#     SV1<:SubArray,SV2<:SubArray,SV3<:SubArray}
-#     #ode required parameters
-#     ΔlogqK::V
+    n_batches = cld(N, batch_size)
+    dist = Uniform(log_lower, log_upper)
+    n_threads = Threads.nthreads()
 
-#     #value buffers
-#     x::V
-#     q::V
-#     J::M  # Buffer for the Jacobian matrix
+    # --- 提前提取每个 poly 的 (A, b) ---
+    reps = polys .|> poly -> MixedMatHRep(hrep(poly)) |> p->(p.A, p.b)
 
-#     # value views
-#     ##outer parameters value views 
-#     startlogq::SV1 # View for startlogqK[1:d]
-#     ##value buffer views
-#     Δlogq::SV2     # View for ΔlogqK[1:d]
-#     J_top::SV3     # View for J[1:Bnc.d, :]
-# end
-# function logx_traj_with_logqK_change(Bnc::Bnc,
-#     startlogqK::Vector{<:Real},
-#     endlogqK::Vector{<:Real};
-#     # Optional parameters for the initial log(x) values
-#     startlogx::Union{Vector{<:Real},Nothing}=nothing,
-#     # Optional parameters for the ODE solver
-#     alg=nothing, # Default to nothing, will use Tsit5() if not provided
-#     reltol=1e-8,
-#     abstol=1e-9,
-#     kwargs... #other Optional arguments for ODE solver
-# )::ODESolution
+    # --- 每线程局部计数 ---
+    thread_counts = [zeros(Int, length(polys)) for _ in 1:n_threads]
 
-#     #---Solve the homotopy ODE to find x from qK.---
+    Threads.@threads for b in 1:n_batches
+        m = (b == n_batches) ? (N - (n_batches-1)*batch_size) : batch_size
+        samples = rand(dist, n, m)
+        local_counts = thread_counts[Threads.threadid()]
 
-#     # Define the start point for the intergration
-#     tspan = (0.0, 1.0)
-#     d = Bnc.d
-#     n = Bnc.n
-#     startlogx = isnothing(startlogx) ? qK2x(Bnc, startlogqK; input_logspace=true, output_logspace=true) : startlogx
-#     ΔlogqK = endlogqK - startlogqK
+        @inbounds for j in 1:m
+            @views x = samples[:, j]
+            for i in full_dim_idx
+                (A, b) = reps[i]
+            # for (i, (A, b)) in enumerate(reps)
+                # x ∈ poly <=> A*x <= b
+                if all(A * x .<= b .+ tol)
+                    local_counts[i] += 1
+                end
+            end
+        end
+    end
 
-#     # Create the J_buffer here
-#     # Assuming Bnc.N is a Matrix{<:Real} and compatible with zeros(d,n)
-#     J_buffer = [zeros(d, n); Bnc.N] # This creates a new Matrix{<:Real}
-
-#     # Create the views once here
-#     startlogq = @view(startlogqK[1:d])
-#     Δlogq = @view(ΔlogqK[1:d])
-#     J_top = @view(J_buffer[1:Bnc.d, :])
-
-#     params = HomotopyParams(
-#         ΔlogqK, Vector{Float64}(undef, n), #x_buffer
-#         Vector{Float64}(undef, d), #q_buffer
-#         J_buffer, # Use the pre-created J_buffer
-#         startlogq,
-#         Δlogq,
-#         J_top
-#     )
-
-#     function homotopy_ode!(dlogx, logx, p, t)
-#         # logx is the current state vector, log(x(t))
-#         # params contains constant parameters (startlogqK, dlogqK_vec)
-#         # t is the current time/path parameter from 0 to 1
-#         @unpack ΔlogqK, x, q, J, startlogq, Δlogq, J_top = p
-#         #update q 
-#         @. q = exp10(startlogq + t * Δlogq)
-#         #update x
-#         @. x = exp10(logx)
-#         # Update the Jacobian (only top part needed)
-#         @. J_top = x' * Bnc.L / q
-#         dlogx .= J \ ΔlogqK
-#         # @show dlogx
-#         # return dlogx
-#     end
-
-#     # Solve the ODE using the DifferentialEquations.jl package
-#     prob = ODEProblem(homotopy_ode!, startlogx, tspan, params)
-#     sol = solve(prob, alg; reltol=reltol, abstol=abstol, kwargs...)
-#     return sol
-# end
-
-#----------------Functions for modeling when envolving catalysis reactions----------------------
-
-# original version
-# struct TimecurveParam{V<:Vector{<:Real},M<:Matrix{<:Real},
-#     SV1<:SubArray,SV2<:SubArray}
-#     x::V # Buffer for x values
-#     K::V # Buffer for K values
-#     v::V # Buffer for the catalysis flux vector
-#     Sv::V # Buffer for the catalysis rate vector multiplied by S
-#     J::M # Jacobian matrix buffer
-
-#     J_top::SV1 # View for the top part of the Jacobian matrix
-#     J_bottom::SV2 # View for the bottom part of the Jacobian matrix
-# end
-
-# function time_curve_logx(Bnc::Bnc, logx0::Vector{<:Real}, tspan::Tuple{Real,Real};
-#     k::Union{Vector{<:Real},Nothing}=nothing,
-#     S::Union{Matrix{Int},Nothing}=nothing,
-#     aT::Union{Matrix{Int},Nothing}=nothing,
-#     override::Bool=false,
-#     alg=nothing, # Default to nothing, will use Tsit5() if not provided
-#     reltol=1e-8,
-#     abstol=1e-9,
-#     kwargs...
-# )::ODESolution
-
-#     # ---Solve the ODE to find the time curve of log(x) with respect to qK change.---
-
-#     #--Prepare parameters---
-#     if override
-#         if ~isnothing(k)
-#             Bnc.k = k
-#         end
-#         if ~isnothing(S)
-#             Bnc.S = S
-#         end
-#         if ~isnothing(aT)
-#             Bnc.aT = aT
-#         end
-#     end
-#     k = coalesce(k, Bnc.k)
-#     S = coalesce(S, Bnc.S)
-#     aT = coalesce(aT, Bnc.aT)
-
-#     #initialize J_buffer
-#     J = Matrix{Float64}(undef, Bnc.n, Bnc.n)
-#     # create view for the J_buffer
-#     J_top = @view J[1:Bnc.d, :]
-#     J_bottom = @view J[(Bnc.d+1):end, :]
-
-#     params = TimecurveParam(
-#         Vector{Float64}(undef, Bnc.n), # x_buffer
-#         Vector{Float64}(undef, Bnc.r), # K_buffer
-#         Vector{Float64}(undef, length(k)), # v buffer / flux
-#         Vector{Float64}(undef, Bnc.n), # Sv buffer
-#         J, # J_buffer
-#         #Views for updating J
-#         J_top,
-#         J_bottom
-#     )
-#     # Define the ODE system for the time curve
-#     if Bnc._is_change_of_K_involved
-#         Catalysis_process! = function (dlogx, logx, p, t)
-#             @unpack x, K, v, Sv, J, J_top, J_bottom = p
-#             #update the values
-#             x .= exp10.(logx)
-#             K .= exp10.(Bnc.N * logx)
-#             # Calculate the Jacobian matrix J
-#             @. J_top = Bnc.L * x'
-#             @. J_bottom = K * Bnc.N
-
-#             # dlogx .= J \ (S * (k .* exp10.(aT * logx)))
-#             mul!(v, aT, logx)
-#             @. v = k * exp10(v) # calculate the catalysis rate vector
-#             mul!(Sv, S, v) # reuse x as a temporary buffer, but need change if x is used in other places, like to act call back for ODESolution
-#             dlogx .= J \ Sv
-#         end
-#     else
-#         # If K is not involved, we can skip the K update
-#         params.J_bottom .= exp10.(Bnc.N * logx0) .* Bnc.N #initialize J_bottom once
-#         Catalysis_process! = function (dlogx, logx, p, t)
-#             @unpack x, v, Sv, J, J_top = p
-#             #update the values
-#             x .= exp10.(logx)
-#             # Update the Jacobian matrix J
-#             @. J_top = Bnc.L * x'
-#             # dlogx .= J \ (S * (k .* exp10.(aT * logx))) # could be optimized by symbolics further.
-#             mul!(v, aT, logx) # v = aT * logx
-#             @. v = k * exp10(v) # calculate the catalysis rate vector
-#             mul!(Sv, S, v) # Sv = S * v
-#             dlogx .= J \ Sv
-#         end
-#     end
-#     # Create the ODE problem
-#     prob = ODEProblem(Catalysis_process!, logx0, tspan, params)
-#     sol = solve(prob, alg; reltol=reltol, abstol=abstol, kwargs...)
-#     return sol
-# end
+    # --- 汇总 ---
+    total_counts = zeros(Int, length(polys))
+    
+    for c in thread_counts
+        @inbounds total_counts .+= c
+    end
+    # --- Wilson 区间 ---
+    function get_center_margin(count::Int, N::Int)
+        if count == 0
+            return (0.0, 0.0)
+        end
+        P_hat = count / N
+        z = quantile(Normal(), (1 + confidence_level) / 2)
+        denom = 1 + z^2 / N
+        center = (P_hat + z^2/(2*N)) / denom
+        margin = (z / denom) * sqrt(P_hat*(1 - P_hat)/N + z^2/(4*N^2))
+        return center, margin
+    end
+    @show total_counts
+    return [get_center_margin(c, N) for c in total_counts]
+end
 
 
 
-# # original original version
-# struct TimecurveParam2{V<:Vector{<:Real}, M<:Matrix{<:Real},
-#                 SV1<:SubArray, SV2<:SubArray}
-#     x::V # Buffer for x values
-#     K::V # Buffer for K values
-#     J::M # Jacobian matrix buffer
-#     J_top::SV1 # View for the top part of the Jacobian matrix
-#     J_bottom::SV2 # View for the bottom part of the Jacobian matrix
-# end
 
-# function time_curve_logx_origin(Bnc::Bnc,logx0::Vector{<:Real}, tspan::Tuple{Real, Real};
-#     k::Union{Vector{<:Real},Nothing} = nothing,
-#     S::Union{Matrix{Int},Nothing} = nothing,
-#     aT::Union{Matrix{Int},Nothing} = nothing,
-#     alg=nothing, # Default to nothing, will use Tsit5() if not provided
-#     reltol=1e-8,
-#     abstol=1e-9,
-#     kwargs...
-#     )::ODESolution
+# Trying speedup assign_vertex_qK, but not success yet.
+function get_i_j(model::Bnc,perm::Vector{<:Integer}, t::Integer)
+    i = findfirst(>(t),model._C_partition_idx) - 1
+    j1 = perm[i]
+    cth = t - model._C_partition_idx[i] + 1
+    j2 = model._valid_L_idx[i][cth]
+    j2 < j1 ? nothing : j2 += 1
+    return i, j1, j2
+end
 
-#     # ---Solve the ODE to find the time curve of log(x) with respect to qK change.---
+function assign_vertex_qK_test(Bnc::Bnc{T}, qK::AbstractVector{<:Real};
+                               input_logspace::Bool=false,
+                               asymptotic::Bool=true, eps=0) where T
+    logqK = input_logspace ? qK : log10.(qK)
+    Perm_tried = Set{UInt64}()  # 存放哈希值
 
-#     #--Prepare parameters---
-#     k = isnothing(k) ? Bnc.k : k
-#     S = isnothing(S) ? Bnc.S : S
-#     aT = isnothing(aT) ? Bnc.aT : aT
+    function try_perm!(perm1)
+        (C, C0) = get_C0_qK!(Bnc, perm1)
+        err = C * logqK .+ C0
+        ts = findall(er -> er <= -eps, err)
 
-#     #initialize J_buffer
-#     J = Matrix{Float64}(undef, Bnc.n, Bnc.n)
-#     # create view for the J_buffer
-#     J_top = @view J[1:Bnc.d, :]
-#     J_bottom = @view J[(Bnc.d+1):end, :]
+        # 没有违反不等式，返回
+        if isempty(ts)
+            return perm1
+        end
 
-#     params = TimecurveParam2(
-#         Vector{Float64}(undef, Bnc.n), # x_buffer
-#         Vector{Float64}(undef, Bnc.r), # K_buffer
-#         J, # J_buffer
-#         J_top,
-#         J_bottom
-#     )
-#     # Define the ODE system for the time curve
-#     if Bnc._is_change_of_K_involved
-#         Catalysis_process! = function(dlogx, logx, p, t)
-#             @unpack x, K, J, J_top,J_bottom =p
-#             #update the values
-#             x .= exp10.(logx)
-#             K .= exp10.(Bnc.N * logx)
-#             # Calculate the Jacobian matrix J
-#             @. J_top = Bnc.L * x'
-#             @. J_bottom = K * Bnc.N
-#             dlogx .= J \ (S * (k .* exp10.(aT * logx)))
-#         end
-#     else
-#         # If K is not involved, we can skip the K update
-#         params.J_bottom .= exp10.(Bnc.N * logx0) .* Bnc.N #initialize J_bottom once
-#         Catalysis_process! = function(dlogx, logx, p, t)
-#             @unpack x, J, J_top =p
-#             #update the values
-#             x .= exp10.(logx)
-#             @. J_top = Bnc.L * x'
-#             dlogx .= J \ (S * (k .* exp10.(aT * logx))) # could be optimized by symbolics further.
-#         end
-#     end
-#     # Create the ODE problem
-#     prob = ODEProblem(Catalysis_process!, logx0, tspan, params)
-#     sol = solve(prob, alg; reltol=reltol, abstol=abstol,kwargs...)
-#     return sol    
-# end
+        h = hash(perm1)
+        if h in Perm_tried
+            error("Cyclic permutation detected! Tried permutations: $(collect(Perm_tried))")
+        end
+        push!(Perm_tried, h)
 
-# struct TimecurveParam{V<:Vector{<:Real},M<:Matrix{<:Real},
-#     SV1<:SubArray,SV2<:SubArray}
-#     x::V # Buffer for x values
-#     K::V # Buffer for K values
-#     v::V # Buffer for the catalysis flux vector
-#     Sv::V # Buffer for the catalysis rate vector multiplied by S
-#     J::M # Jacobian matrix buffer
-#     J_top::SV1 # View for the top part of the Jacobian matrix
-#     J_bottom::SV2 # View for the bottom part of the Jacobian matrix
-# end
+        # 对所有违反的约束更新 perm
+        for t in ts
+            i, j1, j2 = get_i_j(Bnc, perm1, t)
+            perm1[i] = j2
+            if !haskey(Bnc.vertices_perm_dict, perm1) 
+                perm1[i] = j1  # 恢复原值
+            end
+            try_perm!(perm1)
+        end
+        # else
+        #         @show perm1
+    end
 
-
-# 3rd version, using [LΛₓ;ΛₖN], seems not numerically stable
-
-
+    # 假设初始 perm1 为 1:Bnc.d 或者外部传入
+    perm0 = collect(1:Bnc.d) .|> x->T(x)
+    return try_perm!(perm0)
+end
