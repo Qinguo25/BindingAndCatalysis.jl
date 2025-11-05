@@ -180,7 +180,7 @@ function find_all_complete_paths(model::Bnc, g::DiGraph)
     end
 
     paths = reduce(vcat, paths_per_thread)
-    return paths#filter!(paths) do x length(x) > 1 end
+    return sort!(paths)#filter!(paths) do x length(x) > 1 end
 end
 
 function find_conditions_for_path_direct(model::Bnc, path, change_qK_idx)::Polyhedron # Can be extremely slow for long paths
@@ -209,23 +209,14 @@ function find_conditions_for_path_direct(model::Bnc, path, change_qK_idx)::Polyh
     return p
 end
 
-function find_conditions_for_pathes_direct(model::Bnc, paths, change_qK_idx)::Vector{Polyhedron}
-    polys = Vector{Polyhedron}(undef, length(paths))
-    Threads.@threads for i in eachindex(paths)
-        polys[i] = find_conditions_for_path_direct(model, paths[i], change_qK_idx)
-    end
-    return polys
-end
-# function find_conditions_for_path_direct(model,path,change_qK_idx)::Polyhedron
-#     C = [get_C_qK!(model,pth) for pth in path]
-#     C0 = [get_C0_qK!(model,pth) for pth in path]
-#     nul = [get_nullity!(model,pth) for pth in path]
-
-# end
 
 
 function find_conditions_for_path(model::Bnc,path,change_qK_idx)::Polyhedron
-    # Firstly let's try assuming regiems with nullity 1 have no contribution
+    # Buggy, not working for now.
+
+    # Handle invertible regimes first
+
+    # Firstly let's try assuming regiems with nullity 1 have no contribution()
     nlts = [get_nullity!(model, p) for p in path]
     idxs = findall(x -> x == 0, nlts)
     C = Vector{Matrix{Float64}}(undef, length(idxs))
@@ -249,11 +240,30 @@ function find_conditions_for_path(model::Bnc,path,change_qK_idx)::Polyhedron
     end
     C_all = reduce(vcat, C)
     C0_all = reduce(vcat, C0)
+
+
+    # # Now handle regimes with nullity 1
+    # idxs_nlt = findall(x -> x ==1, nlts)
+    # C_nlt = Vector{Matrix{Float64}}(undef, length(idxs_nlt))
+    # C0_nlt = Vector{Vector{Float64}}(undef, length(idxs_nlt))
+    # Threads.@threads for i in eachindex(idxs_nlt)
+    #     poly = get_polyhedra
+
     p = get_polyhedra(C_all, C0_all, 0)
     detecthlinearity!(p)
     removehredundancy!(p)
     return p
 end
+
+
+function find_conditions_for_pathes_direct(model::Bnc, paths, change_qK_idx)::Vector{Polyhedron}
+    polys = Vector{Polyhedron}(undef, length(paths))
+    Threads.@threads for i in eachindex(paths)
+        polys[i] = find_conditions_for_path_direct(model, paths[i], change_qK_idx)
+    end
+    return polys
+end
+
 
 function find_conditions_for_pathes(model::Bnc, paths, change_qK_idx)::Vector{Polyhedron}
     polys = Vector{Polyhedron}(undef, length(paths))
@@ -264,7 +274,7 @@ function find_conditions_for_pathes(model::Bnc, paths, change_qK_idx)::Vector{Po
 end
 
 
-function find_reaction_order_for_single_path(model, path::Vector{Int}, change_qK_idx, observe_x_idx; deduplicate::Bool=false)::Vector{<:Real}
+function find_reaction_order_for_single_path(model, path::Vector{Int}, change_qK_idx, observe_x_idx; deduplicate::Bool=false,keep_singular::Bool=true)::Vector{<:Real}
     r_ord = Vector{Float64}(undef, length(path))
     for i in eachindex(path)
         null = get_nullity!(model, path[i])
@@ -280,7 +290,7 @@ function find_reaction_order_for_single_path(model, path::Vector{Int}, change_qK
         end
     end
     if deduplicate
-        r_ord = dedup(r_ord)
+        r_ord = dedup(r_ord,keep_singular)
     end
     return r_ord
 end
@@ -293,11 +303,15 @@ function find_reaction_order_for_pathes(model, paths::Vector{Vector{Int}}, args.
     return r_ords
 end
 
-function dedup(v)
+function dedup(v,keep_singular::Bool=true)
     isempty(v) && return v
-    result = [first(v)]
-    for x in Iterators.drop(v, 1)
+    i_fst = findfirst(x->!isinf(x), v)
+    result = [v[i_fst]]
+    for x in Iterators.drop(v, i_fst)
         if x != last(result)
+            if isinf(x) && !keep_singular
+                continue
+            end
             push!(result, x)
         end
     end
@@ -345,14 +359,35 @@ end
 
 draw_qK_neighbor_grh(args...;kwargs...) = draw_vertices_neighbor_graph(args...; kwargs...)
 
-function draw_vertices_neighbor_graph(model::Bnc, grh=nothing; arrow_idx=nothing, edge_labels=nothing, figsize=(1000,1000), arrow_color=(:green, 0.5))
+function draw_vertices_neighbor_graph(model::Bnc, grh=nothing; 
+    arrow_idx=nothing, 
+    edge_labels=nothing, 
+    figsize=(1000,1000), 
+    arrow_color=(:green, 0.5),
+    kwargs...)
     # use provided grh or compute a default neighbor graph
     grh = isnothing(grh) ? get_qK_neighbor_grh(model) : grh
-
     # prepare labels / colors
     # node_labels = model.vertices_perm .|> (x-> Int.(x) |> repr)
     node_labels = model.vertices_perm .|> x->model.x_sym[x] |> x->repr(x)[4:end] # remove the "Num"
-    node_colors = [model.vertices_nullity[i] > 0 ? "#CCCCFF" : "#FFCCCC" for i in eachindex(model.vertices_nullity)]
+
+    # assign node_colors based on nullity and asymptoticity
+    node_colors = Vector{String}(undef, length(model.vertices_perm))
+    for i in eachindex(model.vertices_perm)
+        is_sin = is_singular(model, i)
+        is_asym = is_asymptotic(model, i)
+        if is_sin
+            node_colors[i] = "#CCCCFF"  # light blue for singular regimes
+        else
+            if is_asym
+                node_colors[i] = "#FFCCCC"  # light green for asymptotic regimes
+            else
+                node_colors[i] = "#CCFFCC"  # light red for regular regimes
+            end
+        end
+    end
+
+    # node_colors = [model.vertices_nullity[i] > 0 ? "#CCCCFF" : "#FFCCCC" for i in eachindex(model.vertices_nullity)]
 
     f = Figure(size = figsize)
     ax = Axis(f[1, 1],title = "Dominant mode of "*repr(model.q_sym)[4:end], titlealign = :right,titlegap =2)
@@ -360,14 +395,14 @@ function draw_vertices_neighbor_graph(model::Bnc, grh=nothing; arrow_idx=nothing
     if !isnothing(edge_labels) && isa(edge_labels, String)
         edge_labels = repeat([edge_labels], ne(grh))
     end
-    @show edge_labels
-    p = graphplot!(ax, grh,
+    p = graphplot!(ax, grh;
                     node_color = node_colors,
                     elabels = edge_labels,
                     edge_color = (:black, 0.7),
                     ilabels = node_labels,
                     arrow_size = 20,
                     arrow_shift = 0.8,
+                    kwargs...,
                     layout = Spring(; dim = 2))
     # p.node_pos[] = posi
     # add arrows from your helper (keeps behavior from original cell)
@@ -380,4 +415,90 @@ function draw_vertices_neighbor_graph(model::Bnc, grh=nothing; arrow_idx=nothing
     return f, ax, p
 end
 
+function add_vertices_idx!(ax,p)
+    posi = p.node_pos[]
+    text!(ax, posi; text = "#".*string.(1:length(posi)),align = (:center, :bottom), color = :black,offset = (0,5))
+    return nothing
+end
 
+function get_node_size(model::Bnc, default=1; asymptotic=true, kwargs...)
+    # seems properly handel non-asyntotic nodes
+    vals = calc_volume(model;asymptotic=asymptotic, kwargs...) .|> x->x[1]
+    idx = if asymptotic
+        non_asym_idx = get_vertices(model, singular=nothing, asymptotic=false, return_idx=true) # non-asymptotic
+        singular_asym_idx = get_vertices(model, singular=true, asymptotic=true, return_idx=true)# singular asymptotic
+        vcat(non_asym_idx, singular_asym_idx)
+    else
+        get_vertices(model, singular=true, asymptotic=nothing, return_idx=true) # only care about singular
+    end
+    n_data = length(vals)-length(idx)
+
+    Volume = vals .* n_data .* default^2
+    Volume[idx] .= default^2
+    return Dict(i=>sqrt(Volume[i]) for i in eachindex(Volume))
+end
+
+function find_lim_of_p(p,x_prochunge=1.2, y_prochunge=1.2)
+    ps = p.node_pos[]
+    xs = [ps[i][1] for i in 1:length(ps)]
+    ys = [ps[i][2] for i in 1:length(ps)]
+    xmin = minimum(xs)
+    xmax = maximum(xs)
+    ymin = minimum(ys)
+    ymax = maximum(ys)
+
+    xmid = (xmin + xmax)/2
+    ymid = (ymin + ymax)/2
+    xmin = xmid + (xmin - xmid)*x_prochunge
+    xmax = xmid + (xmax - xmid)*x_prochunge
+    ymin = ymid + (ymin - ymid)*y_prochunge
+    ymax = ymid + (ymax - ymid)*y_prochunge
+
+    return (xmin, xmax, ymin, ymax)
+end
+
+function SISO_plot(model, cond_s, change_idx; npoints=1000,start=-6, stop=6,cmap=:rainbow, size = (800,600),draw_idx=nothing)
+    change_sym = "log"*repr([model.q_sym;model.K_sym][change_idx])
+    change_S = range(start, stop, npoints)
+    start_logqK = copy(cond_s)|> x-> insert!(x, change_idx, start)
+    end_logqK = copy(cond_s)|> x-> insert!(x, change_idx, stop)
+    logx = x_traj_with_qK_change(model, start_logqK, end_logqK;input_logspace=true, output_logspace=true, 
+                                    tstops = range(0,1,npoints), saveat = range(0,1,npoints))
+
+    #assign color
+    rgm = logx[2] .|> x-> assign_vertex_x(model, x;input_logspace=true) |> x->get_idx(model,x)
+
+    unique_rgm = unique(rgm)
+    col_map_dict = Dict(unique_rgm[i]=>i for i in eachindex(unique_rgm))
+
+    crange =(1, length(unique_rgm))
+    nlevels = crange[2]-crange[1] + 1
+    cmap_disc = cgrad(cmap, nlevels, categorical=true)
+
+    @show change_sym
+        
+    draw_idx = isnothing(draw_idx) ? (1:model.n) : draw_idx
+    F = Figure(size = size)
+    for (i, j) in enumerate(draw_idx)
+        target_sym = "log"*repr(model.x_sym[j])
+        @show target_sym
+        ax = Axis(F[i,1]; xlabel = change_sym, ylabel = target_sym)
+        lines!(ax, change_S, logx[2] .|> x-> x[j]; color = map(r->col_map_dict[r], rgm), colorrange = crange, colormap = cmap)
+    end
+    Colorbar(F[:,end+1], colorrange = crange, colormap = cmap_disc,ticks=[0])
+
+    # add perm label
+    ax = Axis(F[:,end+1])
+    hidexdecorations!(ax)
+    hideydecorations!(ax)
+    hidespines!(ax)
+    colsize!(F.layout,3,Fixed(30))
+    colsize!(F.layout,2,Fixed(0))
+
+    for i in eachindex(unique_rgm)
+        y_pos = (i - 0.5)*(1/length(unique_rgm))
+        text!(ax, Point2f(0.5,y_pos); text = "#"*string(unique_rgm[i]), align = (:center, :center), color = :black)
+    end
+    ylims!(ax, (0,1))
+    return F
+end

@@ -36,25 +36,46 @@ handle C log(sym) + C0 >= 0
 """
 function show_sym_conds(C::AbstractMatrix{<:Real},
                         C0::AbstractVector{<:Real},
-                        syms::Vector{Num}, 
+                        syms::AbstractVector{Num},
                         nullity::Integer = 0;
-                        log_space::Bool=true,asymptotic::Bool=false)::Vector{Num}
-    if nullity == 0
-        if log_space
-            # eq = asymptotic ? C_qK[1:nullity,:] * log10.(syms) .~ 0 : C_qK * log10.(syms) .+ C0_qK[1:nullity,:] .~ 0
-            return (asymptotic ? C * log10.(syms) .> 0 : C * log10.(syms) .+ C0 .> 0).|> Num
-        else
-            return  (asymptotic ? handle_log_weighted_sum(C, syms) .|> x-> numerator(x) > denominator(x) : handle_log_weighted_sum(C, syms,C0) .|> x-> numerator(x) > denominator(x)).|> Num
-        end
+                        log_space::Bool = true,
+                        asymptotic::Bool = false)::Vector{Num}
+
+    # Helper: generate symbolic expression per row
+    make_expr(Crow, C0v) = if log_space
+        expr = Crow * log10.(syms)
+        asymptotic ? expr : expr .+ C0v
     else
+        asymptotic ?
+            handle_log_weighted_sum(Crow, syms) :
+            handle_log_weighted_sum(Crow, syms, C0v)
+    end
+
+    # Helper: generate symbolic comparison
+    make_cond(expr, op) = begin
         if log_space
-            eq = asymptotic ? C[1:nullity,:] * log10.(syms) .~ 0 : C[1:nullity,:] * log10.(syms) .+ C0[1:nullity,:] .~ 0
-            uneq = asymptotic ? C[nullity+1:end,:] * log10.(syms) .> 0 : C[nullity+1:end,:] * log10.(syms) .+ C0[nullity+1:end,:] .> 0
+            op == :eq ? (expr .~ 0) : (expr .> 0)
         else
-            eq = asymptotic ? handle_log_weighted_sum(C[1:nullity,:], syms) .|> x-> numerator(x) ~ denominator(x) : handle_log_weighted_sum(C[1:nullity,:], syms,C0[1:nullity,:]) .|> x-> numerator(x) ~ denominator(x)
-            uneq = asymptotic ? handle_log_weighted_sum(C[nullity+1:end,:], syms) .|> x-> numerator(x) > denominator(x) : handle_log_weighted_sum(C[nullity+1:end,:], syms,C0[nullity+1:end,:]) .|> x-> numerator(x) > denominator(x)
+            expr .|> x -> begin
+                num, den = numerator(x), denominator(x)
+                op == :eq ? (num ~ den) : (num > den)
+            end
         end
-        return [eq; uneq] .|> Num
+    end
+
+    # Handle two cases: nullity == 0 vs >0
+    if nullity == 0
+        expr = make_expr(C, C0)
+        conds = make_cond(expr, :uneq)
+        return conds .|> Num
+    else
+        eq_expr   = make_expr(C[1:nullity, :], C0[1:nullity])
+        uneq_expr = make_expr(C[nullity+1:end, :], C0[nullity+1:end])
+
+        eq   = make_cond(eq_expr, :eq)
+        uneq = make_cond(uneq_expr, :uneq)
+
+        return vcat(eq, uneq) .|> Num
     end
 end
 function show_sym_conds(C_qK::AbstractVector{<:Real},
@@ -117,6 +138,7 @@ function show_condition_poly(Bnc::Bnc, poly::Polyhedron,change_dir_idx=nothing; 
     C,C0,nullity= get_C_C0(poly)
     syms = [Bnc.q_sym; Bnc.K_sym]
     isnothing(change_dir_idx) || popat!(syms, change_dir_idx)
+    @show syms
     nullity = isempty(nullity) ? 0 : maximum(nullity)
     show_sym_conds(C, C0, syms, maximum(nullity); kwargs...)
 end
@@ -128,7 +150,7 @@ end
 function show_equilibrium(Bnc::Bnc;log_space::Bool=true)
     sym2 = Bnc.K_sym
     sym1 = Bnc.x_sym
-    return show_sym_expr(Bnc.N, [0], sym2, sym1; log_space=log_space)
+    return show_sym_expr(Bnc.N, zeros(Int,Bnc.r), sym2, sym1; log_space=log_space)
 end
 
 """
@@ -167,6 +189,24 @@ function sym_direction(Bnc::Bnc,dir)
         end
     end
     return rst
+end
+
+
+function render_arrow(a::Vector, appendix="")
+    v = Vector{Any}(undef, length(a))
+    for i in eachindex(a)
+        try 
+            v[i] = Int(a[i])
+        catch
+            v[i] = a[i]
+        end
+    end
+    # @show v
+    s = appendix*repr(v[1])
+    for x in v[2:end]
+        s *= " → " *appendix* repr(x)
+    end
+    return s
 end
 
 # function sym_direction(Bnc::Bnc,dir; show_val::Bool=true)

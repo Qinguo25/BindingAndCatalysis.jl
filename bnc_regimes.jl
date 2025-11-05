@@ -1070,6 +1070,18 @@ function get_polyhedra(C::AbstractMatrix{<:Real}, C0::AbstractVector{<:Real}, nu
     end
 end
 
+function is_singular(Bnc::Bnc, perm)::Bool
+    nullity = get_nullity!(Bnc, perm)
+    return nullity > 0
+end
+
+function is_asymptotic(Bnc::Bnc, perm)::Bool
+    find_all_vertices!(Bnc)
+    idx = get_idx(Bnc, perm)
+    return Bnc.vertices_asymptotic_flag[idx]
+end
+
+
 
 #--------------------------------------------------------------------------------------------------------------------------------------
 #          Functions involving neighbor relationships between two vertices
@@ -1200,10 +1212,10 @@ function get_interface(Bnc::Bnc, from, to)
 
     # return interface based on nullity
     if n1 ==1 
-        C,C0 = get_C0_qK!(Bnc, from)
+        C,C0 = get_C_C0_qK!(Bnc, from)
         return  C[1,:], C0[1]
     elseif n2 ==1
-        C,C0 = get_C0_qK!(Bnc, to)
+        C,C0 = get_C_C0_qK!(Bnc, to)
         return  C[1,:], C0[1]
     else
         (i1,i2,j1,j2) = _get_i_j_perms(from,to)
@@ -1323,21 +1335,6 @@ end
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 #-------------------------------------------------------------
 # Functions using Polyhedra.jl  to calculate and fufill the 
 #polyhedron helper functions
@@ -1360,7 +1357,7 @@ function get_one_inner_point(Bnc::Bnc,perm;kwargs...)
     poly = get_polyhedra(Bnc,perm)
     return get_one_inner_point(poly;kwargs...)
 end
-function get_one_inner_point(poly::T;rand_line=true,rand_ray=true) where T<:Polyhedron
+function get_one_inner_point(poly::T;rand_line=true,rand_ray=true,extend=3) where T<:Polyhedron
     vrep_poly = MixedMatVRep(vrep(poly))
     point = [mean(p) for p in eachcol(vrep_poly.V)]
     ray_avg = zeros(size(point,1))
@@ -1378,7 +1375,7 @@ function get_one_inner_point(poly::T;rand_line=true,rand_ray=true) where T<:Poly
         end
     end
     norm_ray_avg = norm(ray_avg)
-    @. ray_avg = ray_avg / norm_ray_avg .* 3
+    @. ray_avg = ray_avg / norm_ray_avg .* extend
     return (point.+ ray_avg)
 end
 
@@ -1392,18 +1389,33 @@ function get_C_C0(poly::Polyhedron)
     C = -p.A
     C0 = p.b
     linset = p.linset
-    nullity = maximum(linset)
-    @assert linset == BitSet(1:nullity)
+    if !isempty(linset)
+        nullity = maximum(linset)
+        @assert linset == BitSet(1:nullity)
+    else
+        nullity = linset
+    end
     return C, C0, nullity
 end
 
+function check_feasibility(Bnc::Bnc, perm,C::AbstractMatrix{<:Real},C0::AbstractVector{<:Real},nullity::Int=0)::Bool
+    poly_additional = get_polyhedra(C,C0,nullity)
+    poly = get_polyhedra(Bnc, perm)
+    ins = intersect(poly,poly_additional)
+    @show dim(ins)
+    return !isempty(ins)
+end
 
-
-
-
-
-
-
+function feasible_vertieces_with_constraint(Bnc::Bnc, C::AbstractMatrix{<:Real},C0::AbstractVector{<:Real},nullity::Int=0;kwargs...)
+    all_vtx = get_vertices(Bnc;kwargs...)
+    feasible_vtx = Vector{eltype(all_vtx)}()
+    for perm in all_vtx
+        if check_feasibility(Bnc, perm,C,C0,nullity)
+            push!(feasible_vtx, perm)
+        end
+    end
+    return feasible_vtx
+end
 
 #-------------------------------------------------------------
 #Other higher lever functions

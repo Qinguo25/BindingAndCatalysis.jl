@@ -409,4 +409,26 @@ include("bnc_graphs.jl")
 
 
 
+function Base.summary(Bnc::Bnc)
+    println("----------Binding Network Summary:-------------")
+    println("Number of species (n): ", Bnc.n)
+    println("Number of conserved quantities (d): ", Bnc.d)
+    println("Number of reactions (r): ", Bnc.r)
+    println("L matrix: ", Bnc.L)
+    println("N matrix: ", Bnc.N)
+    println("Direction of binding reactions: ", Bnc.direction == 1 ? "forward" : Bnc.direction == -1 ? "backward" : "zero")
+    catalysis_str = isnothing(Bnc.catalysis) ? "No" : "Yes"
+    println("Catalysis involved: ", catalysis_str)
+    is_regimes_built = isempty(Bnc.vertices_perm) ? "No" : "Yes"
+    println("Regimes constructed: ", is_regimes_built)
+    if !isempty(Bnc.vertices_perm)
+        map = zip(Bnc.vertices_asymptotic_flag, Bnc.vertices_nullity .> 0) |> countmap
+        println("Number of regimes: ", length(Bnc.vertices_perm))
+        println("  - Invertible + Asymptotic: ", get(map, (true, false), 0))
+        println("  - Singular +  Asymptotic: ", get(map, (true, true), 0))
+        println("  - Invertible +  Non-Asymptotic: ", get(map, (false, false), 0))
+        println("  - Singular +  Non-Asymptotic: ", get(map, (false, true), 0))
+    end
+    println("-----------------------------------------------")
+end
 

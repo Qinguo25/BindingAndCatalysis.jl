@@ -767,7 +767,7 @@ function calc_volume(poly::Polyhedron;asymptotic::Bool=true, kwargs...)::Tuple{F
     return (center, margin)
 end
 
-function calc_volume(polys::Vector{<:Polyhedron};
+function calc_volume(Cs::AbstractVector{<:AbstractMatrix{<:Real}}, C0s::AbstractVector{<:AbstractVector{<:Real}};
     confidence_level::Float64=0.95,
     N::Int=1_000_000,
     batch_size::Int=100_000,
@@ -776,19 +776,14 @@ function calc_volume(polys::Vector{<:Polyhedron};
     tol::Float64=1e-10,
 )::Vector{Tuple{Float64,Float64}}
 
-    n = fulldim(polys[1])
-    full_dim_idx = findall(dim.(polys).==n)
-    @show full_dim_idx
-
     n_batches = cld(N, batch_size)
     dist = Uniform(log_lower, log_upper)
     n_threads = Threads.nthreads()
 
-    # --- 提前提取每个 poly 的 (A, b) ---
-    reps = polys .|> poly -> MixedMatHRep(hrep(poly)) |> p->(p.A, p.b)
+    n = size(Cs[1], 2)
 
     # --- 每线程局部计数 ---
-    thread_counts = [zeros(Int, length(polys)) for _ in 1:n_threads]
+    thread_counts = [zeros(Int, length(Cs)) for _ in 1:n_threads]
 
     Threads.@threads for b in 1:n_batches
         m = (b == n_batches) ? (N - (n_batches-1)*batch_size) : batch_size
@@ -797,11 +792,10 @@ function calc_volume(polys::Vector{<:Polyhedron};
 
         @inbounds for j in 1:m
             @views x = samples[:, j]
-            for i in full_dim_idx
-                (A, b) = reps[i]
-            # for (i, (A, b)) in enumerate(reps)
-                # x ∈ poly <=> A*x <= b
-                if all(A * x .<= b .+ tol)
+            for i in eachindex(Cs)
+                @views A = Cs[i]
+                @views b = C0s[i]
+                if all(A * x .+ b .> - tol)
                     local_counts[i] += 1
                 end
             end
@@ -809,7 +803,7 @@ function calc_volume(polys::Vector{<:Polyhedron};
     end
 
     # --- 汇总 ---
-    total_counts = zeros(Int, length(polys))
+    total_counts = zeros(Int, length(Cs))
     
     for c in thread_counts
         @inbounds total_counts .+= c
@@ -826,9 +820,72 @@ function calc_volume(polys::Vector{<:Polyhedron};
         margin = (z / denom) * sqrt(P_hat*(1 - P_hat)/N + z^2/(4*N^2))
         return center, margin
     end
+
     @show total_counts
     return [get_center_margin(c, N) for c in total_counts]
 end
+
+function calc_volume(polys::Vector{<:Polyhedron};
+    asymptotic::Bool=true,
+    kwargs...
+)::Vector{Tuple{Float64,Float64}}
+    # --- 提前提取每个 poly 的 (A, b) ---
+    full_dims = fulldim(polys[1])
+
+    function repolyhedron(poly::Polyhedron)
+        (A,b,linset) = MixedMatHRep(hrep(poly)) |> p->(p.A, p.b,p.linset)
+        p_new = hrep(A, zeros(size(b)), linset) |> x-> polyhedron(x,CDDLib.Library())
+        return p_new
+    end
+
+    if asymptotic
+        polys = polys .|> repolyhedron
+    end
+    full_dim_idx = findall(v -> v == full_dims, dim.(polys))
+
+    @show length(full_dim_idx)
+
+    reps = polys[full_dim_idx] .|> poly -> MixedMatHRep(hrep(poly)) |> p->(p.A, p.b)
+    vals = collect(zip(zeros(Float64, length(polys)), zeros(Float64, length(polys))))
+
+    C = [ -rep[1] for rep in reps ]
+    C0 = [ rep[2] for rep in reps ]
+
+    vals[full_dim_idx] .= calc_volume(C, C0; kwargs...)
+    return vals
+end
+
+
+function calc_volume(model::Bnc;
+    asymptotic::Bool=true,
+    kwargs...)::Vector{Tuple{Float64, Float64}}
+    
+    idxs = if asymptotic
+        get_vertices(model, singular=false, asymptotic=true, return_idx=true)
+    else
+        get_vertices(model, singular=false, asymptotic=nothing, return_idx=true)
+    end
+
+    Cs = [get_C_qK!(model,idx) for idx in idxs]
+
+    if asymptotic # get only asymptotic vertices
+        C0s = [zeros(size(C,1)) for C in Cs]
+    else # get all non-singular vertices
+        C0s = [get_C0_qK!(model,idx) for idx in idxs]
+    end
+
+    vals = collect(zip(zeros(Float64, length(model.vertices_perm)), zeros(Float64, length(model.vertices_perm))))
+    vals[idxs] .= calc_volume(Cs, C0s; kwargs...)
+    return vals
+end
+
+
+
+
+
+
+
+
 
 
 
@@ -842,6 +899,9 @@ function get_i_j(model::Bnc,perm::Vector{<:Integer}, t::Integer)
     j2 < j1 ? nothing : j2 += 1
     return i, j1, j2
 end
+
+
+
 
 function assign_vertex_qK_test(Bnc::Bnc{T}, qK::AbstractVector{<:Real};
                                input_logspace::Bool=false,
@@ -882,3 +942,5 @@ function assign_vertex_qK_test(Bnc::Bnc{T}, qK::AbstractVector{<:Real};
     perm0 = collect(1:Bnc.d) .|> x->T(x)
     return try_perm!(perm0)
 end
+
+
