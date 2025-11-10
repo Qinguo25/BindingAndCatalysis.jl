@@ -468,13 +468,13 @@ function _fulfill_vertices_graph!(Bnc::Bnc, vtx_graph::VertexGraph)
         return nnz(dir)==0 ? nothing : dir
     end
     # pre compute H for all vertices with nullity 0 or 1
-    Threads.@threads for idx in 1:length(vtx_graph.neighbors)
+    Threads.@threads for idx in eachindex(vtx_graph.neighbors)
         if Bnc.vertices_nullity[idx] <= 1
             get_H!(Bnc, idx)
         end
     end
 
-    Threads.@threads for vi in 1:length(vtx_graph.neighbors)
+    Threads.@threads for vi in eachindex(vtx_graph.neighbors)
         edges = vtx_graph.neighbors[vi]
         if Bnc.vertices_nullity[vi] > 1 # jump off those regimes with nullity >1
             continue
@@ -741,9 +741,10 @@ function find_all_vertices!(Bnc::Bnc{T};) where T # cheap enough for now
         Bnc.vertices_perm = all_vertices
         Bnc.vertices_asymptotic_flag = Bnc.vertices_perm .∈ Ref(real_vtx)
         Bnc.vertices_perm_dict = Dict(a=>idx for (idx, a) in enumerate(Bnc.vertices_perm)) # Map from vertex to its index
+        Bnc.vertices_nullity = nullity
         Bnc.vertices_data = Vector{Vertex}(undef, n_vertices)
         Bnc._vertices_is_filled = falses(n_vertices)
-        Bnc.vertices_nullity = nullity
+        # Bnc._vertices_volume_is_calced = falses(n_vertices)
         println("Done.")
     end
     return Bnc.vertices_perm
@@ -769,6 +770,24 @@ function get_vertices_nullity(Bnc::Bnc)
     """
     find_all_vertices!(Bnc)
     return Bnc.vertices_nullity
+end
+
+"""
+Get the volume of all vertices in Bnc.
+"""
+function get_vertices_volume!(Bnc::Bnc;recalculate::Bool=false)
+    """
+    Calculate the volume of all vertices in Bnc.
+    """
+    if recalculate || !Bnc._vertices_volume_is_calced
+        vals = calc_volume(Bnc;asymptotic=true)
+        for (vtx, vol) in zip(Bnc.vertices_data, vals)
+            vtx.volume = vol[1]
+            vtx.eps_volume = vol[2]
+        end
+        return vals
+    end
+    return [(vtx.volume, vtx.eps_volume) for vtx in Bnc.vertices_data]
 end
 
 #---------------------------------------------------------------------------------------------
@@ -1069,6 +1088,25 @@ function get_polyhedra(C::AbstractMatrix{<:Real}, C0::AbstractVector{<:Real}, nu
         return hrep(-C,C0,linset) |> x-> polyhedron(x,CDDLib.Library())
     end
 end
+
+function get_volume!(Bnc::Bnc, perm;recalculate::Bool=false, kwargs...)
+    
+    recalculate = isempty(kwargs) ? recalculate : true
+
+    vtx = get_vertex!(Bnc, perm)
+    if !recalculate 
+        if !Bnc._vertices_volume_is_calced && vtx.volume == 0.0 # may not been calculated before
+                (vtx.volume, vtx.eps_volume) = calc_volume(Bnc,perm;asymptotic=true,kwargs...)
+        end
+    else
+        (vtx.volume, vtx.eps_volume) = calc_volume(Bnc,perm;asymptotic=true,kwargs...)
+    end
+
+    return (vtx.volume, vtx.eps_volume)
+end
+
+
+
 
 function is_singular(Bnc::Bnc, perm)::Bool
     nullity = get_nullity!(Bnc, perm)

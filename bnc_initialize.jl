@@ -118,6 +118,10 @@ mutable struct Vertex{F,T}
     neighbors_idx::Vector{Int}
     # finite_neighbors_idx::Vector{Int}
     # infinite_neighbors_idx::Vector{Int}
+    
+    #---Realizibility Index
+    volume::Float64 # R_idx
+    eps_volume::Float64 #eps of volume
 
     # The inner constructor also needs to be updated for the parametric type
     function Vertex{F,T}(;perm, P, P0, M, M0, C_x, C0_x, idx,real,nullity) where {F<:Real ,T<:Integer}
@@ -131,6 +135,8 @@ mutable struct Vertex{F,T}
             SparseMatrixCSC{Float64, Int}(undef, 0, 0), # C_qK
             Vector{F}(undef, 0),          # C0_qK
             Int[], # neighbors_idx (using empty literal is cleaner)
+            0.0, # Volume
+            0.0, # eps
             # Int[], # finite_neighbors_idx
             # Int[]  # infinite_neighbors_idx
         )
@@ -151,8 +157,13 @@ end
 mutable struct VertexGraph{T} 
     neighbors::Vector{Vector{VertexEdge{T}}}
     change_dir_qK_computed::Bool
+    # current_change_idx::T
+    # ne_for_current_change_idx::Int
+    # ne_full::Int # total number of edges,counts both directions
     # nullity::Union{Nothing, Vector{T}} # optional cache of nullity for each vertex #Store nullity again.
     function VertexGraph(neighbors::Vector{Vector{VertexEdge{T}}}) where {T}
+        # ne_full = sum(length.(neighbors))
+        # new{T}(neighbors,false,-1,ne_full/2,ne_full)
         new{T}(neighbors,false)
     end
 end
@@ -175,10 +186,14 @@ mutable struct Bnc{T} # T is the int type to save all the indices
     catalysis::Union{Any,Nothing} # Using Any for placeholder for CatalysisData
 
     #--------Vertex data--------
+
+    #The following four are computed when finding regimes.
     vertices_perm::Vector{Vector{T}} # all feasible regimes.
     vertices_perm_dict::Dict{Vector{T},Int} # map from permutation vector to its idx in the vertices list
     vertices_asymptotic_flag::Vector{Bool} # While this vertice is real
     vertices_nullity::Vector{T} # nullity of one vertex.
+    
+    #The following are computed when building graphs.
     vertices_graph::Union{Any,Nothing} # Using Any for placeholder for VertexGraph
 
     # vertices_neighbor_mat::SparseMatrixCSC{T, Int} # distance between vertices, upper triangular
@@ -188,6 +203,7 @@ mutable struct Bnc{T} # T is the int type to save all the indices
 
     vertices_data::Vector{Vertex} # Using Any for placeholder for Vertex
     _vertices_is_filled::BitVector
+    _vertices_volume_is_calced::Bool
     _vertices_Nρ_inv_dict::Dict{Vector{T}, Tuple{SparseMatrixCSC{Float64, Int},T}} # cache the N_inv for each vertex permutation
 
     #------other helper parameters------
@@ -287,6 +303,7 @@ mutable struct Bnc{T} # T is the int type to save all the indices
             # Int[],                           # _vertices_sym_invperm
             Vector{Vertex}(),              # vertices_data
             BitVector(),                     # _vertices_is_filled
+            false,                     # _R_idx_is_calced
             Dict{Vector{T}, Tuple{SparseMatrixCSC{Float64, Int},T}}(), # _vertices_perm_Ninv_dict
             # Fields 13-28 (Calculated values)
             direction,
@@ -406,6 +423,7 @@ include("bnc_numeric.jl")
 include("bnc_regimes.jl")
 include("bnc_symbolics.jl")
 include("bnc_graphs.jl")
+include("bnc_visualize.jl")
 
 
 

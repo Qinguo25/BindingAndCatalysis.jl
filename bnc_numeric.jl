@@ -633,8 +633,6 @@ function assign_vertex_x(Bnc::Bnc{T}, x::AbstractVector{<:Real};input_logspace::
         nzval = @view(x[Bnc._LN_top_cols]) .* L.nzval
     end
 
-    nzval  = asymptotic ? @view(x[Bnc._LN_top_cols]) : @view(x[Bnc._LN_top_cols]) .* L.nzval
-
     @inbounds for col in 1:n
         col_start_idx = colptr[col]
         col_end_idx   = colptr[col+1] - 1
@@ -704,111 +702,129 @@ end
 #-----------------------------------------------------------------
 # Function of calculating volume of vertices
 #-----------------------------------------------------------------
-function calc_volume(C::AbstractMatrix{<:Real}, C0::AbstractVector{<:Real}; 
-    confidence_level::Float64=0.95,
-    N=1_000_000,
-    batch_size::Int=100_000,
-    log_lower=-6,
-    log_upper=6
-)::Tuple{Float64,Float64}
-    N = Int(N)
+# function calc_volume(C::AbstractMatrix{<:Real}, C0::AbstractVector{<:Real}; 
+#     confidence_level::Float64=0.95,
+#     N=1_000_000,
+#     batch_size::Int=100_000,
+#     log_lower=-6,
+#     log_upper=6
+# )::Tuple{Float64,Float64}
+#     N = Int(N)
 
-    n = size(C, 2)
-    dist = Uniform(log_lower, log_upper)
+#     n = size(C, 2)
+#     dist = Uniform(log_lower, log_upper)
 
-    n_batches = cld(N, batch_size)  # 向上取整批次数
-    counts = zeros(Int, n_batches)  # 每批结果
+#     n_batches = cld(N, batch_size)  # 向上取整批次数
+#     counts = zeros(Int, n_batches)  # 每批结果
 
-    Threads.@threads for b in 1:n_batches
-        m = (b == n_batches) ? (N - (n_batches-1)*batch_size) : batch_size
-        samples = rand(dist, n, m)
-        vals = C * samples .+ C0
+#     Threads.@threads for b in 1:n_batches
+#         m = (b == n_batches) ? (N - (n_batches-1)*batch_size) : batch_size
+#         samples = rand(dist, n, m)
+#         vals = C * samples .+ C0
 
-        local_count = 0
-        @inbounds for j in 1:m
-            if all(@view(vals[:, j]) .> 0)
-                local_count += 1
-            end
-        end
-        counts[b] = local_count
-    end
+#         local_count = 0
+#         @inbounds for j in 1:m
+#             if all(@view(vals[:, j]) .> 0)
+#                 local_count += 1
+#             end
+#         end
+#         counts[b] = local_count
+#     end
 
-    count = sum(counts)
-    P_hat = count / N
-    z = quantile(Normal(), (1 + confidence_level) / 2)
+#     count = sum(counts)
+#     P_hat = count / N
+#     z = quantile(Normal(), (1 + confidence_level) / 2)
 
-    # Wilson 置信区间
-    denom = 1 + z^2 / N
-    center = (P_hat + z^2/(2N)) / denom
-    margin = (z / denom) * sqrt(P_hat*(1-P_hat)/N + z^2/(4N^2))
+#     # Wilson 置信区间
+#     denom = 1 + z^2 / N
+#     center = (P_hat + z^2/(2N)) / denom
+#     margin = (z / denom) * sqrt(P_hat*(1-P_hat)/N + z^2/(4N^2))
 
-    return (center, margin)
-end
+#     return (center, margin)
+# end
 
-function calc_volume(Bnc::Bnc, perm; 
-    asymptotic::Bool=true, 
-    kwargs...
-)::Tuple{Float64,Float64}
-    C, C0 = get_C_C0_qK!(Bnc, perm)
-    if asymptotic
-        C0 .= 0.0
-    end
-    center, margin = calc_volume(C, C0; kwargs...)
-    return (center, margin)
-end
+# The core calculate function:
+# function calc_volume(Cs::AbstractVector{<:AbstractMatrix{<:Real}}, C0s::AbstractVector{<:AbstractVector{<:Real}};
+#     confidence_level::Float64=0.95,
+#     N::Int=1_000_000,
+#     batch_size::Int=100_000,
+#     log_lower=-6,
+#     log_upper=6,
+#     tol::Float64=1e-10,
+# )::Vector{Tuple{Float64,Float64}}
 
-function calc_volume(poly::Polyhedron;asymptotic::Bool=true, kwargs...)::Tuple{Float64,Float64}
-    p = MixedMatHRep(hrep(poly))
-    C, C0 = -p.A, p.b
-    if asymptotic
-        C0 .= 0.0
-    end
-    center, margin = calc_volume(C, C0; kwargs...)
-    return (center, margin)
-end
+#     n_batches = cld(N, batch_size)
+#     dist = Uniform(log_lower, log_upper)
+#     n_threads = Threads.nthreads()
 
-function calc_volume(Cs::AbstractVector{<:AbstractMatrix{<:Real}}, C0s::AbstractVector{<:AbstractVector{<:Real}};
-    confidence_level::Float64=0.95,
-    N::Int=1_000_000,
-    batch_size::Int=100_000,
-    log_lower=-6,
-    log_upper=6,
-    tol::Float64=1e-10,
-)::Vector{Tuple{Float64,Float64}}
+#     n = size(Cs[1], 2)
 
-    n_batches = cld(N, batch_size)
-    dist = Uniform(log_lower, log_upper)
+#     # --- 每线程局部计数 ---
+#     thread_counts = [zeros(Int, length(Cs)) for _ in 1:n_threads]
+
+#     Threads.@threads for b in 1:n_batches
+#         m = (b == n_batches) ? (N - (n_batches-1)*batch_size) : batch_size
+#         samples = rand(dist, n, m)
+#         local_counts = thread_counts[Threads.threadid()]
+
+#         @inbounds for j in 1:m
+#             @views x = samples[:, j]
+#             for i in eachindex(Cs)
+#                 @views A = Cs[i]
+#                 @views b = C0s[i]
+#                 if all(A * x .+ b .> - tol)
+#                     local_counts[i] += 1
+#                 end
+#             end
+#         end
+#     end
+
+#     # --- 汇总 ---
+#     total_counts = zeros(Int, length(Cs))
+    
+#     for c in thread_counts
+#         @inbounds total_counts .+= c
+#     end
+#     # --- Wilson 区间 ---
+#     function get_center_margin(count::Int, N::Int)
+#         if count == 0
+#             return (0.0, 0.0)
+#         end
+#         P_hat = count / N
+#         z = quantile(Normal(), (1 + confidence_level) / 2)
+#         denom = 1 + z^2 / N
+#         center = (P_hat + z^2/(2*N)) / denom
+#         margin = (z / denom) * sqrt(P_hat*(1 - P_hat)/N + z^2/(4*N^2))
+#         return center, margin
+#     end
+
+#     @show total_counts
+#     return [get_center_margin(c, N) for c in total_counts]
+# end
+
+function calc_volume(Cs::AbstractVector{<:AbstractMatrix{<:Real}},
+                          C0s::AbstractVector{<:AbstractVector{<:Real}};
+    confidence_level::Float64 = 0.95,
+    contain_overlap::Bool=false,
+    batch_size::Int = 100_000,
+    log_lower = -6,
+    log_upper = 6,
+    tol::Float64 = 1e-10,
+    rel_tol::Float64 = 0.005,    # 目标相对误差 0.5%
+    time_limit::Float64 = 20.0,  
+)::Vector{Tuple{Float64, Float64}}
+    @info "Processing $(length(Cs)) regimes"
     n_threads = Threads.nthreads()
-
     n = size(Cs[1], 2)
-
-    # --- 每线程局部计数 ---
+    dist = Uniform(log_lower, log_upper)
     thread_counts = [zeros(Int, length(Cs)) for _ in 1:n_threads]
 
-    Threads.@threads for b in 1:n_batches
-        m = (b == n_batches) ? (N - (n_batches-1)*batch_size) : batch_size
-        samples = rand(dist, n, m)
-        local_counts = thread_counts[Threads.threadid()]
-
-        @inbounds for j in 1:m
-            @views x = samples[:, j]
-            for i in eachindex(Cs)
-                @views A = Cs[i]
-                @views b = C0s[i]
-                if all(A * x .+ b .> - tol)
-                    local_counts[i] += 1
-                end
-            end
-        end
-    end
-
-    # --- 汇总 ---
     total_counts = zeros(Int, length(Cs))
-    
-    for c in thread_counts
-        @inbounds total_counts .+= c
-    end
-    # --- Wilson 区间 ---
+    total_N = 0
+    start_time = time()
+    stats = Vector{Tuple{Float64,Float64}}(undef, length(Cs))
+    rel_errors = Vector{Float64}(undef, length(Cs))
+
     function get_center_margin(count::Int, N::Int)
         if count == 0
             return (0.0, 0.0)
@@ -821,9 +837,61 @@ function calc_volume(Cs::AbstractVector{<:AbstractMatrix{<:Real}}, C0s::Abstract
         return center, margin
     end
 
-    @show total_counts
-    return [get_center_margin(c, N) for c in total_counts]
+    # --- 主循环 ---
+    while true
+        elapsed = time() - start_time
+        if elapsed > time_limit
+            @info "Reach to the time limit: $elapsed s, stop"
+            break
+        end
+
+        # --- 一批采样 ---
+        samples = rand(dist, n, batch_size)
+        Threads.@threads for j in 1:batch_size
+            @views x = samples[:, j]
+            local_counts = thread_counts[Threads.threadid()]
+            x_multi_assign=0
+            
+            for i in eachindex(Cs)
+                @views A = Cs[i]
+                @views b = C0s[i]
+                if any(A * x .+ b .< -tol)
+                    contain_overlap ? continue : break
+                end
+                local_counts[i] += 1
+                x_multi_assign += 1
+            end
+
+            if x_multi_assign >1
+                @show x, x_multi_assign
+            end
+
+        end
+
+        for c in thread_counts
+            total_counts .+= c
+            fill!(c, 0)
+        end
+
+        total_N += batch_size
+
+        # --- 检查误差 ---
+        stats .= [get_center_margin(c, total_N) for c in total_counts]
+        rel_errors .= [m == 0 || c == 0 ? Inf : m / c for (c, m) in stats]
+
+        if all(e -> e <= rel_tol, rel_errors)
+            @info "Volume relative error is less than  $(100*rel_tol)% after $total_N samples, $(round(elapsed, digits=2)) s"
+            break
+        end
+    end
+
+    @info "total_sample_num: $total_N"
+    @show rel_errors
+    return stats
 end
+
+
+calc_volume(C::AbstractMatrix{<:Real}, C0::AbstractVector{<:Real}; kwargs...)::Tuple{Float64,Float64} = calc_volume([C], [C0]; kwargs...)[1]
 
 function calc_volume(polys::Vector{<:Polyhedron};
     asymptotic::Bool=true,
@@ -854,18 +922,20 @@ function calc_volume(polys::Vector{<:Polyhedron};
     vals[full_dim_idx] .= calc_volume(C, C0; kwargs...)
     return vals
 end
-
+calc_volume(poly::Polyhedron;kwargs...)::Tuple{Float64,Float64} = calc_volume([poly]; kwargs...)[1]
 
 function calc_volume(model::Bnc;
     asymptotic::Bool=true,
-    kwargs...)::Vector{Tuple{Float64, Float64}}
-    
+    kwargs...
+)::Vector{Tuple{Float64, Float64}}
+    # get index for those worth calculate volume
     idxs = if asymptotic
         get_vertices(model, singular=false, asymptotic=true, return_idx=true)
     else
         get_vertices(model, singular=false, asymptotic=nothing, return_idx=true)
     end
 
+    # get C and C0 for each vertex
     Cs = [get_C_qK!(model,idx) for idx in idxs]
 
     if asymptotic # get only asymptotic vertices
@@ -874,10 +944,36 @@ function calc_volume(model::Bnc;
         C0s = [get_C0_qK!(model,idx) for idx in idxs]
     end
 
+    # calculate volume for each vertex
     vals = collect(zip(zeros(Float64, length(model.vertices_perm)), zeros(Float64, length(model.vertices_perm))))
     vals[idxs] .= calc_volume(Cs, C0s; kwargs...)
     return vals
 end
+
+
+
+function calc_volume(Bnc::Bnc, perm;
+    asymptotic::Bool=true, 
+    kwargs...
+)::Tuple{Float64,Float64} # singular/ asymptotic not be put here, as dimensions could reduce and change.
+    
+    if is_singular(Bnc,perm)
+        return (0.0, 0.0)
+    end
+    
+    if asymptotic && !is_asymptotic(Bnc,perm)
+        return (0.0, 0.0)
+    end
+
+    C, C0 = get_C_C0_qK!(Bnc, perm)
+    
+    if asymptotic
+        C0 .= 0.0
+    end
+    center, margin = calc_volume(C, C0; kwargs...)
+    return (center, margin)
+end
+
 
 
 
