@@ -541,6 +541,9 @@ function _calc_change_col(from::Vector{T},to::Vector{T}) where T<:Integer
 end
 
 function _get_i_j_perms(from::Vector{T},to::Vector{T}) where T<:Integer
+    """
+    We shall find the source col+row and target col+row directly from two permutations.
+    """
     inconsis_idx = findall(from .!= to)
     if length(inconsis_idx) == 1
         i1 = inconsis_idx[1]
@@ -785,6 +788,7 @@ function get_vertices_volume!(Bnc::Bnc;recalculate::Bool=false)
             vtx.volume = vol[1]
             vtx.eps_volume = vol[2]
         end
+        Bnc._vertices_volume_is_calced = true
         return vals
     end
     return [(vtx.volume, vtx.eps_volume) for vtx in Bnc.vertices_data]
@@ -1122,8 +1126,17 @@ end
 
 
 #--------------------------------------------------------------------------------------------------------------------------------------
-#          Functions involving neighbor relationships between two vertices
+#          Naive code for figuring out  relationships between two vertices 
 #----------------------------------------------------------------------------------------------------------------------------------------
+
+
+# Direct method:
+function get_polyhedron_intersect(Bnc::Bnc,vtx1,vtx2)::Polyhedron
+    p1 = get_polyhedra(Bnc, vtx1)
+    p2 = get_polyhedra(Bnc, vtx2)
+    p = intersect(p1,p2)
+    return p
+end
 """
 Directly judge if two vertices are neighbors by polyhedron intersection.
 """
@@ -1132,9 +1145,7 @@ function is_neighbor_direct(Bnc::Bnc,vtx1,vtx2)::Bool
         @warn "Currently we doesn't care neighbor relationships less than your model's dim - 1  ,return false by default"
         return false
     end
-    p1 = get_polyhedra(Bnc, vtx1)
-    p2 = get_polyhedra(Bnc, vtx2)
-    p = intersect(p1,p2)
+    p = get_polyhedron_intersect(Bnc,vtx1,vtx2)
     # detecthlinearity!(p)
     # if nhyperplanes(p) > null || isempty(p)
     if dim(p)==Bnc.n-1 
@@ -1143,7 +1154,45 @@ function is_neighbor_direct(Bnc::Bnc,vtx1,vtx2)::Bool
         return false
     end
 end
+function get_change_dir_qK_direct(Bnc::Bnc, from, to;check=false)
+    p = get_polyhedron_intersect(Bnc,from,to)
+    detecthlinearity!(p)
+    if dim(p)< Bnc.n-1
+        @error("Vertices $get_perm(Bnc, from) and $get_perm(Bnc, to) do not intersect.")
+    end
+    hplanes = hyperplanes(p)
+    hp = first(hplanes)
 
+    a = droptol!(sparse(hp.a), 1e-10)
+    
+    if check
+        point = get_one_inner_point(p2)
+        val = dot(a, point)
+        b = hp.β
+        if val < b 
+            return -a
+        end
+    end
+    return a
+    # judge the direction
+end
+
+function get_interface_direct(Bnc::Bnc, from, to)
+    p = get_polyhedron_intersect(Bnc,from,to)
+    detecthlinearity!(p)
+    if dim(p)< Bnc.n-1
+        @error("Vertices $get_perm(Bnc, from) and $get_perm(Bnc, to) do not intersect.")
+    end
+    hplanes = hyperplanes(p)
+    hp = first(hplanes)
+    a = droptol!(sparse(hp.a), 1e-10)
+    b = hp.β
+    return a, b
+end
+
+
+
+# indirect method:
 """
 Judge if two vertices are neighbors.
 """
@@ -1214,31 +1263,13 @@ function get_change_dir_qK(Bnc::Bnc, from, to;check=false)
     end
 end
 
-function get_change_dir_qK_direct(Bnc::Bnc, from, to;check=false)
-    p1 = get_polyhedra(Bnc, from)
-    p2 = get_polyhedra(Bnc, to)
-    p = intersect(p1,p2)
-    detecthlinearity!(p)
-    if dim(p)< Bnc.n-1
-        @error("Vertices $get_perm(Bnc, from) and $get_perm(Bnc, to) do not intersect.")
-    end
-    hplanes = hyperplanes(p)
-    hp = first(hplanes)
 
-    a = droptol!(sparse(hp.a), 1e-10)
-    
-    if check
-        point = get_one_inner_point(p2)
-        val = dot(a, point)
-        b = hp.β
-        if val < b 
-            return -a
-        end
-    end
-    return a
-    # judge the direction
-end
 
+"""
+    get_interface(Bnc::Bnc, from, to)
+return the interface (a,b) between two neighboring vertices in qK space, i.e., a'x = b.
+(For now the logic is to find the right row in C and C0, and calculate from then is required.)
+"""
 function get_interface(Bnc::Bnc, from, to)
     if !is_neighbor(Bnc,from,to)
         @error("Vertices $get_perm(Bnc, from) and $get_perm(Bnc, to) are not neighbors.")
@@ -1257,26 +1288,12 @@ function get_interface(Bnc::Bnc, from, to)
         return  C[1,:], C0[1]
     else
         (i1,i2,j1,j2) = _get_i_j_perms(from,to)
-        row_idx = _locate_C_row(Bnc, i1, j1, j2)
+        row_idx = _locate_C_row(Bnc, i1, j1, j2) # or i2,j2,j1 while under such case, the next row will change from "from" to "to"
         C,C0 = get_C_C0_qK!(Bnc, from)
         return  C[row_idx,:], C0[row_idx]
     end
 end
 
-function get_interface_direct(Bnc::Bnc, from, to)
-    p1 = get_polyhedra(Bnc, from)
-    p2 = get_polyhedra(Bnc, to)
-    p = intersect(p1,p2)
-    detecthlinearity!(p)
-    if dim(p)< Bnc.n-1
-        @error("Vertices $get_perm(Bnc, from) and $get_perm(Bnc, to) do not intersect.")
-    end
-    hplanes = hyperplanes(p)
-    hp = first(hplanes)
-    a = droptol!(sparse(hp.a), 1e-10)
-    b = hp.β
-    return a, b
-end
 
 
 
@@ -1348,26 +1365,35 @@ get_vertices(Bnc; singular=2)              # nullity ≤ 2
 get_vertices(Bnc; asymptotic=true)         # real/asymptotic vertices
 get_vertices(Bnc; singular=false, asymptotic=false)
 """
-function get_vertices(Bnc::Bnc; singular::Union{Bool,Int,Nothing}=nothing, asymptotic::Union{Bool,Nothing}=nothing, return_idx::Bool=false)
+function get_vertices(Bnc::Bnc; return_idx::Bool=false, kwargs...)
     find_all_vertices!(Bnc)
     idx_all = eachindex(Bnc.vertices_perm)
-    idx = filter(idx_all) do i
-        nlt = Bnc.vertices_nullity[i]
-        flag_asym = Bnc.vertices_asymptotic_flag[i]
-
-        ok_singular = isnothing(singular) || (
-            (singular === true  && nlt > 0) ||
-            (singular === false && nlt == 0) ||
-            (singular isa Int   && nlt ≤ singular)
-        )
-
-        ok_asym = isnothing(asymptotic) || (asymptotic == flag_asym)
-        return ok_singular && ok_asym 
-    end
-
+    masks = _get_vertices_mask(Bnc, idx_all; kwargs...)
+    idx = idx_all[masks]
     return return_idx ? idx : Bnc.vertices_perm[idx]
 end
 
+function _get_vertices_mask(model::Bnc,vtxs::AbstractVector{<:Integer};
+     singular::Union{Bool,Integer,Nothing}=nothing, 
+     asymptotic::Union{Bool,Nothing}=nothing)::Vector{Bool}
+    # ensure nullity and asymptotic flags are calculated
+    find_all_vertices!(model)
+
+    nlt = model.vertices_nullity
+    flag_asym = model.vertices_asymptotic_flag
+
+    f(nlt) = isnothing(singular) || (
+        (singular === true  && nlt > 0) ||
+        (singular === false && nlt == 0) ||
+        (singular isa Int   && nlt ≤ singular)
+    )
+
+    g(flag_asym) = isnothing(asymptotic) || (asymptotic == flag_asym)
+    
+    return map(vtxs) do i
+        f(nlt[i]) && g(flag_asym[i])
+    end
+end
 
 
 

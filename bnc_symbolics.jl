@@ -39,7 +39,8 @@ function show_sym_conds(C::AbstractMatrix{<:Real},
                         syms::AbstractVector{Num},
                         nullity::Integer = 0;
                         log_space::Bool = true,
-                        asymptotic::Bool = false)::Vector{Num}
+                        asymptotic::Bool = false
+)::Vector{Num}
 
     # Helper: generate symbolic expression per row
     make_expr(Crow, C0v) = if log_space
@@ -89,24 +90,39 @@ end
 """
 handle log(sym2) = C log(sym1) + C0
 """
-function show_sym_expr(C::AbstractMatrix{<:Real}, C0::AbstractVector{<:Real}, sym2, sym1; log_space::Bool=true,asymptotic::Bool=false)::Vector{Num}
+function show_sym_expr(C::AbstractMatrix{<:Real}, C0::AbstractVector{<:Real}, sym2, sym1; log_space::Bool=true,asymptotic::Bool=false)::Vector{Equation}
     if log_space
         expr =  asymptotic ?   log10.(sym2) .~ C * log10.(sym1) : log10.(sym2) .~ C * log10.(sym1) .+ C0
     else
         expr =  asymptotic ? sym2 .~ handle_log_weighted_sum(C, sym1) : sym2 .~ handle_log_weighted_sum(C, sym1,C0)
     end
-    return expr .|> Num
+    return expr 
 end
 function show_sym_expr(C::AbstractVector{<:Real}, C0::Real, sym2, sym1; log_space::Bool=true,asymptotic::Bool=false)
     show_sym_expr(C', [C0], sym2, sym1; log_space=log_space, asymptotic=asymptotic)
 end
 
 
+# for a^T x +b = 0 =>  xi = -(1/ai)(b + ∑j≠i aj xj)
+function solve_sym_expr(a::AbstractVector{<:Real}, b::Real, x, idx; log_space::Bool=true)
+    a = copy(collect(a))
+    x = copy(x)
+    ai = popat!(a, idx)
+    target_x = popat!(x, idx)
+    @assert abs(ai) > 1e-10 "Cannot solve for the variable at index $idx since its coefficient is zero." 
+    a ./= -ai
+    b /= -ai
+
+    target = log_space ? log10(target_x) : target_x
+    expr = log_space ? a' * log10.(x) .+ b : handle_log_weighted_sum(a', x, [b])[1]
+    return target ~ expr
+end
+
 
 function show_expression_x(Bnc::Bnc, perm;kwargs...)
     H,H0 = get_H_H0!(Bnc, perm)
     qK_syms = [Bnc.q_sym; Bnc.K_sym]
-    show_sym_expr(H, H0, qK_syms, Bnc.x_sym; kwargs...)
+    show_sym_expr(H, H0, Bnc.x_sym, qK_syms; kwargs...)
 end
 function show_expression_qK(Bnc::Bnc, perm;kwargs...)
     M,M0 = get_M_M0!(Bnc, perm)
@@ -143,35 +159,55 @@ function show_condition_poly(Bnc::Bnc, poly::Polyhedron,change_dir_idx=nothing; 
     show_sym_conds(C, C0, syms, maximum(nullity); kwargs...)
 end
 
-function show_conservation(Bnc::Bnc)
-    return Bnc.q_sym .~ Bnc._L_sparse * Bnc.x_sym .|> Num
+function show_conservation(Bnc::Bnc)::Vector{Equation}
+    eq  = Bnc.q_sym .~ Bnc._L_sparse * Bnc.x_sym
+    return eq 
 end
 
-function show_equilibrium(Bnc::Bnc;log_space::Bool=true)
+function show_equilibrium(Bnc::Bnc;log_space::Bool=true)::Vector{Equation}
     sym2 = Bnc.K_sym
     sym1 = Bnc.x_sym
     return show_sym_expr(Bnc.N, zeros(Int,Bnc.r), sym2, sym1; log_space=log_space)
 end
 
+
+
+function show_interface(Bnc::Bnc, from,to, change_idx::Union{Nothing,Integer}=nothing;kwargs...)
+    C, C0 = get_interface(Bnc,from,to)
+    if isnothing(change_idx)
+        return show_sym_conds(C, C0, [Bnc.q_sym; Bnc.K_sym], 1;kwargs...)
+    else
+        return solve_sym_expr(C,C0, [Bnc.q_sym; Bnc.K_sym], change_idx;kwargs...)
+    end
+end
+
+
+
+
+
+
 """
 Symbolic helper function to convert a sum of log10 terms into a product form.
-from ∑a log b to log ∏b^a
+from A*log x + b  to x^A*10^b
 
 The final expression contains ∏b^a term.
 """
-function handle_log_weighted_sum(C::AbstractMatrix{<:Real}, syms , C0::Union{Nothing,AbstractVector{<:Real}}=nothing)::Vector{Num}
-    rows = size(C,1)
+function handle_log_weighted_sum(A::AbstractMatrix{<:Real}, x , b::Union{Nothing,AbstractVector{<:Real}}=nothing)::Vector{Num}
+    rows = size(A,1)
     rst = Vector{Num}(undef, rows)
-    C0 = isnothing(C0) ? zeros(Int, rows) : C0
+    b = isnothing(b) ? zeros(Int, rows) : b
     for i in 1:rows
-        rst[i] = syms .^ C[i,:] |> prod |> (x-> x*10^C0[i])
+        rst[i] = x .^ A[i,:] |> prod |> (x-> x*10^b[i])
     end
     return rst
 end
 
 
-
-function sym_direction(Bnc::Bnc,dir)
+"""
+Create a symbolic representation of the direction change in qK-space.
+eg: +q1 -q2 +K2 from [1,-1,0,1]
+"""
+function sym_direction(Bnc::Bnc,dir)::String
     rst = ""
     for i in 1:Bnc.d
         if dir[i] > 0
@@ -191,8 +227,11 @@ function sym_direction(Bnc::Bnc,dir)
     return rst
 end
 
-
-function render_arrow(a::Vector, appendix="")
+"""
+Render an arrow representation of a vector, with an optional appendix before each element.
+eg: render_arrow([1,0,-1],"x") -> "x1 → x0 → x-1"
+"""
+function render_arrow(a::Vector, appendix="")::String
     v = Vector{Any}(undef, length(a))
     for i in eachindex(a)
         try 
@@ -229,3 +268,24 @@ end
 #     end
 #     return rst
 # end
+
+"""
+Given a regime path, change_qK_idx, and observe_x_idx, return the symbolic expressions for the path in the form
+[expression1, edge1, expression2, edge2,...]
+"""
+function get_expression_for_path(model::Bnc, rgm_path, change_qK_idx, observe_x_idx;log_space::Bool=false)::Tuple{Vector,Vector}
+    
+    have_volume_mask = _get_vertices_mask(model, rgm_path; singular=false)
+    idx = findall(have_volume_mask)
+    exprs = map(idx) do id
+        show_expression_x(model, rgm_path[id];log_space=log_space)[observe_x_idx].rhs
+    end
+    edges = map(@view idx[1:end-1]) do i
+        rgm_from = rgm_path[i]
+        rgm_to   = rgm_path[i+1]
+        edge = show_interface(model, rgm_from, rgm_to,change_qK_idx;log_space=log_space).rhs
+        return edge
+    end
+    return (exprs, edges)
+end
+

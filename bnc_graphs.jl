@@ -2,6 +2,21 @@
 #This is graph associated functions for Bnc models and archetyple behaviors associated code
 #-----------------------------------------------------------------------------------------------
 
+#--------------------------------------------------------------------------
+#              Binding Newtork Graph
+#-------------------------------------------------------------------------
+function get_binding_network_grh(Bnc::Bnc)::SimpleGraph
+    g = SimpleGraph(Bnc.d + Bnc.n)
+    for vi in eachindex(Bnc._valid_L_idx)
+        for vj in Bnc._valid_L_idx[vi]
+            add_edge!(g, vi, vj+Bnc.d)
+        end
+    end
+    return g # get first d nodes as total, last n nodes as x
+end
+
+
+
 #------------------------------------------------------------------------------
 #              Functions try makeing Graphs.jl functions on VertexGraph
 #------------------------------------------------------------------------------
@@ -47,7 +62,7 @@
 
 
 #------------------------------------------------------------------------------
-#                  Things involving with drawing plot 
+#                  Getting the whole graph functions. 
 #----------------------------------------------------------------------------
 function get_x_neighbor_grh(Bnc::Bnc)::SimpleGraph
     vg = get_vertices_graph!(Bnc)
@@ -106,13 +121,15 @@ function get_qK_neighbor_grh(Bnc::Bnc,change_qK_idx;)::SimpleDiGraph
     return g
 end
 
+#---------------------------------------------------------------------------------------------------
+#             Functions for analyzing each individual path in the graph
+#----------------------------------------------------------------------------------------------------
 
 
+get_sources(g::AbstractGraph) = Set(v for v in vertices(g) if indegree(g, v) == 0)
+get_sinks(g::AbstractGraph)   = Set(v for v in vertices(g) if outdegree(g, v) == 0)
 
-get_sources(g::DiGraph) = Set(v for v in vertices(g) if indegree(g, v) == 0)
-get_sinks(g::DiGraph)   = Set(v for v in vertices(g) if outdegree(g, v) == 0)
-
-function find_all_complete_paths(model::Bnc, g::DiGraph)
+function find_all_complete_paths(model::Bnc, g::AbstractGraph)
     sources_all = get_sources(g)
     sinks_all   = get_sinks(g)
     common_vs = intersect(sources_all, sinks_all)
@@ -122,9 +139,8 @@ function find_all_complete_paths(model::Bnc, g::DiGraph)
     sources = setdiff(sources_all, common_vs)
     sinks = setdiff(sinks_all, common_vs)
 
-    @show sources
-    @show sinks
-    
+    @info "sources: $sources"
+    @info "sinks: $sinks"
 
     function dfs(path, local_paths)
         lastv = path[end]
@@ -149,20 +165,22 @@ function find_all_complete_paths(model::Bnc, g::DiGraph)
     return sort!(paths)#filter!(paths) do x length(x) > 1 end
 end
 
-function find_conditions_for_path_direct(model::Bnc, path, change_qK_idx)::Polyhedron # Can be extremely slow for long paths
+
+
+function find_conditions_for_path_direct(model::Bnc, rgm_path, change_qK_idx)::Polyhedron # Can be extremely slow for long paths
     el_dim = BitSet(change_qK_idx)
 
-    if length(path) ==1
-        poly = get_polyhedra(model, path[1])
+    if length(rgm_path) ==1
+        poly = get_polyhedra(model, rgm_path[1])
         e = eliminate(poly,el_dim)
         detecthlinearity!(e)
         return e
     end
 
-    poly_ins = Vector{Polyhedron{Float64}}(undef,length(path)-1)
-    Threads.@threads for i in 1:(length(path)-1)
-        u = path[i]
-        v = path[i+1]
+    poly_ins = Vector{Polyhedron{Float64}}(undef,length(rgm_path)-1)
+    Threads.@threads for i in 1:(length(rgm_path)-1)
+        u = rgm_path[i]
+        v = rgm_path[i+1]
         poly1 = get_polyhedra(model,u)
         poly2 = get_polyhedra(model,v)
         ins = intersect(poly1, poly2)
@@ -177,50 +195,51 @@ end
 
 
 
-function find_conditions_for_path(model::Bnc,path,change_qK_idx)::Polyhedron
-    @warn "This function is buggy for now, use find_conditions_for_path_direct instead"
-    # Buggy, not working for now.
+find_conditions_for_path(args...;kwargs...) = find_conditions_for_path_direct(args...;kwargs...)
+# function find_conditions_for_path(model::Bnc,path,change_qK_idx)::Polyhedron
+#     @warn "This function is buggy for now, use find_conditions_for_path_direct instead"
+#     # Buggy, not working for now.
 
-    # Handle invertible regimes first
+#     # Handle invertible regimes first
 
-    # Firstly let's try assuming regiems with nullity 1 have no contribution()
-    nlts = [get_nullity!(model, p) for p in path]
-    idxs = findall(x -> x == 0, nlts)
-    C = Vector{Matrix{Float64}}(undef, length(idxs))
-    C0 = Vector{Vector{Float64}}(undef, length(idxs))
+#     # Firstly let's try assuming regiems with nullity 1 have no contribution()
+#     nlts = [get_nullity!(model, p) for p in path]
+#     idxs = findall(x -> x == 0, nlts)
+#     C = Vector{Matrix{Float64}}(undef, length(idxs))
+#     C0 = Vector{Vector{Float64}}(undef, length(idxs))
 
-    function get_empty_row_idxs(L::SparseMatrixCSC,i)
-        m = size(L,1)
-        rows_i = L.rowval[L.colptr[i]:(L.colptr[i+1]-1)]
-        zero_rows = setdiff(1:m, rows_i)
-        return zero_rows
-    end
+#     function get_empty_row_idxs(L::SparseMatrixCSC,i)
+#         m = size(L,1)
+#         rows_i = L.rowval[L.colptr[i]:(L.colptr[i+1]-1)]
+#         zero_rows = setdiff(1:m, rows_i)
+#         return zero_rows
+#     end
 
-    Threads.@threads for i in eachindex(idxs)
-        idx = idxs[i]
-        perm = path[idx]
-        C_tmp, C0_tmp = get_C_C0_qK!(model, perm)
-        rows = get_empty_row_idxs(C_tmp, change_qK_idx)
-        cols = setdiff(1:model.n, change_qK_idx)
-        C[i] = C_tmp[rows, cols]
-        C0[i] = C0_tmp[rows]
-    end
-    C_all = reduce(vcat, C)
-    C0_all = reduce(vcat, C0)
+#     Threads.@threads for i in eachindex(idxs)
+#         idx = idxs[i]
+#         perm = path[idx]
+#         C_tmp, C0_tmp = get_C_C0_qK!(model, perm)
+#         rows = get_empty_row_idxs(C_tmp, change_qK_idx)
+#         cols = setdiff(1:model.n, change_qK_idx)
+#         C[i] = C_tmp[rows, cols]
+#         C0[i] = C0_tmp[rows]
+#     end
+#     C_all = reduce(vcat, C)
+#     C0_all = reduce(vcat, C0)
 
 
-    # # Now handle regimes with nullity 1
-    # idxs_nlt = findall(x -> x ==1, nlts)
-    # C_nlt = Vector{Matrix{Float64}}(undef, length(idxs_nlt))
-    # C0_nlt = Vector{Vector{Float64}}(undef, length(idxs_nlt))
-    # Threads.@threads for i in eachindex(idxs_nlt)
-    #     poly = get_polyhedra
+#     # # Now handle regimes with nullity 1
+#     # idxs_nlt = findall(x -> x ==1, nlts)
+#     # C_nlt = Vector{Matrix{Float64}}(undef, length(idxs_nlt))
+#     # C0_nlt = Vector{Vector{Float64}}(undef, length(idxs_nlt))
+#     # Threads.@threads for i in eachindex(idxs_nlt)
+#     #     poly = get_polyhedra
 
-    p = get_polyhedra(C_all, C0_all, 0)
-    detecthlinearity!(p)
-    removehredundancy!(p)
-    return p
-end
+#     p = get_polyhedra(C_all, C0_all, 0)
+#     detecthlinearity!(p)
+#     removehredundancy!(p)
+#     return p
+# end
 
 
 function find_conditions_for_pathes(model::Bnc, paths, change_qK_idx)::Vector{Polyhedron}
@@ -228,17 +247,15 @@ function find_conditions_for_pathes(model::Bnc, paths, change_qK_idx)::Vector{Po
     polys = Vector{Polyhedron}(undef, length(paths))
     Threads.@threads for i in eachindex(paths)
         # polys[i] = find_conditions_for_path(model, paths[i], change_qK_idx)
-        polys[i] = find_conditions_for_path_direct(model, paths[i], change_qK_idx)
+        polys[i] = find_conditions_for_path(model, paths[i], change_qK_idx)
     end
     return polys
 end
 
-
-function find_reaction_order_for_single_path(model, path::Vector{Int}, change_qK_idx, observe_x_idx; deduplicate::Bool=false,keep_singular::Bool=true)::Vector{<:Real}
+function _calc_reaction_order_for_single_path(model, path::Vector{Int}, change_qK_idx, observe_x_idx)::Vector{<:Real}
     r_ord = Vector{Float64}(undef, length(path))
     for i in eachindex(path)
-        null = get_nullity!(model, path[i])
-        if null == 0
+        if !is_singular(model, path[i])
             r_ord[i] = get_H!(model, path[i])[observe_x_idx, change_qK_idx] |> x->round(x;digits=3)
         else
             ord = get_H!(model, path[i])[observe_x_idx, change_qK_idx]
@@ -249,36 +266,46 @@ function find_reaction_order_for_single_path(model, path::Vector{Int}, change_qK
             end     
         end
     end
-    if deduplicate
-        r_ord = dedup(r_ord,keep_singular)
-    end
     return r_ord
 end
-
-function find_reaction_order_for_pathes(model, paths::Vector{Vector{Int}}, args...; kwargs...)::Vector{Vector{<:Real}}
-    r_ords = Vector{Vector{<:Real}}(undef, length(paths))
-    Threads.@threads for i in eachindex(paths)
-        r_ords[i] = find_reaction_order_for_single_path(model, paths[i], args...; kwargs...)
-    end
-    return r_ords
-end
-
-function dedup(v,keep_singular::Bool=true)
-    isempty(v) && return v
-    i_fst = findfirst(x->!isinf(x), v)
-    result = [v[i_fst]]
-    for x in Iterators.drop(v, i_fst)
+function _dedup(ord_path::Vector{T})::Vector{T} where T<:Real
+    isempty(ord_path) && return ord_path
+    result = [ord_path[1]]
+    for x in Iterators.drop(ord_path, 1)
         if x != last(result)
-            if isinf(x) && !keep_singular
-                continue
-            end
             push!(result, x)
         end
     end
     return result
 end
 
-function group_sum(keys::AbstractVector, vals::AbstractVector;sort_values::Bool=true)
+function find_reaction_order_for_single_path(model::Bnc, rgm_path::Vector{<:Integer}, change_qK_idx, observe_x_idx; deduplicate::Bool=false,keep_singular::Bool=true,keep_nonasymptotic::Bool=false)::Vector{<:Real}
+    ord_path = _calc_reaction_order_for_single_path(model, rgm_path, change_qK_idx, observe_x_idx)
+    
+    mask = _get_vertices_mask(model, rgm_path;
+        singular=keep_singular ? nothing : false,
+        asymptotic=keep_nonasymptotic ? nothing : true)
+    
+    ord_path = ord_path[mask]
+
+    if deduplicate
+        ord_path = _dedup(ord_path)
+    end
+    return ord_path
+end
+
+
+function find_reaction_order_for_pathes(model, rgm_paths::Vector{Vector{Int}}, args...; kwargs...)::Vector{Vector{<:Real}}
+    r_ords = Vector{Vector{<:Real}}(undef, length(rgm_paths))
+    Threads.@threads for i in eachindex(rgm_paths)
+        r_ords[i] = find_reaction_order_for_single_path(model, rgm_paths[i], args...; kwargs...)
+    end
+    return r_ords
+end
+
+
+
+function group_sum(keys::AbstractVector, vals::AbstractVector;sort_values::Bool=true)::Vector{Pair}
     @assert length(keys) == length(vals)
     dict = Dict{eltype(keys), eltype(vals)}()
     @inbounds for (k, v) in zip(keys, vals)
@@ -292,35 +319,7 @@ function group_sum(keys::AbstractVector, vals::AbstractVector;sort_values::Bool=
 end
 
 
-function get_binding_network_grh(Bnc::Bnc)::SimpleGraph
-    g = SimpleGraph(Bnc.d + Bnc.n)
-    for vi in eachindex(Bnc._valid_L_idx)
-        for vj in Bnc._valid_L_idx[vi]
-            add_edge!(g, vi, vj+Bnc.d)
-        end
-    end
-    return g # get first d nodes as total, last n nodes as x
-end
 
-
-
-
-function get_node_size(model::Bnc, default=1; asymptotic=true, kwargs...)
-    # seems properly handel non-asyntotic nodes
-    vals = calc_volume(model;asymptotic=asymptotic, kwargs...) .|> x->x[1]
-    idx = if asymptotic
-        non_asym_idx = get_vertices(model, singular=nothing, asymptotic=false, return_idx=true) # non-asymptotic
-        singular_asym_idx = get_vertices(model, singular=true, asymptotic=true, return_idx=true)# singular asymptotic
-        vcat(non_asym_idx, singular_asym_idx)
-    else
-        get_vertices(model, singular=true, asymptotic=nothing, return_idx=true) # only care about singular
-    end
-    n_data = length(vals)-length(idx)
-
-    Volume = vals .* n_data .* default^2
-    Volume[idx] .= default^2
-    return Dict(i=>sqrt(Volume[i]) for i in eachindex(Volume))
-end
 
 
 

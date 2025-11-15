@@ -6,14 +6,16 @@ using Latexify
 #-------------------------------------------------------------
 # Key visualizing functions
 #----------------------------------------------------------------
-function SISO_plot(model, cond_s, change_idx; 
+
+
+function SISO_plot(model, parameters, change_idx; 
         npoints=1000,start=-6, stop=6,cmap=:rainbow, size = (800,600),draw_idx=nothing,
         asymptotic=false)
 
     change_sym = "log"*repr([model.q_sym;model.K_sym][change_idx])
     change_S = range(start, stop, npoints)
-    start_logqK = copy(cond_s)|> x-> insert!(x, change_idx, start)
-    end_logqK = copy(cond_s)|> x-> insert!(x, change_idx, stop)
+    start_logqK = copy(parameters)|> x-> insert!(x, change_idx, start)
+    end_logqK = copy(parameters)|> x-> insert!(x, change_idx, stop)
     logx = x_traj_with_qK_change(model, start_logqK, end_logqK;input_logspace=true, output_logspace=true, 
                                     tstops = range(0,1,npoints), saveat = range(0,1,npoints))
 
@@ -27,13 +29,14 @@ function SISO_plot(model, cond_s, change_idx;
     nlevels = crange[2]-crange[1] + 1
     cmap_disc = cgrad(cmap, nlevels, categorical=true)
 
-    @show change_sym
+    @info "Change in $(change_sym)"
+    @info "parameters: $([i=>j for (i,j) in zip([model.q_sym;model.K_sym] |> x->deleteat!(x,change_idx), parameters)])"
         
     draw_idx = isnothing(draw_idx) ? (1:model.n) : draw_idx
     F = Figure(size = size)
     for (i, j) in enumerate(draw_idx)
         target_sym = "log"*repr(model.x_sym[j])
-        @show target_sym
+        @info "Target syms contains: $(target_sym) "
         ax = Axis(F[i,1]; xlabel = change_sym, ylabel = target_sym)
         lines!(ax, change_S, logx[2] .|> x-> x[j]; color = map(r->col_map_dict[r], rgm), colorrange = crange, colormap = cmap)
     end
@@ -56,150 +59,9 @@ function SISO_plot(model, cond_s, change_idx;
 end
 
 
-
-function draw_vertices_neighbor_graph(model::Bnc, grh=nothing; 
-    arrow_idx=nothing, 
-    edge_labels=nothing, 
-    figsize=(1000,1000), 
-    arrow_color=(:green, 0.5),
-    kwargs...)
-    # use provided grh or compute a default neighbor graph
-    grh = isnothing(grh) ? get_qK_neighbor_grh(model) : grh
-    # prepare labels / colors
-    # node_labels = model.vertices_perm .|> (x-> Int.(x) |> repr)
-    node_labels = model.vertices_perm .|> x->model.x_sym[x] |> x->repr(x)[4:end] # remove the "Num"
-
-    # assign node_colors based on nullity and asymptoticity
-    node_colors = Vector{String}(undef, length(model.vertices_perm))
-    for i in eachindex(model.vertices_perm)
-        is_sin = is_singular(model, i)
-        is_asym = is_asymptotic(model, i)
-        if is_sin
-            node_colors[i] = "#CCCCFF"  # light blue for singular regimes
-        else
-            if is_asym
-                node_colors[i] = "#FFCCCC"  # light green for asymptotic regimes
-            else
-                node_colors[i] = "#CCFFCC"  # light red for regular regimes
-            end
-        end
-    end
-
-    # node_colors = [model.vertices_nullity[i] > 0 ? "#CCCCFF" : "#FFCCCC" for i in eachindex(model.vertices_nullity)]
-
-    f = Figure(size = figsize)
-    ax = Axis(f[1, 1],title = "Dominant mode of "*repr(model.q_sym)[4:end], titlealign = :right,titlegap =2)
-
-    if !isnothing(edge_labels) && isa(edge_labels, String)
-        edge_labels = repeat([edge_labels], ne(grh))
-    end
-    p = graphplot!(ax, grh;
-                    node_color = node_colors,
-                    elabels = edge_labels,
-                    edge_color = (:black, 0.7),
-                    ilabels = node_labels,
-                    arrow_size = 20,
-                    arrow_shift = 0.8,
-                    kwargs...,
-                    layout = Spring(; dim = 2))
-    # p.node_pos[] = posi
-    # add arrows from your helper (keeps behavior from original cell)
-    if !isnothing(arrow_idx)
-        add_arrows!(ax, p, model, arrow_idx; color = arrow_color)
-    end
-
-
-    hidedecorations!(ax); hidespines!(ax)
-    return f, ax, p
-end
-
-function add_vertices_idx!(ax,p)
-    posi = p.node_pos[]
-    text!(ax, posi; text = "#".*string.(1:length(posi)),align = (:center, :bottom), color = :black,offset = (0,5))
-    return nothing
-end
-
-"""
-    Add arrows on an existing graph plot based on edge weights from change_qK_idx.
-"""
-function add_arrows!(ax,p, model,change_qK_idx; kwargs...)
-    edge_dir = get_edge_weight_vec(model,change_qK_idx)
-    arws1 = map(edge_dir) do (edge, meta)
-        u,v = edge.src, edge.dst
-        mag = meta[:magnitude]
-            p1 = p.node_pos[][u]
-            p2 = p.node_pos[][v]
-            Δp = p2.-p1
-            norm_Δp = norm(Δp)
-            p1 = p1 .+ Δp/norm_Δp .*0.1
-            p2 = p2 .- Δp/norm_Δp .*0.1
-            shaftwidth = mag *8
-            tipwidth = mag *15
-            return [p1,p2], shaftwidth, tipwidth
-        end
-    for (points, shaftwidth, tipwidth) in arws1
-        arrows2d!(ax, points...; shaftwidth=shaftwidth, tipwidth=tipwidth,tiplength=20,argmode=:endpoint,kwargs...)
-    end
-    return nothing
-end
-
-
-draw_qK_neighbor_grh(args...;kwargs...) = draw_vertices_neighbor_graph(args...; kwargs...)
-
-
-
-
-
-function draw_binding_network_grh(Bnc::Bnc,grh::Union{AbstractGraph, Nothing}=nothing; figsize=(800,800),q_color="#FFCCCC", x_color="#CCCCFF")
-    f = Figure(size = figsize)
-    grh = isnothing(grh) ? get_binding_network_grh(Bnc) : grh
-    ax = Axis(f[1, 1])
-    node_labels = [i <= Bnc.d ? repr(Bnc.q_sym[i]) : repr(Bnc.x_sym[i-Bnc.d]) for i in 1:(Bnc.d + Bnc.n)]
-    node_colors = [i <= Bnc.d ? q_color : x_color for i in 1:(Bnc.d + Bnc.n)]
-    p = graphplot!(ax, grh,
-                    node_color = node_colors,
-                    edge_color = (:black, 0.7),
-                    ilabels = node_labels,
-                    arrow_size = 20,
-                    arrow_shift = 0.8,
-                    layout = Spring(; dim = 2))
-    hidedecorations!(ax); hidespines!(ax)
-    return f, ax, p
-end
-
-
-
-
-
-
-
-
 #-------------------------------------------------------------
-#Helper functions for plotting
+#Helper functions for plotting graphs
 #-------------------------------------------------------------
-"""
-    get_edge_labels(Bnc; sym=false) -> Dict{Edge,String}
-Get edge labels for qK-space edges. IF half, only label one direction.
-"""
-function get_edge_labels(Bnc::Bnc; sym::Bool=false, half::Bool=true)::Dict{Edge,String}
-    vg = get_vertices_graph!(Bnc;full=true)
-    labels = Dict{Edge,String}()
-    for (i, edges) in enumerate(vg.neighbors)
-        if get_nullity!(Bnc,i) >1
-            continue
-        end
-        for e in edges
-            if isnothing(e.change_dir_qK) || (half && e.to < i)    # only label one direction
-                continue
-            end 
-            ch_dir = round.(e.change_dir_qK;digits=1)
-            labels[Edge(i,e.to)] = sym ? sym_direction(Bnc,ch_dir) : repr(Vector(ch_dir))
-        end
-    end
-    return labels
-end
-
-
 
 """
     get_edge_weight_vec(Bnc, change_qK_idx) -> Vector{Tuple{Edge,Dict{Symbol,Any}}}
@@ -236,22 +98,217 @@ end
 
 
 
+# function find_proper_bounds_for_graph_plot(p,x_prochunge=1.3, y_prochunge=1.3)
+#     ps = p.node_pos[]
+#     xs = [ps[i][1] for i in 1:length(ps)]
+#     ys = [ps[i][2] for i in 1:length(ps)]
+#     xmin = minimum(xs)
+#     xmax = maximum(xs)
+#     ymin = minimum(ys)
+#     ymax = maximum(ys)
 
-function find_proper_bounds_for_graph_plot(p,x_prochunge=1.2, y_prochunge=1.2)
-    ps = p.node_pos[]
-    xs = [ps[i][1] for i in 1:length(ps)]
-    ys = [ps[i][2] for i in 1:length(ps)]
-    xmin = minimum(xs)
-    xmax = maximum(xs)
-    ymin = minimum(ys)
-    ymax = maximum(ys)
+#     xmid = (xmin + xmax)/2
+#     ymid = (ymin + ymax)/2
+#     xmin = xmid + (xmin - xmid)*x_prochunge
+#     xmax = xmid + (xmax - xmid)*x_prochunge
+#     ymin = ymid + (ymin - ymid)*y_prochunge
+#     ymax = ymid + (ymax - ymid)*y_prochunge
 
-    xmid = (xmin + xmax)/2
-    ymid = (ymin + ymax)/2
-    xmin = xmid + (xmin - xmid)*x_prochunge
-    xmax = xmid + (xmax - xmid)*x_prochunge
-    ymin = ymid + (ymin - ymid)*y_prochunge
-    ymax = ymid + (ymax - ymid)*y_prochunge
+#     return (xmin, xmax, ymin, ymax)
+# end
+
+function find_proper_bounds_for_graph_plot(p; x_margin=0.1, y_margin=0.1)
+    # 支持 p.node_pos[] (Observable) 或直接 Vector / Dict
+    # ps = node_pos isa Observable ? node_pos[] : node_pos
+    coords = p.node_pos[]
+    xs = first.(coords)
+    ys = last.(coords)
+
+    xmin, xmax = extrema(xs)
+    ymin, ymax = extrema(ys)
+
+    xspan = xmax - xmin
+    yspan = ymax - ymin
+
+    xmin -= x_margin * xspan
+    xmax += x_margin * xspan
+    ymin -= y_margin * yspan
+    ymax += y_margin * yspan
 
     return (xmin, xmax, ymin, ymax)
 end
+
+"""
+    get_edge_labels(Bnc; sym=false) -> Dict{Edge,String}
+Get edge labels for qK-space edges. IF half, only label one direction.
+"""
+function get_edge_labels(Bnc::Bnc; sym::Bool=false, half::Bool=true)::Dict{Edge,String}
+    vg = get_vertices_graph!(Bnc;full=true)
+    labels = Dict{Edge,String}()
+    for (i, edges) in enumerate(vg.neighbors)
+        if get_nullity!(Bnc,i) >1
+            continue
+        end
+        for e in edges
+            if isnothing(e.change_dir_qK) || (half && e.to < i)    # only label one direction
+                continue
+            end 
+            ch_dir = round.(e.change_dir_qK;digits=1)
+            labels[Edge(i,e.to)] = sym ? sym_direction(Bnc,ch_dir) : repr(Vector(ch_dir))
+        end
+    end
+    return labels
+end
+"""
+    Get fixed node positions for the qK-neighbor from x-neighbor graph of the model.
+"""
+function get_node_positions(model::Bnc; kwargs...)
+    grh = get_x_neighbor_grh(model)
+    f,ax,p = graphplot(grh; kwargs...)
+    posi = p.node_pos[]
+    return posi
+end
+
+function get_node_colors(model; singular_color="#CCCCFF", asymptotic_color="#FFCCCC", regular_color="#CCFFCC")::Vector{String}
+    node_colors = Vector{String}(undef, length(model.vertices_perm))
+    for i in eachindex(model.vertices_perm)
+        is_sin = is_singular(model, i)
+        is_asym = is_asymptotic(model, i)
+        if is_sin
+            node_colors[i] = singular_color  # light blue for singular regimes
+        else
+            if is_asym
+                node_colors[i] = asymptotic_color  # light green for asymptotic regimes
+            else
+                node_colors[i] = regular_color  # light red for regular regimes
+            end
+        end
+    end
+    return node_colors
+end
+
+function get_node_labels(model::Bnc)
+    return model.vertices_perm .|> x->model.x_sym[x] |> x->repr(x)[4:end] # remove the "Num"
+end
+
+function get_node_size(model::Bnc; default_node_size=50, asymptotic=true, kwargs...)
+    # seems properly handel non-asyntotic nodes
+    vals = (asymptotic ? get_vertices_volume!(model) : calc_volume(model;asymptotic=asymptotic, kwargs...)) .|> x->x[1]
+    
+    zero_volume_idx = if asymptotic # both non-asymptotic and singular
+        non_asym_idx = get_vertices(model, singular=nothing, asymptotic=false, return_idx=true) # non-asymptotic
+        singular_asym_idx = get_vertices(model, singular=true, asymptotic=true, return_idx=true)# singular asymptotic
+        vcat(non_asym_idx, singular_asym_idx)
+    else # only singular
+        get_vertices(model, singular=true, asymptotic=nothing, return_idx=true) # only care about singular
+    end
+
+    n_data = length(vals)-length(zero_volume_idx)
+
+    Volume = vals .* n_data .* default_node_size^2
+    Volume[zero_volume_idx] .= default_node_size^2
+    return Dict(i=>sqrt(Volume[i]) for i in eachindex(Volume))
+end
+
+"""
+    Draw the qK-neighbor graph of the model, with optional edge labels, node colors, and node sizes.
+"""
+function draw_vertices_neighbor_graph(model::Bnc, grh=nothing; 
+    default_node_size=50,
+    edge_labels=nothing, 
+    figsize=(1000,1000), 
+    kwargs...)
+    # use provided grh or compute a default neighbor graph
+    grh = isnothing(grh) ? get_qK_neighbor_grh(model) : grh
+    edge_labels = isnothing(edge_labels) ? get_edge_labels(model, sym=true) : (isa(edge_labels, String) ? repeat([edge_labels], ne(grh)) : edge_labels)
+    posi = get_node_positions(model)
+    node_labels = get_node_labels(model)
+    node_colors = get_node_colors(model)
+    node_size = get_node_size(model; default_node_size=default_node_size)
+
+
+    f = Figure(size = figsize)
+    ax = Axis(f[1, 1],title = "Dominant mode of "*repr(model.q_sym)[4:end], titlealign = :right,titlegap =2)
+
+    
+    p = graphplot!(ax, grh;
+                    node_color = node_colors,
+                    elabels = edge_labels,
+                    node_size = node_size,
+                    ilabels = node_labels,
+                    layout = posi,
+                    arrow_size = 20,
+                    arrow_shift = 0.8,
+                    edge_color = (:black, 0.7),
+                    kwargs...,
+                    )
+    hidedecorations!(ax); hidespines!(ax)
+
+    bounds = find_proper_bounds_for_graph_plot(p)
+    limits!(ax, bounds...)
+
+    return f, ax, p
+end
+
+
+function add_vertices_idx!(ax,p)
+    posi = p.node_pos[]
+    text!(ax, posi; text = "#".*string.(1:length(posi)),align = (:center, :bottom), color = :black,offset = (0,5))
+    return nothing
+end
+
+"""
+    Add arrows on an existing graph plot based on edge weights from change_qK_idx.
+"""
+function add_arrows!(ax,p, model,change_qK_idx;color = (:green, 0.5), kwargs...)
+    edge_dir = get_edge_weight_vec(model,change_qK_idx)
+    arws1 = map(edge_dir) do (edge, meta)
+        u,v = edge.src, edge.dst
+        mag = meta[:magnitude]
+            p1 = p.node_pos[][u]
+            p2 = p.node_pos[][v]
+            Δp = p2.-p1
+            norm_Δp = norm(Δp)
+            p1 = p1 .+ Δp/norm_Δp .*0.1
+            p2 = p2 .- Δp/norm_Δp .*0.1
+            shaftwidth = mag *8
+            tipwidth = mag *15
+            return [p1,p2], shaftwidth, tipwidth
+        end
+    for (points, shaftwidth, tipwidth) in arws1
+        arrows2d!(ax, points...; shaftwidth=shaftwidth, tipwidth=tipwidth,tiplength=20,argmode=:endpoint,color=color,kwargs...)
+    end
+    return nothing
+end
+
+
+draw_qK_neighbor_grh(args...;kwargs...) = draw_vertices_neighbor_graph(args...; kwargs...)
+
+
+
+
+
+function draw_binding_network_grh(Bnc::Bnc,grh::Union{AbstractGraph, Nothing}=nothing; figsize=(800,800),q_color="#FFCCCC", x_color="#CCCCFF")
+    f = Figure(size = figsize)
+    grh = isnothing(grh) ? get_binding_network_grh(Bnc) : grh
+    ax = Axis(f[1, 1])
+    node_labels = [i <= Bnc.d ? repr(Bnc.q_sym[i]) : repr(Bnc.x_sym[i-Bnc.d]) for i in 1:(Bnc.d + Bnc.n)]
+    node_colors = [i <= Bnc.d ? q_color : x_color for i in 1:(Bnc.d + Bnc.n)]
+    p = graphplot!(ax, grh,
+                    node_color = node_colors,
+                    edge_color = (:black, 0.7),
+                    ilabels = node_labels,
+                    arrow_size = 20,
+                    arrow_shift = 0.8,
+                    layout = Spring(; dim = 2))
+    hidedecorations!(ax); hidespines!(ax)
+    return f, ax, p
+end
+
+
+
+
+
+
+
+

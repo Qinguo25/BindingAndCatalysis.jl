@@ -803,37 +803,44 @@ end
 # end
 
 function calc_volume(Cs::AbstractVector{<:AbstractMatrix{<:Real}},
-                          C0s::AbstractVector{<:AbstractVector{<:Real}};
+                     C0s::AbstractVector{<:AbstractVector{<:Real}};
     confidence_level::Float64 = 0.95,
-    contain_overlap::Bool=false,
+    contain_overlap::Bool = false,
     batch_size::Int = 100_000,
     log_lower = -6,
     log_upper = 6,
-    tol::Float64 = 1e-10,
-    rel_tol::Float64 = 0.005,    # 目标相对误差 0.5%
-    time_limit::Float64 = 20.0,  
+    tol::Float64 = 0.0,
+    rel_tol::Float64 = 0.005,  # 相对误差阈值
+    time_limit::Float64 = 40.0,
 )::Vector{Tuple{Float64, Float64}}
-    @info "Processing $(length(Cs)) regimes"
+
+    @assert length(Cs) == length(C0s) "Cs and C0s must have same length"
+    n_regimes = length(Cs)
+    @info "Number of polyhedra to calc volume: $n_regimes"
     n_threads = Threads.nthreads()
-    n = size(Cs[1], 2)
+    n_dim = size(Cs[1], 2)
     dist = Uniform(log_lower, log_upper)
-    thread_counts = [zeros(Int, length(Cs)) for _ in 1:n_threads]
 
-    total_counts = zeros(Int, length(Cs))
+    total_counts = zeros(Int, n_regimes)
     total_N = 0
-    start_time = time()
-    stats = Vector{Tuple{Float64,Float64}}(undef, length(Cs))
-    rel_errors = Vector{Float64}(undef, length(Cs))
+    stats = fill((0.0, 0.0), n_regimes)
+    rel_errors = fill(Inf, n_regimes)
+    active = trues(n_regimes)  # 哪些 regime 仍在采样中
 
-    function get_center_margin(count::Int, N::Int)
+    # 每线程本地计数，避免锁
+    thread_counts = [zeros(Int, n_regimes) for _ in 1:n_threads]
+
+    start_time = time()
+    z = quantile(Normal(), (1 + confidence_level) / 2)
+
+    @inline function get_center_margin(count::Int, N::Int)
         if count == 0
-            return (0.0, 0.0)
+            return 0.0, 0.0
         end
         P_hat = count / N
-        z = quantile(Normal(), (1 + confidence_level) / 2)
         denom = 1 + z^2 / N
-        center = (P_hat + z^2/(2*N)) / denom
-        margin = (z / denom) * sqrt(P_hat*(1 - P_hat)/N + z^2/(4*N^2))
+        center = (P_hat + z^2 / (2 * N)) / denom
+        margin = (z / denom) * sqrt(P_hat * (1 - P_hat) / N + z^2 / (4 * N^2))
         return center, margin
     end
 
@@ -841,55 +848,76 @@ function calc_volume(Cs::AbstractVector{<:AbstractMatrix{<:Real}},
     while true
         elapsed = time() - start_time
         if elapsed > time_limit
-            @info "Reach to the time limit: $elapsed s, stop"
+            @info "Reached time limit ($(round(elapsed, digits=2)) s). Stopping."
+            break
+        end
+        if !any(active)
+            @info "All regimes converged after $total_N samples."
             break
         end
 
-        # --- 一批采样 ---
-        samples = rand(dist, n, batch_size)
-        Threads.@threads for j in 1:batch_size
+        # 生成一批样本（列是样本）
+        samples = rand(dist, n_dim, batch_size)
+
+       Threads.@threads for j in 1:batch_size
+            tid = Threads.threadid()
+            local_counts = thread_counts[tid]
             @views x = samples[:, j]
-            local_counts = thread_counts[Threads.threadid()]
-            x_multi_assign=0
-            
+
+            # 对当前点，只检查 active 的 regimes
+            # 如果 contain_overlap == false：当找到一个满足的 regime，记录并 break（一个点只属于一个）
+            # 如果 contain_overlap == true：记录所有满足的 regimes（允许多分配）
             for i in eachindex(Cs)
+                if !active[i]
+                    continue
+                end
                 @views A = Cs[i]
                 @views b = C0s[i]
-                if any(A * x .+ b .< -tol)
-                    contain_overlap ? continue : break
+
+                # 计算 A*x + b 的每个分量是否都 > -tol
+                # 使用 all(...) 简洁直观（可能会分配一个临时数组在某些情况下，但通常 A*x+b 是向量）
+                vals = A * x .+ b
+                if any(vals .< -tol)
+                    # 不满足当前 regime：不管 contain_overlap 与否，都去检查下一个 regime
+                    continue
                 end
+
+                # 满足当前 regime
                 local_counts[i] += 1
-                x_multi_assign += 1
+                if !contain_overlap
+                    break  # 当不允许重叠时，属于一个 regime 后停止检查其它 regime
+                else
+                    # 若允许重叠，继续检查其它 regimes
+                end
             end
-
-            if x_multi_assign >1
-                @show x, x_multi_assign
-            end
-
         end
 
+        # 汇总线程统计并清零线程本地计数
         for c in thread_counts
             total_counts .+= c
             fill!(c, 0)
         end
-
         total_N += batch_size
 
-        # --- 检查误差 ---
-        stats .= [get_center_margin(c, total_N) for c in total_counts]
-        rel_errors .= [m == 0 || c == 0 ? Inf : m / c for (c, m) in stats]
-
-        if all(e -> e <= rel_tol, rel_errors)
-            @info "Volume relative error is less than  $(100*rel_tol)% after $total_N samples, $(round(elapsed, digits=2)) s"
-            break
+        # 更新置信区间与相对误差，仅对 active 的 regimes
+        for i in eachindex(Cs)
+            if !active[i]
+                continue
+            end
+            center, margin = get_center_margin(total_counts[i], total_N)
+            stats[i] = (center, margin)
+            # 相对误差用 margin/center；若 center==0 则看成无穷（还没观测到）
+            rel_errors[i] = (center == 0.0) ? Inf : (margin / center)
+            if rel_errors[i] <= rel_tol
+                active[i] = false
+            end
         end
     end
 
-    @info "total_sample_num: $total_N"
-    @show rel_errors
+    elapsed = time() - start_time
+    @info "Total samples: $total_N, Elapsed: $(round(elapsed, digits=2)) s"
     return stats
 end
-
 
 calc_volume(C::AbstractMatrix{<:Real}, C0::AbstractVector{<:Real}; kwargs...)::Tuple{Float64,Float64} = calc_volume([C], [C0]; kwargs...)[1]
 
@@ -911,8 +939,6 @@ function calc_volume(polys::Vector{<:Polyhedron};
     end
     full_dim_idx = findall(v -> v == full_dims, dim.(polys))
 
-    @show length(full_dim_idx)
-
     reps = polys[full_dim_idx] .|> poly -> MixedMatHRep(hrep(poly)) |> p->(p.A, p.b)
     vals = collect(zip(zeros(Float64, length(polys)), zeros(Float64, length(polys))))
 
@@ -929,11 +955,8 @@ function calc_volume(model::Bnc;
     kwargs...
 )::Vector{Tuple{Float64, Float64}}
     # get index for those worth calculate volume
-    idxs = if asymptotic
-        get_vertices(model, singular=false, asymptotic=true, return_idx=true)
-    else
-        get_vertices(model, singular=false, asymptotic=nothing, return_idx=true)
-    end
+    idxs = get_vertices(model, singular=false, 
+        asymptotic= asymptotic ? true : nothing, return_idx=true)
 
     # get C and C0 for each vertex
     Cs = [get_C_qK!(model,idx) for idx in idxs]
@@ -945,7 +968,9 @@ function calc_volume(model::Bnc;
     end
 
     # calculate volume for each vertex
+    # Initialize the value
     vals = collect(zip(zeros(Float64, length(model.vertices_perm)), zeros(Float64, length(model.vertices_perm))))
+    # fill the value
     vals[idxs] .= calc_volume(Cs, C0s; kwargs...)
     return vals
 end
