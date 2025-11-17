@@ -10,8 +10,10 @@ using Latexify
 
 function SISO_plot(model, parameters, change_idx; 
         npoints=1000,start=-6, stop=6,cmap=:rainbow, size = (800,600),draw_idx=nothing,
-        asymptotic=false)
+        add_archeatype_lines::Bool=false,
+        regime_asign_asymptotic::Bool=false)
 
+    change_idx = locate_sym([model.q_sym;model.K_sym], change_idx)
     change_sym = "log"*repr([model.q_sym;model.K_sym][change_idx])
     change_S = range(start, stop, npoints)
     start_logqK = copy(parameters)|> x-> insert!(x, change_idx, start)
@@ -19,8 +21,12 @@ function SISO_plot(model, parameters, change_idx;
     logx = x_traj_with_qK_change(model, start_logqK, end_logqK;input_logspace=true, output_logspace=true, 
                                     tstops = range(0,1,npoints), saveat = range(0,1,npoints))
 
+    if add_archeatype_lines
+        logx_arch = [qK2x(model, logqK;input_logspace=true, use_vtx=true,output_logspace=true) for logqK in range(start_logqK, end_logqK, npoints)]  # precompute x for archetype lines
+    end
+
     #assign color
-    rgm = logx[2] .|> x-> assign_vertex_x(model, x;input_logspace=true,asymptotic=asymptotic) |> x->get_idx(model,x)
+    rgm = logx[2] .|> x-> assign_vertex_x(model, x;input_logspace=true,asymptotic=regime_asign_asymptotic) |> x->get_idx(model,x)
 
     unique_rgm = unique(rgm)
     col_map_dict = Dict(unique_rgm[i]=>i for i in eachindex(unique_rgm))
@@ -39,6 +45,9 @@ function SISO_plot(model, parameters, change_idx;
         @info "Target syms contains: $(target_sym) "
         ax = Axis(F[i,1]; xlabel = change_sym, ylabel = target_sym)
         lines!(ax, change_S, logx[2] .|> x-> x[j]; color = map(r->col_map_dict[r], rgm), colorrange = crange, colormap = cmap)
+        if add_archeatype_lines
+            lines!(ax, change_S, getindex.(logx_arch, j); color = :black, linestyle = :dash,)
+        end
     end
     Colorbar(F[:,end+1], colorrange = crange, colormap = cmap_disc,ticks=[0])
 
@@ -57,6 +66,12 @@ function SISO_plot(model, parameters, change_idx;
     ylims!(ax, (0,1))
     return F
 end
+function SISO_plot(SISO_graph::SISO_graph,pth_idx;rand_line=false, rand_ray=false, extend=4, kwargs...)
+    parameters = get_one_inner_point(SISO_graph.rgm_polys[pth_idx], rand_line=rand_line, rand_ray=rand_ray, extend=extend)
+    @show parameters
+    return SISO_plot(SISO_graph.bn, parameters, SISO_graph.change_qK_idx; kwargs...)
+end
+
 
 
 #-------------------------------------------------------------
@@ -250,6 +265,11 @@ function draw_vertices_neighbor_graph(model::Bnc, grh=nothing;
     return f, ax, p
 end
 
+function draw_vertices_neighbor_graph(grh::SISO_graph,args...;kwargs...)
+    edge_labels = "+"* repr([grh.bn.q_sym; grh.bn.K_sym][grh.change_qK_idx])
+    f,ax,p = draw_vertices_neighbor_graph(grh.bn, grh.qK_grh, args...; edge_labels = edge_labels, kwargs...)
+    return f,ax,p
+end
 
 function add_vertices_idx!(ax,p)
     posi = p.node_pos[]

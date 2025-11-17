@@ -154,17 +154,39 @@ mutable struct VertexEdge{T}
 end
 
 # Adjacency list + optional caches
-mutable struct VertexGraph{T} 
+mutable struct VertexGraph{T}
+    x_grh::SimpleGraph 
     neighbors::Vector{Vector{VertexEdge{T}}}
     change_dir_qK_computed::Bool
+    edge_map::Dict{Set{Int},Int}
+    boundary_polys_is_computed::BitVector
+    boundary_polys::Vector{Polyhedron}
     # current_change_idx::T
     # ne_for_current_change_idx::Int
     # ne_full::Int # total number of edges,counts both directions
     # nullity::Union{Nothing, Vector{T}} # optional cache of nullity for each vertex #Store nullity again.
     function VertexGraph(neighbors::Vector{Vector{VertexEdge{T}}}) where {T}
+        edge_map = Dict{Set{Int},Int}()
+        idx = 1
+        for i in eachindex(neighbors)
+            for edge in neighbors[i]
+                if edge.to > i 
+                    edge_map[Set((i, edge.to))] = idx
+                    idx += 1
+                end
+            end
+        end
+        g = SimpleGraph(length(neighbors))
+        for (i, edges) in enumerate(neighbors)
+            for e in edges
+                add_edge!(g, i, e.to)
+            end
+        end
+        boundary_polys_is_computed = falses(idx-1)
+        boundary_polys = Vector{Polyhedron}(undef, idx-1)
         # ne_full = sum(length.(neighbors))
         # new{T}(neighbors,false,-1,ne_full/2,ne_full)
-        new{T}(neighbors,false)
+        new{T}(g,neighbors,false,edge_map,boundary_polys_is_computed,boundary_polys)
     end
 end
 
@@ -327,7 +349,27 @@ mutable struct Bnc{T} # T is the int type to save all the indices
     end
 end
 
-
+struct SISO_graph{T}
+    bn::Bnc{T}
+    qK_grh::SimpleDiGraph
+    change_qK_idx::T
+    sources::Vector{Int}
+    sinks::Vector{Int}
+    rgm_paths::Vector{Vector{Int}}
+    rgm_volume_is_calc::BitVector
+    rgm_polys_is_calc::BitVector
+    rgm_polys::Vector{Polyhedron}
+    rgm_volume::Vector{Float64}
+    rgm_volume_err::Vector{Float64}
+    function SISO_graph(model::Bnc{T}, qK_grh, change_qK_idx, sources, sinks, rgm_paths) where T
+        rgm_polys = Vector{Polyhedron}(undef, length(rgm_paths))
+        rgm_volume = Vector{Float64}(undef, length(rgm_paths))
+        rgm_volume_err = Vector{Float64}(undef, length(rgm_paths))
+        rgm_volume_is_calc = falses(length(rgm_paths))
+        rgm_polys_is_calc = falses(length(rgm_paths))  
+        new{T}(model, qK_grh, change_qK_idx, sources, sinks, rgm_paths, rgm_volume_is_calc,rgm_polys_is_calc, rgm_polys, rgm_volume, rgm_volume_err)
+    end
+end
 
 
 

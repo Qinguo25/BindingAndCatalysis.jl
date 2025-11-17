@@ -432,12 +432,27 @@ end
 #--------------------------------------
 
 
-# find boundary for regime map, to draw boundary for different regimes.
+# find boundary between different regimes for regime map, to draw boundary for different regimes.
 function find_bounds(lattice)
     col_asym_x_bounds = imfilter(lattice, Kernel.Laplacian(), "replicate") # findboundary
     edge_map = col_asym_x_bounds .!= 0
     return edge_map
 end
+
+
+#------------------------------
+# some other helper functions 
+#------------------------------
+function locate_sym(syms, target_sym)
+    target_sym = Symbol(target_sym)
+    return findfirst(x -> x.val.name == target_sym, syms)
+end
+function locate_sym(syms, target_syms::Integer)
+    return target_syms
+end
+
+
+
 
 
 #---------------------------------------------------

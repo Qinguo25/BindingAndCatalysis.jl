@@ -103,7 +103,9 @@ function show_sym_expr(C::AbstractVector{<:Real}, C0::Real, sym2, sym1; log_spac
 end
 
 
-# for a^T x +b = 0 =>  xi = -(1/ai)(b + ∑j≠i aj xj)
+"""
+ for a^T x +b = 0 =>  xi = -(1/ai)(b + ∑j≠i aj xj)
+"""
 function solve_sym_expr(a::AbstractVector{<:Real}, b::Real, x, idx; log_space::Bool=true)
     a = copy(collect(a))
     x = copy(x)
@@ -131,7 +133,7 @@ function show_expression_qK(Bnc::Bnc, perm;kwargs...)
 end
 function show_dominant_condition(Bnc::Bnc, perm;kwargs...)
     P,P_0 = get_P_P0!(Bnc, perm)
-    show_sym_conds(P, P_0, Bnc.q_sym; kwargs...)
+    show_sym_expr(P, P_0, Bnc.q_sym, Bnc.x_sym; kwargs...)
 end
 
 
@@ -150,14 +152,30 @@ function show_condition_qK(Bnc::Bnc, perm; kwargs...)
     show_sym_conds(C_qK, C0_qK, syms, nullity; kwargs...)
 end
 
-function show_condition_poly(Bnc::Bnc, poly::Polyhedron,change_dir_idx=nothing; kwargs...)
+function show_condition_qK(grh::SISO_graph, pth_idx; kwargs...)
+    poly = get_polyhedra!(grh, pth_idx)[1]
+    syms = [grh.bn.q_sym; grh.bn.K_sym]
+    popat!(syms, grh.change_qK_idx)
+    return show_condition_poly(poly, syms; kwargs...)
+end
+
+
+function show_condition_poly(poly::Polyhedron, syms; kwargs...)
     C,C0,nullity= get_C_C0(poly)
-    syms = [Bnc.q_sym; Bnc.K_sym]
-    isnothing(change_dir_idx) || popat!(syms, change_dir_idx)
-    @show syms
     nullity = isempty(nullity) ? 0 : maximum(nullity)
     show_sym_conds(C, C0, syms, maximum(nullity); kwargs...)
 end
+
+function show_condition_path(Bnc::Bnc, path::AbstractVector{<:Integer}, change_qK; kwargs...)
+    # directly calculate the polyhedron for the path, may not useful.
+    poly = _calc_polyhedra_for_path(Bnc, path,change_qK)
+    show_condition_path(Bnc, poly, change_qK; kwargs...)
+end
+
+
+
+
+
 
 function show_conservation(Bnc::Bnc)::Vector{Equation}
     eq  = Bnc.q_sym .~ Bnc._L_sparse * Bnc.x_sym
@@ -173,7 +191,7 @@ end
 
 
 function show_interface(Bnc::Bnc, from,to, change_idx::Union{Nothing,Integer}=nothing;kwargs...)
-    C, C0 = get_interface(Bnc,from,to)
+    C, C0 = get_interface(Bnc,from,to) # C' log qK + C0 =0
     if isnothing(change_idx)
         return show_sym_conds(C, C0, [Bnc.q_sym; Bnc.K_sym], 1;kwargs...)
     else
@@ -248,33 +266,73 @@ function render_arrow(a::Vector, appendix="")::String
     return s
 end
 
-# function sym_direction(Bnc::Bnc,dir; show_val::Bool=true)
-#     dir = show_val ? dir : sign.(dir)
-#     rst = ""
-#     for i in 1:Bnc.d
-#         if dir[i] > 0
-#             rst *= "+"*repr(Bnc.q_sym[i]^dir[i])*" "
-#         elseif dir[i] < 0
-#             rst *= "-"*repr(Bnc.q_sym[i]^(-dir[i]))*" "
-#         end
-#     end
-#     rst*="; "
-#     for j in 1:Bnc.r
-#         if dir[j+Bnc.d] > 0
-#             rst *= "+"*repr(Bnc.K_sym[j]^dir[j+Bnc.d])*" "
-#         elseif dir[j+Bnc.d] < 0
-#             rst *= "-"*repr(Bnc.K_sym[j]^(-dir[j+Bnc.d]))*" "
-#         end
-#     end
-#     return rst
-# end
+function render_path(pths::AbstractVector{<:Tuple};kwargs...)
+    if length(pths[1]) == 2
+        return render_path(1:length(pths), getindex.(pths,1), getindex.(pths,2); kwargs...)
+    elseif length(pths[1]) == 1
+        return render_path(1:length(pths), getindex.(pths,1); kwargs...)
+    else
+        return render_path(getindex.(pths,1), getindex.(pths,2),getindex.(pths,3); kwargs...)
+    end
+end
+render_path(groups::AbstractVector{Vector{<:Real}}; kwargs...) = render_path(eachindex(groups), groups, nothing; kwargs...)
+function render_path(groups, pths, volumes=nothing; appendix="")
+    # if isnothing(volumes)
+    #     for (i, pth) in zip(groups, pths)
+    #           println("Path" * repr(i) * ":  ", render_arrow(pth, appendix))
+    #     end
+    # elseif length(volumes[1]) == 2
+    #     for (i, pth,vals) in zip(groups, pths,volumes)
+    #           println("Path" * repr(i) * ":  ", render_arrow(pth, appendix), "\t | Volume: $(round(vals[1], digits=4)) ± $(round(vals[2], digits=4))")
+    #     end
+    # else
+    #     for (i, pth,vals) in zip(groups, pths,volumes)
+    #           println("Path" * repr(i) * ":  ", render_arrow(pth, appendix), "\t | Volume: $(round(vals, digits=4)) ± $(round(vals[2], digits=4))")
+    #     end
+    # end
+    path_width = 15  # "Path" 列的宽度
+    arrow_width = 30  # render_arrow 的列宽度
+    volume_width = 6  # Volume 列的宽度
+    if isnothing(volumes)
+        for (i, pth) in zip(groups, pths)
+            # 格式化输出路径编号、箭头路径和 volume 列（无 volume）
+            println(Printf.@sprintf("Path %-*s  %-*s", path_width, repr(i), arrow_width, render_arrow(pth, appendix)))
+        end
+    elseif length(volumes[1]) == 2
+        for (i, pth, vals) in zip(groups, pths, volumes)
+            # 格式化输出路径编号、箭头路径以及体积和误差
+            println(Printf.@sprintf("Path %-*s  %-*s\t  Volume: %-*s ± %-*s", path_width, repr(i), arrow_width, render_arrow(pth, appendix), volume_width, string(round(vals[1], digits=4)), volume_width, string(round(vals[2], digits=4))))
+        end
+    else # volumes[1] is a single value
+        for (i, pth, vals) in zip(groups, pths, volumes)
+            # 格式化输出路径编号、箭头路径以及体积
+            println(Printf.@sprintf("Path %-*s  %-*s\t  Volume: %-*s", path_width, repr(i), arrow_width, render_arrow(pth, appendix), volume_width, string(round(vals, digits=4))))
+        end
+    end
+    return nothing
+end
+
+
+function show_path(grh::SISO_graph; show_volume::Bool=true,kwargs...)
+    pths = grh.rgm_paths
+    if show_volume 
+        val =  get_volume!(grh,kwargs...)
+        render_path(1:length(pths), pths, val; appendix ="#")
+    else
+        render_path(1:length(pths), pths; appendix ="#")
+    end
+    return nothing
+end
+
+
+
 
 """
 Given a regime path, change_qK_idx, and observe_x_idx, return the symbolic expressions for the path in the form
 [expression1, edge1, expression2, edge2,...]
 """
 function get_expression_for_path(model::Bnc, rgm_path, change_qK_idx, observe_x_idx;log_space::Bool=false)::Tuple{Vector,Vector}
-    
+    observe_x_idx = locate_sym(model.x_sym, observe_x_idx)
     have_volume_mask = _get_vertices_mask(model, rgm_path; singular=false)
     idx = findall(have_volume_mask)
     exprs = map(idx) do id
@@ -289,3 +347,6 @@ function get_expression_for_path(model::Bnc, rgm_path, change_qK_idx, observe_x_
     return (exprs, edges)
 end
 
+function get_expression_for_path(grh::SISO_graph, pth_idx, observe_x; kwargs...)
+    return get_expression_for_path(grh.bn, grh.rgm_paths[pth_idx], grh.change_qK_idx, observe_x; kwargs...)
+end

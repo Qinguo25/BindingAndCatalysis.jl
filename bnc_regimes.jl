@@ -641,10 +641,10 @@ function _ensure_full_properties!(Bnc::Bnc, vtx::Vertex)
     end
     if vtx.nullity == 0
         H = _calc_H(Bnc, vtx.perm) 
-        vtx.H = H # Calculate the inverse matrix from pre-computed LU decomposition of M
-        vtx.H0 = H * vtx.M0
-        vtx.C_qK = droptol!(sparse(vtx.C_x * H),1e-10)
-        vtx.C0_qK = vtx.C0_x - vtx.C_x * vtx.H0 # Correctly use vtx.C0_x
+        vtx.H = H # Calculate the inverse matrix from pre-computed LU decomposition of M H=M^-1
+        vtx.H0 = - H * vtx.M0  # H0 = -M^-1 * M0
+        vtx.C_qK = droptol!(sparse(vtx.C_x * H),1e-10) # C_qK = C_x * H
+        vtx.C0_qK = vtx.C0_x + vtx.C_x * vtx.H0 # C0_qK = C0_x + C_x * H0 
     else
         if vtx.nullity ==1
             # we need to check where this nullity comes from.
@@ -1131,12 +1131,37 @@ end
 
 
 # Direct method:
-function get_polyhedron_intersect(Bnc::Bnc,vtx1,vtx2)::Polyhedron
-    p1 = get_polyhedra(Bnc, vtx1)
-    p2 = get_polyhedra(Bnc, vtx2)
-    p = intersect(p1,p2)
-    return p
+function get_polyhedron_intersect(Bnc::Bnc,vtx1,vtx2;cache::Bool=true)::Polyhedron
+    idx1 = get_idx(Bnc, vtx1)
+    idx2 = get_idx(Bnc, vtx2)
+    
+    f(vtx1,vtx2) = begin
+        p1 = get_polyhedra(Bnc, vtx1)
+        p2 = get_polyhedra(Bnc, vtx2)
+        p = intersect(p1,p2)
+        return p
+    end
+
+    if !cache
+        return f(vtx1,vtx2)
+    end
+
+    key = Set([idx1, idx2])
+    vg = get_vertices_graph!(Bnc; full=false) # May not necessary
+    if haskey(vg.edge_map, key)
+        idx = vg.edge_map[key]
+        if vg.boundary_polys_is_computed[idx]
+            return vg.boundary_polys[idx]
+        else
+            vg.boundary_polys[idx] = f(vtx1,vtx2)
+            vg.boundary_polys_is_computed[idx] = true
+            return vg.boundary_polys[idx]
+        end
+    end
+    return f(vtx1,vtx2)
 end
+
+
 """
 Directly judge if two vertices are neighbors by polyhedron intersection.
 """
@@ -1177,6 +1202,9 @@ function get_change_dir_qK_direct(Bnc::Bnc, from, to;check=false)
     # judge the direction
 end
 
+"""
+a'x+b =0 is the interface between two neighboring vertices in qK space.
+"""
 function get_interface_direct(Bnc::Bnc, from, to)
     p = get_polyhedron_intersect(Bnc,from,to)
     detecthlinearity!(p)
@@ -1187,7 +1215,7 @@ function get_interface_direct(Bnc::Bnc, from, to)
     hp = first(hplanes)
     a = droptol!(sparse(hp.a), 1e-10)
     b = hp.β
-    return a, b
+    return a, -b
 end
 
 
@@ -1267,7 +1295,7 @@ end
 
 """
     get_interface(Bnc::Bnc, from, to)
-return the interface (a,b) between two neighboring vertices in qK space, i.e., a'x = b.
+return the interface (a,b) between two neighboring vertices in qK space, i.e., a'x + b = 0.
 (For now the logic is to find the right row in C and C0, and calculate from then is required.)
 """
 function get_interface(Bnc::Bnc, from, to)
@@ -1428,18 +1456,16 @@ function get_one_inner_point(poly::T;rand_line=true,rand_ray=true,extend=3) wher
     for (i, ray) in enumerate(eachrow(vrep_poly.R))
         if i ∉ vrep_poly.Rlinset
             norm_ray = norm(ray)
-            sigma = rand_ray ? rand()-0.5 : 0
-            ray_avg .+= (ray ./ norm_ray .* (1+sigma) )
+            sigma = rand_ray ? (rand()+0.5)*extend : extend
+            ray_avg .+= (ray ./ norm_ray .* sigma )
         else
             if rand_line
                 norm_ray = norm(ray)
-                sigma = rand()-0.5
+                sigma = (rand()-0.5)*extend
                 ray_avg .+= (ray ./ norm_ray * sigma)
             end
         end
     end
-    norm_ray_avg = norm(ray_avg)
-    @. ray_avg = ray_avg / norm_ray_avg .* extend
     return (point.+ ray_avg)
 end
 

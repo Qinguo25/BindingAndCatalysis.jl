@@ -190,7 +190,7 @@ function qK2x(Bnc::Bnc, qK::AbstractArray{<:Real,1};
 
 
     if use_vtx
-        perm = assign_vertex_qK(Bnc,endlogqK; input_logspace=true)
+        perm = assign_vertex_qK(Bnc,endlogqK; input_logspace=true,asymptotic=false)
         H,H0 = get_H_H0!(Bnc,perm)
         x = H* endlogqK .+ H0
     elseif ismissing(method) || method != :homotopy
@@ -375,6 +375,20 @@ function _logx_traj_with_logqK_change(Bnc::Bnc,
         callback = CallbackSet(equilibrium_cb)
     end
 
+    @inline function eps_lu(J,max_try=100)
+        lu!(J_lu, J,check=false) # recalculate the LU decomposition of J
+        try_count = 0
+        while !issuccess(J_lu) && try_count < max_try
+            @.J_top_diag += eps() # perturb the diagonal elements a bit to avoid singularity
+            lu!(J_lu, J,check=false)
+            try_count += 1
+        end
+        if try_count == max_try
+            @show logx logqK
+            @show J
+            @warn("Jacobian is still singular after maximum perturbation attempts.")
+        end
+    end
     homotopy_process! = function(du, u, p, t)
         @unpack ΔlogqK, logx, logqK, J, J_lu, logx_J_view, logq_J_view, J_top,J_top_diag = p
         #update q & x
@@ -384,14 +398,7 @@ function _logx_traj_with_logqK_change(Bnc::Bnc,
         #update J_top(sparse version) - use the local copy of nzval
         @. J_top = exp10(logx_J_view - logq_J_view) * L_nzval
         # Update the dlogx
-        lu!(J_lu, J,check=false) # recalculate the LU decomposition of J
-        if !issuccess(J_lu)
-            if !ensure_manifold
-                @warn("Jacobian is singular, and force invertible by pertubing, please set ensure_manifold=true to decrease numeric error.")
-            end
-            @.J_top_diag += eps() # perturb the diagonal elements a bit to avoid singularity
-            lu!(J_lu, J)
-        end
+        eps_lu(J)
         ldiv!(du, J_lu, ΔlogqK)
     end
     
@@ -921,7 +928,7 @@ end
 
 calc_volume(C::AbstractMatrix{<:Real}, C0::AbstractVector{<:Real}; kwargs...)::Tuple{Float64,Float64} = calc_volume([C], [C0]; kwargs...)[1]
 
-function calc_volume(polys::Vector{<:Polyhedron};
+function calc_volume(polys::AbstractVector{<:Polyhedron};
     asymptotic::Bool=true,
     kwargs...
 )::Vector{Tuple{Float64,Float64}}
@@ -935,7 +942,7 @@ function calc_volume(polys::Vector{<:Polyhedron};
     end
 
     if asymptotic
-        polys = polys .|> repolyhedron
+        polys = repolyhedron.(polys)
     end
     full_dim_idx = findall(v -> v == full_dims, dim.(polys))
 
