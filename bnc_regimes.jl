@@ -780,11 +780,14 @@ Get the volume of all vertices in Bnc.
 """
 function get_vertices_volume!(Bnc::Bnc;recalculate::Bool=false)
     """
-    Calculate the volume of all vertices in Bnc.
+    Calculate the volume of all vertices in Bnc. (currently calc all the voluems, but unnecessary)
     """
     if recalculate || !Bnc._vertices_volume_is_calced
-        vals = calc_volume(Bnc;asymptotic=true)
-        for (vtx, vol) in zip(Bnc.vertices_data, vals)
+        # n_vtxs = length(Bnc.vertices_data)
+        vals = calc_vertices_volume(Bnc;asymptotic=true)
+        for i in eachindex(Bnc.vertices_data)
+            vtx = get_vertex!(Bnc,i;full=false)
+            vol = vals[i]
             vtx.volume = vol[1]
             vtx.eps_volume = vol[2]
         end
@@ -1100,10 +1103,10 @@ function get_volume!(Bnc::Bnc, perm;recalculate::Bool=false, kwargs...)
     vtx = get_vertex!(Bnc, perm)
     if !recalculate 
         if !Bnc._vertices_volume_is_calced && vtx.volume == 0.0 # may not been calculated before
-                (vtx.volume, vtx.eps_volume) = calc_volume(Bnc,perm;asymptotic=true,kwargs...)
+                (vtx.volume, vtx.eps_volume) = calc_vertex_volume(Bnc,perm;asymptotic=true,kwargs...)
         end
     else
-        (vtx.volume, vtx.eps_volume) = calc_volume(Bnc,perm;asymptotic=true,kwargs...)
+        (vtx.volume, vtx.eps_volume) = calc_vertex_volume(Bnc,perm;asymptotic=true,kwargs...)
     end
 
     return (vtx.volume, vtx.eps_volume)
@@ -1395,12 +1398,16 @@ get_vertices(Bnc; singular=false, asymptotic=false)
 """
 function get_vertices(Bnc::Bnc; return_idx::Bool=false, kwargs...)
     find_all_vertices!(Bnc)
-    idx_all = eachindex(Bnc.vertices_perm)
+    idx_all = eachindex(Bnc.vertices_data)
     masks = _get_vertices_mask(Bnc, idx_all; kwargs...)
-    idx = idx_all[masks]
-    return return_idx ? idx : Bnc.vertices_perm[idx]
+    return return_idx ? findall(masks) : Bnc.vertices_perm[masks]
 end
 
+
+
+#
+# filter the vtxs accoring to the criteria
+#
 function _get_vertices_mask(model::Bnc,vtxs::AbstractVector{<:Integer};
      singular::Union{Bool,Integer,Nothing}=nothing, 
      asymptotic::Union{Bool,Nothing}=nothing)::Vector{Bool}

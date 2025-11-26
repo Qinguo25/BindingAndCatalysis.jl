@@ -668,7 +668,7 @@ function assign_vertex_qK(Bnc::Bnc ; x::AbstractVector{<:Real}, input_logspace::
     return assign_vertex_qK(Bnc, logqK; input_logspace=true, kwargs...)
 end
 
-function assign_vertex_qK(Bnc::Bnc, qK::AbstractVector{<:Real}; input_logspace::Bool=false, asymptotic::Bool=true, eps=0) 
+function assign_vertex_qK(Bnc::Bnc, qK::AbstractVector{<:Real}; input_logspace::Bool=false, asymptotic::Bool=false, eps=0) 
     real_only = asymptotic ? true : nothing
     all_vertice_idx = get_vertices(Bnc, singular=false, asymptotic = real_only, return_idx = false)
     # @show all_vertice_idx
@@ -809,6 +809,8 @@ end
 #     return [get_center_margin(c, N) for c in total_counts]
 # end
 
+
+# Core function of calc volume:
 function calc_volume(Cs::AbstractVector{<:AbstractMatrix{<:Real}},
                      C0s::AbstractVector{<:AbstractVector{<:Real}};
     confidence_level::Float64 = 0.95,
@@ -836,6 +838,7 @@ function calc_volume(Cs::AbstractVector{<:AbstractMatrix{<:Real}},
 
     # 每线程本地计数，避免锁
     thread_counts = [zeros(Int, n_regimes) for _ in 1:n_threads]
+    
 
     start_time = time()
     z = quantile(Normal(), (1 + confidence_level) / 2)
@@ -851,6 +854,7 @@ function calc_volume(Cs::AbstractVector{<:AbstractMatrix{<:Real}},
         return center, margin
     end
 
+     
     # --- 主循环 ---
     while true
         elapsed = time() - start_time
@@ -865,7 +869,7 @@ function calc_volume(Cs::AbstractVector{<:AbstractMatrix{<:Real}},
 
         # 生成一批样本（列是样本）
         samples = rand(dist, n_dim, batch_size)
-
+       
        Threads.@threads for j in 1:batch_size
             tid = Threads.threadid()
             local_counts = thread_counts[tid]
@@ -873,7 +877,8 @@ function calc_volume(Cs::AbstractVector{<:AbstractMatrix{<:Real}},
 
             # 对当前点，只检查 active 的 regimes
             # 如果 contain_overlap == false：当找到一个满足的 regime，记录并 break（一个点只属于一个）
-            # 如果 contain_overlap == true：记录所有满足的 regimes（允许多分配）
+            # 如果 contain_overlap == true：记录所有满足的 regimes（允许多分配
+            vals = [similar(b) for b in C0s] # 提前分配内存
             for i in eachindex(Cs)
                 if !active[i]
                     continue
@@ -883,8 +888,10 @@ function calc_volume(Cs::AbstractVector{<:AbstractMatrix{<:Real}},
 
                 # 计算 A*x + b 的每个分量是否都 > -tol
                 # 使用 all(...) 简洁直观（可能会分配一个临时数组在某些情况下，但通常 A*x+b 是向量）
-                vals = A * x .+ b
-                if any(vals .< -tol)
+                mul!(vals[i], A,x)
+                vals[i] .+b
+                # vals = A * x .+ b
+                if any(vals[i] .< -tol)
                     # 不满足当前 regime：不管 contain_overlap 与否，都去检查下一个 regime
                     continue
                 end
@@ -928,83 +935,122 @@ end
 
 calc_volume(C::AbstractMatrix{<:Real}, C0::AbstractVector{<:Real}; kwargs...)::Tuple{Float64,Float64} = calc_volume([C], [C0]; kwargs...)[1]
 
-function calc_volume(polys::AbstractVector{<:Polyhedron};
-    asymptotic::Bool=true,
+
+
+# calculate volume for Bnc regimes,
+
+
+
+function calc_vertices_volume(model::Bnc, perms=nothing;
+    asymptotic::Union{Bool,Nothing}=true, 
     kwargs...
-)::Vector{Tuple{Float64,Float64}}
-    # --- 提前提取每个 poly 的 (A, b) ---
-    full_dims = fulldim(polys[1])
-
-    function repolyhedron(poly::Polyhedron)
-        (A,b,linset) = MixedMatHRep(hrep(poly)) |> p->(p.A, p.b,p.linset)
-        p_new = hrep(A, zeros(size(b)), linset) |> x-> polyhedron(x,CDDLib.Library())
-        return p_new
+)::Vector{Tuple{Float64, Float64}} # singular/ asymptotic not be put here, as dimensions could reduce and change.
+    if isnothing(perms)
+        n_all  = length(model.vertices_perm)
+        # get index for those worth calculate volume
+        idxs = get_vertices(model, singular=false, asymptotic= asymptotic; return_idx=true) # Are both index and perms!!!!!!
+        perms_to_calc = idxs
+    else
+        n_all = length(perms)
+        idxs = findall(perms) do perm # not perms!!!!!!!!!!!
+                !is_singular(model,perm) && (isnothing(asymptotic) || is_asymptotic(model,perm) == asymptotic)
+            end
+        perms_to_calc = perms[idxs]
     end
 
-    if asymptotic
-        polys = repolyhedron.(polys)
-    end
-    full_dim_idx = findall(v -> v == full_dims, dim.(polys))
-
-    reps = polys[full_dim_idx] .|> poly -> MixedMatHRep(hrep(poly)) |> p->(p.A, p.b)
-    vals = collect(zip(zeros(Float64, length(polys)), zeros(Float64, length(polys))))
-
-    C = [ -rep[1] for rep in reps ]
-    C0 = [ rep[2] for rep in reps ]
-
-    vals[full_dim_idx] .= calc_volume(C, C0; kwargs...)
-    return vals
-end
-calc_volume(poly::Polyhedron;kwargs...)::Tuple{Float64,Float64} = calc_volume([poly]; kwargs...)[1]
-
-function calc_volume(model::Bnc;
-    asymptotic::Bool=true,
-    kwargs...
-)::Vector{Tuple{Float64, Float64}}
-    # get index for those worth calculate volume
-    idxs = get_vertices(model, singular=false, 
-        asymptotic= asymptotic ? true : nothing, return_idx=true)
-
-    # get C and C0 for each vertex
-    Cs = [get_C_qK!(model,idx) for idx in idxs]
-
-    if asymptotic # get only asymptotic vertices
-        C0s = [zeros(size(C,1)) for C in Cs]
-    else # get all non-singular vertices
-        C0s = [get_C0_qK!(model,idx) for idx in idxs]
+    vals = collect(zip(zeros(Float64, n_all), zeros(Float64, n_all)))
+    
+    if isempty(perms_to_calc)
+        return vals
     end
 
-    # calculate volume for each vertex
-    # Initialize the value
-    vals = collect(zip(zeros(Float64, length(model.vertices_perm)), zeros(Float64, length(model.vertices_perm))))
-    # fill the value
+    CC0s = [get_C_C0_qK!(model,perm) for perm in perms_to_calc]
+    Cs = [ rep[1] for rep in CC0s ]
+    C0s = asymptotic ? [zeros(size(rep[2])) for rep in CC0s] : [ rep[2] for rep in CC0s ]
+    
     vals[idxs] .= calc_volume(Cs, C0s; kwargs...)
     return vals
 end
 
+calc_vertex_volume(Bnc::Bnc, perm;kwargs...) = calc_vertices_volume(Bnc,[perm]; kwargs...)[1]
 
 
-function calc_volume(Bnc::Bnc, perm;
-    asymptotic::Bool=true, 
-    kwargs...
-)::Tuple{Float64,Float64} # singular/ asymptotic not be put here, as dimensions could reduce and change.
-    
-    if is_singular(Bnc,perm)
-        return (0.0, 0.0)
-    end
-    
-    if asymptotic && !is_asymptotic(Bnc,perm)
-        return (0.0, 0.0)
-    end
 
-    C, C0 = get_C_C0_qK!(Bnc, perm)
-    
-    if asymptotic
-        C0 .= 0.0
-    end
-    center, margin = calc_volume(C, C0; kwargs...)
-    return (center, margin)
+# filter and then calculate volumes for polyhedra
+function _remove_poly_intersect(poly::Polyhedron)
+    (A,b,linset) = MixedMatHRep(hrep(poly)) |> p->(p.A, p.b,p.linset)
+    p_new = hrep(A, zeros(size(b)), linset) |> x-> polyhedron(x,CDDLib.Library())
+    return p_new
 end
+
+function _get_polys_mask(polys::AbstractVector{<:Polyhedron};
+     singular::Union{Bool,Integer,Nothing}=nothing, 
+     asymptotic::Union{Bool,Nothing}=nothing)::Vector{Bool}
+    # ensure nullity and asymptotic flags are calculated
+
+    n = length(polys)
+
+    full_dim = fulldim(polys[1])
+    dims = dim.(polys)
+    nlt = full_dim .- dims
+
+    flag_asym =
+        if isnothing(asymptotic)
+            fill(false, n)               # 不使用 asym 标准
+        else
+            # only compute if needed
+            polys_asym = _remove_poly_intersect.(polys)
+            nlt_new = full_dim .- dim.(polys_asym)
+            nlt_new .== nlt               # asym condition
+        end
+
+    check_singular(nlt) = isnothing(singular) || (
+        (singular === true  && nlt > 0) ||
+        (singular === false && nlt == 0) ||
+        (singular isa Int   && nlt ≤ singular)
+    )
+
+    check_asym(flag_asym) = isnothing(asymptotic) || (asymptotic == flag_asym)
+    
+    return [ check_singular(nlt[i]) && check_asym(flag_asym[i]) for i in 1:n ]
+end
+
+function filter_polys(polys; return_idx::Bool=false, kwargs...)
+    mask = _get_polys_mask(polys; kwargs...)
+    return return_idx ? findall(mask) : polys[mask]
+end
+
+
+
+
+function calc_volume(polys::AbstractVector{<:Polyhedron};
+    asymptotic::Bool=true,
+    kwargs...
+)::Vector{Tuple{Float64,Float64}}
+    n_all = length(polys)
+    idxs = filter_polys(polys; singular=false, asymptotic= asymptotic ? true : nothing, return_idx=true)
+    reps = polys[idxs] .|> poly -> MixedMatHRep(hrep(poly)) |> p->(p.A, p.b)
+    
+    vals = collect(zip(zeros(Float64, n_all), zeros(Float64, n_all)))
+
+    if isempty(reps)
+        return vals
+    end    
+
+    Cs = [ -rep[1] for rep in reps ]
+    C0s = asymptotic ? [zeros(size(rep[2])) for rep in reps] : [ rep[2] for rep in reps ]
+    
+    
+    vals[idxs] .= calc_volume(Cs, C0s; kwargs...)
+    return vals
+end
+
+calc_volume(poly::Polyhedron;kwargs...) = calc_volume([poly]; kwargs...)[1]
+
+
+# for now as the perm is not defined , we shall 
+
+
 
 
 

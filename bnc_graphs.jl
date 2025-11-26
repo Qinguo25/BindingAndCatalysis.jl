@@ -108,9 +108,9 @@ function SISO_graph(model::Bnc{T}, change_qK, rgm_paths::AbstractVector{Abstract
     return SISO_graph(model, qK_grh, change_qK_idx, sources, sinks, rgm_paths)
 end
 
-function get_volume!(grh::SISO_graph, pth_idx = nothing; asymptotic=true,recalculate=false, kwargs...)::Vector{Tuple{Float64,Float64}}
+function get_volume!(grh::SISO_graph, pth_idx::Union{Vector{<:Integer},Nothing}=nothing; asymptotic=true,recalculate=false, kwargs...)::Vector{Tuple{Float64,Float64}}
     pth_idx === nothing && (pth_idx = 1:length(grh.rgm_paths))
-    isa(pth_idx, Integer) && (pth_idx = [pth_idx]) # make sure pth_idx is a vector
+    # isa(pth_idx, Integer) && (pth_idx = [pth_idx]) # make sure pth_idx is a vector
     
     let # calculate volumes if not calculated before
         idx_to_calculate = recalculate ? pth_idx : filter(x -> !grh.rgm_volume_is_calc[x], pth_idx)
@@ -129,6 +129,7 @@ function get_volume!(grh::SISO_graph, pth_idx = nothing; asymptotic=true,recalcu
     err = grh.rgm_volume_err[pth_idx]
     return [(vol, err) for (vol, err) in zip(vol, err)]
 end
+get_volume!(grh::SISO_graph, pth_idx::Integer; kwargs...) = get_volume!(grh, [pth_idx]; kwargs...)[1]
 
 function get_polyhedra!(grh::SISO_graph, pth_idx = nothing)::Vector{Polyhedron}
     pth_idx === nothing && (pth_idx = 1:length(grh.rgm_paths))

@@ -331,7 +331,7 @@ end
 Given a regime path, change_qK_idx, and observe_x_idx, return the symbolic expressions for the path in the form
 [expression1, edge1, expression2, edge2,...]
 """
-function get_expression_for_path(model::Bnc, rgm_path, change_qK_idx, observe_x_idx;log_space::Bool=false)::Tuple{Vector,Vector}
+function show_expression_path(model::Bnc, rgm_path, change_qK_idx, observe_x_idx;log_space::Bool=false)::Tuple{Vector,Vector}
     observe_x_idx = locate_sym(model.x_sym, observe_x_idx)
     have_volume_mask = _get_vertices_mask(model, rgm_path; singular=false)
     idx = findall(have_volume_mask)
@@ -347,6 +347,6 @@ function get_expression_for_path(model::Bnc, rgm_path, change_qK_idx, observe_x_
     return (exprs, edges)
 end
 
-function get_expression_for_path(grh::SISO_graph, pth_idx, observe_x; kwargs...)
-    return get_expression_for_path(grh.bn, grh.rgm_paths[pth_idx], grh.change_qK_idx, observe_x; kwargs...)
+function show_expression_path(grh::SISO_graph, pth_idx, observe_x; kwargs...)
+    return show_expression_path(grh.bn, grh.rgm_paths[pth_idx], grh.change_qK_idx, observe_x; kwargs...)
 end

@@ -21,7 +21,7 @@ using Polyhedra#:vrep,hrep,eliminate,MixedMatHRep,MixedMatVRep,polyhedron,Polyhe
 import CDDLib
 
 using Graphs
-
+import Printf
 import JSON3
 import ImageFiltering: imfilter, Kernel
 # ---------------------Define the struct of binding and catalysis networks----------------------------------
