@@ -447,11 +447,16 @@ function locate_sym(syms, target_sym)
     target_sym = Symbol(target_sym)
     return findfirst(x -> x.val.name == target_sym, syms)
 end
-function locate_sym(syms, target_syms::Integer)
-    return target_syms
+function locate_sym(syms, target_sym::Integer)
+    return target_sym
 end
 
-
+function locate_sym_x(model::Bnc,target_sym)
+    return locate_sym(model.x_sym, target_sym)
+end
+function locate_sym_qK(model::Bnc,target_sym)
+    return locate_sym([model.q_sym;model.K_sym], target_sym)
+end
 
 
 
@@ -497,4 +502,10 @@ function _logx_traj_with_logqK_change_test(Bnc::Bnc,
     prob = ODE.DAEProblem(func, startlogx, tspan, params)
     sol = ODE.solve(prob, Sundials.IDA(linear_solver=:KLU); reltol=reltol, abstol=abstol, callback=callback, kwargs...)
     return sol
+end
+
+function norm_vec_space(x::AbstractVector{<:Real})::Vector{Float64}
+    n = length(x)
+    num_to_norm = median!(filter!(>(1e-9), abs.(x)))
+    return x./num_to_norm
 end

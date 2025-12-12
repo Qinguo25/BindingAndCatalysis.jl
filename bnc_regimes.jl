@@ -985,12 +985,13 @@ Return neighbors of the vertex `perm` that satisfy certain conditions.
 - `return_idx`: if `true`, return neighbor indices; otherwise, return permutations.
 
 # Example
-```julia
+julia
 get_neighbors(Bnc, perm)                       # all neighbors
 get_neighbors(Bnc, perm; singular=true)        # only singular ones
 get_neighbors(Bnc, perm; singular=2)           # nullity ≤ 2
 get_neighbors(Bnc, perm; asymptotic=true)      # only asymptotic ones
 get_neighbors(Bnc, perm; singular=1, asymptotic=false)
+
 """
 function get_neighbors(Bnc::Bnc, perm; singular::Union{Bool,Int,Nothing}=nothing, asymptotic::Union{Bool,Nothing}=nothing, return_idx::Bool=false)
     idx = get_vertex!(Bnc,perm; full=false, neighbor_info=true).neighbors_idx
@@ -1389,7 +1390,7 @@ Return all vertices of `Bnc` that satisfy given filters.
 - `return_idx`: if `true`, return vertex indices; otherwise return vertex permutations.
 
 # Example
-```julia
+julia
 get_vertices(Bnc)                          # all vertices
 get_vertices(Bnc; singular=true)           # singular only
 get_vertices(Bnc; singular=2)              # nullity ≤ 2
@@ -1522,7 +1523,19 @@ function summary_vertex(Bnc::Bnc, perm)
     perm = get_perm(Bnc, idx)
     is_real = get_vertex!(Bnc, idx).real
     nullity = get_nullity!(Bnc, idx)
-    println("idx=$idx,perm=$perm, is_real=$is_real, nullity=$nullity")
+    volume = get_volume!(model,perm)
+    println("idx=$idx,perm=$perm, asymptotic=$is_real, nullity=$nullity")
+    println("volume=$(volume[1]) +- $(volume[2])")
+    println("Dominante condition")
+    display.(show_dominant_condition(model,perm;log_space=false))
+    println("x expression")
+    try
+        display.(show_expression_x(model,perm;log_space=false))
+    catch
+    end
+    println("condition:")
+    display.(show_condition_qK(model,perm;log_space=false))
+    
     return nothing
 end
 function summary_vertices(Bnc::Bnc;kwargs...)
@@ -1530,3 +1543,4 @@ function summary_vertices(Bnc::Bnc;kwargs...)
     vtx .|> x->summary_vertex(Bnc,x)
     return nothing
 end
+

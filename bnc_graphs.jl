@@ -81,7 +81,7 @@ end
 # end
 
 function SISO_graph(model::Bnc{T}, change_qK)::SISO_graph{T} where T
-    change_qK_idx = locate_sym([model.q_sym; model.K_sym], change_qK)
+    change_qK_idx = locate_sym_qK(model, change_qK)
     qK_grh = get_qK_neighbor_grh(model, change_qK;)
     sources, sinks = get_sources_sinks(model, qK_grh)
     rgm_paths = _enumerate_paths(qK_grh; sources=sources, sinks=sinks)
@@ -100,7 +100,7 @@ function SISO_graph(model::Bnc{T}, change_qK, rgm_paths::AbstractVector{Abstract
         end
     end
     qK_grh = grh
-    change_qK_idx = locate_sym([model.q_sym; model.K_sym], change_qK)
+    change_qK_idx = locate_sym_qK(model, change_qK)
     sources, sinks = unique(rgm_paths .|> x->x[1]), unique(rgm_paths .|> x->x[end])
     # volume_data = calc_volume(rgm_polys;asymptotic=true)
     # rgm_volume = map(x->x[1], volume_data)
@@ -175,7 +175,7 @@ end
 Get qK neighbor graph with denoted idx
 """
 function get_qK_neighbor_grh(Bnc::Bnc,change_qK;)::SimpleDiGraph
-    change_qK_idx = locate_sym([Bnc.q_sym; Bnc.K_sym], change_qK)
+    change_qK_idx = locate_sym_qK(model, change_qK)
     vg = get_vertices_graph!(Bnc;full=true)
     n = length(vg.neighbors)
     g = SimpleDiGraph(n)
@@ -252,7 +252,7 @@ end
 
 function _calc_polyhedra_for_path(model::Bnc, paths::AbstractArray{<:AbstractVector{Ty}},change_qK; cachelevel=2)::Vector{Polyhedron} where Ty<:Integer
     # Find the dimension to eliminate
-    change_qK_idx = locate_sym([model.q_sym; model.K_sym], change_qK)
+    change_qK_idx = locate_sym_qK(model, change_qK)
     el_dim = BitSet(change_qK_idx) # dimension to eliminate
 
     clean(p) = begin
@@ -332,7 +332,7 @@ end
 
 function _calc_polyhedra_for_path(model::Bnc, rgm_path::AbstractVector{<:Integer}, change_qK)::Polyhedron # Can be extremely slow for long paths
     # Find the dimension to eliminate
-    change_qK_idx = locate_sym([model.q_sym; model.K_sym], change_qK)
+    change_qK_idx = locate_sym_qK(model, change_qK)
     el_dim = BitSet(change_qK_idx) # dimension to eliminate
 
     f(p) = begin
@@ -440,8 +440,8 @@ function _dedup(ord_path::Vector{T})::Vector{T} where T<:Real
 end
 
 function find_reaction_order_for_path(model::Bnc, rgm_path::Vector{<:Integer}, change_qK, observe_x; deduplicate::Bool=false,keep_singular::Bool=true,keep_nonasymptotic::Bool=true)::Vector{<:Real}
-    change_qK_idx = locate_sym([model.q_sym; model.K_sym], change_qK)
-    observe_x_idx = locate_sym(model.x_sym, observe_x)
+    change_qK_idx = locate_sym_qK(model, change_qK)
+    observe_x_idx = locate_sym_x(model, observe_x)
     ord_path = _calc_reaction_order_for_single_path(model, rgm_path, change_qK_idx, observe_x_idx)
     
     mask = _get_vertices_mask(model, rgm_path;
@@ -465,7 +465,7 @@ function find_reaction_order_for_path(model, rgm_paths::Vector{Vector{Int}}, arg
 end
 
 function find_reaction_order_for_path(model::SISO_graph,observe_x;kwargs...)
-    observe_x_idx = locate_sym(model.bn.x_sym, observe_x)
+    observe_x_idx = locate_sym_x(model.bn, observe_x)
     return find_reaction_order_for_path(model.bn, model.rgm_paths, model.change_qK_idx, observe_x_idx; kwargs...)
 end
 
@@ -520,7 +520,7 @@ end
 function summary_path(grh::SISO_graph,observe_x; 
     deduplicate::Bool=false,keep_singular::Bool=true,keep_nonasymptotic::Bool=true,kwargs...)
     
-    observe_x_idx = locate_sym(grh.bn.x_sym, observe_x)
+    observe_x_idx = locate_sym_x(grh.bn, observe_x)
     ord_pth = find_reaction_order_for_path(grh, observe_x_idx; 
         deduplicate=deduplicate,
         keep_singular=keep_singular,

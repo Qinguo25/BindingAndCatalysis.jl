@@ -24,7 +24,7 @@ Symbolicly calculate ∂logx/∂logqK
 function ∂logx_∂logqK_sym(Bnc::Bnc;show_x_space::Bool=false)::Matrix{Num}
     # Calculate the symbolic derivative of log(qK) with respect to log(x)
     # This function is used for symbolic calculations, not numerical ones.
-    return inv(∂logqK_∂logx_sym(Bnc; show_x_space=show_x_space)).|> simplify
+    return inv(∂logqK_∂logx_sym(Bnc; show_x_space=show_x_space)).|> Symbolics.simplify
 end
 
 #---------------------------------------------------------
@@ -245,6 +245,9 @@ function sym_direction(Bnc::Bnc,dir)::String
     return rst
 end
 
+
+
+
 """
 Render an arrow representation of a vector, with an optional appendix before each element.
 eg: render_arrow([1,0,-1],"x") -> "x1 → x0 → x-1"
@@ -253,7 +256,7 @@ function render_arrow(a::Vector, appendix="")::String
     v = Vector{Any}(undef, length(a))
     for i in eachindex(a)
         try 
-            v[i] = Int(a[i])
+            v[i] = Int(round(a[i];digits=3))
         catch
             v[i] = a[i]
         end
@@ -266,6 +269,13 @@ function render_arrow(a::Vector, appendix="")::String
     return s
 end
 
+
+
+
+
+
+
+
 function render_path(pths::AbstractVector{<:Tuple};kwargs...)
     if length(pths[1]) == 2
         return render_path(1:length(pths), getindex.(pths,1), getindex.(pths,2); kwargs...)
@@ -277,19 +287,6 @@ function render_path(pths::AbstractVector{<:Tuple};kwargs...)
 end
 render_path(groups::AbstractVector{Vector{<:Real}}; kwargs...) = render_path(eachindex(groups), groups, nothing; kwargs...)
 function render_path(groups, pths, volumes=nothing; appendix="")
-    # if isnothing(volumes)
-    #     for (i, pth) in zip(groups, pths)
-    #           println("Path" * repr(i) * ":  ", render_arrow(pth, appendix))
-    #     end
-    # elseif length(volumes[1]) == 2
-    #     for (i, pth,vals) in zip(groups, pths,volumes)
-    #           println("Path" * repr(i) * ":  ", render_arrow(pth, appendix), "\t | Volume: $(round(vals[1], digits=4)) ± $(round(vals[2], digits=4))")
-    #     end
-    # else
-    #     for (i, pth,vals) in zip(groups, pths,volumes)
-    #           println("Path" * repr(i) * ":  ", render_arrow(pth, appendix), "\t | Volume: $(round(vals, digits=4)) ± $(round(vals[2], digits=4))")
-    #     end
-    # end
     path_width = 15  # "Path" 列的宽度
     arrow_width = 30  # render_arrow 的列宽度
     volume_width = 6  # Volume 列的宽度
@@ -311,8 +308,6 @@ function render_path(groups, pths, volumes=nothing; appendix="")
     end
     return nothing
 end
-
-
 function show_path(grh::SISO_graph; show_volume::Bool=true,kwargs...)
     pths = grh.rgm_paths
     if show_volume 
@@ -332,6 +327,7 @@ Given a regime path, change_qK_idx, and observe_x_idx, return the symbolic expre
 [expression1, edge1, expression2, edge2,...]
 """
 function show_expression_path(model::Bnc, rgm_path, change_qK_idx, observe_x_idx;log_space::Bool=false)::Tuple{Vector,Vector}
+    change_qK_idx = locate_sym([model.q_sym;model.K_sym],change_qK_idx)
     observe_x_idx = locate_sym(model.x_sym, observe_x_idx)
     have_volume_mask = _get_vertices_mask(model, rgm_path; singular=false)
     idx = findall(have_volume_mask)
@@ -349,4 +345,20 @@ end
 
 function show_expression_path(grh::SISO_graph, pth_idx, observe_x; kwargs...)
     return show_expression_path(grh.bn, grh.rgm_paths[pth_idx], grh.change_qK_idx, observe_x; kwargs...)
+end
+
+
+
+function render_array(M::AbstractArray)
+    A = Array{Any}(M)
+    f(x) = begin
+            a = try 
+                    Int(round(x;digits=3))
+                catch
+                    round(x;digits=5)
+                end
+            a == 0 ? nothing : a
+        end
+    A = f.(A)
+    return latexify(A)
 end

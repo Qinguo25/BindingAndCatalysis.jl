@@ -13,7 +13,7 @@ function SISO_plot(model, parameters, change_idx;
         add_archeatype_lines::Bool=false,
         regime_asign_asymptotic::Bool=false)
 
-    change_idx = locate_sym([model.q_sym;model.K_sym], change_idx)
+    change_idx = locate_sym_qK(model, change_idx)
     change_sym = "log"*repr([model.q_sym;model.K_sym][change_idx])
     change_S = range(start, stop, npoints)
     start_logqK = copy(parameters)|> x-> insert!(x, change_idx, start)
