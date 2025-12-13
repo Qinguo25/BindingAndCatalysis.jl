@@ -91,6 +91,8 @@ function SISO_graph(model::Bnc{T}, change_qK)::SISO_graph{T} where T
     return SISO_graph(model, qK_grh, change_qK_idx, sources, sinks, rgm_paths)
 end
 
+
+
 function SISO_graph(model::Bnc{T}, change_qK, rgm_paths::AbstractVector{AbstractVector{Integer}})::SISO_graph{T} where T
     grh = SimpleDiGraph(length(model.vertices_perm))
     for p in rgm_paths
@@ -108,20 +110,21 @@ function SISO_graph(model::Bnc{T}, change_qK, rgm_paths::AbstractVector{Abstract
     return SISO_graph(model, qK_grh, change_qK_idx, sources, sinks, rgm_paths)
 end
 
+
+
 function get_volume!(grh::SISO_graph, pth_idx::Union{Vector{<:Integer},Nothing}=nothing; asymptotic=true,recalculate=false, kwargs...)::Vector{Tuple{Float64,Float64}}
     pth_idx === nothing && (pth_idx = 1:length(grh.rgm_paths))
     # isa(pth_idx, Integer) && (pth_idx = [pth_idx]) # make sure pth_idx is a vector
+    # calculate volumes if not calculated before
+    idxes_to_calculate = recalculate ? pth_idx : filter(x -> !grh.rgm_volume_is_calc[x], pth_idx)
     
-    let # calculate volumes if not calculated before
-        idx_to_calculate = recalculate ? pth_idx : filter(x -> !grh.rgm_volume_is_calc[x], pth_idx)
-        if !isempty(idx_to_calculate)
-            polys = get_polyhedra!(grh, idx_to_calculate)
-            rlts = calc_volume(polys; asymptotic=asymptotic, kwargs...)
-            for (i, idx) in enumerate(idx_to_calculate)
-                grh.rgm_volume[idx] = rlts[i][1]
-                grh.rgm_volume_err[idx] = rlts[i][2]
-                grh.rgm_volume_is_calc[idx] = true
-            end
+    if !isempty(idxes_to_calculate)
+        polys = get_polyhedra!(grh, idxes_to_calculate)
+        rlts = calc_volume(polys; asymptotic=asymptotic, kwargs...)
+        for (i, idx) in enumerate(idxes_to_calculate)
+            grh.rgm_volume[idx] = rlts[i][1]
+            grh.rgm_volume_err[idx] = rlts[i][2]
+            grh.rgm_volume_is_calc[idx] = true
         end
     end
 
@@ -131,11 +134,14 @@ function get_volume!(grh::SISO_graph, pth_idx::Union{Vector{<:Integer},Nothing}=
 end
 get_volume!(grh::SISO_graph, pth_idx::Integer; kwargs...) = get_volume!(grh, [pth_idx]; kwargs...)[1]
 
+
+
+
 function get_polyhedra!(grh::SISO_graph, pth_idx = nothing)::Vector{Polyhedron}
     pth_idx === nothing && (pth_idx = 1:length(grh.rgm_paths))
     isa(pth_idx, Integer) && (pth_idx = [pth_idx]) # make sure pth_idx is a vector
     
-    let # calculate polyhedra if not calculated before
+    let # calculate polyhedra if not initialized before
         idx_to_calculate = filter(x -> !grh.rgm_polys_is_calc[x], pth_idx) # filter those not calculated
         if !isempty(idx_to_calculate)
             polys = _calc_polyhedra_for_path(grh.bn, grh.rgm_paths[idx_to_calculate], grh.change_qK_idx)

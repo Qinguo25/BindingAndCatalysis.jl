@@ -1,159 +1,5 @@
 #--------------Core computation functions-------------------------
-function _enumerate_vertices_nonasymptotic(L, ::Val{T} ;eps=1e-9) where T
-    d, n = size(L)
-    # T = get_int_type(n)  # Determine integer type based on n
-    # Nonzero indices of each row
-    J = [findall(!iszero, row) for row in eachrow(L)]
-    
-    order = sortperm(J, by=length, rev=true)
-    inv_order = invperm(order)
-    J_ord = J[order]
 
-    # Precompute VertexEdge weights: Dict[u => edges] for each row
-    row_edges = map(1:d) do i
-        Ji = J[i]
-        logL = log.(L[i, Ji])  # compute once per row
-        Dict(Ji[k] => [(Ji[m], -((logL[m] - logL[k]) + eps)) for m in eachindex(Ji) if m != k]
-             for k in eachindex(Ji))
-    end
-
-    adj = [Vector{Tuple{T,Float64}}() for _ in 1:n]
-    results = Vector{Vector{T}}()
-
-    function has_neg_cycle(seeds)
-        # dist_local = zeros(Float64, n)   # rollback safety
-        dist_local = fill(Inf, n)
-        q = Queue{T}()
-        inq = falses(n)
-        cnt = zeros(T, n)
-        for u in seeds
-            dist_local[u] = 0.0
-            enqueue!(q, u)
-            inq[u] = true
-        end
-        while !isempty(q)
-            u = dequeue!(q)
-            inq[u] = false
-            du = dist_local[u]
-            for (v, w) in adj[u]
-                nd = du + w
-                if nd + 1e-15 < dist_local[v]
-                    dist_local[v] = nd
-                    if !inq[v]
-                        enqueue!(q, v)
-                        inq[v] = true
-                        cnt[v] += 1
-                        if cnt[v] > n
-                            return true  # negative cycle detected
-                        end
-                    end
-                end
-            end
-        end
-        return false
-    end
-
-    function dfs(r, chosen)
-        if r > d
-            # @show adj
-            push!(results, chosen[inv_order])
-            return
-        end
-        for u in J_ord[r]
-            oldlen = length(adj[u])
-            append!(adj[u], row_edges[order[r]][u])
-            if !has_neg_cycle(J_ord[r])
-                push!(chosen, u)
-                dfs(r+1, chosen)
-                pop!(chosen)
-            end
-            resize!(adj[u], oldlen)  # rollback edges
-        end
-    end
-
-    dfs(1, Int[])
-    return results
-end
-function _enumerate_vertices_asymptotic(L, ::Val{T}) where T
-    d, n = size(L)
-    J = [findall(x -> x != 0, row) for row in eachrow(L)]
-    order = sortperm(J, by = length, rev=true)
-    inv_order = invperm(order)
-    J_ord = J[order]
-
-    graph = [T[] for _ in 1:n]
-    results = Vector{Vector{T}}()
-
-
-    stack = Vector{T}(undef, n)                 # DFS stack (reused)
-    visited_stamp = zeros(Int, n)                 # visited stamps per node
-    stamp_ref = Ref(0)
-    function reachable(start, target)::Bool
-        stamp_ref[] += 1
-        curstamp = stamp_ref[]
-        top = 1
-        stack[1] = start
-        visited_stamp[start] = curstamp
-        while top > 0
-            u = stack[top]; top -= 1
-            if u == target
-                return true
-            end
-            for w in graph[u]
-                if visited_stamp[w] != curstamp
-                    visited_stamp[w] = curstamp
-                    top += 1
-                    stack[top] = w
-                end
-            end
-        end
-        return false
-    end
-
-    # fast reachable using stamp to avoid clearing visited array
-    function dfs(r,chosen)
-        if r > d
-            push!(results, chosen[inv_order])
-            # @show graph
-            return
-        end
-
-        row_choices = J_ord[r]
-        any_success = false
-        for v in row_choices
-            
-            # if v can reach some k in this row, adding k->v would create cycle
-            bad = false
-            for k in row_choices
-                k == v && continue
-                if reachable(v, k)
-                    bad = true
-                    break
-                end
-            end
-            bad && continue
-
-            # add edges k -> v for k != v
-            for k in row_choices
-                k == v && continue
-                push!(graph[k], v)
-            end
-
-            push!(chosen, v)
-            dfs(r + 1,chosen)
-            pop!(chosen)
-
-            # remove added edges
-            for k in reverse(row_choices)
-                k == v && continue
-                pop!(graph[k])
-            end
-            any_success = true
-        end
-    end
-    dfs(1,T[])
-    return results
-end
 """
     _calc_Nρ_inverse(Nρ) -> (Nρ_inv::SparseMatrixCSC, nullity::Int)
 
@@ -629,12 +475,12 @@ function _create_vertex(Bnc::Bnc{T}, perm::Vector{<:Integer})::Vertex where T
     )
 end
 """
-    _ensure_full_properties!(Bnc, vtx)
+    _fill_inv_info!(Bnc, vtx)
 
 Ensure Vertex has H/H0 and qK constraints computed and cached.
 Mutates vtx. Returns nothing.
 """
-function _ensure_full_properties!(Bnc::Bnc, vtx::Vertex)
+function _fill_inv_info!(Bnc::Bnc, vtx::Vertex)
     # Check if already calculated
     if !isempty(vtx.H)
         return nothing
@@ -674,36 +520,9 @@ function _fill_neighbor_info!(Bnc::Bnc, vtx::Vertex)
 end
 
 
-
-
-
-
-
-
 #------------------------------------------------------------------------------
 #             1. Functions find all regimes and return properties
 # ------------------------------------------------------------------------------
-find_all_vertices_nonasym(L;kwargs...) = _enumerate_vertices_nonasymptotic(L,Val(get_int_type(size(L)[2]));kwargs...) 
-find_all_vertices_asym(L;kwargs...) = _enumerate_vertices_asymptotic(L,Val(get_int_type(size(L)[2]));kwargs...)
-"""
-    find_all_vertices(L; eps=1e-9, dominance_ratio=nothing, mode="auto")
-
-Find all feasible "vertex" regimes for matrix `L` (d × n).
-Returns Vector{Vector{Int}} where each inner Vector is a length-d assignment (1-based column indices).
-Options:
-- eps: small slack for weighted mode
-- dominance_ratio: Float64
-- asymptotic::Bool
-"""
-function find_all_vertices(L::Matrix{Int} ; eps=1e-9, dominance_ratio=Inf, asymptotic::Union{Bool,Nothing}=nothing)
-    asymptotic =  (isnothing(asymptotic) && dominance_ratio == Inf) || (asymptotic == true)
-    eps = asymptotic ? nothing : (dominance_ratio == Inf ? eps : log(dominance_ratio))  # extra slack for weighted mode 
-    if asymptotic
-        return find_all_vertices_asym(L)
-    else
-        return find_all_vertices_nonasym(L,eps=eps)
-    end
-end
 
 """
     find_all_vertices!(Bnc)
@@ -746,8 +565,8 @@ function find_all_vertices!(Bnc::Bnc{T};) where T # cheap enough for now
         Bnc.vertices_perm_dict = Dict(a=>idx for (idx, a) in enumerate(Bnc.vertices_perm)) # Map from vertex to its index
         Bnc.vertices_nullity = nullity
         Bnc.vertices_data = Vector{Vertex}(undef, n_vertices)
-        Bnc._vertices_is_filled = falses(n_vertices)
-        # Bnc._vertices_volume_is_calced = falses(n_vertices)
+        Bnc._vertices_is_initialized = falses(n_vertices)
+        Bnc._vertices_volume_is_calced = falses(n_vertices)
         println("Done.")
     end
     return Bnc.vertices_perm
@@ -778,23 +597,30 @@ end
 """
 Get the volume of all vertices in Bnc.
 """
-function get_vertices_volume!(Bnc::Bnc;recalculate::Bool=false)
+function get_vertices_volume!(Bnc::Bnc,vtxs=nothing; recalculate::Bool=false, kwargs...)
     """
     Calculate the volume of all vertices in Bnc. (currently calc all the voluems, but unnecessary)
     """
-    if recalculate || !Bnc._vertices_volume_is_calced
-        # n_vtxs = length(Bnc.vertices_data)
-        vals = calc_vertices_volume(Bnc;asymptotic=true)
-        for i in eachindex(Bnc.vertices_data)
-            vtx = get_vertex!(Bnc,i;full=false)
-            vol = vals[i]
-            vtx.volume = vol[1]
-            vtx.eps_volume = vol[2]
+    all_vtxs = isnothing(vtxs) ? get_vertices(Bnc;return_idx=true) : [get_idx(Bnc, vtx) for vtx in vtxs]
+
+    vtxs_to_calc = 
+        if recalculate
+            all_vtxs
+        else
+            filter(i -> !Bnc._vertices_volume_is_calced[i], all_vtxs)
         end
-        Bnc._vertices_volume_is_calced = true
-        return vals
+    
+    if !isempty(vtxs_to_calc)
+        rlts = calc_volume(Bnc,vtxs_to_calc;kwargs...)
+        for (i,idx) in enumerate(vtxs_to_calc)
+            vtx = get_vertex!(Bnc,idx; inv_info=false,neighbor_info=false)
+            vtx.volume = rlts[i][1]
+            vtx.eps_volume = rlts[i][2]
+            Bnc._vertices_volume_is_calced[idx]=true
+        end
     end
-    return [(vtx.volume, vtx.eps_volume) for vtx in Bnc.vertices_data]
+
+    return [(vtx.volume, vtx.eps_volume) for vtx in Bnc.vertices_data[all_vtxs]]
 end
 
 #---------------------------------------------------------------------------------------------
@@ -898,25 +724,33 @@ end
 """
 Retrieves a vertex from cache or creates it if it doesn't exist.
 """
-function get_vertex!(Bnc::Bnc, perm; full::Bool=true, neighbor_info::Bool=true, check::Bool=false)::Vertex
+function get_vertex!(Bnc::Bnc, perm; inv_info::Bool=true, neighbor_info::Bool=true, check::Bool=false)::Vertex
     find_all_vertices!(Bnc) #initialize perm_data
     idx = get_idx(Bnc, perm; check=check)
-    if Bnc._vertices_is_filled[idx]
+    if Bnc._vertices_is_initialized[idx]
         vtx = Bnc.vertices_data[idx]
     else
         perm = Bnc.vertices_perm[idx]
         vtx = _create_vertex(Bnc, perm)
         Bnc.vertices_data[idx] = vtx
-        Bnc._vertices_is_filled[idx] = true
+        Bnc._vertices_is_initialized[idx] = true
     end
 
-    if full
-        _ensure_full_properties!(Bnc,vtx)
+    if inv_info
+        _fill_inv_info!(Bnc,vtx)
     end
     if neighbor_info
         _fill_neighbor_info!(Bnc,vtx)
     end
     return vtx
+end
+
+function have_perm(Bnc::Bnc, perm::Vector{<:Integer})
+    """
+    Check if the vertex represented by perm is within the Bnc.
+    """
+    find_all_vertices!(Bnc)
+    return haskey(Bnc.vertices_idx, perm)
 end
 
 
@@ -936,7 +770,7 @@ end
 # """
 # function get_all_neighbors!(Bnc::Bnc, perm; return_idx::Bool=false)
 #     # Get the neighbors of the vertex represented by perm
-#     vtx = get_vertex!(Bnc, perm ; full=false)
+#     vtx = get_vertex!(Bnc, perm ; inv_info=false)
 #     if isempty(vtx.neighbors_idx)
 #         vtx_grh = get_vertices_graph!(Bnc;full=false)
 #         vtx.neighbors_idx = vtx_grh.neighbors[vtx.idx] .|> e -> e.to
@@ -994,7 +828,7 @@ get_neighbors(Bnc, perm; singular=1, asymptotic=false)
 
 """
 function get_neighbors(Bnc::Bnc, perm; singular::Union{Bool,Int,Nothing}=nothing, asymptotic::Union{Bool,Nothing}=nothing, return_idx::Bool=false)
-    idx = get_vertex!(Bnc,perm; full=false, neighbor_info=true).neighbors_idx
+    idx = get_vertex!(Bnc,perm; inv_info=false, neighbor_info=true).neighbors_idx
     
     idx = filter(idx) do i
         nlt = Bnc.vertices_nullity[i]
@@ -1015,36 +849,6 @@ end
 
 
 """
-Gets P and P0, creating the vertex if necessary.
-"""
-get_P_P0!(Bnc::Bnc, perm) = get_vertex!(Bnc, perm; full=false, neighbor_info=false) |> vtx -> (vtx.P, vtx.P0)
-get_P!(Bnc::Bnc, perm) = get_vertex!(Bnc, perm; full=false, neighbor_info=false).P
-get_P0!(Bnc::Bnc, perm) = get_vertex!(Bnc, perm; full=false, neighbor_info=false).P0
-
-"""
-Gets M and M0, creating the vertex if necessary.
-"""
-get_M_M0!(Bnc::Bnc, perm) = get_vertex!(Bnc, perm; full=false, neighbor_info=false) |> vtx -> (vtx.M, vtx.M0)
-get_M!(Bnc::Bnc, perm) = get_vertex!(Bnc, perm; full=false, neighbor_info=false).M
-get_M0!(Bnc::Bnc, perm) = get_vertex!(Bnc, perm; full=false, neighbor_info=false).M0
-
-
-"""
-Gets C_x and C0_x, creating the vertex if necessary.
-"""
-get_C_C0_x!(Bnc::Bnc, perm) = get_vertex!(Bnc, perm; full=false, neighbor_info=false) |> vtx -> (vtx.C_x, vtx.C0_x)
-get_C_x!(Bnc::Bnc, perm) = get_vertex!(Bnc, perm; full=false, neighbor_info=false).C_x
-get_C0_x!(Bnc::Bnc, perm) = get_vertex!(Bnc, perm; full=false, neighbor_info=false).C0_x
-
-
-"""
-Gets C_qK and C0_qK, ensuring the full vertex is calculated.
-"""
-get_C_C0_qK!(Bnc::Bnc, perm) = get_vertex!(Bnc, perm; full=true, neighbor_info=false) |> vtx -> (vtx.C_qK, vtx.C0_qK)
-get_C_qK!(Bnc::Bnc, perm) = get_vertex!(Bnc, perm; full=true, neighbor_info=false).C_qK
-get_C0_qK!(Bnc::Bnc, perm) = get_vertex!(Bnc, perm; full=true, neighbor_info=false).C0_qK
-
-"""
 Gets the nullity of a vertex
 """
 function get_nullity!(Bnc::Bnc,perm)
@@ -1052,29 +856,72 @@ function get_nullity!(Bnc::Bnc,perm)
     idx = get_idx(Bnc, perm)
     return Bnc.vertices_nullity[idx]
 end
+function is_singular(Bnc::Bnc, perm)::Bool
+    nullity = get_nullity!(Bnc, perm)
+    return nullity > 0
+end
+
+function is_asymptotic(Bnc::Bnc, perm)::Bool
+    find_all_vertices!(Bnc)
+    idx = get_idx(Bnc, perm)
+    return Bnc.vertices_asymptotic_flag[idx]
+end
+
+"""
+Gets P and P0, creating the vertex if necessary.
+"""
+get_P_P0!(Bnc::Bnc, perm) = get_vertex!(Bnc, perm; inv_info=false, neighbor_info=false) |> vtx -> (vtx.P, vtx.P0)
+get_P!(Bnc::Bnc, perm) = get_vertex!(Bnc, perm; inv_info=false, neighbor_info=false).P
+get_P0!(Bnc::Bnc, perm) = get_vertex!(Bnc, perm; inv_info=false, neighbor_info=false).P0
+
+"""
+Gets M and M0, creating the vertex if necessary.
+"""
+get_M_M0!(Bnc::Bnc, perm) = get_vertex!(Bnc, perm; inv_info=false, neighbor_info=false) |> vtx -> (vtx.M, vtx.M0)
+get_M!(Bnc::Bnc, perm) = get_vertex!(Bnc, perm; inv_info=false, neighbor_info=false).M
+get_M0!(Bnc::Bnc, perm) = get_vertex!(Bnc, perm; inv_info=false, neighbor_info=false).M0
+
+
+"""
+Gets C_x and C0_x, creating the vertex if necessary.
+"""
+get_C_C0_x!(Bnc::Bnc, perm) = get_vertex!(Bnc, perm; inv_info=false, neighbor_info=false) |> vtx -> (vtx.C_x, vtx.C0_x)
+get_C_x!(Bnc::Bnc, perm) = get_vertex!(Bnc, perm; inv_info=false, neighbor_info=false).C_x
+get_C0_x!(Bnc::Bnc, perm) = get_vertex!(Bnc, perm; inv_info=false, neighbor_info=false).C0_x
+
+
+"""
+Gets C_qK and C0_qK, ensuring the inv_info  is calculated.
+"""
+get_C_C0_qK!(Bnc::Bnc, perm) = get_vertex!(Bnc, perm; inv_info=true, neighbor_info=false) |> vtx -> (vtx.C_qK, vtx.C0_qK)
+get_C_qK!(Bnc::Bnc, perm) = get_vertex!(Bnc, perm; inv_info=true, neighbor_info=false).C_qK
+get_C0_qK!(Bnc::Bnc, perm) = get_vertex!(Bnc, perm; inv_info=true, neighbor_info=false).C0_qK
 
 
 """
 Gets H and H0, ensuring the full vertex is calculated.
 """
-function get_H_H0!(Bnc::Bnc, perm)
-    vtx = get_vertex!(Bnc, perm; full=false)
-    if vtx.nullity > 0
-        @error("Vertex is singular, cannot get H0")
-    end # This will compute if needed
-    _ensure_full_properties!(Bnc,vtx)
-    return vtx.H, vtx.H0
-end
 
-function get_H!(Bnc::Bnc, perm)
-    vtx = get_vertex!(Bnc, perm; full=false)
-    if vtx.nullity > 1
-        @error("Vertex's nullity is bigger than 1, cannot get H")
-    end # This will compute if needed
-    _ensure_full_properties!(Bnc,vtx)
-    return vtx.H
-end
-get_H0!(Bnc::Bnc, perm) = get_H_H0!(Bnc, perm)[2]
+get_H_H0!(Bnc::Bnc, perm) = is_singular(Bnc, perm) ? @error("Vertex is singular, cannot get H0") : get_vertex!(Bnc, perm; inv_info=true, neighbor_info=false) |> vtx -> (vtx.H, vtx.H0)
+get_H!(Bnc::Bnc, perm) = get_nullity!(Bnc, perm) > 1 ? @error("Vertex's nullity is bigger than 1, cannot get H") : get_vertex!(Bnc, perm; inv_info=true, neighbor_info=false).H
+get_H0!(Bnc::Bnc, perm) = is_singular(Bnc, perm) ? @error("Vertex is singular, cannot get H0") : get_vertex!(Bnc, perm; inv_info=true, neighbor_info=false).H0
+# function get_H_H0!(Bnc::Bnc, perm)
+#     vtx = get_vertex!(Bnc, perm; full=false, neighbor_info=false)
+#     if vtx.nullity > 0
+#         @error("Vertex is singular, cannot get H0")
+#     end # This will compute if needed
+#     _fill_inv_info!(Bnc,vtx)
+#     return vtx.H, vtx.H0
+# end
+# function get_H!(Bnc::Bnc, perm)
+#     vtx = get_vertex!(Bnc, perm; full=false, neighbor_info=false)
+#     if vtx.nullity > 1
+#         @error("Vertex's nullity is bigger than 1, cannot get H")
+#     end # This will compute if needed
+#     _fill_inv_info!(Bnc,vtx)
+#     return vtx.H
+# end
+# get_H0!(Bnc::Bnc, perm) = get_H_H0!(Bnc, perm)[2]
 
 
 function get_polyhedra(Bnc::Bnc,perm)::Polyhedron 
@@ -1098,33 +945,15 @@ function get_polyhedra(C::AbstractMatrix{<:Real}, C0::AbstractVector{<:Real}, nu
 end
 
 function get_volume!(Bnc::Bnc, perm;recalculate::Bool=false, kwargs...)
-    
-    recalculate = isempty(kwargs) ? recalculate : true
-
-    vtx = get_vertex!(Bnc, perm)
-    if !recalculate 
-        if !Bnc._vertices_volume_is_calced && vtx.volume == 0.0 # may not been calculated before
-                (vtx.volume, vtx.eps_volume) = calc_vertex_volume(Bnc,perm;asymptotic=true,kwargs...)
-        end
-    else
-        (vtx.volume, vtx.eps_volume) = calc_vertex_volume(Bnc,perm;asymptotic=true,kwargs...)
-    end
-
-    return (vtx.volume, vtx.eps_volume)
-end
-
-
-
-
-function is_singular(Bnc::Bnc, perm)::Bool
-    nullity = get_nullity!(Bnc, perm)
-    return nullity > 0
-end
-
-function is_asymptotic(Bnc::Bnc, perm)::Bool
-    find_all_vertices!(Bnc)
     idx = get_idx(Bnc, perm)
-    return Bnc.vertices_asymptotic_flag[idx]
+    vtx = get_vertex!(Bnc, perm; inv_info=true, neighbor_info=false)
+    if recalculate || !Bnc._vertices_volume_is_calced[idx]
+        vol = calc_volume(Bnc, [idx];kwargs...)[1]
+        vtx.volume = vol[1]
+        vtx.eps_volume = vol[2]
+        Bnc._vertices_volume_is_calced[idx] = true
+    end
+    return (vtx.volume, vtx.eps_volume)
 end
 
 

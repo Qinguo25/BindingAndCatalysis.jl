@@ -224,8 +224,8 @@ mutable struct Bnc{T} # T is the int type to save all the indices
     # # _vertices_sym_invperm::Vector{Int}
 
     vertices_data::Vector{Vertex} # Using Any for placeholder for Vertex
-    _vertices_is_filled::BitVector
-    _vertices_volume_is_calced::Bool
+    _vertices_is_initialized::BitVector
+    _vertices_volume_is_calced::BitVector
     _vertices_Nρ_inv_dict::Dict{Vector{T}, Tuple{SparseMatrixCSC{Float64, Int},T}} # cache the N_inv for each vertex permutation
 
     #------other helper parameters------
@@ -324,8 +324,8 @@ mutable struct Bnc{T} # T is the int type to save all the indices
             # SparseMatrixCSC{SparseVector{Float64,T}, Int}(undef, 0, 0),             # vertices_change_dir_qK
             # Int[],                           # _vertices_sym_invperm
             Vector{Vertex}(),              # vertices_data
-            BitVector(),                     # _vertices_is_filled
-            false,                     # _R_idx_is_calced
+            BitVector(),                     # _vertices_is_initialized
+            BitVector(),                     # _R_idx_is_calced
             Dict{Vector{T}, Tuple{SparseMatrixCSC{Float64, Int},T}}(), # _vertices_perm_Ninv_dict
             # Fields 13-28 (Calculated values)
             direction,
@@ -460,12 +460,16 @@ end
 
 
 
-include("bnc_helperfunctions.jl")
-include("bnc_numeric.jl")
-include("bnc_regimes.jl")
-include("bnc_symbolics.jl")
-include("bnc_graphs.jl")
-include("bnc_visualize.jl")
+include("helperfunctions.jl")
+include("qK_x_mapping.jl")
+include("volume_calc.jl")
+include("numeric.jl")
+include("regime_enumerate.jl") # before regimes.jl
+include("regimes.jl")
+include("regime_assign.jl")
+include("symbolics.jl")
+include("regime_graphs.jl")
+include("visualize.jl")
 
 
 
