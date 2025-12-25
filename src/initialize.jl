@@ -27,6 +27,9 @@ import ImageFiltering: imfilter, Kernel
 # ---------------------Define the struct of binding and catalysis networks----------------------------------
 
 
+abstract type AbstractBnc end
+
+
 """
 Catalysis data structure
 """
@@ -90,6 +93,8 @@ end
 
 
 mutable struct Vertex{F,T}
+    #--- Parent Bnc model reference ---
+    bn::Union{AbstractBnc,Nothing} # Reference to the parent Bnc model
     # --- Initial / Identifying Properties ---
     perm::Vector{T} # The regime vector
     idx::Int # Index of the vertex in the Bnc.vertices list
@@ -116,19 +121,16 @@ mutable struct Vertex{F,T}
     
     #--- Neighbors ---
     neighbors_idx::Vector{Int}
-    # finite_neighbors_idx::Vector{Int}
-    # infinite_neighbors_idx::Vector{Int}
     
     #---Realizibility Index
     volume::Float64 # R_idx
     eps_volume::Float64 #eps of volume
 
     # The inner constructor also needs to be updated for the parametric type
-    function Vertex{F,T}(;perm, P, P0, M, M0, C_x, C0_x, idx,real,nullity) where {F<:Real ,T<:Integer}
+    function Vertex(;bn::Union{AbstractBnc,Nothing}=nothing, perm, P, P0::Vector{F}, M, M0, C_x, C0_x, idx,real,nullity::T) where {T<:Integer,F<:Real}
         # _M_lu = lu(M, check=false) # It's good practice to ensure M is Float64 for LU
         # Use new{T} to construct an instance of Vertex{T}
-        new{F,T}(perm, idx,real, P, P0, M, M0, C_x, C0_x,
-            # _M_lu,
+        return new{F,T}(bn, perm, idx,real, P, P0, M, M0, C_x, C0_x,
             nullity,
             SparseMatrixCSC{Float64, Int}(undef, 0, 0), # H
             Vector{F}(undef, 0),          # H0
@@ -137,8 +139,6 @@ mutable struct Vertex{F,T}
             Int[], # neighbors_idx (using empty literal is cleaner)
             0.0, # Volume
             0.0, # eps
-            # Int[], # finite_neighbors_idx
-            # Int[]  # infinite_neighbors_idx
         )
     end
 end
@@ -190,7 +190,7 @@ mutable struct VertexGraph{T}
     end
 end
 
-mutable struct Bnc{T} # T is the int type to save all the indices
+mutable struct Bnc{T} <: AbstractBnc # T is the int type to save all the indices
     # ----Parameters of the binding networks------
     N::Matrix{Int} # binding reaction matrix
     L::Matrix{Int} # conservation law matrix
@@ -480,7 +480,7 @@ function Base.summary(Bnc::Bnc)
     println("Number of reactions (r): ", Bnc.r)
     println("L matrix: ", Bnc.L)
     println("N matrix: ", Bnc.N)
-    println("Direction of binding reactions: ", Bnc.direction == 1 ? "forward" : Bnc.direction == -1 ? "backward" : "zero")
+    println("Direction of binding reactions: ", Bnc.direction == 1 ? "forward" : "backward")
     catalysis_str = isnothing(Bnc.catalysis) ? "No" : "Yes"
     println("Catalysis involved: ", catalysis_str)
     is_regimes_built = isempty(Bnc.vertices_perm) ? "No" : "Yes"

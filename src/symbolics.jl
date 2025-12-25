@@ -1,6 +1,30 @@
 #----------------------------------------------------------Symbolics calculation fucntions-----------------------------------------------------------
 
+# General method for binding network
+x_sym(args...)=get_binding_network(args...).x_sym
+q_sym(args...)=get_binding_network(args...).q_sym
+K_sym(args...)=get_binding_network(args...).K_sym
+qK_sym(args...)= [q_sym(args...); K_sym(args...)]
 
+#special api for SISO_graph
+q_sym(grh::SISO_graph,args...)= begin
+    bn = grh.bn
+    q_sym = if grh.change_qK_idx <= bn.d
+        deleteat!(copy(bn.q_sym), grh.change_qK_idx)
+    else
+        bn.q_sym
+    end
+    return q_sym
+end
+K_sym(grh::SISO_graph,args...)= begin
+    bn = grh.bn
+    K_sym = if grh.change_qK_idx > bn.d
+        deleteat!(copy(bn.K_sym), grh.change_qK_idx - bn.d)
+    else
+        bn.K_sym
+    end
+    return K_sym
+end
 
 """
 Symbolicly calculate ∂logqK/∂logx
@@ -32,12 +56,12 @@ end
 #---------------------------------------------------------
 
 """
-handle C log(sym) + C0 >= 0
+handle C log(sym) + C0 >= 0 , polyhedron in log space
 """
-function show_sym_conds(C::AbstractMatrix{<:Real},
+function show_condition_poly(C::AbstractMatrix{<:Real},
                         C0::AbstractVector{<:Real},
-                        syms::AbstractVector{Num},
                         nullity::Integer = 0;
+                        syms::AbstractVector{Num},
                         log_space::Bool = true,
                         asymptotic::Bool = false
 )::Vector{Num}
@@ -79,28 +103,22 @@ function show_sym_conds(C::AbstractMatrix{<:Real},
         return vcat(eq, uneq) .|> Num
     end
 end
-function show_sym_conds(C_qK::AbstractVector{<:Real},
-                        C0_qK::Real,
-                        args...;
-                        kwargs...)
-    show_sym_conds(C_qK', [C0_qK], args...; kwargs...)
-end
-
+show_condition_poly(poly::Polyhedron;kwargs...)=show_condition_poly(get_C_C0_nullity(poly)...; kwargs...)
+show_condition_poly(C_qK::AbstractVector{<:Real},C0_qK::Real,args...;kwargs...)=show_condition_poly(C_qK', [C0_qK], args...; kwargs...)[1]
 
 """
-handle log(sym2) = C log(sym1) + C0
+handle log(y) = C log(x) + C0
 """
-function show_sym_expr(C::AbstractMatrix{<:Real}, C0::AbstractVector{<:Real}, sym2, sym1; log_space::Bool=true,asymptotic::Bool=false)::Vector{Equation}
+function show_expression_mapping(C::AbstractMatrix{<:Real}, C0::AbstractVector{<:Real}, y, x; log_space::Bool=true,asymptotic::Bool=false)::Vector{Equation}
     if log_space
-        expr =  asymptotic ?   log10.(sym2) .~ C * log10.(sym1) : log10.(sym2) .~ C * log10.(sym1) .+ C0
+        expr =  asymptotic ?   log10.(y) .~ C * log10.(x) : log10.(y) .~ C * log10.(x) .+ C0
     else
-        expr =  asymptotic ? sym2 .~ handle_log_weighted_sum(C, sym1) : sym2 .~ handle_log_weighted_sum(C, sym1,C0)
+        expr =  asymptotic ? y .~ handle_log_weighted_sum(C, x) : y .~ handle_log_weighted_sum(C, x,C0)
     end
     return expr 
 end
-function show_sym_expr(C::AbstractVector{<:Real}, C0::Real, sym2, sym1; log_space::Bool=true,asymptotic::Bool=false)
-    show_sym_expr(C', [C0], sym2, sym1; log_space=log_space, asymptotic=asymptotic)
-end
+show_expression_mapping(C::AbstractVector{<:Real}, C0::Real, args...;kwargs...)=show_expression_mapping(C', [C0], args...;kwargs...)[1]
+
 
 
 """
@@ -121,79 +139,51 @@ function solve_sym_expr(a::AbstractVector{<:Real}, b::Real, x, idx; log_space::B
 end
 
 
-function show_expression_x(Bnc::Bnc, perm;kwargs...)
-    H,H0 = get_H_H0!(Bnc, perm)
-    qK_syms = [Bnc.q_sym; Bnc.K_sym]
-    show_sym_expr(H, H0, Bnc.x_sym, qK_syms; kwargs...)
-end
-function show_expression_qK(Bnc::Bnc, perm;kwargs...)
-    M,M0 = get_M_M0!(Bnc, perm)
-    qK_syms = [Bnc.q_sym; Bnc.K_sym]
-    show_sym_expr(M, M0, qK_syms, Bnc.x_sym; kwargs...)
-end
-function show_dominant_condition(Bnc::Bnc, perm;kwargs...)
-    P,P_0 = get_P_P0!(Bnc, perm)
-    show_sym_expr(P, P_0, Bnc.q_sym, Bnc.x_sym; kwargs...)
+
+
+show_expression_x(args...;kwargs...)= begin
+    bn = get_binding_network(args...)
+    y = x_sym(bn)
+    x = qK_sym(bn)
+    show_expression_mapping(get_H_H0!(args...), y,x; kwargs...)
 end
 
-
-
-
-function show_condition_x(Bnc::Bnc, perm; kwargs...)
-    C_x, C_0 =  get_C_C0_x!(Bnc,perm)
-    # Show the conditions for the x space for the given regime.
-    show_sym_conds(C_x, C_0, Bnc.x_sym; kwargs...)
+show_expression_qK(args...;kwargs...)= begin
+    bn = get_binding_network(args...)
+    y = qK_sym(bn)
+    x = x_sym(bn)
+    show_expression_mapping(get_M_M0!(args...), y,x; kwargs...)
 end
 
-function show_condition_qK(Bnc::Bnc, perm; kwargs...)
-    C_qK, C0_qK = get_C_C0_qK!(Bnc, perm)
-    syms = [Bnc.q_sym; Bnc.K_sym]
-    nullity = get_nullity!(Bnc, perm)
-    show_sym_conds(C_qK, C0_qK, syms, nullity; kwargs...)
-end
-
-function show_condition_qK(grh::SISO_graph, pth_idx; kwargs...)
-    poly = get_polyhedra!(grh, pth_idx)[1]
-    syms = [grh.bn.q_sym; grh.bn.K_sym]
-    popat!(syms, grh.change_qK_idx)
-    return show_condition_poly(poly, syms; kwargs...)
+show_dominant_condition(args...;kwargs...)= begin
+    bn = get_binding_network(args...)
+    y = q_sym(bn)
+    x = x_sym(bn)
+    show_expression_mapping(get_P_P0!(args...), y,x; kwargs...)
 end
 
 
-function show_condition_poly(poly::Polyhedron, syms; kwargs...)
-    C,C0,nullity= get_C_C0(poly)
-    nullity = isempty(nullity) ? 0 : maximum(nullity)
-    show_sym_conds(C, C0, syms, maximum(nullity); kwargs...)
-end
+
+show_condition_x(args...; kwargs...)= show_condition_poly(get_C_C0_x!(args...)...; syms=x_sym(args...), kwargs...)
+show_condition_qK(args...; kwargs...)= show_condition_poly(get_C_C0_nullity_qK!(args...)...; syms=qK_sym(args...), kwargs...)
 
 function show_condition_path(Bnc::Bnc, path::AbstractVector{<:Integer}, change_qK; kwargs...)
     # directly calculate the polyhedron for the path, may not useful.
     poly = _calc_polyhedra_for_path(Bnc, path,change_qK)
-    show_condition_path(Bnc, poly, change_qK; kwargs...)
+    syms = copy(qK_sym(Bnc)) |> x->deleteat!(x,locate_sym_qK(Bnc, change_qK)) 
+    show_condition_poly(poly; syms=syms, kwargs...)
 end
 
 
-
-
-
-
-function show_conservation(Bnc::Bnc)::Vector{Equation}
-    eq  = Bnc.q_sym .~ Bnc._L_sparse * Bnc.x_sym
-    return eq 
-end
-
-function show_equilibrium(Bnc::Bnc;log_space::Bool=true)::Vector{Equation}
-    sym2 = Bnc.K_sym
-    sym1 = Bnc.x_sym
-    return show_sym_expr(Bnc.N, zeros(Int,Bnc.r), sym2, sym1; log_space=log_space)
-end
+show_conservation(Bnc::Bnc)=Bnc.q_sym .~ Bnc._L_sparse * Bnc.x_sym
+show_equilibrium(Bnc::Bnc;log_space::Bool=true) = show_expression_mapping(Bnc.N, zeros(Int,Bnc.r), Bnc.K_sym, Bnc.x_sym; log_space=log_space)
 
 
 
 function show_interface(Bnc::Bnc, from,to, change_idx::Union{Nothing,Integer}=nothing;kwargs...)
     C, C0 = get_interface(Bnc,from,to) # C' log qK + C0 =0
     if isnothing(change_idx)
-        return show_sym_conds(C, C0, [Bnc.q_sym; Bnc.K_sym], 1;kwargs...)
+        return show_condition_poly(C, C0, [Bnc.q_sym; Bnc.K_sym], 1;kwargs...)
     else
         return solve_sym_expr(C,C0, [Bnc.q_sym; Bnc.K_sym], change_idx;kwargs...)
     end
@@ -349,7 +339,7 @@ end
 
 
 
-function render_array(M::AbstractArray)
+function render_array(M::AbstractArray,empty_posi_subs=nothing)
     A = Array{Any}(M)
     f(x) = begin
             a = try 
@@ -357,7 +347,7 @@ function render_array(M::AbstractArray)
                 catch
                     round(x;digits=5)
                 end
-            a == 0 ? nothing : a
+            a == 0 ? empty_posi_subs : a
         end
     A = f.(A)
     return latexify(A)

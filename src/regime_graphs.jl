@@ -64,6 +64,36 @@ end
 #------------------------------------------------------------------------------
 #                  Getting the whole graph functions. 
 #----------------------------------------------------------------------------
+"""
+    get_vertices_graph!(Bnc; full=false) -> VertexGraph
+
+Ensure vertex graph is built; if full=true, also compute qK change directions on edges.
+Returns the cached VertexGraph.
+"""
+function get_vertices_graph!(Bnc::Bnc; full::Bool=false)::VertexGraph
+    """
+    get the neighbor of vertices formed graph.
+    """
+    if full
+        vtx_graph = get_vertices_graph!(Bnc; full=false)
+        if !vtx_graph.change_dir_qK_computed
+            println("-------Start calculating vertices neighbor graph with qK change dir, It may takes a while.------------")
+            _fulfill_vertices_graph!(Bnc, vtx_graph)
+            vtx_graph.change_dir_qK_computed = true
+            println("Done.\n")
+        end
+    else
+        if isnothing(Bnc.vertices_graph)
+            find_all_vertices!(Bnc)# Ensure vertices are calculated
+            println("----------------Start calculating vertices neighbor graph, It may takes a while.----------------")
+            Bnc.vertices_graph =  _calc_vertices_graph_from_perms(Bnc.vertices_perm,Bnc.n)
+            println("Done.\n")
+        end
+    end
+    return Bnc.vertices_graph
+end
+
+
 
 
 # struct SISO_graph{T}
@@ -149,13 +179,26 @@ function get_polyhedra!(grh::SISO_graph, pth_idx = nothing)::Vector{Polyhedron}
             grh.rgm_polys_is_calc[idx_to_calculate] .= true
         end
     end
-
     return grh.rgm_polys[pth_idx]
 end
+get_polyhedron!(grh::SISO_graph, pth_idx)= get_polyhedra!(grh, pth_idx)[1]
+
+
+#
+get_C_C0_nullity_qK!(grh::SISO_graph, pth_idx) = get_polyhedron!(grh, pth_idx) |> get_C_C0_nullity
+# get_C_C0!, 
+#get_C!, 
+#get_C0! are already defined by julia multipy dispatch
+
+get_binding_network(grh::SISO_graph,args...)= grh.bn
+
+
+
+
 
 #-----------------------------------------------------------------------------------
 function get_x_neighbor_grh(Bnc::Bnc)::SimpleGraph
-    vg = get_vertices_graph!(Bnc)
+    vg = get_vertices_graph!(Bnc;full=false)
     return vg.x_grh
 end
 

@@ -460,6 +460,34 @@ end
 
 
 
+
+
+
+
+
+#----------------------------------
+# helper functions for calculation
+#------------------------------------
+function removed_copy(v::Vector{T}, i::Int) where T
+    n = length(v)
+    @boundscheck 1 ≤ i ≤ n || throw(BoundsError(v, i))
+    out = Vector{T}(undef, n - 1)
+    @inbounds begin
+        copyto!(out, 1, v, 1, i - 1)
+        copyto!(out, i, v, i + 1, n - i)
+    end
+    return out
+end
+
+rest = removed_copy(v, i)
+
+
+
+
+
+
+
+
 #---------------------------------------------------
 # Try using DAE solver to solve the logx-logqK conversion problem.
 #---------------------------------------------------
