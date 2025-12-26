@@ -24,6 +24,8 @@ using Graphs
 import Printf
 import JSON3
 import ImageFiltering: imfilter, Kernel
+
+import Base: summary,show
 # ---------------------Define the struct of binding and catalysis networks----------------------------------
 
 
@@ -472,8 +474,7 @@ include("regime_graphs.jl")
 include("visualize.jl")
 
 
-
-function Base.summary(Bnc::Bnc)
+function summary(Bnc::Bnc)
     println("----------Binding Network Summary:-------------")
     println("Number of species (n): ", Bnc.n)
     println("Number of conserved quantities (d): ", Bnc.d)
@@ -496,3 +497,25 @@ function Base.summary(Bnc::Bnc)
     println("-----------------------------------------------")
 end
 
+function show(io::IO, ::MIME"text/plain", bnc::Bnc)
+    println(io, "----------Binding Network Summary:-------------")
+    println(io, "Number of species (n): ", bnc.n)
+    println(io, "Number of conserved quantities (d): ", bnc.d)
+    println(io, "Number of reactions (r): ", bnc.r)
+    println(io, "L matrix: ", bnc.L)
+    println(io, "N matrix: ", bnc.N)
+    println(io, "Direction of binding reactions: ", bnc.direction == 1 ? "forward" : "backward")
+    catalysis_str = isnothing(bnc.catalysis) ? "No" : "Yes"
+    println(io, "Catalysis involved: ", catalysis_str)
+    is_regimes_built = isempty(bnc.vertices_perm) ? "No" : "Yes"
+    println(io, "Regimes constructed: ", is_regimes_built)
+    if !isempty(bnc.vertices_perm)
+        map = zip(bnc.vertices_asymptotic_flag, bnc.vertices_nullity .> 0) |> countmap
+        println(io, "Number of regimes: ", length(bnc.vertices_perm))
+        println(io, "  - Invertible + Asymptotic: ", get(map, (true, false), 0))
+        println(io, "  - Singular +  Asymptotic: ", get(map, (true, true), 0))
+        println(io, "  - Invertible +  Non-Asymptotic: ", get(map, (false, false), 0))
+        println(io, "  - Singular +  Non-Asymptotic: ", get(map, (false, true), 0))
+    end
+    print(io, "-----------------------------------------------") # 最后一行可用 print 避免额外空行
+end
