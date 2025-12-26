@@ -91,7 +91,7 @@ function get_edge_weight_vec(Bnc::Bnc,change_qK_idx)::Vector{Tuple{Edge,Dict{Sym
     n = length(vg.neighbors)
     weight_vec = Vector{Tuple{Edge,Dict{Symbol,Any}}}()
     for (i, edges) in enumerate(vg.neighbors)
-        nlt = get_nullity!(Bnc,i)
+        nlt = get_nullity(Bnc,i)
         if nlt >1
             continue
         end
@@ -165,7 +165,7 @@ function get_edge_labels(Bnc::Bnc; sym::Bool=false, half::Bool=true)::Dict{Edge,
     vg = get_vertices_graph!(Bnc;full=true)
     labels = Dict{Edge,String}()
     for (i, edges) in enumerate(vg.neighbors)
-        if get_nullity!(Bnc,i) >1
+        if get_nullity(Bnc,i) >1
             continue
         end
         for e in edges

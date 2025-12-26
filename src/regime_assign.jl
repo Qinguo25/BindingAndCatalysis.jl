@@ -57,7 +57,7 @@ function assign_vertex_qK(Bnc::Bnc, qK::AbstractVector{<:Real}; input_logspace::
     
     record = Vector{Float64}(undef,length(all_vertice_idx))
     for (i, idx) in enumerate(all_vertice_idx)
-        C, C0 = get_C_C0_qK!(Bnc, idx) 
+        C, C0 = get_C_C0_qK(Bnc, idx) 
         
         min_val = if !asymptotic
             minimum(C * logqK .+ C0)
@@ -75,6 +75,10 @@ function assign_vertex_qK(Bnc::Bnc, qK::AbstractVector{<:Real}; input_logspace::
     @warn("All vertex conditions failed for logqK=$logqK. Returning the best-fit vertex.")
     return all_vertice_idx[findmax(record)[2]]
 end
+
+assign_vertex(args...;kwargs...)=assign_vertex_qK(args...;kwargs...)
+
+
 #-------------------------------------------------------------------------------------------------------------------------------------------------------
 
 # Trying speedup assign_vertex_qK, but not success yet.
@@ -94,7 +98,7 @@ function assign_vertex_qK_test(Bnc::Bnc{T}, qK::AbstractVector{<:Real};
     Perm_tried = Set{UInt64}()  # 存放哈希值
 
     function try_perm!(perm1)
-        (C, C0) = get_C0_qK!(Bnc, perm1)
+        (C, C0) = get_C_C0_qK(Bnc, perm1)
         err = C * logqK .+ C0
         ts = findall(er -> er <= -eps, err)
 

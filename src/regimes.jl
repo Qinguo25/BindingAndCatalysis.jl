@@ -31,7 +31,7 @@ function  _calc_vertices_graph_from_perms(perms::Vector{<:AbstractVector{T}},n::
     d=length(perms[1])# n = maximum(v -> maximum(v), data)
     # n = maximum(v -> maximum(v), data)
     # 线程本地边集，最后归并
-    thread_edges = [Vector{Tuple{Int, VertexEdge{T}}}() for _ in 1:Threads.nthreads()]
+    thread_edges = [Vector{Tuple{Int, VertexEdge{T}}}() for _ in 1:Threads.maxthreadid()]
 
     # 按行分桶：key 为去掉该行后的签名（Tuple），值为该签名下的 (顶点索引, 该行取值)
     for r in 1:d
@@ -219,8 +219,8 @@ Build qK-space constraints (C_qK, C0_qK) for singular vertices via affine mappin
 Returns: (C_qK::SparseMatrixCSC, C0_qK::Vector)
 """
 function _calc_C_C0_qK_singular(Bnc::Bnc, vtx)
-    M,M0 = get_M_M0!(Bnc,vtx)
-    C,C0 = get_C_C0_x!(Bnc,vtx)
+    M,M0 = get_M_M0(Bnc,vtx)
+    C,C0 = get_C_C0_x(Bnc,vtx)
     # n = Bnc.n
     poly_x = hrep(-C,C0) |> x->polyhedron(x,CDDLib.Library())
     poly_elim = M * poly_x  # If for convenience, one can write `translate(M * poly_x, M0)`, and then C0qK = b
@@ -286,9 +286,9 @@ function _fulfill_vertices_graph!(Bnc::Bnc, vtx_graph::VertexGraph)
     fill the qK space change dir matrix for all vertices in Bnc.
     """
     function _calc_change_dir_qK(Bnc, vi, vj, i, j1, j2)
-        n1 = get_nullity!(Bnc, vi)
+        n1 = get_nullity(Bnc, vi)
         # println("trigger one")
-        n2 = get_nullity!(Bnc, vj)
+        n2 = get_nullity(Bnc, vj)
         # println("trigger two")
         if n1 > 1 || n2 > 1
             return nothing
@@ -298,16 +298,16 @@ function _fulfill_vertices_graph!(Bnc::Bnc, vtx_graph::VertexGraph)
         ei = SparseVector(Bnc.n, [i], [1.0])
 
         if n1 == 0
-            H1 = get_H!(Bnc, vi)
+            H1 = get_H(Bnc, vi)
             # println("trigger three")
             dir = H1[j2, :] - ei
         elseif n2 == 0
-            H2 = get_H!(Bnc, vj)
+            H2 = get_H(Bnc, vj)
             # println("trigger four")
             dir = ei - H2[j1, :]
         else
             # n1 == 1 && n2 == 1
-            H1 = get_H!(Bnc, vi)
+            H1 = get_H(Bnc, vi)
             dir = H1[j2, :]
         end
         droptol!(dir, 1e-10)
@@ -316,7 +316,7 @@ function _fulfill_vertices_graph!(Bnc::Bnc, vtx_graph::VertexGraph)
     # pre compute H for all vertices with nullity 0 or 1
     Threads.@threads for idx in eachindex(vtx_graph.neighbors)
         if Bnc.vertices_nullity[idx] <= 1
-            get_H!(Bnc, idx)
+            get_H(Bnc, idx)
         end
     end
 
@@ -614,7 +614,7 @@ function get_vertices_volume!(Bnc::Bnc,vtxs=nothing; recalculate::Bool=false, kw
     if !isempty(vtxs_to_calc)
         rlts = calc_volume(Bnc,vtxs_to_calc;kwargs...)
         for (i,idx) in enumerate(vtxs_to_calc)
-            vtx = get_vertex!(Bnc,idx; inv_info=false,neighbor_info=false)
+            vtx = get_vertex(Bnc,idx; inv_info=false,neighbor_info=false)
             vtx.volume = rlts[i][1]
             vtx.eps_volume = rlts[i][2]
             Bnc._vertices_volume_is_calced[idx]=true
@@ -632,7 +632,7 @@ end
 
 Return x-space adjacency matrix of the vertex graph (unweighted → 1.0).
 """
-function get_vertices_neighbor_mat_x!(Bnc::Bnc)
+function get_vertices_neighbor_mat_x(Bnc::Bnc)
     """
     # find the x space neighbor of all vertices in Bnc, the value denotes for two perms, which row they differ at.
     """
@@ -641,7 +641,7 @@ function get_vertices_neighbor_mat_x!(Bnc::Bnc)
     return spmat
 end
 
-function get_vertices_neighbor_mat_qK!(Bnc::Bnc)
+function get_vertices_neighbor_mat_qK(Bnc::Bnc)
     """
     # find the x space neighbor of all vertices in Bnc, the value denotes for two perms, which row they differ at.
     """
@@ -688,7 +688,7 @@ get_perm(Bnc::Bnc, vtx::Vertex;kwargs...)= get_perm(vtx)
 """
 Retrieves a vertex from cache or creates it if it doesn't exist.
 """
-function get_vertex!(Bnc::Bnc, perm; check::Bool=false, kwargs...)::Vertex
+function get_vertex(Bnc::Bnc, perm; check::Bool=false, kwargs...)::Vertex
     find_all_vertices!(Bnc) #initialize perm_data
     
     vtx = begin
@@ -703,9 +703,9 @@ function get_vertex!(Bnc::Bnc, perm; check::Bool=false, kwargs...)::Vertex
         end
         vt
     end
-    return get_vertex!(vtx; kwargs...)
+    return get_vertex(vtx; kwargs...)
 end
-function get_vertex!(vtx::Vertex; inv_info::Bool=true, neighbor_info::Bool=true,kwargs...)::Vertex
+function get_vertex(vtx::Vertex; inv_info::Bool=true, neighbor_info::Bool=true,kwargs...)::Vertex
     if inv_info
         _fill_inv_info!(vtx)
     end
@@ -746,7 +746,7 @@ have_perm(Bnc::Bnc, vtx::Vertex) = have_perm(Bnc, get_perm(vtx))
 # """
 # function get_all_neighbors!(Bnc::Bnc, perm; return_idx::Bool=false)
 #     # Get the neighbors of the vertex represented by perm
-#     vtx = get_vertex!(Bnc, perm ; inv_info=false)
+#     vtx = get_vertex(Bnc, perm ; inv_info=false)
 #     if isempty(vtx.neighbors_idx)
 #         vtx_grh = get_vertices_graph!(Bnc;full=false)
 #         vtx.neighbors_idx = vtx_grh.neighbors[vtx.idx] .|> e -> e.to
@@ -805,7 +805,7 @@ get_neighbors(Bnc, perm; singular=1, asymptotic=false)
 """
 function get_neighbors(args...; singular::Union{Bool,Int,Nothing}=nothing, asymptotic::Union{Bool,Nothing}=nothing, return_idx::Bool=false)
     Bnc = get_binding_network(args...)
-    idx = get_vertex!(args...; inv_info=false, neighbor_info=true).neighbors_idx
+    idx = get_vertex(args...; inv_info=false, neighbor_info=true).neighbors_idx
     
     idx = filter(idx) do i
         nlt = Bnc.vertices_nullity[i]
@@ -826,22 +826,22 @@ end
 
 
 # --------------------------These properties are stored in Bnc as vector form when finding regimes, so we can access them directly.----------------------------
-"""
-Gets the nullity of a vertex
-eg: get_nullity!(model,perm)
-    get_nullity!(vtx)
-"""
-get_nullity!(args...) = begin
-    model = get_binding_network(args...)
-    find_all_vertices!(model)
-    return model.vertices_nullity[get_idx(args...)]
-end::Integer
+# """
+# Gets the nullity of a vertex
+# eg: get_nullity(model,perm)
+#     get_nullity(vtx)
+# """
+# get_nullity(args...) = begin
+#     model = get_binding_network(args...)
+#     find_all_vertices!(model)
+#     return model.vertices_nullity[get_idx(args...)]
+# end::Integer
 
 """
 Checks if a vertex is singular (nullity > 0)
 """
 
-is_singular(args...)= get_nullity!(args...) > 0
+is_singular(args...)= get_nullity(args...) > 0
 
 
 """
@@ -859,71 +859,51 @@ end::Bool
 """
 Gets P and P0, creating the vertex if necessary.
 """
-get_P_P0!(args...) = get_vertex!(args...; inv_info=false, neighbor_info=false) |> vtx -> (vtx.P, vtx.P0)
-get_P!(args...) = get_P_P0!(args...)[1]
-get_P0!(args...) = get_P_P0!(args...)[2]
-# get_P_P0!(vtx::Vertex) = (vtx.P, vtx.P0)
-# get_P!(vtx::Vertex) = vtx.P
-# get_P0!(vtx::Vertex) = vtx.P0
+get_P_P0(args...) = get_vertex(args...; inv_info=false, neighbor_info=false) |> vtx -> (vtx.P, vtx.P0)
+get_P(args...) = get_P_P0(args...)[1]
+get_P0(args...) = get_P_P0(args...)[2]
+# get_P_P0(vtx::Vertex) = (vtx.P, vtx.P0)
+# get_P(vtx::Vertex) = vtx.P
+# get_P0(vtx::Vertex) = vtx.P0
 """
 Gets M and M0, creating the vertex if necessary.
 """
-get_M_M0!(args...) = get_vertex!(args...; inv_info=false, neighbor_info=false) |> vtx -> (vtx.M, vtx.M0)
-get_M!(args...) = get_M_M0!(args...)[1]
-get_M0!(args...) = get_M_M0!(args...)[2]
-# get_M_M0!(vtx::Vertex) = (vtx.M, vtx.M0)
-# get_M!(vtx::Vertex) = vtx.M
-# get_M0!(vtx::Vertex) = vtx.M0
+get_M_M0(args...) = get_vertex(args...; inv_info=false, neighbor_info=false) |> vtx -> (vtx.M, vtx.M0)
+get_M(args...) = get_M_M0(args...)[1]
+get_M0(args...) = get_M_M0(args...)[2]
+# get_M_M0(vtx::Vertex) = (vtx.M, vtx.M0)
+# get_M(vtx::Vertex) = vtx.M
+# get_M0(vtx::Vertex) = vtx.M0
 
 """
 Gets C_x and C0_x, creating the vertex if necessary.
 """
-get_C_C0_x!(args...) = get_vertex!(args...; inv_info=false, neighbor_info=false) |> vtx -> (vtx.C_x, vtx.C0_x)
-get_C_x!(args...) = get_C_C0_x!(args...)[1]
-get_C0_x!(args...) = get_C_C0_x!(args...)[2]
-# get_C_C0_x!(vtx::Vertex) = (vtx.C_x, vtx.C0_x)
-# get_C_x!(vtx::Vertex) = vtx.C_x
-# get_C0_x!(vtx::Vertex) = vtx.C0_x
+get_C_C0_x(args...) = get_vertex(args...; inv_info=false, neighbor_info=false) |> vtx -> (vtx.C_x, vtx.C0_x)
+get_C_x(args...) = get_C_C0_x(args...)[1]
+get_C0_x(args...) = get_C_C0_x(args...)[2]
+# get_C_C0_x(vtx::Vertex) = (vtx.C_x, vtx.C0_x)
+# get_C_x(vtx::Vertex) = vtx.C_x
+# get_C0_x(vtx::Vertex) = vtx.C0_x
 
 """
 Gets C_qK and C0_qK, ensuring the inv_info  is calculated.
 """
-get_C_C0_nullity_qK!(args...) = get_vertex!(args...; inv_info=true, neighbor_info=false) |> vtx -> (vtx.C_qK, vtx.C0_qK, vtx.nullity)
-get_C_C0_qK!(args...) = get_C_C0_nullity_qK!(args...)[1:2]
-get_C_qK!(args...) = get_C_C0_nullity_qK!(args...)[1]
-get_C0_qK!(args...) = get_C_C0_nullity_qK!(args...)[2]
-# get_C_C0_nullity_qK!(vtx::Vertex) = (_fill_inv_info!(vtx);(vtx.C_qK, vtx.C0_qK, vtx.nullity))
-# get_C_C0_qK!(vtx::Vertex) = (_fill_inv_info!(vtx);(vtx.C_qK, vtx.C0_qK))
-# get_C_qK!(vtx::Vertex) = (_fill_inv_info!(vtx); vtx.C_qK)
-# get_C0_qK!(vtx::Vertex) = (_fill_inv_info!(vtx); vtx.C0_qK)
+get_C_C0_nullity_qK(args...) = get_vertex(args...; inv_info=true, neighbor_info=false) |> vtx -> (vtx.C_qK, vtx.C0_qK, vtx.nullity)
+get_C_C0_qK(args...) = get_C_C0_nullity_qK(args...)[1:2]
+get_C_qK(args...) = get_C_C0_nullity_qK(args...)[1]
+get_C0_qK(args...) = get_C_C0_nullity_qK(args...)[2]
+# get_C_C0_nullity_qK(vtx::Vertex) = (_fill_inv_info!(vtx);(vtx.C_qK, vtx.C0_qK, vtx.nullity))
+# get_C_C0_qK(vtx::Vertex) = (_fill_inv_info!(vtx);(vtx.C_qK, vtx.C0_qK))
+# get_C_qK(vtx::Vertex) = (_fill_inv_info!(vtx); vtx.C_qK)
+# get_C0_qK(vtx::Vertex) = (_fill_inv_info!(vtx); vtx.C0_qK)
 
 """
 Gets H and H0, ensuring the full vertex is calculated.
 """
 
-get_H_H0!(args...) = is_singular(args...) ? @error("Vertex is singular, cannot get H0") : get_vertex!(args...; inv_info=true, neighbor_info=false) |> vtx -> (vtx.H, vtx.H0)
-get_H!(args...) = get_nullity!(args...) > 1 ? @error("Vertex's nullity is bigger than 1, cannot get H") : get_vertex!(args...; inv_info=true, neighbor_info=false).H
-get_H0!(args...) = get_H_H0!(args...)[2]
-# get_H_H0!(vtx::Vertex) = is_singular(vtx) ? @error("Vertex is singular, cannot get H0") : (_fill_inv_info!(vtx); (vtx.H, vtx.H0))
-# get_H!(vtx::Vertex) = get_nullity!(vtx) > 1 ? @error("Vertex's nullity is bigger than 1, cannot get H") : (_fill_inv_info!(vtx); vtx.H)
-# get_H0!(vtx::Vertex) = is_singular(vtx) ? @error("Vertex is singular, cannot get H0") : (_fill_inv_info!(vtx); vtx.H0)
-# function get_H_H0!(Bnc::Bnc, perm)
-#     vtx = get_vertex!(Bnc, perm; full=false, neighbor_info=false)
-#     if vtx.nullity > 0
-#         @error("Vertex is singular, cannot get H0")
-#     end # This will compute if needed
-#     _fill_inv_info!(Bnc,vtx)
-#     return vtx.H, vtx.H0
-# end
-# function get_H!(Bnc::Bnc, perm)
-#     vtx = get_vertex!(Bnc, perm; full=false, neighbor_info=false)
-#     if vtx.nullity > 1
-#         @error("Vertex's nullity is bigger than 1, cannot get H")
-#     end # This will compute if needed
-#     _fill_inv_info!(Bnc,vtx)
-#     return vtx.H
-# end
-# get_H0!(Bnc::Bnc, perm) = get_H_H0!(Bnc, perm)[2]
+get_H_H0(args...) = is_singular(args...) ? @error("Vertex is singular, cannot get H0") : get_vertex(args...; inv_info=true, neighbor_info=false) |> vtx -> (vtx.H, vtx.H0)
+get_H(args...) = get_nullity(args...) > 1 ? @error("Vertex's nullity is bigger than 1, cannot get H") : get_vertex(args...; inv_info=true, neighbor_info=false).H
+get_H0(args...) = get_H_H0(args...)[2]
 
 
 function get_polyhedron(C::AbstractMatrix{<:Real}, C0::AbstractVector{<:Real}, nullity::Integer=0)::Polyhedron 
@@ -934,14 +914,37 @@ function get_polyhedron(C::AbstractMatrix{<:Real}, C0::AbstractVector{<:Real}, n
         return hrep(-C,C0,linset) |> x-> polyhedron(x,CDDLib.Library())
     end
 end
-get_polyhedron(args...)=get_polyhedron(get_C_C0_nullity_qK!(args...)...)
+get_polyhedron(args...)=get_polyhedron(get_C_C0_nullity_qK(args...)...)
+
+
+get_C_C0_nullity(args...;kwargs...) = get_C_C0_nullity_qK(args...;kwargs...)
+function get_C_C0_nullity(poly::Polyhedron) #Have to make sure the polyhedron has been already detecthlinearity.
+    p = MixedMatHRep(hrep(poly))
+    C = -p.A
+    C0 = p.b
+    nullity = begin
+        linset = p.linset
+        if !isempty(linset)
+            nty = maximum(linset)
+            @assert linset == BitSet(1:nty)
+        else
+            nty = 0
+        end
+        nty
+    end
+    return (C, C0, nullity)
+end
+get_C_C0(args...;kwargs...) = get_C_C0_nullity(args...;kwargs...) |> x->(x[1], x[2]) 
+get_C(args...;kwargs...) = get_C_C0_nullity(args...;kwargs...)[1]
+get_C0(args...;kwargs...) = get_C_C0_nullity(args...;kwargs...)[2]
+get_nullity(args...;kwargs...) = get_C_C0_nullity(args...;kwargs...)[3]
 
 
 
 function get_volume!(args...; recalculate::Bool=false, kwargs...)
     model = get_binding_network(args...)
     idx = get_idx(args...)
-    vtx = get_vertex!(args...; inv_info=true, neighbor_info=false)
+    vtx = get_vertex(args...; inv_info=true, neighbor_info=false)
     if recalculate || !model._vertices_volume_is_calced[idx]
         vol = calc_volume(model, [idx];kwargs...)[1]
         vtx.volume = vol[1]
@@ -993,7 +996,7 @@ end
 Directly judge if two vertices are neighbors by polyhedron intersection.
 """
 function is_neighbor_direct(Bnc::Bnc,vtx1,vtx2)::Bool
-    if get_nullity!(Bnc, vtx1) > 1 || get_nullity!(Bnc, vtx2) > 1
+    if get_nullity(Bnc, vtx1) > 1 || get_nullity(Bnc, vtx2) > 1
         @warn "Currently we doesn't care neighbor relationships less than your model's dim - 1  ,return false by default"
         return false
     end
@@ -1062,8 +1065,8 @@ function is_neighbor_x(Bnc::Bnc,vtx1,vtx2)::Bool
 end
 
 function is_neighbor_qK(Bnc::Bnc,vtx1,vtx2)::Bool
-    @assert get_nullity!(Bnc, vtx1) <= 1 "Currently we only support neighbor detection for vertices with nullity less than or equal to 1"
-    @assert get_nullity!(Bnc, vtx2) <= 1 "Currently we only support neighbor detection for vertices with nullity less than or equal to 1"
+    @assert get_nullity(Bnc, vtx1) <= 1 "Currently we only support neighbor detection for vertices with nullity less than or equal to 1"
+    @assert get_nullity(Bnc, vtx2) <= 1 "Currently we only support neighbor detection for vertices with nullity less than or equal to 1"
     from = get_idx(Bnc, vtx1)
     to = get_idx(Bnc, vtx2)
     vtx_grh = get_vertices_graph!(Bnc,full=true)
@@ -1075,7 +1078,7 @@ function is_neighbor_qK(Bnc::Bnc,vtx1,vtx2)::Bool
     # no directly edge found, judge numerically,
     return is_neighbor_direct(Bnc,vtx1,vtx2)
 end
-is_neighbor(Bnc::Bnc,vtx1,vtx2) = is_neighbor_qK(Bnc,vtx1,vtx2)
+is_neighbor(args...;kwargs...) = is_neighbor_qK(args...;kwargs...)
 
 
 function get_change_dir_x(Bnc::Bnc, from, to)
@@ -1106,14 +1109,14 @@ function get_change_dir_qK(Bnc::Bnc, from, to;check=false)
     if check && !is_neighbor_direct(Bnc,from,to)
         @error("Vertices $get_perm(Bnc, from) and $get_perm(Bnc, to) are not neighbors in qK space.")
     else
-        @assert get_nullity!(Bnc, from) ==0 && get_nullity!(Bnc, to) ==0 "They are neighbor but change direaction is currently not supported"
+        @assert get_nullity(Bnc, from) ==0 && get_nullity(Bnc, to) ==0 "They are neighbor but change direaction is currently not supported"
         (i1, i2, j1, j2) = _get_i_j_perms(get_perm(Bnc, from), get_perm(Bnc, to))
-        # n1 = get_nullity!(Bnc, from)
-        # n2 = get_nullity!(Bnc, to)
-        # a = get_H!(Bnc, from)[j2] .- SparseVector(Bnc.n, [i1], [1.0])
-        # b = SparseVector(Bnc.n, [i2], [1.0]) .- get_H!(Bnc, to)[j1]
+        # n1 = get_nullity(Bnc, from)
+        # n2 = get_nullity(Bnc, to)
+        # a = get_H(Bnc, from)[j2] .- SparseVector(Bnc.n, [i1], [1.0])
+        # b = SparseVector(Bnc.n, [i2], [1.0]) .- get_H(Bnc, to)[j1]
         # @show a,b
-        dir = (get_H!(Bnc, from)[j2, :] - get_H!(Bnc, to)[j1, :]) ./ 2
+        dir = (get_H(Bnc, from)[j2, :] - get_H(Bnc, to)[j1, :]) ./ 2
         return droptol!(dir,1e-10)
     end
 end
@@ -1131,20 +1134,20 @@ function get_interface(Bnc::Bnc, from, to)
     end
     from = get_perm(Bnc, from)
     to = get_perm(Bnc, to)
-    n1 = get_nullity!(Bnc, from)
-    n2 = get_nullity!(Bnc, to)
+    n1 = get_nullity(Bnc, from)
+    n2 = get_nullity(Bnc, to)
 
     # return interface based on nullity
     if n1 ==1 
-        C,C0 = get_C_C0_qK!(Bnc, from)
+        C,C0 = get_C_C0_qK(Bnc, from)
         return  C[1,:], C0[1]
     elseif n2 ==1
-        C,C0 = get_C_C0_qK!(Bnc, to)
+        C,C0 = get_C_C0_qK(Bnc, to)
         return  C[1,:], C0[1]
     else
         (i1,i2,j1,j2) = _get_i_j_perms(from,to)
         row_idx = _locate_C_row(Bnc, i1, j1, j2) # or i2,j2,j1 while under such case, the next row will change from "from" to "to"
-        C,C0 = get_C_C0_qK!(Bnc, from)
+        C,C0 = get_C_C0_qK(Bnc, from)
         return  C[row_idx,:], C0[row_idx]
     end
 end
@@ -1162,38 +1165,38 @@ end
 #         functions of getting vertices with certain properties
 # -------------------------------------------------------------------------------------
 
-"""
-    get_singular_vertices(Bnc::Bnc; return_idx=false)
+# """
+#     get_singular_vertices(Bnc::Bnc; return_idx=false)
 
-Return all singular vertices (nullity > 0).
-"""
-get_singular_vertices(Bnc::Bnc; return_idx::Bool=false) = get_vertices(Bnc; singular=true, return_idx)
-get_singular_vertices_idx(Bnc::Bnc) = get_vertices(Bnc; singular=true, return_idx=true)
+# Return all singular vertices (nullity > 0).
+# """
+# get_singular_vertices(Bnc::Bnc; return_idx::Bool=false) = get_vertices(Bnc; singular=true, return_idx)
+# get_singular_vertices_idx(Bnc::Bnc) = get_vertices(Bnc; singular=true, return_idx=true)
 
-"""
-    get_nonsingular_vertices(Bnc::Bnc; return_idx=false)
+# """
+#     get_nonsingular_vertices(Bnc::Bnc; return_idx=false)
 
-Return all nonsingular vertices (nullity == 0).
-"""
-get_nonsingular_vertices(Bnc::Bnc; return_idx::Bool=false) = get_vertices(Bnc; singular=false, return_idx)
-get_nonsingular_vertices_idx(Bnc::Bnc) = get_vertices(Bnc; singular=false, return_idx=true)
+# Return all nonsingular vertices (nullity == 0).
+# """
+# get_nonsingular_vertices(Bnc::Bnc; return_idx::Bool=false) = get_vertices(Bnc; singular=false, return_idx)
+# get_nonsingular_vertices_idx(Bnc::Bnc) = get_vertices(Bnc; singular=false, return_idx=true)
 
-"""
-    get_real_vertices(Bnc::Bnc; return_idx=false)
+# """
+#     get_real_vertices(Bnc::Bnc; return_idx=false)
 
-Return all real/asymptotic vertices.
-"""
-get_real_vertices(Bnc::Bnc; return_idx::Bool=false) = get_vertices(Bnc; asymptotic=true, return_idx)
-get_real_vertices_idx(Bnc::Bnc) = get_vertices(Bnc; asymptotic=true, return_idx=true)
+# Return all real/asymptotic vertices.
+# """
+# get_real_vertices(Bnc::Bnc; return_idx::Bool=false) = get_vertices(Bnc; asymptotic=true, return_idx)
+# get_real_vertices_idx(Bnc::Bnc) = get_vertices(Bnc; asymptotic=true, return_idx=true)
 
 
-"""
-    get_fake_vertices(Bnc::Bnc; return_idx=false)
+# """
+#     get_fake_vertices(Bnc::Bnc; return_idx=false)
 
-Return all fake (non-asymptotic) vertices.
-"""
-get_fake_vertices(Bnc::Bnc; return_idx::Bool=false) = get_vertices(Bnc; asymptotic=false, return_idx)
-get_fake_vertices_idx(Bnc::Bnc) = get_vertices(Bnc; asymptotic=false, return_idx=true)
+# Return all fake (non-asymptotic) vertices.
+# """
+# get_fake_vertices(Bnc::Bnc; return_idx::Bool=false) = get_vertices(Bnc; asymptotic=false, return_idx)
+# get_fake_vertices_idx(Bnc::Bnc) = get_vertices(Bnc; asymptotic=false, return_idx=true)
 
 """
     get_vertices(Bnc::Bnc; singular=nothing, asymptotic=nothing, return_idx=false)
@@ -1306,26 +1309,7 @@ get_one_inner_point(args...;kwargs...)=get_one_inner_point(get_polyhedron(args..
 Get the C and C0 matrices from a Polyhedron's H-representation.
 Returns C, C0, linset, the original polyhedra can be represented as {x | Cx ≤ C0, Cx = C0 for linset}
 """
-function get_C_C0_nullity(poly::Polyhedron) #Have to make sure the polyhedron has been already detecthlinearity.
-    p = MixedMatHRep(hrep(poly))
-    C = -p.A
-    C0 = p.b
-    nullity = begin
-        linset = p.linset
-        if !isempty(linset)
-            nty = maximum(linset)
-            @assert linset == BitSet(1:nty)
-        else
-            nty = 0
-        end
-        nty
-    end
-    return (C, C0, nullity)
-end
-get_C_C0(poly::Polyhedron) = get_C_C0_nullity(poly) |> x->(x[1], x[2]) 
-get_C(poly::Polyhedron) = get_C_C0_nullity(poly)[1]
-get_C0(poly::Polyhedron) = get_C_C0_nullity(poly)[2]
-get_nullity(poly::Polyhedron) = get_C_C0_nullity(poly)[3]
+
 
 
 
@@ -1358,7 +1342,7 @@ function summary_vertex(args...)
     idx= get_idx(args...)
     perm = get_perm(args...)
     is_real = is_asymptotic!(args...)
-    nullity = get_nullity!(args...)
+    nullity = get_nullity(args...)
     volume = get_volume!(args...)
     println("idx=$idx,perm=$perm, asymptotic=$is_real, nullity=$nullity")
     println("volume=$(volume[1]) +- $(volume[2])")
@@ -1375,8 +1359,8 @@ function summary_vertex(args...)
     return nothing
 end
 
-Base.summary(Bnc::Bnc, perm)= summary_vertex(Bnc, perm)
-Base.summary(vtx::Vertex)= summary_vertex(vtx)
+summary(Bnc::Bnc, perm)= summary_vertex(Bnc, perm)
+summary(vtx::Vertex)= summary_vertex(vtx)
 
 
 # function summary_vertices(Bnc::Bnc;kwargs...)

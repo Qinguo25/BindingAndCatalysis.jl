@@ -1,126 +1,281 @@
 
 # Core function of calc volume:
-function calc_volume(Cs::AbstractVector{<:AbstractMatrix{<:Real}},
-                     C0s::AbstractVector{<:AbstractVector{<:Real}};
+# function calc_volume_old(Cs::AbstractVector{<:AbstractMatrix{<:Real}},
+#                      C0s::AbstractVector{<:AbstractVector{<:Real}};
+#     confidence_level::Float64 = 0.95,
+#     contain_overlap::Bool = false,
+#     batch_size::Int = 100_000,
+#     log_lower = -6,
+#     log_upper = 6,
+#     tol::Float64 = 0.0,
+#     rel_tol::Float64 = 0.005,  # 相对误差阈值
+#     time_limit::Float64 = 40.0,
+# )::Vector{Tuple{Float64, Float64}}
+
+#     @assert length(Cs) == length(C0s) "Cs and C0s must have same length"
+#     n_regimes = length(Cs)
+#     @info "Number of polyhedra to calc volume: $n_regimes"
+#     n_threads = Threads.maxthreadid()
+#     n_dim = size(Cs[1], 2)
+#     dist = Uniform(log_lower, log_upper)
+
+#     total_counts = zeros(Int, n_regimes)
+#     total_N = 0
+#     stats = fill((0.0, 0.0), n_regimes)
+#     rel_errors = fill(Inf, n_regimes)
+#     active = trues(n_regimes)  # 哪些 regime 仍在采样中
+
+#     # 每线程本地计数，避免锁
+#     thread_counts = [zeros(Int, n_regimes) for _ in 1:n_threads]
+    
+
+#     start_time = time()
+#     z = quantile(Normal(), (1 + confidence_level) / 2)
+
+#     @inline function get_center_margin(count::Int, N::Int)
+#         if count == 0
+#             return 0.0, 0.0
+#         end
+#         P_hat = count / N
+#         denom = 1 + z^2 / N
+#         center = (P_hat + z^2 / (2 * N)) / denom
+#         margin = (z / denom) * sqrt(P_hat * (1 - P_hat) / N + z^2 / (4 * N^2))
+#         return center, margin
+#     end
+
+     
+#     # --- 主循环 ---
+#     while true
+#         elapsed = time() - start_time
+#         if elapsed > time_limit
+#             @info "Reached time limit ($(round(elapsed, digits=2)) s). Stopping."
+#             break
+#         end
+#         if !any(active)
+#             @info "All regimes converged after $total_N samples."
+#             break
+#         end
+
+#         # 生成一批样本（列是样本）
+#         samples = rand(dist, n_dim, batch_size)
+       
+#        Threads.@threads for j in 1:batch_size
+#             tid = Threads.threadid()
+#             local_counts = thread_counts[tid]
+#             @views x = samples[:, j]
+
+#             # 对当前点，只检查 active 的 regimes
+#             # 如果 contain_overlap == false：当找到一个满足的 regime，记录并 break（一个点只属于一个）
+#             # 如果 contain_overlap == true：记录所有满足的 regimes（允许多分配
+#             vals = [similar(b) for b in C0s] # 提前分配内存
+#             for i in eachindex(Cs)
+#                 if !active[i]
+#                     continue
+#                 end
+#                 @views A = Cs[i]
+#                 @views b = C0s[i]
+
+#                 # 计算 A*x + b 的每个分量是否都 > -tol
+#                 # 使用 all(...) 简洁直观（可能会分配一个临时数组在某些情况下，但通常 A*x+b 是向量）
+#                 mul!(vals[i], A,x)
+#                 vals[i] .+=b
+#                 # vals = A * x .+ b
+#                 if any(vals[i] .< -tol)
+#                     # 不满足当前 regime：不管 contain_overlap 与否，都去检查下一个 regime
+#                     continue
+#                 end
+
+#                 # 满足当前 regime
+#                 local_counts[i] += 1
+#                 if !contain_overlap
+#                     break  # 当不允许重叠时，属于一个 regime 后停止检查其它 regime
+#                 else
+#                     # 若允许重叠，继续检查其它 regimes
+#                 end
+#             end
+#         end
+
+#         # 汇总线程统计并清零线程本地计数
+#         for c in thread_counts
+#             total_counts .+= c
+#             fill!(c, 0)
+#         end
+#         total_N += batch_size
+
+#         # 更新置信区间与相对误差，仅对 active 的 regimes
+#         for i in eachindex(Cs)
+#             if !active[i]
+#                 continue
+#             end
+#             center, margin = get_center_margin(total_counts[i], total_N)
+#             stats[i] = (center, margin)
+#             # 相对误差用 margin/center；若 center==0 则看成无穷（还没观测到）
+#             rel_errors[i] = (center == 0.0) ? Inf : (margin / center)
+#             if rel_errors[i] <= rel_tol
+#                 active[i] = false
+#             end
+#         end
+#     end
+
+#     elapsed = time() - start_time
+#     @info "Total samples: $total_N, Elapsed: $(round(elapsed, digits=2)) s"
+#     return stats
+# end
+
+"""
+    calc_volume(Cs, C0s; kwargs...) -> Vector{Tuple{Float64,Float64}}
+
+Monte Carlo estimate for each polyhedron/regime defined by `A*x + b >= -tol`
+(where `A = Cs[i]`, `b = C0s[i]`), using Wilson score interval to stop per-regime
+when relative error <= `rel_tol` (or `time_limit` hit).
+
+Returns `stats[i] = (center, margin)` for each regime.
+"""
+function calc_volume(
+    Cs::AbstractVector{<:AbstractMatrix{<:Real}},
+    C0s::AbstractVector{<:AbstractVector{<:Real}};
     confidence_level::Float64 = 0.95,
     contain_overlap::Bool = false,
     batch_size::Int = 100_000,
-    log_lower = -6,
-    log_upper = 6,
+    log_lower::Float64 = -6.0,
+    log_upper::Float64 = 6.0,
     tol::Float64 = 0.0,
-    rel_tol::Float64 = 0.005,  # 相对误差阈值
+    rel_tol::Float64 = 0.005,
     time_limit::Float64 = 40.0,
 )::Vector{Tuple{Float64, Float64}}
 
     @assert length(Cs) == length(C0s) "Cs and C0s must have same length"
     n_regimes = length(Cs)
     @info "Number of polyhedra to calc volume: $n_regimes"
-    n_threads = Threads.nthreads()
-    n_dim = size(Cs[1], 2)
-    dist = Uniform(log_lower, log_upper)
+    n_regimes == 0 && return Tuple{Float64,Float64}[]
 
+    # Dimensions & sanity
+    n_dim = size(Cs[1], 2)
+    for i in 1:n_regimes
+        @assert size(Cs[i], 2) == n_dim "All Cs must have same column dimension"
+        @assert size(Cs[i], 1) == length(C0s[i]) "size(Cs[$i],1) must match length(C0s[$i])"
+    end
+
+    # Wilson interval parameter
+    z = quantile(Normal(), (1 + confidence_level) / 2)
+
+    @inline function wilson_center_margin(count::Int, N::Int)
+        count == 0 && return 0.0, 0.0
+        P̂ = count / N
+        denom = 1 + z^2 / N
+        center = (P̂ + z^2 / (2N)) / denom
+        margin = (z / denom) * sqrt(P̂ * (1 - P̂) / N + z^2 / (4N^2))
+        return center, margin
+    end
+
+    # Global stats
     total_counts = zeros(Int, n_regimes)
     total_N = 0
     stats = fill((0.0, 0.0), n_regimes)
     rel_errors = fill(Inf, n_regimes)
-    active = trues(n_regimes)  # 哪些 regime 仍在采样中
 
-    # 每线程本地计数，避免锁
-    thread_counts = [zeros(Int, n_regimes) for _ in 1:n_threads]
-    
+    active_ids = collect(1:n_regimes)
 
-    start_time = time()
-    z = quantile(Normal(), (1 + confidence_level) / 2)
+    # Thread-local slot count (important: maxthreadid, not nthreads)
+    n_slots = Threads.maxthreadid()
+    thread_counts = [zeros(Int, n_regimes) for _ in 1:n_slots]
 
-    @inline function get_center_margin(count::Int, N::Int)
-        if count == 0
-            return 0.0, 0.0
+    # Thread-local RNG + x workspace
+    # Use a stable seed per thread to avoid contention and keep reproducibility-ish.
+    thread_rng = [Random.MersenneTwister(0x12345678 + tid) for tid in 1:n_slots]
+    thread_x = [Vector{Float64}(undef, n_dim) for _ in 1:n_slots]
+
+    # Thread-local y workspaces: one vector per regime (length = m_i)
+    # Use Float64 for speed; if your b is Float64 this is perfect.
+    thread_y = [
+        [Vector{Float64}(undef, size(Cs[i], 1)) for i in 1:n_regimes]
+        for _ in 1:n_slots
+    ]
+
+    # Pre-grab b as Float64 vectors if possible (avoids repeated Real->Float64 conversions)
+    # If b is already Vector{Float64}, this is just a cheap reference.
+    b64 = Vector{Vector{Float64}}(undef, n_regimes)
+    for i in 1:n_regimes
+        bi = C0s[i]
+        if bi isa Vector{Float64}
+            b64[i] = bi
+        else
+            b64[i] = Float64.(bi)
         end
-        P_hat = count / N
-        denom = 1 + z^2 / N
-        center = (P_hat + z^2 / (2 * N)) / denom
-        margin = (z / denom) * sqrt(P_hat * (1 - P_hat) / N + z^2 / (4 * N^2))
-        return center, margin
     end
 
-     
-    # --- 主循环 ---
+    start_time = time()
+    width = log_upper - log_lower
+
     while true
-        elapsed = time() - start_time
-        if elapsed > time_limit
-            @info "Reached time limit ($(round(elapsed, digits=2)) s). Stopping."
-            break
-        end
-        if !any(active)
-            @info "All regimes converged after $total_N samples."
-            break
-        end
+        (time() - start_time > time_limit) && (@info "Reached time limit ($(round(time() - start_time, digits=2)) s). Stopping.";break)
+        isempty(active_ids) && (@info "All regimes converged after $total_N samples.";break)
 
-        # 生成一批样本（列是样本）
-        samples = rand(dist, n_dim, batch_size)
-       
-       Threads.@threads for j in 1:batch_size
+        # Monte Carlo batch
+        Threads.@threads for _ in 1:batch_size
             tid = Threads.threadid()
+            rng = thread_rng[tid]
+            x = thread_x[tid]
             local_counts = thread_counts[tid]
-            @views x = samples[:, j]
+            ywork = thread_y[tid]
 
-            # 对当前点，只检查 active 的 regimes
-            # 如果 contain_overlap == false：当找到一个满足的 regime，记录并 break（一个点只属于一个）
-            # 如果 contain_overlap == true：记录所有满足的 regimes（允许多分配
-            vals = [similar(b) for b in C0s] # 提前分配内存
-            for i in eachindex(Cs)
-                if !active[i]
-                    continue
-                end
-                @views A = Cs[i]
-                @views b = C0s[i]
+            # x ~ Uniform(log_lower, log_upper)^n_dim
+            @inbounds @simd for k in 1:n_dim
+                x[k] = log_lower + width * rand(rng)
+            end
 
-                # 计算 A*x + b 的每个分量是否都 > -tol
-                # 使用 all(...) 简洁直观（可能会分配一个临时数组在某些情况下，但通常 A*x+b 是向量）
-                mul!(vals[i], A,x)
-                vals[i] .+b
-                # vals = A * x .+ b
-                if any(vals[i] .< -tol)
-                    # 不满足当前 regime：不管 contain_overlap 与否，都去检查下一个 regime
-                    continue
-                end
+            # test regimes
+            for idx in active_ids
+                A = Cs[idx]
+                b = b64[idx]
+                y = ywork[idx]
 
-                # 满足当前 regime
-                local_counts[i] += 1
-                if !contain_overlap
-                    break  # 当不允许重叠时，属于一个 regime 后停止检查其它 regime
-                else
-                    # 若允许重叠，继续检查其它 regimes
+                # y = A*x  (sparse gemv)
+                mul!(y, A, x)
+
+                # check y + b >= -tol  (fuse add+check)
+                ok = true
+                @inbounds for k in 1:length(y)
+                    if y[k] + b[k] < -tol
+                        ok = false
+                        break
+                    end
                 end
+                ok || continue
+
+                local_counts[idx] += 1
+                contain_overlap || break
             end
         end
 
-        # 汇总线程统计并清零线程本地计数
+        # Reduce and reset counts; update N
         for c in thread_counts
-            total_counts .+= c
-            fill!(c, 0)
+            @inbounds for i in active_ids
+                total_counts[i] += c[i]
+                c[i] = 0
+            end
         end
         total_N += batch_size
 
-        # 更新置信区间与相对误差，仅对 active 的 regimes
-        for i in eachindex(Cs)
-            if !active[i]
-                continue
-            end
-            center, margin = get_center_margin(total_counts[i], total_N)
+        # Update CI and prune active_ids
+        new_active = Int[]
+        sizehint!(new_active, length(active_ids))
+        for i in active_ids
+            center, margin = wilson_center_margin(total_counts[i], total_N)
             stats[i] = (center, margin)
-            # 相对误差用 margin/center；若 center==0 则看成无穷（还没观测到）
-            rel_errors[i] = (center == 0.0) ? Inf : (margin / center)
-            if rel_errors[i] <= rel_tol
-                active[i] = false
+            re = (center == 0.0) ? Inf : (margin / center)
+            rel_errors[i] = re
+            if re > rel_tol
+                push!(new_active, i)
             end
         end
+        active_ids = new_active
     end
 
-    elapsed = time() - start_time
-    @info "Total samples: $total_N, Elapsed: $(round(elapsed, digits=2)) s"
     return stats
 end
+
+
 calc_volume(C::AbstractMatrix{<:Real}, C0::AbstractVector{<:Real}; kwargs...)::Tuple{Float64,Float64} = calc_volume([C], [C0]; kwargs...)[1]
 
 
@@ -140,6 +295,7 @@ function calc_volume(model::Bnc, perms=nothing;
 
     # filter out those perms expect to give zero volume
     if isnothing(perms)
+        find_all_vertices!(model)  # ensure vertices_perm is populated
         n_all  = length(model.vertices_perm)
         # get index for those worth calculate volume
         idxs = get_vertices(model, singular=false, asymptotic= asymptotic; return_idx=true) # Are both index and perms!!!!!!
@@ -160,7 +316,7 @@ function calc_volume(model::Bnc, perms=nothing;
         return vals
     end
 
-    CC0s = [get_C_C0_qK!(model,perm) for perm in perms_to_calc]
+    CC0s = [get_C_C0_qK(model,perm) for perm in perms_to_calc]
     Cs = [ rep[1] for rep in CC0s ]
     C0s = asymptotic ? [zeros(size(rep[2])) for rep in CC0s] : [ rep[2] for rep in CC0s ]
     

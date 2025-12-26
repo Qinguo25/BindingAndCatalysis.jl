@@ -42,6 +42,8 @@ function ∂logqK_∂logx_sym(Bnc::Bnc; show_x_space::Bool=false)::Matrix{Num}
         Bnc.N
     ]
 end
+logder_qK_x_sym(args...;kwargs...) = ∂logqK_∂logx_sym(args...;kwargs...)
+
 """
 Symbolicly calculate ∂logx/∂logqK
 """
@@ -50,6 +52,8 @@ function ∂logx_∂logqK_sym(Bnc::Bnc;show_x_space::Bool=false)::Matrix{Num}
     # This function is used for symbolic calculations, not numerical ones.
     return inv(∂logqK_∂logx_sym(Bnc; show_x_space=show_x_space)).|> Symbolics.simplify
 end
+logder_x_qK_sym(args...;kwargs...) = ∂logx_∂logqK_sym(args...;kwargs...)
+
 
 #---------------------------------------------------------
 #   Below are regimes associtaed symbolic functions
@@ -106,6 +110,18 @@ end
 show_condition_poly(poly::Polyhedron;kwargs...)=show_condition_poly(get_C_C0_nullity(poly)...; kwargs...)
 show_condition_poly(C_qK::AbstractVector{<:Real},C0_qK::Real,args...;kwargs...)=show_condition_poly(C_qK', [C0_qK], args...; kwargs...)[1]
 
+
+show_condition_x(args...; kwargs...)= show_condition_poly(get_C_C0_x(args...)...; syms=x_sym(args...), kwargs...)
+show_condition_qK(args...; kwargs...)= show_condition_poly(get_C_C0_nullity_qK(args...)...; syms=qK_sym(args...), kwargs...)
+
+function show_condition_path(Bnc::Bnc, path::AbstractVector{<:Integer}, change_qK; kwargs...)
+    # directly calculate the polyhedron for the path, may not useful.
+    poly = _calc_polyhedra_for_path(Bnc, path,change_qK)
+    syms = copy(qK_sym(Bnc)) |> x->deleteat!(x,locate_sym_qK(Bnc, change_qK)) 
+    show_condition_poly(poly; syms=syms, kwargs...)
+end
+
+
 """
 handle log(y) = C log(x) + C0
 """
@@ -118,6 +134,20 @@ function show_expression_mapping(C::AbstractMatrix{<:Real}, C0::AbstractVector{<
     return expr 
 end
 show_expression_mapping(C::AbstractVector{<:Real}, C0::Real, args...;kwargs...)=show_expression_mapping(C', [C0], args...;kwargs...)[1]
+
+show_expression_x(args...;kwargs...)= begin
+    bn = get_binding_network(args...)
+    y = x_sym(bn)
+    x = qK_sym(bn)
+    show_expression_mapping(get_H_H0(args...), y,x; kwargs...)
+end
+
+show_expression_qK(args...;kwargs...)= begin
+    bn = get_binding_network(args...)
+    y = qK_sym(bn)
+    x = x_sym(bn)
+    show_expression_mapping(get_M_M0(args...), y,x; kwargs...)
+end
 
 
 
@@ -140,41 +170,12 @@ end
 
 
 
-
-show_expression_x(args...;kwargs...)= begin
-    bn = get_binding_network(args...)
-    y = x_sym(bn)
-    x = qK_sym(bn)
-    show_expression_mapping(get_H_H0!(args...), y,x; kwargs...)
-end
-
-show_expression_qK(args...;kwargs...)= begin
-    bn = get_binding_network(args...)
-    y = qK_sym(bn)
-    x = x_sym(bn)
-    show_expression_mapping(get_M_M0!(args...), y,x; kwargs...)
-end
-
 show_dominant_condition(args...;kwargs...)= begin
     bn = get_binding_network(args...)
     y = q_sym(bn)
     x = x_sym(bn)
-    show_expression_mapping(get_P_P0!(args...), y,x; kwargs...)
+    show_expression_mapping(get_P_P0(args...), y,x; kwargs...)
 end
-
-
-
-show_condition_x(args...; kwargs...)= show_condition_poly(get_C_C0_x!(args...)...; syms=x_sym(args...), kwargs...)
-show_condition_qK(args...; kwargs...)= show_condition_poly(get_C_C0_nullity_qK!(args...)...; syms=qK_sym(args...), kwargs...)
-
-function show_condition_path(Bnc::Bnc, path::AbstractVector{<:Integer}, change_qK; kwargs...)
-    # directly calculate the polyhedron for the path, may not useful.
-    poly = _calc_polyhedra_for_path(Bnc, path,change_qK)
-    syms = copy(qK_sym(Bnc)) |> x->deleteat!(x,locate_sym_qK(Bnc, change_qK)) 
-    show_condition_poly(poly; syms=syms, kwargs...)
-end
-
-
 show_conservation(Bnc::Bnc)=Bnc.q_sym .~ Bnc._L_sparse * Bnc.x_sym
 show_equilibrium(Bnc::Bnc;log_space::Bool=true) = show_expression_mapping(Bnc.N, zeros(Int,Bnc.r), Bnc.K_sym, Bnc.x_sym; log_space=log_space)
 
@@ -260,12 +261,6 @@ function render_arrow(a::Vector, appendix="")::String
 end
 
 
-
-
-
-
-
-
 function render_path(pths::AbstractVector{<:Tuple};kwargs...)
     if length(pths[1]) == 2
         return render_path(1:length(pths), getindex.(pths,1), getindex.(pths,2); kwargs...)
@@ -333,22 +328,4 @@ function show_expression_path(model::Bnc, rgm_path, change_qK_idx, observe_x_idx
     return (exprs, edges)
 end
 
-function show_expression_path(grh::SISO_graph, pth_idx, observe_x; kwargs...)
-    return show_expression_path(grh.bn, grh.rgm_paths[pth_idx], grh.change_qK_idx, observe_x; kwargs...)
-end
-
-
-
-function render_array(M::AbstractArray,empty_posi_subs=nothing)
-    A = Array{Any}(M)
-    f(x) = begin
-            a = try 
-                    Int(round(x;digits=3))
-                catch
-                    round(x;digits=5)
-                end
-            a == 0 ? empty_posi_subs : a
-        end
-    A = f.(A)
-    return latexify(A)
-end
+show_expression_path(grh::SISO_graph, pth_idx, observe_x; kwargs...)=show_expression_path(grh.bn, grh.rgm_paths[pth_idx], grh.change_qK_idx, observe_x; kwargs...)

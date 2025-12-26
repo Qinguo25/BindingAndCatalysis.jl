@@ -185,7 +185,7 @@ get_polyhedron!(grh::SISO_graph, pth_idx)= get_polyhedra!(grh, pth_idx)[1]
 
 
 #
-get_C_C0_nullity_qK!(grh::SISO_graph, pth_idx) = get_polyhedron!(grh, pth_idx) |> get_C_C0_nullity
+get_C_C0_nullity_qK(grh::SISO_graph, pth_idx) = get_polyhedron!(grh, pth_idx) |> get_C_C0_nullity
 # get_C_C0!, 
 #get_C!, 
 #get_C0! are already defined by julia multipy dispatch
@@ -207,7 +207,7 @@ function get_qK_neighbor_grh(Bnc::Bnc; half::Bool=true)::SimpleDiGraph
     n = length(vg.neighbors)
     g = SimpleDiGraph(n)
     for (i, edges) in enumerate(vg.neighbors)
-        if get_nullity!(Bnc,i) >1
+        if get_nullity(Bnc,i) >1
             continue
         end
         for e in edges
@@ -229,7 +229,7 @@ function get_qK_neighbor_grh(Bnc::Bnc,change_qK;)::SimpleDiGraph
     n = length(vg.neighbors)
     g = SimpleDiGraph(n)
     for (i, edges) in enumerate(vg.neighbors)
-        nlt = get_nullity!(Bnc,i)
+        nlt = get_nullity(Bnc,i)
         if nlt >1
             continue
         end
@@ -261,7 +261,7 @@ function get_sources_sinks(model::Bnc, g::AbstractGraph)
     sinks_all   = get_sinks(g) 
     common_vs = intersect(sources_all, sinks_all)
     filter!(common_vs) do v
-        get_nullity!(model, v) > 0
+        get_nullity(model, v) > 0
     end
     sources = setdiff(sources_all, common_vs)
     sinks = setdiff(sinks_all, common_vs)
@@ -288,7 +288,7 @@ function _enumerate_paths(g::AbstractGraph;
         end
     end
 
-    paths_per_thread = [Vector{Vector{Int}}() for _ in 1:Threads.nthreads()]
+    paths_per_thread = [Vector{Vector{Int}}() for _ in 1:Threads.maxthreadid()]
     Threads.@threads for s in collect(sources)
         local_paths = paths_per_thread[Threads.threadid()]
         dfs([s], local_paths)
@@ -419,7 +419,7 @@ end
 #     # Handle invertible regimes first
 
 #     # Firstly let's try assuming regiems with nullity 1 have no contribution()
-#     nlts = [get_nullity!(model, p) for p in path]
+#     nlts = [get_nullity(model, p) for p in path]
 #     idxs = findall(x -> x == 0, nlts)
 #     C = Vector{Matrix{Float64}}(undef, length(idxs))
 #     C0 = Vector{Vector{Float64}}(undef, length(idxs))
@@ -434,7 +434,7 @@ end
 #     Threads.@threads for i in eachindex(idxs)
 #         idx = idxs[i]
 #         perm = path[idx]
-#         C_tmp, C0_tmp = get_C_C0_qK!(model, perm)
+#         C_tmp, C0_tmp = get_C_C0_qK(model, perm)
 #         rows = get_empty_row_idxs(C_tmp, change_qK_idx)
 #         cols = setdiff(1:model.n, change_qK_idx)
 #         C[i] = C_tmp[rows, cols]
@@ -464,9 +464,9 @@ function _calc_reaction_order_for_single_path(model, path::Vector{Int}, change_q
     r_ord = Vector{Float64}(undef, length(path))
     for i in eachindex(path)
         if !is_singular(model, path[i])
-            r_ord[i] = get_H!(model, path[i])[observe_x_idx, change_qK_idx] |> x->round(x;digits=3)
+            r_ord[i] = get_H(model, path[i])[observe_x_idx, change_qK_idx] |> x->round(x;digits=3)
         else
-            ord = get_H!(model, path[i])[observe_x_idx, change_qK_idx]
+            ord = get_H(model, path[i])[observe_x_idx, change_qK_idx]
             if abs(ord) < 1e-6
                 r_ord[i] = NaN  # We use NaN to denote singular
             else 

@@ -2,7 +2,7 @@
 
 julia_version = "1.12.2"
 manifest_format = "2.0"
-project_hash = "5999032825424ccdb7f5560dad7634a4c8ddc125"
+project_hash = "0925daa4670a8d10621fd42a7d4d3978014c767b"
 
 [[deps.ADTypes]]
 git-tree-sha1 = "8b2b045b22740e4be20654175cc38291d48539db"
@@ -216,6 +216,12 @@ version = "1.6.3"
 git-tree-sha1 = "a2d308fcd4c2fb90e943cf9cd2fbfa9c32b69733"
 uuid = "e2ed5e7c-b2de-5872-ae92-c73ca462fb04"
 version = "0.2.2"
+
+[[deps.BindingAndCatalysis]]
+deps = ["BenchmarkTools", "CDDLib", "CairoMakie", "Colors", "DataStructures", "DiffEqCallbacks", "Distributions", "GLMakie", "GraphMakie", "Graphs", "ImageFiltering", "JSON3", "LanguageServer", "Latexify", "LinearAlgebra", "MetaGraphsNext", "NonlinearSolve", "OrdinaryDiffEq", "Parameters", "Polyhedra", "Printf", "SparseArrays", "StableRNGs", "Statistics", "StatsBase", "Symbolics", "ThreadsX"]
+path = "."
+uuid = "b532a4b1-2c45-4c12-bcaf-8695372aa40c"
+version = "1.0.0-DEV"
 
 [[deps.BitTwiddlingConvenienceFunctions]]
 deps = ["Static"]

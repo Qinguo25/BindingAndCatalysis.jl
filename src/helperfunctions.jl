@@ -59,6 +59,7 @@ function diag_indices(A::SparseMatrixCSC,end_row::Int)
     return idxs
 end
 
+#= Unused helpers retained for potential future reference.
 function log_sum_exp10(L::AbstractMatrix,logx::AbstractArray)
     m = maximum(logx)
     z = exp10.(x .-m)
@@ -83,6 +84,7 @@ function log_sum_exp10!(logq::AbstractVector, L::SparseMatrixCSC, logx::Abstract
     end
     return logq
 end
+=#
 
 # helper funtions to taking inverse when the matrix is singular.
 function  _adj_singular_matrix(A::AbstractMatrix; atol=1e-12)::Tuple{SparseMatrixCSC,Int}
@@ -161,6 +163,8 @@ function arr_to_vector(arr)
         return [arr_to_vector(s) for s in eachslice(arr, dims=1)]
     end
 end
+#= Unused helper retained for optional console pretty-printing.
+=#
 function pythonprint(arr)
     txt = JSON3.write(arr_to_vector(arr), pretty=true, indent=4, escape_unicode=false)
     println(txt)
@@ -210,6 +214,7 @@ function _ode_solution_wrapper(
 end
 
 
+#= Unused helper retained for potential distance-matrix utilities.
 function pairwise_distance(data::AbstractVector, dist_func::Function; is_symmetric::Bool=true)
     n = length(data)
     # Determine the output type by calculating one distance value first.
@@ -219,9 +224,7 @@ function pairwise_distance(data::AbstractVector, dist_func::Function; is_symmetr
     if is_symmetric
         Threads.@threads for i in 1:n
             for j in i:n
-                # Calculate the distance
                 d = dist_func(data[i], data[j])
-                # Assign to both [i, j] and [j, i]
                 dist_matrix[i, j] = d
                 dist_matrix[j, i] = d
             end
@@ -235,6 +238,7 @@ function pairwise_distance(data::AbstractVector, dist_func::Function; is_symmetr
     end
     return dist_matrix
 end
+=#
 
 
 log10_sym(x) = x==1 ? Num(0) : Symbolics.wrap(Symbolics.Term(log10, [x,]))
@@ -301,15 +305,17 @@ function _idx_val2Mtx(idx::Vector{Int}, val::Vector{<:T}, col_num::Union{Int,Not
     return Mtx
 end
 
+#= Unused helper for validating sparse index/value representations.
 function _check_valid_idx(idx::Vector{Int},Mtx::Matrix{<:Any})
-    # Check if the idx is valid for the given Mtx
     @assert length(idx) == size(Mtx, 1) "idx must have the same length as the number of rows in Mtx"
     for i in 1:length(idx)
         @assert Mtx[i, idx[i]] != 0 "Mtx must have non-zero entries at the idx positions"
     end
     return true
 end
+=#
 
+#= Unused helper that tracked columnwise maxima in sparse matrices.
 function find_max_indices_per_column(S::SparseMatrixCSC{Tv, Ti}, first_n_col::Union{Int,Nothing}=nothing) where {Tv, Ti}
     first_n_col = isnothing(first_n_col) ? size(S, 2) : first_n_col
     max_indices = zeros(Ti, first_n_col)
@@ -336,6 +342,7 @@ function find_max_indices_per_column(S::SparseMatrixCSC{Tv, Ti}, first_n_col::Un
     end
     return max_indices
 end
+=#
 
 
 function matrix_iter(f::Function, M::AbstractArray{<:Any,2}; byrow::Bool=true,multithread::Bool=true)
@@ -418,12 +425,14 @@ end
 """
 CUDA helper to get access to SM number and maximum threads per SM.
 """
+#= Unused CUDA helper kept as reference for device introspection.
 function GPU_SM_threads_num()
     dev = CUDA.device()
     SM = attribute(dev, CUDA.DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT)
     max_threads = attribute(dev, CUDA.DEVICE_ATTRIBUTE_MAX_THREADS_PER_BLOCK)
     return SM, max_threads
 end
+=#
 
 
 
@@ -468,6 +477,7 @@ end
 #----------------------------------
 # helper functions for calculation
 #------------------------------------
+#= Unused helper for copying vectors without an index.
 function removed_copy(v::Vector{T}, i::Int) where T
     n = length(v)
     @boundscheck 1 ≤ i ≤ n || throw(BoundsError(v, i))
@@ -480,6 +490,7 @@ function removed_copy(v::Vector{T}, i::Int) where T
 end
 
 rest = removed_copy(v, i)
+=#
 
 
 
@@ -536,4 +547,18 @@ function norm_vec_space(x::AbstractVector{<:Real})::Vector{Float64}
     n = length(x)
     num_to_norm = median!(filter!(>(1e-9), abs.(x)))
     return x./num_to_norm
+end
+
+function render_array(M::AbstractArray,empty_posi_subs=nothing)
+    A = Array{Any}(M)
+    f(x) = begin
+            a = try 
+                    Int(round(x;digits=3))
+                catch
+                    round(x;digits=5)
+                end
+            a == 0 ? empty_posi_subs : a
+        end
+    A = f.(A)
+    return latexify(A)
 end

@@ -25,6 +25,7 @@ import Printf
 import JSON3
 import ImageFiltering: imfilter, Kernel
 
+import Random
 import Base: summary,show
 # ---------------------Define the struct of binding and catalysis networks----------------------------------
 
