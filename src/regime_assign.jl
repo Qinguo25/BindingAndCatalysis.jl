@@ -2,8 +2,19 @@
 # Functions for assigning vertices
 #-----------------------------------------------------------------
 
+"""
+Assign regimes given a point in x space.
 
-function assign_vertex_x(Bnc::Bnc{T}, x::AbstractVector{<:Real};input_logspace::Bool=false,asymptotic::Bool=true)::Vector{T} where T
+# Arguments
+- `Bnc::Bnc{T}`: The BindingAndCatalysis model.
+- `x::AbstractVector{<:Real}`: The point in x space.
+- `input_logspace::Bool=false`: Whether the input x is in log space.
+- `asymptotic::Bool=true`: Whether to consider only asymptotic regimes.
+"""
+function assign_vertex_x(Bnc::Bnc{T}, x::AbstractVector{<:Real};
+    input_logspace::Bool=false,
+    asymptotic_only::Bool=true,
+    return_idx::Bool=false) where T
     # x = input_logspace ? exp10.(x) : x
     L = Bnc._L_sparse
     d = Bnc.d
@@ -13,7 +24,7 @@ function assign_vertex_x(Bnc::Bnc{T}, x::AbstractVector{<:Real};input_logspace::
     colptr = L.colptr
     rowval = L.rowval
 
-    if asymptotic
+    if asymptotic_only
         nzval = @view(x[Bnc._LN_top_cols])
     else
         x = input_logspace ? exp10.(x) : x # linear or log space only matters when not asymptotic
@@ -34,46 +45,49 @@ function assign_vertex_x(Bnc::Bnc{T}, x::AbstractVector{<:Real};input_logspace::
             end
         end
     end
-    return max_indices
+    return return_idx ? get_idx(Bnc,max_indices) : max_indices
 end
-
-
 # function get_vertex_qK(Bnc::Bnc, x::AbstractMatrix{<:Real}; kwargs...) 
 #     [get_vertex_qK_slow(Bnc, row; kwargs...) for row in eachrow(x)]
 # end
 
+"""
+Assign regimes given qK.
+
+# Arguments
+- `Bnc::Bnc{T}`: The BindingAndCatalysis model.
+- `x::AbstractVector{<:Real}`: The point in x space.
+- `input_logspace::Bool=false`: Whether the input x is in log space.
+- `asymptotic::Bool=true`: Whether to consider only asymptotic regimes.
+"""
 function assign_vertex_qK(Bnc::Bnc ; x::AbstractVector{<:Real}, input_logspace::Bool=false, kwargs...) 
     # @show all_vertice_idx
     logqK = x2qK(Bnc,x; input_logspace=input_logspace, output_logspace=true)
     return assign_vertex_qK(Bnc, logqK; input_logspace=true, kwargs...)
 end
-
-
-function assign_vertex_qK(Bnc::Bnc, qK::AbstractVector{<:Real}; input_logspace::Bool=false, asymptotic::Bool=false, eps=0) 
-    real_only = asymptotic ? true : nothing
-    all_vertice_idx = get_vertices(Bnc, singular=false, asymptotic = real_only, return_idx = false)
+function assign_vertex_qK(Bnc::Bnc, qK::AbstractVector{<:Real}; input_logspace::Bool=false, asymptotic_only::Bool=false, eps=0, return_idx::Bool=false) 
+    real_only = asymptotic_only ? true : nothing
+    all_vertice_idx = get_vertices(Bnc, singular=false, asymptotic = real_only, return_idx = true)
     # @show all_vertice_idx
     logqK = input_logspace ? qK : log10.(qK)
     
     record = Vector{Float64}(undef,length(all_vertice_idx))
     for (i, idx) in enumerate(all_vertice_idx)
         C, C0 = get_C_C0_qK(Bnc, idx) 
-        
-        min_val = if !asymptotic
+        min_val = if !asymptotic_only
             minimum(C * logqK .+ C0)
         else
             minimum(C * logqK)
         end
-        # @show idx
-        # @show min_val
         record[i] = min_val
 
         if record[i] >= -eps
-            return idx
+            return return_idx ? idx : get_perm(Bnc, idx)
         end
     end
     @warn("All vertex conditions failed for logqK=$logqK. Returning the best-fit vertex.")
-    return all_vertice_idx[findmax(record)[2]]
+    idx = all_vertice_idx[findmax(record)[2]]
+    return return_idx ? idx : get_perm(Bnc, idx)
 end
 
 assign_vertex(args...;kwargs...)=assign_vertex_qK(args...;kwargs...)

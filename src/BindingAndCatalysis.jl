@@ -46,6 +46,14 @@ export show_expression_mapping, show_expression_x, show_expression_qK, show_expr
 export show_dominant_condition, show_conservation, show_equilibrium, show_interface
 
 # include("regime_graphs.jl")
+export get_vertices_graph!, SISO_graph,  get_polyhedra, get_polyhedron
+export get_x_neighbor_grh, get_qK_neighbor_grh
+export get_sources, get_sinks, get_sources_sinks
+export find_reaction_order_for_path, group_sum
+# export get_volume, get_C_C0_nullity_qK
 # include("visualize.jl")
+export SISO_plot, get_edge_labels, get_node_positions, get_node_colors, get_node_labels
+export get_node_size, draw_vertices_neighbor_graph, add_vertices_idx!,add_arrows!
+export draw_qK_neighbor_grh
 
-end
+end # module

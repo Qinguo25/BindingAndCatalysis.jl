@@ -140,8 +140,8 @@ function qK2x(Bnc::Bnc, qK::AbstractArray{<:Real,1};
 
 
     if use_vtx
-        perm = assign_vertex_qK(Bnc,endlogqK; input_logspace=true,asymptotic=false)
-        H,H0 = get_H_H0!(Bnc,perm)
+        perm = assign_vertex_qK(Bnc,endlogqK; input_logspace=true,asymptotic_only=false)
+        H,H0 = get_H_H0(Bnc,perm)
         x = H* endlogqK .+ H0
     elseif ismissing(method) || method != :homotopy
         x = _logqK2logx_nlsolve(Bnc, 
@@ -192,6 +192,7 @@ function x_traj_with_qK_change(
 
     startlogqK = input_logspace ? start_point : log10.(start_point)
     endlogqK = input_logspace ? end_point : log10.(end_point)
+
     solution = _logx_traj_with_logqK_change(Bnc, startlogqK, endlogqK;
         dense=false,
         kwargs...
@@ -210,14 +211,9 @@ function x_traj_with_q_change(
     K::Union{Vector{<:Real},Nothing}=nothing,
     logK::Union{Vector{<:Real},Nothing}=nothing,
     input_logspace::Bool=false,
-    # output_logspace::Bool=false,
-    # alg=nothing, # Default to nothing, will use Tsit5() if not provided
-    # reltol=1e-8,
-    # abstol=1e-9,
     kwargs...
 )
-    # Prepare the start and end points
-    # println("x_traj_with_q_change get kwargs: ", kwargs)
+    
     K_prepared = input_logspace ? (isnothing(logK) ? log10.(K) : logK) : (isnothing(K) ? K : exp10.(K))
 
     x_traj_with_qK_change(Bnc, [start_q;K_prepared], [end_q;K_prepared]; input_logspace=input_logspace,kwargs...)
@@ -257,6 +253,7 @@ function _logx_traj_with_logqK_change(Bnc::Bnc,
     reltol=1e-8,
     abstol=1e-9,
     ensure_manifold::Bool=true, # Make sure the trajectory stays on the manifold defined by Lx=q and Nlogx=logK
+    npoints::Union{Nothing,Integer}=nothing,
     kwargs... #other Optional arguments for ODE solver
 )::ODESolution
     # println("_logx_traj_with_logqK_change get kwargs: ", kwargs)
@@ -356,7 +353,12 @@ function _logx_traj_with_logqK_change(Bnc::Bnc,
     # Solve the ODE using the DifferentialEquations.jl package
     tspan = (0.0, 1.0)
     prob = ODE.ODEProblem(homotopy_process!, startlogx, tspan, params)
-    sol = ODE.solve(prob, alg; reltol=reltol, abstol=abstol, callback=callback, kwargs...)
+    sol = if isnothing(npoints)
+            ODE.solve(prob, alg; reltol=reltol, abstol=abstol, callback=callback, kwargs...)
+        else
+            ODE.solve(prob, alg; reltol=reltol, abstol=abstol, callback=callback, 
+                    saveat=range(0,1,npoints),tstops=range(0,1,npoints), kwargs...)
+        end
     return sol
 end
 

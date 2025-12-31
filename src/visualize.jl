@@ -112,25 +112,6 @@ end
 
 
 
-# function find_proper_bounds_for_graph_plot(p,x_prochunge=1.3, y_prochunge=1.3)
-#     ps = p.node_pos[]
-#     xs = [ps[i][1] for i in 1:length(ps)]
-#     ys = [ps[i][2] for i in 1:length(ps)]
-#     xmin = minimum(xs)
-#     xmax = maximum(xs)
-#     ymin = minimum(ys)
-#     ymax = maximum(ys)
-
-#     xmid = (xmin + xmax)/2
-#     ymid = (ymin + ymax)/2
-#     xmin = xmid + (xmin - xmid)*x_prochunge
-#     xmax = xmid + (xmax - xmid)*x_prochunge
-#     ymin = ymid + (ymin - ymid)*y_prochunge
-#     ymax = ymid + (ymax - ymid)*y_prochunge
-
-#     return (xmin, xmax, ymin, ymax)
-# end
-
 function find_proper_bounds_for_graph_plot(p; x_margin=0.1, y_margin=0.1)
     # 支持 p.node_pos[] (Observable) 或直接 Vector / Dict
     # ps = node_pos isa Observable ? node_pos[] : node_pos

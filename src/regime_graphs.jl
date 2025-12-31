@@ -122,7 +122,7 @@ function SISO_graph(model::Bnc{T}, change_qK)::SISO_graph{T} where T
 end
 
 
-
+# Construct the finite graph? why this function exist?
 function SISO_graph(model::Bnc{T}, change_qK, rgm_paths::AbstractVector{AbstractVector{Integer}})::SISO_graph{T} where T
     grh = SimpleDiGraph(length(model.vertices_perm))
     for p in rgm_paths
@@ -142,14 +142,14 @@ end
 
 
 
-function get_volume!(grh::SISO_graph, pth_idx::Union{Vector{<:Integer},Nothing}=nothing; asymptotic=true,recalculate=false, kwargs...)::Vector{Tuple{Float64,Float64}}
+function get_volume(grh::SISO_graph, pth_idx::Union{Vector{<:Integer},Nothing}=nothing; asymptotic=true,recalculate=false, kwargs...)::Vector{Tuple{Float64,Float64}}
     pth_idx === nothing && (pth_idx = 1:length(grh.rgm_paths))
     # isa(pth_idx, Integer) && (pth_idx = [pth_idx]) # make sure pth_idx is a vector
     # calculate volumes if not calculated before
     idxes_to_calculate = recalculate ? pth_idx : filter(x -> !grh.rgm_volume_is_calc[x], pth_idx)
     
     if !isempty(idxes_to_calculate)
-        polys = get_polyhedra!(grh, idxes_to_calculate)
+        polys = get_polyhedra(grh, idxes_to_calculate)
         rlts = calc_volume(polys; asymptotic=asymptotic, kwargs...)
         for (i, idx) in enumerate(idxes_to_calculate)
             grh.rgm_volume[idx] = rlts[i][1]
@@ -162,12 +162,12 @@ function get_volume!(grh::SISO_graph, pth_idx::Union{Vector{<:Integer},Nothing}=
     err = grh.rgm_volume_err[pth_idx]
     return [(vol, err) for (vol, err) in zip(vol, err)]
 end
-get_volume!(grh::SISO_graph, pth_idx::Integer; kwargs...) = get_volume!(grh, [pth_idx]; kwargs...)[1]
+get_volume(grh::SISO_graph, pth_idx::Integer; kwargs...) = get_volume(grh, [pth_idx]; kwargs...)[1]
 
 
 
 
-function get_polyhedra!(grh::SISO_graph, pth_idx = nothing)::Vector{Polyhedron}
+function get_polyhedra(grh::SISO_graph, pth_idx = nothing)::Vector{Polyhedron}
     pth_idx === nothing && (pth_idx = 1:length(grh.rgm_paths))
     isa(pth_idx, Integer) && (pth_idx = [pth_idx]) # make sure pth_idx is a vector
     
@@ -181,16 +181,17 @@ function get_polyhedra!(grh::SISO_graph, pth_idx = nothing)::Vector{Polyhedron}
     end
     return grh.rgm_polys[pth_idx]
 end
-get_polyhedron!(grh::SISO_graph, pth_idx)= get_polyhedra!(grh, pth_idx)[1]
+get_polyhedron(grh::SISO_graph, pth_idx)= get_polyhedra(grh, pth_idx)[1]
 
 
 #
-get_C_C0_nullity_qK(grh::SISO_graph, pth_idx) = get_polyhedron!(grh, pth_idx) |> get_C_C0_nullity
+get_binding_network(grh::SISO_graph,args...)= grh.bn
+get_C_C0_nullity_qK(grh::SISO_graph, pth_idx) = get_polyhedron(grh, pth_idx) |> get_C_C0_nullity
 # get_C_C0!, 
 #get_C!, 
 #get_C0! are already defined by julia multipy dispatch
 
-get_binding_network(grh::SISO_graph,args...)= grh.bn
+
 
 
 
@@ -223,6 +224,7 @@ end
 """
 Get qK neighbor graph with denoted idx
 """
+get_qK_neighbor_grh(grh::SISO_graph) = grh.qK_grh
 function get_qK_neighbor_grh(Bnc::Bnc,change_qK;)::SimpleDiGraph
     change_qK_idx = locate_sym_qK(model, change_qK)
     vg = get_vertices_graph!(Bnc;full=true)
@@ -574,17 +576,18 @@ function summary_path(grh::SISO_graph,observe_x;
         deduplicate=deduplicate,
         keep_singular=keep_singular,
         keep_nonasymptotic=keep_nonasymptotic)
-    volumes = get_volume!(grh; kwargs...)
+    volumes = get_volume(grh; kwargs...)
     return group_sum(ord_pth, collect.(volumes))
 end
 
 function summary_path(grh::SISO_graph; kwargs...)
-    get_polyhedra!(grh)
-    get_volume!(grh; kwargs...)
+    get_polyhedra(grh)
+    get_volume(grh; kwargs...)
     return map(zip(grh.rgm_paths, grh.rgm_volume, grh.rgm_volume_err)) do (pth, vol, err)
         return (pth, [vol, err])
     end
 end
 
+summary(grh::SISO_graph,args...;kwargs...) = summary_path(grh,args...;kwargs...)
 
 
