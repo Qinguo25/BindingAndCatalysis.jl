@@ -113,8 +113,15 @@ show_condition_poly(C_qK::AbstractVector{<:Real},C0_qK::Real,args...;kwargs...)=
 
 show_condition_x(args...; kwargs...)= show_condition_poly(get_C_C0_x(args...)...; syms=x_sym(args...), kwargs...)
 show_condition_qK(args...; kwargs...)= show_condition_poly(get_C_C0_nullity_qK(args...)...; syms=qK_sym(args...), kwargs...)
+show_condition(args...; kwargs...)= show_condition_qK(args...; kwargs...)
 
+
+
+"""
+Show the symbolic conditions for a given regime path.
+"""
 function show_condition_path(Bnc::Bnc, path::AbstractVector{<:Integer}, change_qK; kwargs...)
+    # we couldn't name it as "show_condition" as "path" will be confused with perms
     # directly calculate the polyhedron for the path, may not useful.
     poly = _calc_polyhedra_for_path(Bnc, path,change_qK)
     syms = copy(qK_sym(Bnc)) |> x->deleteat!(x,locate_sym_qK(Bnc, change_qK)) 
@@ -170,11 +177,11 @@ end
 
 
 
-show_dominant_condition(args...;kwargs...)= begin
+show_dominant_condition(args...;log_space=false, kwargs...)= begin
     bn = get_binding_network(args...)
     y = q_sym(bn)
     x = x_sym(bn)
-    show_expression_mapping(get_P_P0(args...), y,x; kwargs...)
+    show_expression_mapping(get_P_P0(args...)..., y,x; log_space=log_space,kwargs...)
 end
 show_conservation(Bnc::Bnc)=Bnc.q_sym .~ Bnc._L_sparse * Bnc.x_sym
 show_equilibrium(Bnc::Bnc;log_space::Bool=true) = show_expression_mapping(Bnc.N, zeros(Int,Bnc.r), Bnc.K_sym, Bnc.x_sym; log_space=log_space)
@@ -296,7 +303,7 @@ end
 function show_path(grh::SISO_graph; show_volume::Bool=true,kwargs...)
     pths = grh.rgm_paths
     if show_volume 
-        val =  get_volume!(grh,kwargs...)
+        val =  get_volume(grh,kwargs...)
         render_path(1:length(pths), pths, val; appendix ="#")
     else
         render_path(1:length(pths), pths; appendix ="#")

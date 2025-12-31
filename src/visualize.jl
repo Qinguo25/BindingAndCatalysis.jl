@@ -1,8 +1,3 @@
-using CairoMakie, GraphMakie
-using GraphMakie.NetworkLayout
-using Latexify
-
-
 #-------------------------------------------------------------
 # Key visualizing functions
 #----------------------------------------------------------------

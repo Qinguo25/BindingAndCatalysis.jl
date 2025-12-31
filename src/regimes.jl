@@ -705,7 +705,7 @@ function get_vertex(Bnc::Bnc, perm; check::Bool=false, kwargs...)::Vertex
     end
     return get_vertex(vtx; kwargs...)
 end
-function get_vertex(vtx::Vertex; inv_info::Bool=true, neighbor_info::Bool=true,kwargs...)::Vertex
+function get_vertex(vtx::Vertex; inv_info::Bool=true, neighbor_info::Bool=false,kwargs...)::Vertex
     if inv_info
         _fill_inv_info!(vtx)
     end
@@ -847,7 +847,7 @@ is_singular(args...)= get_nullity(args...) > 0
 """
 Checks if a vertex is asymptotic (real)
 """
-is_asymptotic!(args...) = begin
+is_asymptotic(args...) = begin
     model = get_binding_network(args...)
     find_all_vertices!(model)
     return model.vertices_asymptotic_flag[get_idx(args...)]
@@ -937,11 +937,18 @@ end
 get_C_C0(args...;kwargs...) = get_C_C0_nullity(args...;kwargs...) |> x->(x[1], x[2]) 
 get_C(args...;kwargs...) = get_C_C0_nullity(args...;kwargs...)[1]
 get_C0(args...;kwargs...) = get_C_C0_nullity(args...;kwargs...)[2]
-get_nullity(args...;kwargs...) = get_C_C0_nullity(args...;kwargs...)[3]
+
+get_nullity(poly::Polyhedron,args...;kwargs...) = get_C_C0_nullity(poly::Polyhedron,args...;kwargs...)[3]
+get_nullity(args...) = begin
+    model = get_binding_network(args...)
+    find_all_vertices!(model)
+    return model.vertices_nullity[get_idx(args...)]
+end::Integer
 
 
 
-function get_volume!(args...; recalculate::Bool=false, kwargs...)
+
+function get_volume(args...; recalculate::Bool=false, kwargs...)
     model = get_binding_network(args...)
     idx = get_idx(args...)
     vtx = get_vertex(args...; inv_info=true, neighbor_info=false)
@@ -1152,52 +1159,9 @@ function get_interface(Bnc::Bnc, from, to)
     end
 end
 
-
-
-
-
-
-
-
-
-
 #-------------------------------------------------------------------------------------
 #         functions of getting vertices with certain properties
 # -------------------------------------------------------------------------------------
-
-# """
-#     get_singular_vertices(Bnc::Bnc; return_idx=false)
-
-# Return all singular vertices (nullity > 0).
-# """
-# get_singular_vertices(Bnc::Bnc; return_idx::Bool=false) = get_vertices(Bnc; singular=true, return_idx)
-# get_singular_vertices_idx(Bnc::Bnc) = get_vertices(Bnc; singular=true, return_idx=true)
-
-# """
-#     get_nonsingular_vertices(Bnc::Bnc; return_idx=false)
-
-# Return all nonsingular vertices (nullity == 0).
-# """
-# get_nonsingular_vertices(Bnc::Bnc; return_idx::Bool=false) = get_vertices(Bnc; singular=false, return_idx)
-# get_nonsingular_vertices_idx(Bnc::Bnc) = get_vertices(Bnc; singular=false, return_idx=true)
-
-# """
-#     get_real_vertices(Bnc::Bnc; return_idx=false)
-
-# Return all real/asymptotic vertices.
-# """
-# get_real_vertices(Bnc::Bnc; return_idx::Bool=false) = get_vertices(Bnc; asymptotic=true, return_idx)
-# get_real_vertices_idx(Bnc::Bnc) = get_vertices(Bnc; asymptotic=true, return_idx=true)
-
-
-# """
-#     get_fake_vertices(Bnc::Bnc; return_idx=false)
-
-# Return all fake (non-asymptotic) vertices.
-# """
-# get_fake_vertices(Bnc::Bnc; return_idx::Bool=false) = get_vertices(Bnc; asymptotic=false, return_idx)
-# get_fake_vertices_idx(Bnc::Bnc) = get_vertices(Bnc; asymptotic=false, return_idx=true)
-
 """
     get_vertices(Bnc::Bnc; singular=nothing, asymptotic=nothing, return_idx=false)
 
@@ -1320,7 +1284,7 @@ function check_feasibility_with_constraint(args...;C::AbstractMatrix{<:Real},C0:
     poly_additional = get_polyhedron(C,C0,nullity)
     poly = get_polyhedron(args...)
     ins = intersect(poly,poly_additional)
-    @show dim(ins)
+    @info "The dimension of the intersected polyhedra is $(dim(ins))"
     return !isempty(ins)
 end
 
@@ -1341,9 +1305,9 @@ end
 function summary_vertex(args...)
     idx= get_idx(args...)
     perm = get_perm(args...)
-    is_real = is_asymptotic!(args...)
+    is_real = is_asymptotic(args...)
     nullity = get_nullity(args...)
-    volume = get_volume!(args...)
+    volume = get_volume(args...)
     println("idx=$idx,perm=$perm, asymptotic=$is_real, nullity=$nullity")
     println("volume=$(volume[1]) +- $(volume[2])")
     println("Dominante condition")

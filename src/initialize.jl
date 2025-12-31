@@ -27,6 +27,13 @@ import ImageFiltering: imfilter, Kernel
 
 import Random
 import Base: summary,show
+
+#---------------------------plot dependency-----------------------------
+using Makie
+using GraphMakie.NetworkLayout
+using Latexify
+
+
 # ---------------------Define the struct of binding and catalysis networks----------------------------------
 
 

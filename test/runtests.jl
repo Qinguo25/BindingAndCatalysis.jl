@@ -1,6 +1,7 @@
-using Bnc
+using BindingAndCatalysis
 using Test
 
-@testset "Bnc.jl" begin
+@testset "BindingAndCatalysis.jl" begin
+   @test true
     # Write your tests here.
 end

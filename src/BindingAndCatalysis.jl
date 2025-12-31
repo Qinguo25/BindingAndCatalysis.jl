@@ -33,7 +33,7 @@ export get_C_C0_nullity_qK, get_C_C0_qK, get_C_qK, get_C0_qK
 export get_C_C0_nullity, get_C_C0, get_C, get_C0
 
 export check_feasibility_with_constraint, feasible_vertieces_with_constraint
-export get_polyhedron, get_volume!
+export get_polyhedron, get_volume
 export is_neighbor, get_interface
 
 
@@ -41,7 +41,7 @@ export is_neighbor, get_interface
 export assign_vertex, assign_vertex_qK, assign_vertex_x
 # include("symbolics.jl")
 export x_sym, q_sym, K_sym, qK_sym, ∂logqK_∂logx_sym, ∂logx_∂logqK_sym, logder_qK_x_sym, logder_x_qK_sym
-export show_condition_poly, show_condition_x, show_condition_qK
+export show_condition_poly, show_condition_x, show_condition_qK, show_condition
 export show_expression_mapping, show_expression_x, show_expression_qK, show_expression_path
 export show_dominant_condition, show_conservation, show_equilibrium, show_interface
 
