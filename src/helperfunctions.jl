@@ -436,19 +436,6 @@ end
 
 
 
-#-----------------------------------
-# Draw plot helper functions
-#--------------------------------------
-
-
-# find boundary between different regimes for regime map, to draw boundary for different regimes.
-function find_bounds(lattice)
-    col_asym_x_bounds = imfilter(lattice, Kernel.Laplacian(), "replicate") # findboundary
-    edge_map = col_asym_x_bounds .!= 0
-    return edge_map
-end
-
-
 #------------------------------
 # some other helper functions 
 #------------------------------

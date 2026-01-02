@@ -54,6 +54,6 @@ export find_reaction_order_for_path, group_sum
 # include("visualize.jl")
 export SISO_plot, get_edge_labels, get_node_positions, get_node_colors, get_node_labels
 export get_node_size, draw_vertices_neighbor_graph, add_vertices_idx!,add_arrows!
-export draw_qK_neighbor_grh
+export draw_qK_neighbor_grh, find_bounds
 
 end # module
