@@ -9,7 +9,7 @@ Assign regimes given a point in x space.
 - `Bnc::Bnc{T}`: The BindingAndCatalysis model.
 - `x::AbstractVector{<:Real}`: The point in x space.
 - `input_logspace::Bool=false`: Whether the input x is in log space.
-- `asymptotic::Bool=true`: Whether to consider only asymptotic regimes.
+- `asymptotic_only::Bool=true`: Whether to consider only asymptotic regimes.
 """
 function assign_vertex_x(Bnc::Bnc{T}, x::AbstractVector{<:Real};
     input_logspace::Bool=false,

@@ -253,7 +253,7 @@ function _logx_traj_with_logqK_change(Bnc::Bnc,
     reltol=1e-8,
     abstol=1e-9,
     ensure_manifold::Bool=true, # Make sure the trajectory stays on the manifold defined by Lx=q and Nlogx=logK
-    npoints::Union{Nothing,Integer}=nothing,
+    npoints::Union{Nothing, Integer}=nothing,
     kwargs... #other Optional arguments for ODE solver
 )::ODESolution
     # println("_logx_traj_with_logqK_change get kwargs: ", kwargs)
@@ -287,14 +287,14 @@ function _logx_traj_with_logqK_change(Bnc::Bnc,
     # logLx_J_view_local = @view logLx_local[Bnc._LN_top_rows]
 
     # Constants helps for updating mutable datas
-    L_nzval = copy(Bnc._LN_sparse.nzval[Bnc._LN_top_idx]) # copy the nzval to avoid shared access
+    L_nzval = log10.(Bnc._LN_sparse.nzval[Bnc._LN_top_idx]) # copy the nzval to avoid shared access
 
     params = HomotopyParams(ΔlogqK, logx, logqK,logq,logK, J, J_lu, logx_J_view, logq_J_view, J_top, J_top_diag,
         # logx_local,logx_J_view_local,logLx_local, logLx_J_view_local
         )
 
-    if !ensure_manifold
-        callback = CallbackSet()
+   callback = if !ensure_manifold
+         CB.CallbackSet()
     else
         keep_manifold! = function(resid, u, p)  #  Can not write to forms like log_sum_exp10!(logLx_local, Bnc._L_sparse, u) for Autodiff.
             @unpack logq,logK = p
@@ -319,10 +319,10 @@ function _logx_traj_with_logqK_change(Bnc::Bnc,
             abstol=1e-12,
             reltol=1e-10
         )
-        callback = CallbackSet(equilibrium_cb)
+        CB.CallbackSet(equilibrium_cb)
     end
 
-    @inline function eps_lu(J,max_try=100)
+    @inline function update_J_lu(J_lu,J,max_try=100)
         lu!(J_lu, J,check=false) # recalculate the LU decomposition of J
         try_count = 0
         while !issuccess(J_lu) && try_count < max_try
@@ -343,9 +343,9 @@ function _logx_traj_with_logqK_change(Bnc::Bnc,
         @. logx = u
         @. logqK = startlogqK + t * ΔlogqK
         #update J_top(sparse version) - use the local copy of nzval
-        @. J_top = exp10(logx_J_view - logq_J_view) * L_nzval
+        @. J_top = exp10(logx_J_view - logq_J_view + L_nzval)
         # Update the dlogx
-        eps_lu(J)
+        update_J_lu(J_lu,J)
         ldiv!(du, J_lu, ΔlogqK)
     end
     
@@ -353,12 +353,13 @@ function _logx_traj_with_logqK_change(Bnc::Bnc,
     # Solve the ODE using the DifferentialEquations.jl package
     tspan = (0.0, 1.0)
     prob = ODE.ODEProblem(homotopy_process!, startlogx, tspan, params)
-    sol = if isnothing(npoints)
-            ODE.solve(prob, alg; reltol=reltol, abstol=abstol, callback=callback, kwargs...)
-        else
-            ODE.solve(prob, alg; reltol=reltol, abstol=abstol, callback=callback, 
-                    saveat=range(0,1,npoints),tstops=range(0,1,npoints), kwargs...)
-        end
+    sol =  if isnothing(npoints) 
+                ODE.solve(prob, alg; reltol=reltol, abstol=abstol, callback=callback, kwargs...)
+            else
+                ODE.solve(prob, alg; reltol=reltol, abstol=abstol, callback=callback,
+                saveat=range(0,1,npoints),tstops=range(0,1,npoints),
+                 kwargs...)
+            end
     return sol
 end
 

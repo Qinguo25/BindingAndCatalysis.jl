@@ -4,66 +4,113 @@
 
 
 function SISO_plot(model, parameters, change_idx; 
-        npoints=1000,start=-6, stop=6,cmap=:rainbow, size = (800,600),draw_idx=nothing,
+        npoints=1000,start=-6, stop=6,colormap=:rainbow, size = (800,600),draw_idx=nothing,
         add_archeatype_lines::Bool=false,
-        regime_asign_asymptotic::Bool=false)
+        asymptotic_only::Bool=false)
+
 
     change_idx = locate_sym_qK(model, change_idx)
-    change_sym = "log"*repr([model.q_sym;model.K_sym][change_idx])
+    change_sym = "log"*repr(qK_sym(model)[change_idx])
     change_S = range(start, stop, npoints)
-    start_logqK = copy(parameters)|> x-> insert!(x, change_idx, start)
-    end_logqK = copy(parameters)|> x-> insert!(x, change_idx, stop)
-    logx = x_traj_with_qK_change(model, start_logqK, end_logqK;input_logspace=true, output_logspace=true, 
-                                    tstops = range(0,1,npoints), saveat = range(0,1,npoints))
 
-    # return(logx)
-    if add_archeatype_lines
-        logx_arch = [qK2x(model, logqK;input_logspace=true, use_vtx=true,output_logspace=true) for logqK in range(start_logqK, end_logqK, npoints)]  # precompute x for archetype lines
+
+    # compute trajectory with change in logqK
+    begin
+        start_logqK = copy(parameters)|> x-> insert!(x, change_idx, start)
+        end_logqK = copy(parameters)|> x-> insert!(x, change_idx, stop)
+        logx =  x_traj_with_qK_change(model, start_logqK, end_logqK;
+                                input_logspace=true, output_logspace=true, 
+                                npoints=npoints,ensure_manifold=true)[2]
+
+        logx_arch = if add_archeatype_lines
+                    [qK2x(model, logqK;input_logspace=true, use_vtx=true,output_logspace=true) for logqK in range(start_logqK, end_logqK, npoints)]  # precompute x for archetype lines
+                    else 
+                        nothing
+                    end
     end
+    
 
     #assign color
-    rgm = logx[2] .|> x-> assign_vertex_x(model, x;input_logspace=true,asymptotic=regime_asign_asymptotic) |> x->get_idx(model,x)
+    rgms = logx .|> x-> assign_vertex_x(model, x;input_logspace=true,asymptotic_only=asymptotic_only, return_idx=true)
+    unique_rgm =  sort!(unique(rgms))
+    col_map_dict, colormap_disc = get_color_map(unique_rgm; colormap=colormap)
+    colors = getindex.(Ref(col_map_dict), rgms)
 
 
-    unique_rgm = unique(rgm)
-    col_map_dict = Dict(unique_rgm[i]=>i for i in eachindex(unique_rgm))
-    crange =(1, length(unique_rgm))
-    nlevels = crange[2]-crange[1] + 1
-    cmap_disc = cgrad(cmap, nlevels, categorical=true)
-
-    @show crange, cmap_disc
     @info "Change in $(change_sym)"
     @info "parameters: $([i=>j for (i,j) in zip([model.q_sym;model.K_sym] |> x->deleteat!(x,change_idx), parameters)])"
     
-    
+    # draw plots
     draw_idx = isnothing(draw_idx) ? (1:model.n) : draw_idx
     F = Figure(size = size)
+    axes = Axis[]
     for (i, j) in enumerate(draw_idx)
         target_sym = "log"*repr(model.x_sym[j])
         @info "Target syms contains: $(target_sym) "
         ax = Axis(F[i,1]; xlabel = change_sym, ylabel = target_sym)
-        lines!(ax, change_S, logx[2] .|> x-> x[j]; color = map(r->col_map_dict[r], rgm))
+        push!(axes, ax)
+        
+        y = getindex.(logx, j)
+        lines!(ax, change_S, y; color = colors)
         if add_archeatype_lines
-            lines!(ax, change_S, getindex.(logx_arch, j); color = :black, linestyle = :dash,)
+            yarch = getindex.(logx_arch, j)
+            lines!(ax, change_S, yarch; color = :black, linestyle = :dash)
         end
     end
-    Colorbar(F[:,end+1], colormap = cmap_disc,ticks=[0]) # DO NOT ADD COLORRANGE, 
+    linkxaxes!(axes...)
 
-    # add perm label
+    add_rgm_colorbar!(F, unique_rgm; colormap=colormap_disc)
+    return F
+end
+
+
+
+
+function add_rgm_colorbar!(F, unique_rgm;colormap)
+    txt_length = length(string.(unique_rgm[1]))*26
+
+
+    render(rgm) = if typeof(unique_rgm[1])<: AbstractArray
+        repr(rgm)
+    else
+        "#"*string(rgm)
+    end
+
+    ncol = size(F.layout)[2]              # 当前已有列数
+    cb_col   = ncol + 1                   # colorbar col
+    text_col = ncol + 2
+    
+    # add colorbar
+    Colorbar(F[:,end+1], colormap = colormap,ticks=[-1]) # DO NOT ADD COLORRANGE, 
+    #add perm label
     ax = Axis(F[:,end+1])
     hidexdecorations!(ax)
     hideydecorations!(ax)
     hidespines!(ax)
-    colsize!(F.layout,3,Fixed(30))
-    colsize!(F.layout,2,Fixed(0))
-
     for i in eachindex(unique_rgm)
         y_pos = (i - 0.5)*(1/length(unique_rgm))
-        text!(ax, Point2f(0.5,y_pos); text = "#"*string(unique_rgm[i]), align = (:center, :center), color = :black)
+        text!(ax, Point2f(0.5,y_pos); text = render(unique_rgm[i]), align = (:center, :center), color = :black)
     end
     ylims!(ax, (0,1))
-    return F
+    colsize!(F.layout, cb_col,   Fixed(0))
+    colsize!(F.layout, text_col, Fixed(txt_length))
+    return nothing
 end
+
+"""
+"""
+function get_color_map(vec::AbstractArray; colormap=:rainbow)
+    keys = unique(vec)
+    col_map_dict = Dict(keys[i]=>i for i in eachindex(keys))
+    crange =(1, length(keys))
+    nlevels = crange[2]-crange[1] + 1
+    cmap_disc = cgrad(colormap, nlevels, categorical=true)
+    return col_map_dict, cmap_disc
+end
+get_color_map(model::Bnc, args...;colormap=:rainbow, kwargs...) = get_color_map(get_vertices(model,args...;kwargs...), colormap=colormap)
+
+
+
 
 function SISO_plot(SISO_graph::SISO_graph,pth_idx;rand_line=false, rand_ray=false, extend=4, kwargs...)
     parameters = get_one_inner_point(SISO_graph.rgm_polys[pth_idx], rand_line=rand_line, rand_ray=rand_ray, extend=extend)

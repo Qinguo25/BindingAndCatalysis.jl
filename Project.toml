@@ -8,8 +8,8 @@ CDDLib = "3391f64e-dcde-5f30-b752-e11513730f60"
 DataStructures = "864edb3b-99cc-5e75-8d2d-829cb0a9cfe8"
 DiffEqCallbacks = "459566f4-90b8-5000-8ac3-15dfb0a30def"
 Distributions = "31c24e10-a181-5473-b8eb-7969acd0382f"
-GraphMakie = "1ecd5474-83a3-4783-bb4f-06765db800d2"
 Graphs = "86223c79-3864-5bf0-83f7-82e725a168b6"
+GraphMakie = "1ecd5474-83a3-4783-bb4f-06765db800d2"
 ImageFiltering = "6a3955dd-da59-5b1f-98d4-e7296123deb5"
 JSON3 = "0f8b85d8-7281-11e9-16c2-39a750bddbf1"
 Latexify = "23fbe1c1-3f47-55db-b15f-69d7ec21a316"
@@ -28,6 +28,7 @@ Symbolics = "0c5d862f-8b57-4792-8d23-62f2024744c7"
 
 [extras]
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+CairoMakie = "13f3f980-e62b-5c42-98c6-ff1f3baf88f0"
 
 [targets]
-test = ["Test"]
+test = ["Test","CairoMakie"]

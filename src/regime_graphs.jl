@@ -301,84 +301,84 @@ function _enumerate_paths(g::AbstractGraph;
 end
 
 
-function _calc_polyhedra_for_path(model::Bnc, paths::AbstractArray{<:AbstractVector{Ty}},change_qK; cachelevel=2)::Vector{Polyhedron} where Ty<:Integer
-    # Find the dimension to eliminate
-    change_qK_idx = locate_sym_qK(model, change_qK)
-    el_dim = BitSet(change_qK_idx) # dimension to eliminate
+# function _calc_polyhedra_for_path(model::Bnc, paths::AbstractArray{<:AbstractVector{Ty}},change_qK; cachelevel=2)::Vector{Polyhedron} where Ty<:Integer
+#     # Find the dimension to eliminate
+#     change_qK_idx = locate_sym_qK(model, change_qK)
+#     el_dim = BitSet(change_qK_idx) # dimension to eliminate
 
-    clean(p) = begin
-        detecthlinearity!(p)
-        removehredundancy!(p)
-    end
-     # build the initial edges cache after eliminate dimension
-    begin
-        # keys = map(Set(a.src, a.dst), edges(g))
-        keys = Set{Set{Int}}()
-        for p in paths
-            n = length(p)
-            for i in 1:(n-1)
-                u = p[i]
-                v = p[i+1]
-                push!(keys, Set([u,v]))
-            end
-        end
-        keys = collect(keys) 
+#     clean(p) = begin
+#         detecthlinearity!(p)
+#         removehredundancy!(p)
+#     end
+#      # build the initial edges cache after eliminate dimension
+#     begin
+#         # keys = map(Set(a.src, a.dst), edges(g))
+#         keys = Set{Set{Int}}()
+#         for p in paths
+#             n = length(p)
+#             for i in 1:(n-1)
+#                 u = p[i]
+#                 v = p[i+1]
+#                 push!(keys, Set([u,v]))
+#             end
+#         end
+#         keys = collect(keys) 
 
-        idx_2_map = Dict(keys[i] => i for i in eachindex(keys))
-        polys_2 = Vector{Polyhedron}(undef, length(keys))
-        Threads.@threads for i in eachindex(keys)
-            u,v = collect(keys[i])
-            ins = get_polyhedron_intersect(model, u, v)
-            e = eliminate(ins,el_dim)
-            clean(e)
-            polys_2[i] = e
-        end
-    end
+#         idx_2_map = Dict(keys[i] => i for i in eachindex(keys))
+#         polys_2 = Vector{Polyhedron}(undef, length(keys))
+#         Threads.@threads for i in eachindex(keys)
+#             u,v = collect(keys[i])
+#             ins = get_polyhedron_intersect(model, u, v)
+#             e = eliminate(ins,el_dim)
+#             clean(e)
+#             polys_2[i] = e
+#         end
+#     end
 
-    # turn paths into edge idxs
-    turn_edge(path) = begin
-        n = length(path)
-        edge_idxs = Vector{Int}(undef, n-1)
-        for i in 1:(n-1)
-            u = path[i]
-            v = path[i+1]
-            key = Set([u,v])
-            edge_idxs[i] = idx_2_map[key]
-        end
-        return edge_idxs
-    end
+#     # turn paths into edge idxs
+#     turn_edge(path) = begin
+#         n = length(path)
+#         edge_idxs = Vector{Int}(undef, n-1)
+#         for i in 1:(n-1)
+#             u = path[i]
+#             v = path[i+1]
+#             key = Set([u,v])
+#             edge_idxs[i] = idx_2_map[key]
+#         end
+#         return edge_idxs
+#     end
 
-    path_edge_idxs = map(turn_edge, paths)
+#     path_edge_idxs = map(turn_edge, paths)
 
-    # build higher level cache
-    begin
-        path_iters = Iterators.partition.(path_edge_idxs, cachelevel)
-        keys = reduce(vcat,collect.(path_iters))
-        idx_cache_map = Dict(Vector(keys[i]) => i for i in eachindex(keys))
-        edge_poly_cache = Vector{Polyhedron}(undef, length(keys))
-        Threads.@threads for i in eachindex(keys)
-            edge_idxs = keys[i]
-            if length(edge_idxs) == 1
-                edge_poly_cache[i] = polys_2[edge_idxs[1]]
-            else
-                edge_poly_cache[i] = reduce((a,b)->intersect(a,b), (polys_2[e] for e in edge_idxs))
-            end
-            clean(edge_poly_cache[i])
-        end
-    end
+#     # build higher level cache
+#     begin
+#         path_iters = Iterators.partition.(path_edge_idxs, cachelevel)
+#         keys = reduce(vcat,collect.(path_iters))
+#         idx_cache_map = Dict(Vector(keys[i]) => i for i in eachindex(keys))
+#         edge_poly_cache = Vector{Polyhedron}(undef, length(keys))
+#         Threads.@threads for i in eachindex(keys)
+#             edge_idxs = keys[i]
+#             if length(edge_idxs) == 1
+#                 edge_poly_cache[i] = polys_2[edge_idxs[1]]
+#             else
+#                 edge_poly_cache[i] = reduce((a,b)->intersect(a,b), (polys_2[e] for e in edge_idxs))
+#             end
+#             clean(edge_poly_cache[i])
+#         end
+#     end
 
-    # @warn "Problematic for now"
-    polys = Vector{Polyhedron}(undef, length(paths))
-    Threads.@threads for i in eachindex(paths)
-        iter = path_iters[i]
-        keys = Vector.(iter)
-        poly_idxs = map(k->idx_cache_map[k], keys)
-        poly_edges = @view edge_poly_cache[poly_idxs]
-        polys[i] = reduce((a,b)->intersect(a,b), poly_edges)
-        clean(polys[i])
-    end
-    return polys
-end
+#     # @warn "Problematic for now"
+#     polys = Vector{Polyhedron}(undef, length(paths))
+#     Threads.@threads for i in eachindex(paths)
+#         iter = path_iters[i]
+#         keys = Vector.(iter)
+#         poly_idxs = map(k->idx_cache_map[k], keys)
+#         poly_edges = @view edge_poly_cache[poly_idxs]
+#         polys[i] = reduce((a,b)->intersect(a,b), poly_edges)
+#         clean(polys[i])
+#     end
+#     return polys
+# end
 
 
 function _calc_polyhedra_for_path(model::Bnc, rgm_path::AbstractVector{<:Integer}, change_qK)::Polyhedron # Can be extremely slow for long paths
@@ -411,6 +411,149 @@ function _calc_polyhedra_for_path(model::Bnc, rgm_path::AbstractVector{<:Integer
     return p
 end
 
+function _calc_polyhedra_for_path(
+    model::Bnc,
+    paths::AbstractVector{<:AbstractVector{Ty}},
+    change_qK;
+    cachelevel::Int = 2,
+)::Vector{Polyhedron} where {Ty<:Integer}
+
+    # dimension to eliminate
+    change_qK_idx = locate_sym_qK(model, change_qK)
+    el_dim = BitSet((change_qK_idx,))  # or BitSet([change_qK_idx])
+
+    clean!(p) = (detecthlinearity!(p); removehredundancy!(p); p)
+
+    # -------------------------
+    # 1) Build regime -> poly map (after eliminate)
+    # -------------------------
+    unique_rgms = unique(vcat(paths...))
+
+    poly_of = Dict{Int,Polyhedron}()
+    # (serial is fine; you can thread if get_polyhedra is heavy and thread-safe)
+    for r in unique_rgms
+        pr = get_polyhedra(model, r)
+        pr = eliminate(pr, el_dim)
+        clean!(pr)
+        poly_of[r] = pr
+    end
+
+    # -------------------------
+    # 2) Build unique undirected edges and edge index map
+    # key = (min(u,v), max(u,v))
+    # -------------------------
+    edges = Tuple{Int,Int}[]
+    edge_idx = Dict{Tuple{Int,Int},Int}()
+
+    for path in paths
+        n = length(path)
+        @inbounds for i in 1:(n-1)
+            u = Int(path[i]); v = Int(path[i+1])
+            a, b = u < v ? (u, v) : (v, u)
+            k = (a, b)
+            if !haskey(edge_idx, k)
+                push!(edges, k)
+                edge_idx[k] = length(edges)
+            end
+        end
+    end
+
+    # -------------------------
+    # 3) Compute poly for each edge (intersection of endpoint polys)
+    # -------------------------
+    edge_poly = Vector{Polyhedron}(undef, length(edges))
+    Threads.@threads for i in eachindex(edges)
+        u, v = edges[i]
+        e = intersect(poly_of[u], poly_of[v])
+        clean!(e)
+        edge_poly[i] = e
+    end
+
+    # -------------------------
+    # 4) Convert each path into edge index list
+    # -------------------------
+    function path_to_edge_idxs(path)
+        n = length(path)
+        idxs = Vector{Int}(undef, n-1)
+        @inbounds for i in 1:(n-1)
+            u = Int(path[i]); v = Int(path[i+1])
+            a, b = u < v ? (u, v) : (v, u)
+            idxs[i] = edge_idx[(a, b)]
+        end
+        return idxs
+    end
+
+    path_edge_idxs = map(path_to_edge_idxs, paths)
+
+    # -------------------------
+    # 5) Higher-level cache over chunks of edges
+    # key = Tuple(edge_idxs_chunk...)  (immutable, content-hashed)
+    # -------------------------
+    chunk_key_to_idx = Dict{Tuple{Vararg{Int}},Int}()
+    chunk_polys = Polyhedron[]
+
+    function get_chunk_poly(edge_idxs_chunk::AbstractVector{Int})
+        k = Tuple(edge_idxs_chunk)  # content-hashable
+        if haskey(chunk_key_to_idx, k)
+            return chunk_polys[chunk_key_to_idx[k]]
+        end
+        # build new
+        p = if length(edge_idxs_chunk) == 1
+            edge_poly[edge_idxs_chunk[1]]
+        else
+            reduce((a,b)->intersect(a,b), (edge_poly[e] for e in edge_idxs_chunk))
+        end
+        clean!(p)
+        push!(chunk_polys, p)
+        chunk_key_to_idx[k] = length(chunk_polys)
+        return p
+    end
+
+    # -------------------------
+    # 6) Final: for each path, intersect its chunk-polys
+    # -------------------------
+    out = Vector{Polyhedron}(undef, length(paths))
+    Threads.@threads for i in eachindex(paths)
+        idxs = path_edge_idxs[i]
+        it = Iterators.partition(idxs, cachelevel)
+        # accumulate
+        first = true
+        acc = Polyhedron()  # placeholder; will be overwritten
+        for chunk in it
+            pchunk = get_chunk_poly(chunk)
+            if first
+                acc = pchunk
+                first = false
+            else
+                acc = intersect(acc, pchunk)
+            end
+        end
+        clean!(acc)
+        out[i] = acc
+    end
+
+    return out
+end
+
+
+
+# function _calc_polyhedra_for_path(model::Bnc, paths::AbstractArray{<:AbstractVector{Ty}},change_qK; cachelevel=2)::Vector{Polyhedron} where Ty<:Integer
+#     # Find the dimension to eliminate
+#     change_qK_idx = locate_sym_qK(model, change_qK)
+#     el_dim = BitSet(change_qK_idx) # dimension to eliminate
+
+#     clean(p) = begin
+#         detecthlinearity!(p)
+#         removehredundancy!(p)
+#     end
+#      # build the initial edges cache after eliminate dimension
+
+#     # project all the polyhedra to its eliminate dimension=0 hyperplane
+#     begin
+#         keys = vcat(paths...) |> unique
+#         ps = keys .|> p -> get_polyhedra(model, p) |> p -> eliminate(p, el_dim) |> clean
+#     end
+# end
 
 
 # _calc_polyhedra_for_path(args...;kwargs...) = _calc_polyhedra_for_path_direct(args...;kwargs...)
