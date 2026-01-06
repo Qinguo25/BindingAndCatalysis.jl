@@ -439,6 +439,10 @@ end
 #------------------------------
 # some other helper functions 
 #------------------------------
+"""
+Helper function to locate the index of a symbol in a vector of symbols.
+If the target is already an integer, return it directly.
+"""
 function locate_sym(syms, target_sym)
     target_sym = Symbol(target_sym)
     return findfirst(x -> x.val.name == target_sym, syms)
@@ -446,7 +450,9 @@ end
 function locate_sym(syms, target_sym::Integer)
     return target_sym
 end
-
+"""
+Helper function to locate the index of a symbol in Bnc model.
+"""
 function locate_sym_x(model::Bnc,target_sym)
     return locate_sym(model.x_sym, target_sym)
 end
@@ -458,8 +464,10 @@ end
 
 
 
-
-
+#--------------------------------------------
+#heler functions to handle strings
+#---------------------------------------------
+strip_before_bracket(s::AbstractString) =    replace(s, r"^[^\[]*" => "")
 
 #----------------------------------
 # helper functions for calculation
@@ -486,49 +494,49 @@ rest = removed_copy(v, i)
 
 
 
-#---------------------------------------------------
-# Try using DAE solver to solve the logx-logqK conversion problem.
-#---------------------------------------------------
+# #---------------------------------------------------
+# # Try using DAE solver to solve the logx-logqK conversion problem.
+# #---------------------------------------------------
 
-function _logx_traj_with_logqK_change_test(Bnc::Bnc,
-    startlogqK::Union{Vector{<:Real},Nothing},
-    endlogqK::Vector{<:Real};
-    startlogx::Union{Vector{<:Real},Nothing}=nothing,
-    reltol=1e-8,
-    abstol=1e-9,
-    kwargs... 
-)::ODESolution
-    n = Bnc.n
-    d = Bnc.d
-    startlogx = isnothing(startlogx) ? qK2x(Bnc, startlogqK; input_logspace=true, output_logspace=true) : startlogx
-    #Homotopy path in log-space( a straight line)
-    ΔlogqK = Float64.(endlogqK - startlogqK)
-    # Create thread-local copies of all mutable data structures
-    logqK = Vector{Float64}(undef, n)
+# function _logx_traj_with_logqK_change_test(Bnc::Bnc,
+#     startlogqK::Union{Vector{<:Real},Nothing},
+#     endlogqK::Vector{<:Real};
+#     startlogx::Union{Vector{<:Real},Nothing}=nothing,
+#     reltol=1e-8,
+#     abstol=1e-9,
+#     kwargs... 
+# )::ODESolution
+#     n = Bnc.n
+#     d = Bnc.d
+#     startlogx = isnothing(startlogx) ? qK2x(Bnc, startlogqK; input_logspace=true, output_logspace=true) : startlogx
+#     #Homotopy path in log-space( a straight line)
+#     ΔlogqK = Float64.(endlogqK - startlogqK)
+#     # Create thread-local copies of all mutable data structures
+#     logqK = Vector{Float64}(undef, n)
 
-    L = Bnc.L
-    N = Bnc.N
+#     L = Bnc.L
+#     N = Bnc.N
     
-    function f(resid,du,u,p,t) # du:δlogx u:logx, 
-        logqK .= t* ΔlogqK .+ startlogqK
-        J = [diagm( 1 ./ exp10.(logqK[1:d])) * L * diagm( exp10.(u) );
-                N ] # J = diag(1/q) * L * diag(x)
-        resid .= J * du .- ΔlogqK
-    end
+#     function f(resid,du,u,p,t) # du:δlogx u:logx, 
+#         logqK .= t* ΔlogqK .+ startlogqK
+#         J = [diagm( 1 ./ exp10.(logqK[1:d])) * L * diagm( exp10.(u) );
+#                 N ] # J = diag(1/q) * L * diag(x)
+#         resid .= J * du .- ΔlogqK
+#     end
 
-    function jac(J,du,u,p,gamma,t)
-        logqK .= t* ΔlogqK .+ startlogqK
-        J .= [diagm( 1 ./ exp10.(logqK[1:d])) * L * diagm(exp10.(u) .* (du .+ gamma));
-                N ]
-    end
+#     function jac(J,du,u,p,gamma,t)
+#         logqK .= t* ΔlogqK .+ startlogqK
+#         J .= [diagm( 1 ./ exp10.(logqK[1:d])) * L * diagm(exp10.(u) .* (du .+ gamma));
+#                 N ]
+#     end
 
-    func = DAEFunction(f; jac=jac, jac_prototype = sparse([L;N]))
+#     func = DAEFunction(f; jac=jac, jac_prototype = sparse([L;N]))
 
-    tspan = (0.0, 1.0)
-    prob = ODE.DAEProblem(func, startlogx, tspan, params)
-    sol = ODE.solve(prob, Sundials.IDA(linear_solver=:KLU); reltol=reltol, abstol=abstol, callback=callback, kwargs...)
-    return sol
-end
+#     tspan = (0.0, 1.0)
+#     prob = ODE.DAEProblem(func, startlogx, tspan, params)
+#     sol = ODE.solve(prob, Sundials.IDA(linear_solver=:KLU); reltol=reltol, abstol=abstol, callback=callback, kwargs...)
+#     return sol
+# end
 
 function norm_vec_space(x::AbstractVector{<:Real})::Vector{Float64}
     n = length(x)

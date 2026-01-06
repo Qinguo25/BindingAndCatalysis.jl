@@ -30,6 +30,7 @@ import Base: summary,show
 
 #---------------------------plot dependency-----------------------------
 using Makie
+using GraphMakie
 using GraphMakie.NetworkLayout
 using Latexify
 
@@ -168,20 +169,20 @@ mutable struct VertexGraph{T}
     x_grh::SimpleGraph 
     neighbors::Vector{Vector{VertexEdge{T}}}
     change_dir_qK_computed::Bool
-    edge_map::Dict{Set{Int},Int}
-    boundary_polys_is_computed::BitVector
-    boundary_polys::Vector{Polyhedron}
+    edge_dict::Dict{Set{Int},Int}
+    # boundary_polys_is_computed::BitVector
+    # boundary_polys::Vector{Polyhedron}
     # current_change_idx::T
     # ne_for_current_change_idx::Int
     # ne_full::Int # total number of edges,counts both directions
     # nullity::Union{Nothing, Vector{T}} # optional cache of nullity for each vertex #Store nullity again.
     function VertexGraph(neighbors::Vector{Vector{VertexEdge{T}}}) where {T}
-        edge_map = Dict{Set{Int},Int}()
+        edge_dict = Dict{Set{Int},Int}()
         idx = 1
         for i in eachindex(neighbors)
             for edge in neighbors[i]
                 if edge.to > i 
-                    edge_map[Set((i, edge.to))] = idx
+                    edge_dict[Set((i, edge.to))] = idx
                     idx += 1
                 end
             end
@@ -192,11 +193,11 @@ mutable struct VertexGraph{T}
                 add_edge!(g, i, e.to)
             end
         end
-        boundary_polys_is_computed = falses(idx-1)
-        boundary_polys = Vector{Polyhedron}(undef, idx-1)
+        # boundary_polys_is_computed = falses(idx-1)
+        # boundary_polys = Vector{Polyhedron}(undef, idx-1)
         # ne_full = sum(length.(neighbors))
         # new{T}(neighbors,false,-1,ne_full/2,ne_full)
-        new{T}(g,neighbors,false,edge_map,boundary_polys_is_computed,boundary_polys)
+        new{T}(g,neighbors,false,edge_dict)#,boundary_polys_is_computed,boundary_polys)
     end
 end
 

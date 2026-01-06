@@ -67,6 +67,8 @@ end
 """
     get_vertices_graph!(Bnc; full=false) -> VertexGraph
 
+    full::Bool=false: whether to compute qK change directions on edges.
+
 Ensure vertex graph is built; if full=true, also compute qK change directions on edges.
 Returns the cached VertexGraph.
 """
@@ -93,31 +95,65 @@ function get_vertices_graph!(Bnc::Bnc; full::Bool=false)::VertexGraph
     return Bnc.vertices_graph
 end
 
+#-----------------------------------------------------------------------------------
+function get_x_neighbor_grh(Bnc::Bnc)::SimpleGraph
+    vg = get_vertices_graph!(Bnc;full=false)
+    return vg.x_grh
+end
 
+function get_qK_neighbor_grh(Bnc::Bnc; half::Bool=true)::SimpleDiGraph
+    vg = get_vertices_graph!(Bnc;full=true)
+    n = length(vg.neighbors)
+    g = SimpleDiGraph(n)
+    for (i, edges) in enumerate(vg.neighbors)
+        if get_nullity(Bnc,i) >1
+            continue
+        end
+        for e in edges
+            if isnothing(e.change_dir_qK) || (half && e.to < i)
+                continue
+            end
+            add_edge!(g, i, e.to)
+        end
+    end
+    return g
+end
 
-
-# struct SISO_graph{T}
-#     bn::Bnc{T}
-#     qK_grh::SimpleDiGraph
-#     change_qK_idx::T
-#     sources::Vector{Int}
-#     sinks::Vector{Int}
-#     rgm_paths::Vector{Vector{Int}}
-#     rgm_volume_is_calc::BitVector
-#   rgm_polys_is_calc::BitVector
-#     rgm_polys::Vector{Polyhedron}
-#     rgm_volume::Vector{Float64}
-#     rgm_volume_err::Vector{Float64}
-# end
+"""
+Get qK neighbor graph with denoted idx
+"""
+get_qK_neighbor_grh(grh::SISO_graph) = grh.qK_grh
+function get_qK_neighbor_grh(Bnc::Bnc,change_qK;)::SimpleDiGraph
+    change_qK_idx = locate_sym_qK(Bnc, change_qK)
+    vg = get_vertices_graph!(Bnc;full=true)
+    n = length(vg.neighbors)
+    g = SimpleDiGraph(n)
+    for (i, edges) in enumerate(vg.neighbors)
+        nlt = get_nullity(Bnc,i)
+        if nlt >1
+            continue
+        end
+        for e in edges
+            if isnothing(e.change_dir_qK) || e.to < i
+                continue
+            end 
+            val = e.change_dir_qK[change_qK_idx]
+            if val > 1e-6
+                add_edge!(g, i, e.to)
+            elseif val < -1e-6
+                add_edge!(g, e.to, i)
+            end 
+        end
+    end
+    return g
+end
+#------------------------------------------------------------------------------------------
 
 function SISO_graph(model::Bnc{T}, change_qK)::SISO_graph{T} where T
     change_qK_idx = locate_sym_qK(model, change_qK)
     qK_grh = get_qK_neighbor_grh(model, change_qK;)
     sources, sinks = get_sources_sinks(model, qK_grh)
     rgm_paths = _enumerate_paths(qK_grh; sources=sources, sinks=sinks)
-    # volume_data = calc_volume(rgm_polys;asymptotic=true)
-    # rgm_volume = map(x->x[1], volume_data)
-    # rgm_volume_err = map(x->x[2], volume_data)
     return SISO_graph(model, qK_grh, change_qK_idx, sources, sinks, rgm_paths)
 end
 
@@ -134,9 +170,6 @@ function SISO_graph(model::Bnc{T}, change_qK, rgm_paths::AbstractVector{Abstract
     qK_grh = grh
     change_qK_idx = locate_sym_qK(model, change_qK)
     sources, sinks = unique(rgm_paths .|> x->x[1]), unique(rgm_paths .|> x->x[end])
-    # volume_data = calc_volume(rgm_polys;asymptotic=true)
-    # rgm_volume = map(x->x[1], volume_data)
-    # rgm_volume_err = map(x->x[2], volume_data)
     return SISO_graph(model, qK_grh, change_qK_idx, sources, sinks, rgm_paths)
 end
 
@@ -197,58 +230,7 @@ get_C_C0_nullity_qK(grh::SISO_graph, pth_idx) = get_polyhedron(grh, pth_idx) |> 
 
 
 
-#-----------------------------------------------------------------------------------
-function get_x_neighbor_grh(Bnc::Bnc)::SimpleGraph
-    vg = get_vertices_graph!(Bnc;full=false)
-    return vg.x_grh
-end
 
-function get_qK_neighbor_grh(Bnc::Bnc; half::Bool=true)::SimpleDiGraph
-    vg = get_vertices_graph!(Bnc;full=true)
-    n = length(vg.neighbors)
-    g = SimpleDiGraph(n)
-    for (i, edges) in enumerate(vg.neighbors)
-        if get_nullity(Bnc,i) >1
-            continue
-        end
-        for e in edges
-            if isnothing(e.change_dir_qK) || (half && e.to < i)
-                continue
-            end
-            add_edge!(g, i, e.to)
-        end
-    end
-    return g
-end
-
-"""
-Get qK neighbor graph with denoted idx
-"""
-get_qK_neighbor_grh(grh::SISO_graph) = grh.qK_grh
-function get_qK_neighbor_grh(Bnc::Bnc,change_qK;)::SimpleDiGraph
-    change_qK_idx = locate_sym_qK(model, change_qK)
-    vg = get_vertices_graph!(Bnc;full=true)
-    n = length(vg.neighbors)
-    g = SimpleDiGraph(n)
-    for (i, edges) in enumerate(vg.neighbors)
-        nlt = get_nullity(Bnc,i)
-        if nlt >1
-            continue
-        end
-        for e in edges
-            if isnothing(e.change_dir_qK) || e.to < i
-                continue
-            end 
-            val = e.change_dir_qK[change_qK_idx]
-            if val > 1e-6
-                add_edge!(g, i, e.to)
-            elseif val < -1e-6
-                add_edge!(g, e.to, i)
-            end 
-        end
-    end
-    return g
-end
 
 #---------------------------------------------------------------------------------------------------
 #             Functions for analyzing each individual path in the graph

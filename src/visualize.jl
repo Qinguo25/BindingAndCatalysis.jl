@@ -2,8 +2,15 @@
 # Key visualizing functions
 #----------------------------------------------------------------
 
-
-function SISO_plot(model, parameters, change_idx; 
+"""
+plot function, given a change in qK, plot the trajectory of x and color by dominant regime. 
+"""
+function SISO_plot(SISO_graph::SISO_graph,pth_idx;rand_line=false, rand_ray=false, extend=4, kwargs...)
+    parameters = get_one_inner_point(SISO_graph.rgm_polys[pth_idx], rand_line=rand_line, rand_ray=rand_ray, extend=extend)
+    @show parameters
+    return SISO_plot(SISO_graph.bn, parameters, SISO_graph.change_qK_idx; kwargs...)
+end
+function SISO_plot(model::Bnc, parameters, change_idx; 
         npoints=1000,start=-6, stop=6,colormap=:rainbow, size = (800,600),draw_idx=nothing,
         add_archeatype_lines::Bool=false,
         asymptotic_only::Bool=false)
@@ -64,11 +71,15 @@ function SISO_plot(model, parameters, change_idx;
 end
 
 
-
-
+"""
+Add the colorbar of the regimes 
+- `F`: the figure to add colorbar to
+- `unique_rgm`: the unique regimes to label on the colorbar, shall be sorted in the same order as the colormap, eg. `unique_rgm = sort!(unique(rgms))`
+- `colormap`: the colormap to use for the colorbar, shall be striped with the same number of colors as unique_rgm,
+eg. `add_rgm_colorbar!(F, unique_rgm; colormap=cmap_disc)`
+"""
 function add_rgm_colorbar!(F, unique_rgm;colormap)
     txt_length = length(string.(unique_rgm[1]))*26
-
 
     render(rgm) = if typeof(unique_rgm[1])<: AbstractArray
         repr(rgm)
@@ -100,7 +111,7 @@ end
 """
 """
 function get_color_map(vec::AbstractArray; colormap=:rainbow)
-    keys = unique(vec)
+    keys = sort!(unique(vec))
     col_map_dict = Dict(keys[i]=>i for i in eachindex(keys))
     crange =(1, length(keys))
     nlevels = crange[2]-crange[1] + 1
@@ -112,11 +123,7 @@ get_color_map(model::Bnc, args...;colormap=:rainbow, kwargs...) = get_color_map(
 
 
 
-function SISO_plot(SISO_graph::SISO_graph,pth_idx;rand_line=false, rand_ray=false, extend=4, kwargs...)
-    parameters = get_one_inner_point(SISO_graph.rgm_polys[pth_idx], rand_line=rand_line, rand_ray=rand_ray, extend=extend)
-    @show parameters
-    return SISO_plot(SISO_graph.bn, parameters, SISO_graph.change_qK_idx; kwargs...)
-end
+
 
 
 
@@ -188,9 +195,10 @@ function get_edge_labels(Bnc::Bnc; sym::Bool=false, half::Bool=true)::Dict{Edge,
     vg = get_vertices_graph!(Bnc;full=true)
     labels = Dict{Edge,String}()
     for (i, edges) in enumerate(vg.neighbors)
-        if get_nullity(Bnc,i) >1
+        if get_nullity(Bnc,i) >1 # skip higher nullity
             continue
         end
+
         for e in edges
             if isnothing(e.change_dir_qK) || (half && e.to < i)    # only label one direction
                 continue
@@ -201,6 +209,10 @@ function get_edge_labels(Bnc::Bnc; sym::Bool=false, half::Bool=true)::Dict{Edge,
     end
     return labels
 end
+
+
+
+
 """
     Get fixed node positions for the qK-neighbor from x-neighbor graph of the model.
 """
@@ -230,7 +242,9 @@ function get_node_colors(model; singular_color="#CCCCFF", asymptotic_color="#FFC
 end
 
 function get_node_labels(model::Bnc)
-    return model.vertices_perm .|> x->model.x_sym[x] |> x->repr(x)[4:end] # remove the "Num"
+    model.vertices_perm .|>
+        x -> model.x_sym[x] |>
+        repr |> strip_before_bracket
 end
 
 function get_node_size(model::Bnc; default_node_size=50, asymptotic=true, kwargs...)
@@ -252,6 +266,8 @@ function get_node_size(model::Bnc; default_node_size=50, asymptotic=true, kwargs
     return Dict(i=>sqrt(Volume[i]) for i in eachindex(Volume))
 end
 
+
+
 """
     Draw the qK-neighbor graph of the model, with optional edge labels, node colors, and node sizes.
 """
@@ -260,9 +276,18 @@ function draw_vertices_neighbor_graph(model::Bnc, grh=nothing;
     edge_labels=nothing, 
     figsize=(1000,1000), 
     kwargs...)
+
     # use provided grh or compute a default neighbor graph
     grh = isnothing(grh) ? get_qK_neighbor_grh(model) : grh
-    edge_labels = isnothing(edge_labels) ? get_edge_labels(model, sym=true) : (isa(edge_labels, String) ? repeat([edge_labels], ne(grh)) : edge_labels)
+
+    edge_labels =   if isnothing(edge_labels) 
+                        get_edge_labels(model, sym=true) 
+                    elseif isa(edge_labels, String) 
+                        repeat([edge_labels], ne(grh)) 
+                    else 
+                        edge_labels
+                    end
+    
     posi = get_node_positions(model)
     node_labels = get_node_labels(model)
     node_colors = get_node_colors(model)
@@ -356,7 +381,6 @@ end
 #-----------------------------------
 # Draw plot helper functions
 #--------------------------------------
-
 
 # find boundary between different regimes for regime map, to draw boundary for different regimes.
 function find_bounds(lattice)
