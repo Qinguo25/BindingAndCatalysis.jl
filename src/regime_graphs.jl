@@ -252,35 +252,157 @@ function get_sources_sinks(model::Bnc, g::AbstractGraph)
     return (collect(sources), collect(sinks))
 end
 
-function _enumerate_paths(g::AbstractGraph; 
-    sources::AbstractVector{Int}, 
-    sinks::AbstractVector{Int})::Vector{Vector{Int}}
+# function _enumerate_paths(g::AbstractGraph; 
+#     sources::AbstractVector{Int}, 
+#     sinks::AbstractVector{Int})::Vector{Vector{Int}}
 
-    @info "sources: $sources"
-    @info "sinks: $sinks"
+#     @info "sources: $sources"
+#     @info "sinks: $sinks"
 
-    function dfs(path, local_paths)
-        lastv = path[end]
-        if lastv in sinks
-            push!(local_paths, copy(path))
-            return
-        end
-        for nb in outneighbors(g, lastv)
-            if nb ∉ path
-                dfs([path...; nb], local_paths)
+#     function dfs(path, local_paths)
+#         lastv = path[end]
+#         if lastv in sinks
+#             push!(local_paths, copy(path))
+#             return
+#         end
+#         for nb in outneighbors(g, lastv)
+#             if nb ∉ path
+#                 dfs([path...; nb], local_paths)
+#             end
+#         end
+#     end
+
+#     paths_per_thread = [Vector{Vector{Int}}() for _ in 1:Threads.maxthreadid()]
+#     Threads.@threads for s in collect(sources)
+#         local_paths = paths_per_thread[Threads.threadid()]
+#         dfs([s], local_paths)
+#     end
+
+#     paths = reduce(vcat, paths_per_thread)
+#     return sort!(paths)#filter!(paths) do x length(x) > 1 end
+# end
+
+
+# 只遍历子图：sources 可达 & 能到 sinks
+function _reachable_from_sources(g::AbstractGraph, sources::AbstractVector{Int})
+    n = nv(g)
+    seen = falses(n)
+    stack = Int[]
+    for s in sources
+        if !seen[s]
+            seen[s] = true
+            push!(stack, s)
+            while !isempty(stack)
+                v = pop!(stack)
+                for nb in outneighbors(g, v)
+                    if !seen[nb]
+                        seen[nb] = true
+                        push!(stack, nb)
+                    end
+                end
             end
         end
     end
+    return seen
+end
 
-    paths_per_thread = [Vector{Vector{Int}}() for _ in 1:Threads.maxthreadid()]
-    Threads.@threads for s in collect(sources)
-        local_paths = paths_per_thread[Threads.threadid()]
-        dfs([s], local_paths)
+function _can_reach_sinks(g::AbstractGraph, sinks::AbstractVector{Int})
+    n = nv(g)
+    seen = falses(n)
+    stack = Int[]
+    for t in sinks
+        if !seen[t]
+            seen[t] = true
+            push!(stack, t)
+            while !isempty(stack)
+                v = pop!(stack)
+                for nb in inneighbors(g, v)   # 反向走
+                    if !seen[nb]
+                        seen[nb] = true
+                        push!(stack, nb)
+                    end
+                end
+            end
+        end
+    end
+    return seen
+end
+
+"""
+DAG 专用：自底向上缓存后缀路径
+返回所有从 sources 到 sinks 的简单路径（DAG 中天然无环）
+"""
+function _enumerate_paths(
+    g::AbstractGraph;
+    sources::AbstractVector{Int},
+    sinks::AbstractVector{Int},
+)::Vector{Vector{Int}}
+
+    n = nv(g)
+
+    # 剪枝：只处理相关子图
+    fromS = _reachable_from_sources(g, sources)
+    toT   = _can_reach_sinks(g, sinks)
+    active = fromS .& toT
+
+    is_sink = falses(n)
+    @inbounds for t in sinks
+        is_sink[t] = true
     end
 
-    paths = reduce(vcat, paths_per_thread)
-    return sort!(paths)#filter!(paths) do x length(x) > 1 end
+    # 拓扑排序（DAG）
+    topo = topological_sort_by_dfs(g)   # Graphs.jl
+    # memo[v] = Vector{Vector{Int}} 或 nothing
+    memo = Vector{Union{Nothing, Vector{Vector{Int}}}}(undef, n)
+    fill!(memo, nothing)
+
+    # 逆拓扑：先算子节点，再算父节点
+    for v in Iterators.reverse(topo)
+        active[v] || continue
+
+        if is_sink[v]
+            memo[v] = Vector{Vector{Int}}(undef, 1)
+            memo[v][1] = [v]
+            continue
+        end
+
+        # 收集所有 nb 的路径，并在前面加 v
+        acc = Vector{Vector{Int}}()
+        # 你也可以在这里做 sizehint!（需要先统计 path 数量，会多一次循环；看你取舍）
+        for nb in outneighbors(g, v)
+            active[nb] || continue
+            paths_nb = memo[nb]
+            paths_nb === nothing && continue
+            for p in paths_nb
+                L = length(p)
+                np = Vector{Int}(undef, L + 1)
+                np[1] = v
+                @inbounds copyto!(np, 2, p, 1, L)
+                push!(acc, np)
+            end
+        end
+
+        memo[v] = isempty(acc) ? nothing : acc
+    end
+
+    # 汇总 sources 的结果
+    out = Vector{Vector{Int}}()
+    for s in sources
+        active[s] || continue
+        ps = memo[s]
+        ps === nothing && continue
+        append!(out, ps)
+    end
+
+    sort!(out)
+    return out
 end
+
+
+
+
+
+
 
 
 # function _calc_polyhedra_for_path(model::Bnc, paths::AbstractArray{<:AbstractVector{Ty}},change_qK; cachelevel=2)::Vector{Polyhedron} where Ty<:Integer
@@ -597,7 +719,7 @@ function _calc_reaction_order_for_single_path(model, path::Vector{Int}, change_q
             if abs(ord) < 1e-6
                 r_ord[i] = NaN  # We use NaN to denote singular
             else 
-                r_ord[i] = ord * model.direction * Inf
+                r_ord[i] = ord  * Inf
             end     
         end
     end

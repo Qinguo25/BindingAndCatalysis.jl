@@ -2,7 +2,9 @@
 BindingAndCatalysis = "b532a4b1-2c45-4c12-bcaf-8695372aa40c"
 CairoMakie = "13f3f980-e62b-5c42-98c6-ff1f3baf88f0"
 GLMakie = "e9467ef8-e4e7-5192-8a1a-b1aee30e663a"
+Graphs = "86223c79-3864-5bf0-83f7-82e725a168b6"
 Latexify = "23fbe1c1-3f47-55db-b15f-69d7ec21a316"
+Polyhedra = "67491407-f73d-577b-9b50-8179a7c68029"
 Revise = "295af30f-e4ad-537b-8983-00126c2a3abe"
 
 [sources]

@@ -360,7 +360,7 @@ draw_qK_neighbor_grh(args...;kwargs...) = draw_vertices_neighbor_graph(args...; 
 
 
 
-function draw_binding_network_grh(Bnc::Bnc,grh::Union{AbstractGraph, Nothing}=nothing; figsize=(800,800),q_color="#FFCCCC", x_color="#CCCCFF")
+function draw_binding_network_grh(Bnc::Bnc,grh::Union{AbstractGraph, Nothing}=nothing; figsize=(800,800),q_color="#A2A544", x_color="#DBCC8C")
     f = Figure(size = figsize)
     grh = isnothing(grh) ? get_binding_network_grh(Bnc) : grh
     ax = Axis(f[1, 1])

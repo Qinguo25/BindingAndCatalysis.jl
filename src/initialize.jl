@@ -289,7 +289,7 @@ mutable struct Bnc{T} <: AbstractBnc # T is the int type to save all the indices
         @assert length(K_sym) == r "K_sym length must equal number of reactions (r)"
 
         #The direction
-        direction = sign(det(Float64.([L;N]))) # Ensure matrix is Float64 for det
+        direction = sign(det([L;N])) # Ensure matrix is Float64 for det
         
         # A simplified check for catalysis.S - replace with your actual logic
         _is_change_of_K_involved = !isnothing(catalysis) #&& !all(@view(catalysis.S[r+1:end, :]) .== 0)
@@ -490,7 +490,7 @@ function summary(Bnc::Bnc)
     println("Number of reactions (r): ", Bnc.r)
     println("L matrix: ", Bnc.L)
     println("N matrix: ", Bnc.N)
-    println("Direction of binding reactions: ", Bnc.direction == 1 ? "forward" : "backward")
+    println("Direction of binding reactions: ", Bnc.direction > 0 ? "forward" : "backward")
     catalysis_str = isnothing(Bnc.catalysis) ? "No" : "Yes"
     println("Catalysis involved: ", catalysis_str)
     is_regimes_built = isempty(Bnc.vertices_perm) ? "No" : "Yes"
@@ -513,7 +513,7 @@ function show(io::IO, ::MIME"text/plain", bnc::Bnc)
     println(io, "Number of reactions (r): ", bnc.r)
     println(io, "L matrix: ", bnc.L)
     println(io, "N matrix: ", bnc.N)
-    println(io, "Direction of binding reactions: ", bnc.direction == 1 ? "forward" : "backward")
+    println(io, "Direction of binding reactions: ", bnc.direction > 0 ? "forward" : "backward")
     catalysis_str = isnothing(bnc.catalysis) ? "No" : "Yes"
     println(io, "Catalysis involved: ", catalysis_str)
     is_regimes_built = isempty(bnc.vertices_perm) ? "No" : "Yes"

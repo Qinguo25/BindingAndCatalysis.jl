@@ -98,14 +98,14 @@ Returns a dense H matrix; caller may sparsify.
 """
 function _calc_H(Bnc::Bnc,perm::Vector{<:Integer})::SparseMatrixCSC
     key = _get_Nρ_key(Bnc, perm)
-    Nρ_inv,nullity = _get_Nρ_inv!(Bnc,key) # get Nρ_inv from cache or calculate it. # sparse matrix
+    Nρ_inv,Nρ_nullity = _get_Nρ_inv!(Bnc,key) # get Nρ_inv from cache or calculate it. # sparse matrix
     Nc = @view Bnc.N[:,perm] # dense matrix
     Nρ_inv_Nc_neg = - Nρ_inv * Nc 
     
-    H_un_perm = if nullity == 0 
+    H_un_perm = if Nρ_nullity == 0 
          [[I(Bnc.d) zeros(Bnc.d,Bnc.r)];
          [Nρ_inv_Nc_neg Nρ_inv]]
-    elseif nullity == 1
+    elseif Nρ_nullity == 1
         [zeros(Bnc.d,Bnc.n);
         [Nρ_inv_Nc_neg Nρ_inv]] # Seems there are sign problem within this part.(fixed)
     else
@@ -495,10 +495,10 @@ function _fill_inv_info!(vtx::Vertex)
         if vtx.nullity ==1
             # we need to check where this nullity comes from.
             if length(Set(vtx.perm)) == Bnc.d # the nullity comes from N
-                vtx.H = _calc_H(Bnc, vtx.perm)#.* Bnc.direction 
+                vtx.H = _calc_H(Bnc, vtx.perm).* Bnc.direction 
             else # the nullity comes from P
                 H = _adj_singular_matrix(vtx.M)[1]
-                vtx.H = droptol!(sparse(H),1e-10)#.* Bnc.direction
+                vtx.H = droptol!(sparse(H),1e-10).* Bnc.direction
             end
         else # nullity>1 , H, HO is nolonger avaliable
             vtx.H = spzeros(Bnc.n, Bnc.n) # fill value as a sign that this regime is fully computed
@@ -985,8 +985,8 @@ function get_polyhedron_intersect(Bnc::Bnc,vtx1,vtx2;cache::Bool=true)::Polyhedr
 
     key = Set([idx1, idx2])
     vg = get_vertices_graph!(Bnc; full=false) # May not necessary
-    if haskey(vg.edge_map, key)
-        idx = vg.edge_map[key]
+    if haskey(vg.edge_dict, key)
+        idx = vg.edge_dict[key]
         if vg.boundary_polys_is_computed[idx]
             return vg.boundary_polys[idx]
         else
