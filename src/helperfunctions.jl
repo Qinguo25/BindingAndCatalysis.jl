@@ -488,8 +488,27 @@ rest = removed_copy(v, i)
 =#
 
 
+#------------------------------------------------------------
+# Helper function for construcing graphs
+#----------------------------------------------------------
+function graph_from_paths(paths::AbstractVector{<:AbstractVector{<:Integer}}, nv=nothing)::SimpleDiGraph
+    nv = nv === nothing ? maximum(Iterators.flatten(paths)) : nv
 
+    grh = SimpleDiGraph(nv)
+    for p in paths
+        n = length(p)
+        for i in 1:(n-1)
+            add_edge!(grh, p[i], p[i+1])
+        end
+    end
+    return grh
+end
 
+function sources_sinks_from_paths(paths::AbstractVector{<:AbstractVector{<:Integer}})::Tuple{Vector{Int}, Vector{Int}}
+    sources = unique(p -> p[1], paths)
+    sinks = unique(p -> p[end], paths)
+    return sources, sinks
+end
 
 
 

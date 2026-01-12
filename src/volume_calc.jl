@@ -83,6 +83,8 @@ function calc_volume(
     start_time = time()
     width = log_upper - log_lower
 
+    p = Progress(n_regimes, desc="Calculating volumes...", dt=1.0)
+
     while true
         (time() - start_time > time_limit) && (@info "Reached time limit ($(round(time() - start_time, digits=2)) s). Stopping.";break)
         isempty(active_ids) && (@info "All regimes converged after $total_N samples.";break)
@@ -145,9 +147,10 @@ function calc_volume(
                 push!(new_active, i)
             end
         end
+        next!(p, length(active_ids) - length(new_active))
         active_ids = new_active
     end
-
+    finish!(p)
     return stats
 end
 

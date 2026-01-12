@@ -5,10 +5,10 @@
 """
 plot function, given a change in qK, plot the trajectory of x and color by dominant regime. 
 """
-function SISO_plot(SISO_graph::SISO_graph,pth_idx;rand_line=false, rand_ray=false, extend=4, kwargs...)
-    parameters = get_one_inner_point(SISO_graph.rgm_polys[pth_idx], rand_line=rand_line, rand_ray=rand_ray, extend=extend)
+function SISO_plot(SISOPaths::SISOPaths,pth_idx;rand_line=false, rand_ray=false, extend=4, kwargs...)
+    parameters = get_one_inner_point(SISOPaths.path_polys[pth_idx], rand_line=rand_line, rand_ray=rand_ray, extend=extend)
     @show parameters
-    return SISO_plot(SISO_graph.bn, parameters, SISO_graph.change_qK_idx; kwargs...)
+    return SISO_plot(SISOPaths.bn, parameters, SISOPaths.change_qK_idx; kwargs...)
 end
 function SISO_plot(model::Bnc, parameters, change_idx; 
         npoints=1000,start=-6, stop=6,colormap=:rainbow, size = (800,600),draw_idx=nothing,
@@ -217,7 +217,7 @@ end
     Get fixed node positions for the qK-neighbor from x-neighbor graph of the model.
 """
 function get_node_positions(model::Bnc; kwargs...)
-    grh = get_x_neighbor_grh(model)
+    grh = get_neighbor_graph_x(model)
     f,ax,p = graphplot(grh; kwargs...)
     posi = p.node_pos[]
     return posi
@@ -278,7 +278,7 @@ function draw_vertices_neighbor_graph(model::Bnc, grh=nothing;
     kwargs...)
 
     # use provided grh or compute a default neighbor graph
-    grh = isnothing(grh) ? get_qK_neighbor_grh(model) : grh
+    grh = isnothing(grh) ? get_neighbor_graph_qK(model) : grh
 
     edge_labels =   if isnothing(edge_labels) 
                         get_edge_labels(model, sym=true) 
@@ -317,7 +317,7 @@ function draw_vertices_neighbor_graph(model::Bnc, grh=nothing;
     return f, ax, p
 end
 
-function draw_vertices_neighbor_graph(grh::SISO_graph,args...;kwargs...)
+function draw_vertices_neighbor_graph(grh::SISOPaths,args...;kwargs...)
     edge_labels = "+"* repr([grh.bn.q_sym; grh.bn.K_sym][grh.change_qK_idx])
     f,ax,p = draw_vertices_neighbor_graph(grh.bn, grh.qK_grh, args...; edge_labels = edge_labels, kwargs...)
     return f,ax,p

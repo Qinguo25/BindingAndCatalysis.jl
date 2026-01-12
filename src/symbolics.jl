@@ -6,8 +6,8 @@ q_sym(args...)=get_binding_network(args...).q_sym
 K_sym(args...)=get_binding_network(args...).K_sym
 qK_sym(args...)= [q_sym(args...); K_sym(args...)]
 
-#special api for SISO_graph
-q_sym(grh::SISO_graph,args...)= begin
+#special api for SISOPaths
+q_sym(grh::SISOPaths,args...)= begin
     bn = grh.bn
     q_sym = if grh.change_qK_idx <= bn.d
         deleteat!(copy(bn.q_sym), grh.change_qK_idx)
@@ -16,7 +16,7 @@ q_sym(grh::SISO_graph,args...)= begin
     end
     return q_sym
 end
-K_sym(grh::SISO_graph,args...)= begin
+K_sym(grh::SISOPaths,args...)= begin
     bn = grh.bn
     K_sym = if grh.change_qK_idx > bn.d
         deleteat!(copy(bn.K_sym), grh.change_qK_idx - bn.d)
@@ -300,7 +300,7 @@ function render_path(groups, pths, volumes=nothing; appendix="")
     end
     return nothing
 end
-function show_path(grh::SISO_graph; show_volume::Bool=true,kwargs...)
+function show_path(grh::SISOPaths; show_volume::Bool=true,kwargs...)
     pths = grh.rgm_paths
     if show_volume 
         val =  get_volume(grh,kwargs...)
@@ -335,4 +335,4 @@ function show_expression_path(model::Bnc, rgm_path, change_qK_idx, observe_x_idx
     return (exprs, edges)
 end
 
-show_expression_path(grh::SISO_graph, pth_idx, observe_x; kwargs...)=show_expression_path(grh.bn, grh.rgm_paths[pth_idx], grh.change_qK_idx, observe_x; kwargs...)
+show_expression_path(grh::SISOPaths, pth_idx, observe_x; kwargs...)=show_expression_path(grh.bn, grh.rgm_paths[pth_idx], grh.change_qK_idx, observe_x; kwargs...)

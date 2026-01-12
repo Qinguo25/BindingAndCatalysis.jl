@@ -34,6 +34,9 @@ using GraphMakie
 using GraphMakie.NetworkLayout
 using Latexify
 
+using ProgressMeter
+
+
 
 # ---------------------Define the struct of binding and catalysis networks----------------------------------
 
@@ -360,25 +363,32 @@ mutable struct Bnc{T} <: AbstractBnc # T is the int type to save all the indices
     end
 end
 
-struct SISO_graph{T}
-    bn::Bnc{T}
-    qK_grh::SimpleDiGraph
-    change_qK_idx::T
-    sources::Vector{Int}
-    sinks::Vector{Int}
-    rgm_paths::Vector{Vector{Int}}
-    rgm_volume_is_calc::BitVector
-    rgm_polys_is_calc::BitVector
-    rgm_polys::Vector{Polyhedron}
-    rgm_volume::Vector{Float64}
-    rgm_volume_err::Vector{Float64}
-    function SISO_graph(model::Bnc{T}, qK_grh, change_qK_idx, sources, sinks, rgm_paths) where T
-        rgm_polys = Vector{Polyhedron}(undef, length(rgm_paths))
-        rgm_volume = Vector{Float64}(undef, length(rgm_paths))
-        rgm_volume_err = Vector{Float64}(undef, length(rgm_paths))
-        rgm_volume_is_calc = falses(length(rgm_paths))
-        rgm_polys_is_calc = falses(length(rgm_paths))  
-        new{T}(model, qK_grh, change_qK_idx, sources, sinks, rgm_paths, rgm_volume_is_calc,rgm_polys_is_calc, rgm_polys, rgm_volume, rgm_volume_err)
+struct SISOPaths{T}
+    bn::Bnc{T}   # binding Newtork
+    qK_grh::SimpleDiGraph # SimpleDiGraph in qK space
+    change_qK_idx::T  # which qK is changing in this SISO graph
+
+    sources::Vector{Int}  # source vertices in the graph
+    sinks::Vector{Int}    # sink vertices in the graph
+    
+    rgm_paths::Vector{Vector{Int}} #All paths from sources to sinks, each path is represented as a vector of vertex idx. Grows exponentially
+    path_polys::Vector{Polyhedron} # the polyhedron for each path, lazily calculated when needed, stored in the same order as rgm_paths
+    path_volume::Vector{Float64}# the volume for each path, lazily calculated when needed, stored in the same order as rgm_paths
+    path_volume_err::Vector{Float64} # the error of volume calculation for each path, lazily calculated when needed, stored in the same order as rgm_paths
+
+    path_volume_is_calc::BitVector # whether the volume for each path is calculated, stored in the same order as rgm_paths
+    path_polys_is_calc::BitVector # whether the polyhedron for each path is calculated, stored in the same order as rgm_paths
+    
+     function SISOPaths(model::Bnc{T}, qK_grh, change_qK_idx, sources, sinks, rgm_paths) where T
+        path_polys = Vector{Polyhedron}(undef, length(rgm_paths))
+        path_volume = Vector{Float64}(undef, length(rgm_paths))
+        path_volume_err = Vector{Float64}(undef, length(rgm_paths))
+        path_volume_is_calc = falses(length(rgm_paths))
+        path_polys_is_calc = falses(length(rgm_paths))  
+        new{T}(model, qK_grh, change_qK_idx, 
+            sources, sinks, 
+            rgm_paths, path_polys, path_volume, path_volume_err,
+            path_volume_is_calc, path_polys_is_calc)
     end
 end
 
@@ -387,16 +397,10 @@ end
 
 
 # Define a separate outer function for keyword-based construction, needs to be refine later.
-function Bnc(;
-    N::Union{Matrix{Int},Nothing}=nothing,
-    L::Union{Matrix{Int},Nothing}=nothing,
-    x_sym::Union{Vector{<:Any},Nothing}=nothing,
-    q_sym::Union{Vector{<:Any},Nothing}=nothing,
-    K_sym::Union{Vector{<:Any},Nothing}=nothing,
-    S::Union{Matrix{Int},Nothing}=nothing,
-    aT::Union{Matrix{Int},Nothing}=nothing,
-    k::Union{Vector{<:Real},Nothing}=nothing,
-    cat_x_idx::Union{Vector{Int},Nothing}=nothing,
+function Bnc(;N=nothing,L=nothing,
+    x_sym=nothing,q_sym=nothing,K_sym=nothing,
+    S=nothing,aT=nothing,k=nothing,
+    cat_x_idx=nothing,
 )::Bnc
     # if N is not provided, derive it from L, if provided, check its linear indenpendency
     isnothing(N) ? (N = N_from_L(L)) : begin 

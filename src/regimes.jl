@@ -251,7 +251,7 @@ function _build_Nρ_cache_parallel!(Bnc::Bnc{T},perms::Vector{Vector{T}}) where 
     inv_list = Vector{SparseMatrixCSC{Float64,Int}}(undef, nk)
     nullity_list = Vector{T}(undef, nk)
 
-    Threads.@threads for i in eachindex(keys)
+    @showprogress Threads.@threads for i in eachindex(keys)
         key = keys[i]
         Nρ = @view Bnc.N[:, key]
         inv_list[i], nullity_list[i] = _calc_Nρ_inverse(Nρ)
@@ -538,7 +538,7 @@ Returns Vector{Vector{Int}} of vertex permutations.
 """
 function find_all_vertices!(Bnc::Bnc{T};) where T # cheap enough for now
     if isempty(Bnc.vertices_perm) || isempty(Bnc.vertices_asymptotic_flag)
-        println("---------------------Start finding all vertices, it may takes a while.--------------------")
+        @info "---------------------Start finding all vertices--------------------"
         # all vertices
         # finding non-asymptotic vettices, which gives all vertices both real and fake, singular and non-singular
         all_vertices = find_all_vertices(Bnc.L; asymptotic=false)
@@ -547,20 +547,22 @@ function find_all_vertices!(Bnc::Bnc{T};) where T # cheap enough for now
         real_vtx = Set(find_all_vertices(Bnc.L; asymptotic=true))
         n_real_vtx = length(real_vtx)
 
-        println("Finished, with $(n_vertices) vertices found and $(n_real_vtx) asymptotic vertices.\n")
-        println("-------------Start calculating nullity for each vertex, it also takes a while.------------")
-        println("1.Building Nρ_inv cache in parallel...")
+        @info "Finished, with $(n_vertices) vertices found and $(n_real_vtx) asymptotic vertices."
+        @info "-------------Start calculating nullity for each vertex, it also takes a while.------------"
+        
+        @info "1.Building Nρ_inv cache in parallel..."
         _build_Nρ_cache_parallel!(Bnc, all_vertices) # build Nρ_inv cache in parallel
         # Caltulate the nullity for each vertices
         nullity = Vector{T}(undef, length(all_vertices))
-        println("2.Calculating nullity for each vertex in parallel...")
-        Threads.@threads for i in  eachindex(all_vertices)
+
+        @info "2.Calculating nullity for each vertex in parallel..."
+        @showprogress Threads.@threads for i in  eachindex(all_vertices)
             perm_set = Set(all_vertices[i])
             nullity_P =  Bnc.d -length(perm_set)
             _ , nullity_N =  _get_Nρ_inv_from_perm!(Bnc,perm_set) 
             nullity[i] = nullity_P + nullity_N # this is true as we can permute the matrix into diagnal block matrix.
         end
-        println("3.Storing all vertices information...")
+
         Bnc.vertices_perm = all_vertices
         Bnc.vertices_asymptotic_flag = Bnc.vertices_perm .∈ Ref(real_vtx)
         Bnc.vertices_perm_dict = Dict(a=>idx for (idx, a) in enumerate(Bnc.vertices_perm)) # Map from vertex to its index
@@ -568,7 +570,6 @@ function find_all_vertices!(Bnc::Bnc{T};) where T # cheap enough for now
         Bnc.vertices_data = Vector{Vertex}(undef, n_vertices)
         Bnc._vertices_is_initialized = falses(n_vertices)
         Bnc._vertices_volume_is_calced = falses(n_vertices)
-        println("Done.")
     end
     return Bnc.vertices_perm
 end
@@ -862,18 +863,13 @@ Gets P and P0, creating the vertex if necessary.
 get_P_P0(args...) = get_vertex(args...; inv_info=false, neighbor_info=false) |> vtx -> (vtx.P, vtx.P0)
 get_P(args...) = get_P_P0(args...)[1]
 get_P0(args...) = get_P_P0(args...)[2]
-# get_P_P0(vtx::Vertex) = (vtx.P, vtx.P0)
-# get_P(vtx::Vertex) = vtx.P
-# get_P0(vtx::Vertex) = vtx.P0
+
 """
 Gets M and M0, creating the vertex if necessary.
 """
 get_M_M0(args...) = get_vertex(args...; inv_info=false, neighbor_info=false) |> vtx -> (vtx.M, vtx.M0)
 get_M(args...) = get_M_M0(args...)[1]
 get_M0(args...) = get_M_M0(args...)[2]
-# get_M_M0(vtx::Vertex) = (vtx.M, vtx.M0)
-# get_M(vtx::Vertex) = vtx.M
-# get_M0(vtx::Vertex) = vtx.M0
 
 """
 Gets C_x and C0_x, creating the vertex if necessary.
@@ -881,9 +877,7 @@ Gets C_x and C0_x, creating the vertex if necessary.
 get_C_C0_x(args...) = get_vertex(args...; inv_info=false, neighbor_info=false) |> vtx -> (vtx.C_x, vtx.C0_x)
 get_C_x(args...) = get_C_C0_x(args...)[1]
 get_C0_x(args...) = get_C_C0_x(args...)[2]
-# get_C_C0_x(vtx::Vertex) = (vtx.C_x, vtx.C0_x)
-# get_C_x(vtx::Vertex) = vtx.C_x
-# get_C0_x(vtx::Vertex) = vtx.C0_x
+
 
 """
 Gets C_qK and C0_qK, ensuring the inv_info  is calculated.
@@ -892,10 +886,7 @@ get_C_C0_nullity_qK(args...) = get_vertex(args...; inv_info=true, neighbor_info=
 get_C_C0_qK(args...) = get_C_C0_nullity_qK(args...)[1:2]
 get_C_qK(args...) = get_C_C0_nullity_qK(args...)[1]
 get_C0_qK(args...) = get_C_C0_nullity_qK(args...)[2]
-# get_C_C0_nullity_qK(vtx::Vertex) = (_fill_inv_info!(vtx);(vtx.C_qK, vtx.C0_qK, vtx.nullity))
-# get_C_C0_qK(vtx::Vertex) = (_fill_inv_info!(vtx);(vtx.C_qK, vtx.C0_qK))
-# get_C_qK(vtx::Vertex) = (_fill_inv_info!(vtx); vtx.C_qK)
-# get_C0_qK(vtx::Vertex) = (_fill_inv_info!(vtx); vtx.C0_qK)
+
 
 """
 Gets H and H0, ensuring the full vertex is calculated.
@@ -917,7 +908,7 @@ end
 get_polyhedron(args...)=get_polyhedron(get_C_C0_nullity_qK(args...)...)
 
 
-get_C_C0_nullity(args...;kwargs...) = get_C_C0_nullity_qK(args...;kwargs...)
+
 function get_C_C0_nullity(poly::Polyhedron) #Have to make sure the polyhedron has been already detecthlinearity.
     p = MixedMatHRep(hrep(poly))
     C = -p.A
@@ -934,6 +925,7 @@ function get_C_C0_nullity(poly::Polyhedron) #Have to make sure the polyhedron ha
     end
     return (C, C0, nullity)
 end
+get_C_C0_nullity(args...;kwargs...) = get_C_C0_nullity_qK(args...;kwargs...)
 get_C_C0(args...;kwargs...) = get_C_C0_nullity(args...;kwargs...) |> x->(x[1], x[2]) 
 get_C(args...;kwargs...) = get_C_C0_nullity(args...;kwargs...)[1]
 get_C0(args...;kwargs...) = get_C_C0_nullity(args...;kwargs...)[2]
