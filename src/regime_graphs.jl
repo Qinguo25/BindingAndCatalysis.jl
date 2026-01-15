@@ -1,231 +1,152 @@
 #-----------------------------------------------------------------------------------------------
 #This is graph associated functions for Bnc models and archetyple behaviors associated code
 #-----------------------------------------------------------------------------------------------
+"""
+    _calc_vertices_graph(data::Vector{<:AbstractVector{T}}, n::Int) where T
 
-#--------------------------------------------------------------------------
-#              Binding Newtork Graph
-#-------------------------------------------------------------------------
-function get_binding_network_grh(Bnc::Bnc)::SimpleGraph
-    g = SimpleGraph(Bnc.d + Bnc.n)
-    for vi in eachindex(Bnc._valid_L_idx)
-        for vj in Bnc._valid_L_idx[vi]
-            add_edge!(g, vi, vj+Bnc.d)
+Build VertexGraph from a list of vertex permutations.
+- Groups vertices differing in exactly one row, creates bidirectional edges with change_dir_x.
+"""
+function  _calc_vertices_graph(Bnc::Bnc{T}) where {T} # optimized by GPT-5, not fullly understood yet.
+    perms = Bnc.vertices_perm
+    n = Bnc.n    
+    L = Bnc.L
+
+    n_vtxs = length(perms)
+    d=length(perms[1])
+    thread_edges = [Vector{Tuple{Int, VertexEdge{T}}}() for _ in 1:Threads.maxthreadid()]
+
+    # 按行分桶：key 为去掉该行后的签名（Tuple），值为该签名下的 (顶点索引, 该行取值)
+    for i in 1:d
+        buckets = Dict{Tuple{Vararg{T}}, Vector{Tuple{Int,T}}}()
+
+        # 构建桶
+        @inbounds for i in 1:n_vtxs
+            v = perms[i]
+            sig = if i == 1
+                    Tuple(v[2:end])
+                elseif i == d
+                    Tuple(v[1:end-1])
+                else
+                    Tuple((v[1:i-1]..., v[i+1:end]...))
+                end
+            push!(get!(buckets, sig) do
+                Vector{Tuple{Int,T}}()
+            end, (i, v[i]))
+        end
+
+        groups = collect(values(buckets))
+
+        # 并行生成边：同桶内所有不同取值的顶点两两相连
+        Threads.@threads for gi in 1:length(groups)
+            tid = Threads.threadid()
+            local_edges = thread_edges[tid]
+            group = groups[gi]  # ::Vector{Tuple{Int,T}}
+            m = length(group)
+            m <= 1 && continue
+
+            @inbounds for a in 1:m-1
+                p1, j1 = group[a]
+                for b in a+1:m
+                    p2, j2 = group[b]
+                    j1 == j2 && continue
+
+                    dx = if j1 < j2   # go from p2 to p1, decrease x_{j2}, increase x_{j1}
+                        SparseVector(n, [j1, j2], Int8[1, -1]) 
+                    else
+                         SparseVector(n, [j2, j1], Int8[-1, 1])
+                    end
+
+                    ins_x = log10(L[i, j1]) - log10(L[i, j2]) # go from p2 to p1
+
+                    push!(local_edges, (p2, VertexEdge(p1, i, dx, ins_x))) # p2 to p1,
+                    push!(local_edges, (p1, VertexEdge(p2, i, -dx, -ins_x)))  # p1 to p2
+                end
+            end
         end
     end
-    return g # get first d nodes as total, last n nodes as x
+
+    # 归并线程本地边
+    all_edges = reduce(vcat, thread_edges; init=Tuple{Int, VertexEdge{T}}[])
+    neighbors = [Vector{VertexEdge{T}}() for _ in 1:n_vtxs]
+    for (from, e) in all_edges
+        push!(neighbors[from], e)
+    end
+    return VertexGraph(Bnc, neighbors)
 end
 
 
-
-#------------------------------------------------------------------------------
-#              Functions try makeing Graphs.jl functions on VertexGraph
-#------------------------------------------------------------------------------
-
-# We need these whole set of functions to make VertexGraph compatible with Graphs.jl,
-# But I'm tired, curretly recreate graph is accessable, 
-# edgetype
-# has_edge
-# inneighbors
-# ne
-# nv
-# outneighbors
-# vertices
-# is_directed
-
-# function nv(g::VertexGraph)
-#     return length(g.neighbors)
-# end
-# function ne(g::VertexGraph)
-#     return g.ne_for_current_change_idx
-# end
-
-# function edges(g::VertexGraph)
-#     if g.current_change_idx == -1
-#         return Iterators.flatten(
-#             ( (Edge(i, e.to) for e in es if !isnothing(e.change_dir_qK))
-#               for (i, es) in enumerate(g.neighbors) )
-#         )
-#     else
-#         idx = g.current_change_idx
-#         return Iterators.flatten(
-#             ( (Edge(i, e.to) for e in es
-#                 if !isnothing(e.change_dir_qK) && e.change_dir_qK[idx] ≥ 1e-6)
-#               for (i, es) in enumerate(g.neighbors) )
-#         )
-#     end
-# end
-
-# function vertices(g::VertexGraph)
-#     return 1:nv(g)
-# end
-
-
-
-#------------------------------------------------------------------------------
-#                  Getting the whole graph functions. 
-#----------------------------------------------------------------------------
 """
-    get_vertices_graph!(Bnc; full=false) -> VertexGraph
+    _fulfill_vertices_graph!(Bnc, vtx_graph)
 
-    full::Bool=false: whether to compute qK change directions on edges.
-
-Ensure vertex graph is built; if full=true, also compute qK change directions on edges.
-Returns the cached VertexGraph.
+Ensure vertices are discovered and vertex graph is built and cached in Bnc.
+Returns nothing.
 """
-function get_vertices_graph!(Bnc::Bnc; full::Bool=false)::VertexGraph
+
+function _fulfill_vertices_graph!(vtx_graph::VertexGraph)
+    Bnc = vtx_graph.bn
     """
-    get the neighbor of vertices formed graph.
+    fill the qK space change dir matrix for all vertices in Bnc.
     """
-    if full
-        vtx_graph = get_vertices_graph!(Bnc; full=false)
-        if !vtx_graph.change_dir_qK_computed
-            println("-------Start calculating vertices neighbor graph with qK change dir, It may takes a while.------------")
-            _fulfill_vertices_graph!(Bnc, vtx_graph)
-            vtx_graph.change_dir_qK_computed = true
-            println("Done.\n")
+    function _calc_change_dir_qK(Bnc, p1, p2, i, j1, j2, ins_x)
+        # calculate the interface and norm points to p2
+        n1 = get_nullity(Bnc, p1)
+        n2 = get_nullity(Bnc, p2)
+        if n1 > 1 || n2 > 1
+            return nothing
         end
-    else
-        if isnothing(Bnc.vertices_graph)
-            find_all_vertices!(Bnc)# Ensure vertices are calculated
-            println("----------------Start calculating vertices neighbor graph, It may takes a while.----------------")
-            Bnc.vertices_graph =  _calc_vertices_graph_from_perms(Bnc.vertices_perm,Bnc.n)
-            println("Done.\n")
+
+        if n1 == 0
+            H,H0 = get_H_H0(Bnc, p1)
+            dir = H[j2, :] - H[j1, :]
+            ins_qK = H0[j2] - H0[j1] + ins_x
+        elseif n2 == 0
+            H,H0 = get_H_H0(Bnc, p1)
+            dir = H[j1, :] - H[j2, :] 
+            ins_qK = H0[j1] - H0[j2] - ins_x
+        else
+            H = get_H(Bnc, p1)
+            M0 = get_M0(Bnc, p1)
+            dir = H[j2, :] - H[j1, :]
+            ins_qK = -dot(dir, M0)
+        end
+        droptol!(dir, 1e-10)
+        return nnz(dir)==0 ? nothing : (dir, ins_qK)
+    end
+
+    # pre compute H for all vertices with nullity 0 or 1
+    Threads.@threads for idx in eachindex(vtx_graph.neighbors)
+        if Bnc.vertices_nullity[idx] <= 1
+            get_H(Bnc, idx)
         end
     end
-    return Bnc.vertices_graph
-end
 
-#-----------------------------------------------------------------------------------
-function get_neighbor_graph_x(Bnc::Bnc)::SimpleGraph
-    vg = get_vertices_graph!(Bnc;full=false)
-    return vg.x_grh
-end
-
-function get_neighbor_graph_qK(Bnc::Bnc; half::Bool=true)::SimpleGraph
-    vg = get_vertices_graph!(Bnc;full=true)
-    n = length(vg.neighbors)
-    g = SimpleDiGraph(n)
-    for (i, edges) in enumerate(vg.neighbors)
-        if get_nullity(Bnc,i) >1
+    Threads.@threads for p1 in eachindex(vtx_graph.neighbors)
+        edges = vtx_graph.neighbors[p1]
+        if Bnc.vertices_nullity[p1] > 1 # jump off those regimes with nullity >1
             continue
         end
         for e in edges
-            if isnothing(e.change_dir_qK) || (half && e.to < i)
+            if !isnothing(e.change_dir_qK) # pass if have been computed
                 continue
             end
-            add_edge!(g, i, e.to)
-        end
-    end
-    return g
-end
-
-get_neighbor_graph(args...; kwargs...) = get_neighbor_graph_qK(args...; kwargs...)
-
-"""
-Get qK neighbor graph with denoted idx
-"""
-
-get_SISO_graph(grh::SISOPaths) = grh.qK_grh
-function get_SISO_graph(Bnc::Bnc,change_qK;)::SimpleDiGraph
-    change_qK_idx = locate_sym_qK(Bnc, change_qK)
-    vg = get_vertices_graph!(Bnc;full=true)
-    n = length(vg.neighbors)
-    g = SimpleDiGraph(n)
-    for (i, edges) in enumerate(vg.neighbors)
-        nlt = get_nullity(Bnc,i)
-        if nlt >1
-            continue
-        end
-        for e in edges
-            if isnothing(e.change_dir_qK) || e.to < i
-                continue
-            end 
-            val = e.change_dir_qK[change_qK_idx]
-            if val > 1e-6
-                add_edge!(g, i, e.to)
-            elseif val < -1e-6
-                add_edge!(g, e.to, i)
-            end 
-        end
-    end
-    return g
-end
-
-
-#------------------------------------------------------------------------------------------
-
-function SISOPaths(model::Bnc{T}, change_qK; rgm_paths=nothing) where {T}
-    change_qK_idx = locate_sym_qK(model, change_qK)
-
-    if rgm_paths === nothing
-        qK_grh = get_SISO_graph(model, change_qK)
-        sources, sinks = get_sources_sinks(model, qK_grh)
-        rgm_paths = _enumerate_paths(qK_grh; sources, sinks)
-    else
-        qK_grh = graph_from_paths(rgm_paths, length(model.vertices_perm))
-        sources, sinks = get_sources_sinks(qK_grh)
-    end
-
-    return SISOPaths(model, qK_grh, change_qK_idx, sources, sinks, rgm_paths)
-end
-
-get_binding_network(grh::SISOPaths,args...)= grh.bn
-get_C_C0_nullity_qK(grh::SISOPaths, pth_idx) = get_polyhedron(grh, pth_idx) |> get_C_C0_nullity
-
-function get_polyhedra(grh::SISOPaths, pth_idx::Union{AbstractVector{<:Integer},Nothing,Integer} = nothing)::Vector{Polyhedron}
-    pth_idx = let 
-            if isnothing(pth_idx)
-                1:length(grh.rgm_paths)
-            elseif isa(pth_idx, Integer)
-                [pth_idx]
-            else
-                pth_idx
+            # from p1 to p2, and change happens on ith row that "1" goes from j1 position to j2 position.
+            p2 = e.to # target 
+            ins_x = e.intersect_x
+            i = e.diff_r # different row
+            (j1,j2) = let 
+                I,V = findnz(e.change_dir_x) # should be two elements
+                V[1] > V[2] ? (I[2], I[1]) : (I[1], I[2])
             end
-        end
-    
-    pth_poly_to_calc = filter(x -> !grh.path_polys_is_calc[x], pth_idx)
-    
-    if !isempty(pth_poly_to_calc)
-        polys = _calc_polyhedra_for_path(grh.bn, grh.rgm_paths[pth_poly_to_calc], grh.change_qK_idx)
-        grh.path_polys[pth_poly_to_calc] .= polys
-        grh.path_polys_is_calc[pth_poly_to_calc] .= true
-    end
-
-    return grh.path_polys[pth_idx]
-end
-get_polyhedron(grh::SISOPaths, pth_idx::Integer)= get_polyhedra(grh, pth_idx)[1]
-
-function get_volume(grh::SISOPaths, pth_idx::Union{AbstractVector{<:Integer},Nothing,Integer}=nothing; asymptotic=true,recalculate=false, kwargs...)::Vector{Tuple{Float64,Float64}}
-    pth_idx = let 
-            if isnothing(pth_idx)
-                1:length(grh.rgm_paths)
-            elseif isa(pth_idx, Integer)
-                [pth_idx]
-            else
-                pth_idx
-            end
-        end
-    
-    idxes_to_calculate = recalculate ? pth_idx : filter(x -> !grh.path_volume_is_calc[x], pth_idx)
-    
-    if !isempty(idxes_to_calculate)
-        polys = get_polyhedra(grh, idxes_to_calculate)
-        rlts = calc_volume(polys; asymptotic=asymptotic, kwargs...)
-        for (i, idx) in enumerate(idxes_to_calculate)
-            grh.path_volume[idx] = rlts[i][1]
-            grh.path_volume_err[idx] = rlts[i][2]
-            grh.path_volume_is_calc[idx] = true
+            # calculate their direction based on formula
+            (e.change_dir_qK, e.intersect_qK) = _calc_change_dir_qK(Bnc, p1, p2, i, j1,j2, ins_x)
         end
     end
-
-    vol = grh.path_volume[pth_idx]
-    err = grh.path_volume_err[pth_idx]
-    return [(vol, err) for (vol, err) in zip(vol, err)]
+    return nothing
 end
-
 
 #---------------------------------------------------------------------------------------------------
-#             Functions for analyzing each individual path in the graph
+#             Helper functions: Functions for construct the regime graph paths
 #----------------------------------------------------------------------------------------------------
 
 
@@ -244,10 +165,6 @@ function get_sources_sinks(model::Bnc, g::AbstractGraph)
     sinks = setdiff(sinks_all, common_vs)
     return (collect(sources), collect(sinks))
 end
-
-
-
-
 
 # 只遍历子图：sources 可达 & 能到 sinks
 function _reachable_from_sources(g::AbstractGraph, sources::AbstractVector{Int})
@@ -454,7 +371,253 @@ end
 
 
 
-function _calc_reaction_order_for_single_path(model, path::Vector{Int}, change_qK_idx, observe_x_idx)::Vector{<:Real}
+#---------------------------------------------------------------------------
+#              Binding Network Graph
+#-------------------------------------------------------------------------
+function get_binding_network_grh(Bnc::Bnc)::SimpleGraph
+    g = SimpleGraph(Bnc.d + Bnc.n)
+    for vi in eachindex(Bnc._valid_L_idx)
+        for vj in Bnc._valid_L_idx[vi]
+            add_edge!(g, vi, vj+Bnc.d)
+        end
+    end
+    return g # get first d nodes as total, last n nodes as x
+end
+
+
+#------------------------------------------------------------------------------
+#                  Getting the Graph of of regimes
+#----------------------------------------------------------------------------
+"""
+    get_vertices_graph!(Bnc; full=false) -> VertexGraph
+
+    full::Bool=false: whether to compute qK change directions on edges.
+
+Ensure vertex graph is built; if full=true, also compute qK change directions on edges.
+Returns the cached VertexGraph.
+"""
+function get_vertices_graph!(Bnc::Bnc; full::Bool=false)::VertexGraph
+    """
+    get the neighbor of vertices formed graph.
+    """
+    if full
+        vtx_graph = get_vertices_graph!(Bnc; full=false)
+        if !vtx_graph.change_dir_qK_computed
+            println("-------Start calculating vertices neighbor graph with qK change dir, It may takes a while.------------")
+            _fulfill_vertices_graph!(vtx_graph)
+            vtx_graph.change_dir_qK_computed = true
+            println("Done.\n")
+        end
+    else
+        if isnothing(Bnc.vertices_graph)
+            find_all_vertices!(Bnc)# Ensure vertices are calculated
+            println("----------------Start calculating vertices neighbor graph, It may takes a while.----------------")
+            Bnc.vertices_graph =  _calc_vertices_graph(Bnc)
+            println("Done.\n")
+        end
+    end
+    return Bnc.vertices_graph
+end
+
+
+function get_edge(grh::VertexGraph, from::Integer, to::Integer; full=false)::Union{Nothing, VertexEdge}
+    if full
+        if isnothing(Bnc.vertices_graph)
+            find_all_vertices!(Bnc)# Ensure vertices are calculated
+            println("----------------Start calculating vertices neighbor graph, It may takes a while.----------------")
+            Bnc.vertices_graph =  _calc_vertices_graph(Bnc)
+            println("Done.\n")
+        end
+    end
+    pos = get(grh.edge_pos[from], to, nothing)
+    return pos === nothing ? nothing : grh.neighbors[from][pos]
+end
+
+
+get_edge(Bnc, from, to; kwargs...)= let
+    vtx_grh = get_vertices_graph!(Bnc; full=false)
+    bn = get_binding_network(Bnc)
+    from = get_idx(Bnc, from)
+    to = get_idx(Bnc, to)
+    get_edge(vtx_grh, from, to; kwargs...)
+end
+
+get_binding_network(grh::VertexGraph,args...) = grh.bn
+
+
+
+
+
+
+
+#-----------------------------------------------------------------------------------
+function get_neighbor_graph_x(Bnc::Bnc)::SimpleGraph
+    vg = get_vertices_graph!(Bnc;full=false)
+    return vg.x_grh
+end
+
+function get_neighbor_graph_qK(Bnc::Bnc; half::Bool=true)::SimpleGraph
+    vg = get_vertices_graph!(Bnc;full=true)
+    n = length(vg.neighbors)
+    g = SimpleDiGraph(n)
+    for (i, edges) in enumerate(vg.neighbors)
+        if get_nullity(Bnc,i) >1
+            continue
+        end
+        for e in edges
+            if isnothing(e.change_dir_qK) || (half && e.to < i)
+                continue
+            end
+            add_edge!(g, i, e.to)
+        end
+    end
+    return g
+end
+
+get_neighbor_graph(args...; kwargs...) = get_neighbor_graph_qK(args...; kwargs...)
+
+"""
+Get qK neighbor graph with denoted idx
+"""
+
+get_SISO_graph(grh::SISOPaths) = grh.qK_grh
+function get_SISO_graph(Bnc::Bnc,change_qK;)::SimpleDiGraph
+    change_qK_idx = locate_sym_qK(Bnc, change_qK)
+    vg = get_vertices_graph!(Bnc;full=true)
+    n = length(vg.neighbors)
+    g = SimpleDiGraph(n)
+    for (i, edges) in enumerate(vg.neighbors)
+        nlt = get_nullity(Bnc,i)
+        if nlt >1
+            continue
+        end
+        for e in edges
+            if isnothing(e.change_dir_qK) || e.to < i
+                continue
+            end 
+            val = e.change_dir_qK[change_qK_idx]
+            if val > 1e-6
+                add_edge!(g, i, e.to)
+            elseif val < -1e-6
+                add_edge!(g, e.to, i)
+            end 
+        end
+    end
+    return g
+end
+
+
+#------------------------------------------------------------------------------
+# Higher wrapper for regime graph paths
+#------------------------------------------------------------------------------------------
+
+function SISOPaths(model::Bnc{T}, change_qK; rgm_paths=nothing) where {T}
+    change_qK_idx = locate_sym_qK(model, change_qK)
+
+    if rgm_paths === nothing
+        qK_grh = get_SISO_graph(model, change_qK)
+        sources, sinks = get_sources_sinks(model, qK_grh)
+        rgm_paths = _enumerate_paths(qK_grh; sources, sinks)
+    else
+        qK_grh = graph_from_paths(rgm_paths, length(model.vertices_perm))
+        sources, sinks = get_sources_sinks(qK_grh)
+    end
+
+    return SISOPaths(model, qK_grh, change_qK_idx, sources, sinks, rgm_paths)
+end
+
+function get_path(grh::SISOPaths, pth_idx::Integer; return_idx::Bool=false)
+    if return_idx
+        return grh.rgm_paths[pth_idx]
+    end
+    bn = get_binding_network(grh)
+    perms = get_perm(bn, pth_idx)
+    return perms
+end
+
+get_idx(grh::SISOPaths, pth::AbstractVector{<:Integer}) = findfirst(x -> x == pth, grh.rgm_paths)
+get_binding_network(grh::SISOPaths,args...)= grh.bn
+get_C_C0_nullity_qK(grh::SISOPaths, pth_idx) = get_polyhedron(grh, pth_idx) |> get_C_C0_nullity
+
+function get_polyhedra(grh::SISOPaths, pth_idx::Union{AbstractVector{<:Integer},Nothing} = nothing)::Vector{Polyhedron}
+    pth_idx = let 
+            if isnothing(pth_idx)
+                1:length(grh.rgm_paths)
+            else
+                pth_idx
+            end
+        end
+    
+    pth_poly_to_calc = filter(x -> !grh.path_polys_is_calc[x], pth_idx)
+    
+    if !isempty(pth_poly_to_calc)
+        polys = _calc_polyhedra_for_path(get_binding_network(grh), grh.rgm_paths[pth_poly_to_calc], grh.change_qK_idx)
+        grh.path_polys[pth_poly_to_calc] .= polys
+        grh.path_polys_is_calc[pth_poly_to_calc] .= true
+    end
+
+    return grh.path_polys[pth_idx]
+end
+get_polyhedron(grh::SISOPaths, pth_idx::Integer)= get_polyhedra(grh, [pth_idx])[1]
+
+
+
+function get_volume(grh::SISOPaths, pth_idx::Union{AbstractVector{<:Integer},Nothing,Integer}=nothing; 
+    asymptotic=true,recalculate=false, kwargs...)
+
+    pth_idx = let 
+            if isnothing(pth_idx)
+                1:length(grh.rgm_paths)
+            else
+                pth_idx
+            end
+        end
+    
+    idxes_to_calculate = recalculate ? pth_idx : filter(x -> !grh.path_volume_is_calc[x], pth_idx)
+    
+    if !isempty(idxes_to_calculate)
+        polys = get_polyhedra(grh, idxes_to_calculate)
+        rlts = calc_volume(polys; asymptotic=asymptotic, kwargs...)
+        for (i, idx) in enumerate(idxes_to_calculate)
+            grh.path_volume[idx] = rlts[i]
+            grh.path_volume_is_calc[idx] = true
+        end
+    end
+    return grh.path_volume
+end
+get_volume(grh::SISOPaths, pth_idx::Integer; kwargs...) = get_volume(grh, [pth_idx]; kwargs...)[1]
+
+
+
+#-------------------------------------------------------------------------------------
+# Regime shifting associated functions
+#-------------------------------------------------------------------------------------
+
+function show_regime_path(grh::SISOPaths, pth_idx::Integer)
+    pth = get_path(grh, pth_idx; return_idx=true)
+    print_path(pth; prefix="#")
+    return nothing
+end
+
+function show_expression_path(grh::SISOPaths, pth_idx::Integer; observe_x=nothing)
+    bn = get_binding_network(grh)
+    observe_x_idx = isnothing(observe_x) ? bn.n : locate_sym_x.(Ref(bn), observe_x)
+    rgm_pth = get_path(grh, pth_idx; return_idx=true)
+    pth = map(rgm_pth) do r
+        is_singular(bn, r) ? fill(NaN, length(observe_x_idx)) : get_expression(bn, r)[observe_x_idx]
+    end
+    pth = get_path(grh, pth_idx; return_idx=false)
+    print_expression_path(get_binding_network(grh), pth; prefix="#")
+    return nothing
+end
+
+#-------------------------------------------------------------------------------------------
+# 
+
+"""
+Given a path in regime graph, find the reaction order profile along the path.
+"""
+function _calc_reaction_order_for_single_path(model, path::AbstractVector{<:Integer}, change_qK_idx, observe_x_idx)::Vector{<:Real}
     r_ord = Vector{Float64}(undef, length(path))
     for i in eachindex(path)
         if !is_singular(model, path[i])
@@ -462,7 +625,7 @@ function _calc_reaction_order_for_single_path(model, path::Vector{Int}, change_q
         else
             ord = get_H(model, path[i])[observe_x_idx, change_qK_idx]
             if abs(ord) < 1e-6
-                r_ord[i] = NaN  # We use NaN to denote singular
+                r_ord[i] = NaN  # We use NaN to denote continuous singular, if reaction order not same before and after, means discontinuity
             else 
                 r_ord[i] = ord  * Inf
             end     
@@ -470,21 +633,60 @@ function _calc_reaction_order_for_single_path(model, path::Vector{Int}, change_q
     end
     return r_ord
 end
+function _dedup(ord_path::AbstractVector{T})::Vector{T} where T<:Real
+    isempty(ord_path) && return T[]
+    out = T[ord_path[1]]
+    pending_nan = false
+    last_out = out[1]  
+    @assert !isnan(last_out) "The first element cannot be NaN for deduplication."
 
-function _dedup(ord_path::Vector{T})::Vector{T} where T<:Real
-    isempty(ord_path) && return ord_path
-    result = [ord_path[1]]
-    for x in Iterators.drop(ord_path, 1)
-        if x != last(result) && !isnan(x)
-            push!(result, x)
+    for x in @view ord_path[2:end]
+        if isnan(x)
+            pending_nan = true
+            continue
+        end
+        if x != last_out
+            if pending_nan
+                push!(out, NaN)
+                pending_nan = false
+            end
+            push!(out, x)
+            last_out = x
+        else
+            pending_nan = false
         end
     end
-    return result
+    return out
 end
 
-function find_reaction_order_for_path(model::Bnc, rgm_path::Vector{<:Integer}, change_qK, observe_x; deduplicate::Bool=false,keep_singular::Bool=true,keep_nonasymptotic::Bool=true)::Vector{<:Real}
+
+
+
+
+
+
+
+"""
+Calc reaction order profile for single path in regime graph.
+- `model::Bnc`: Binding network model.
+- `rgm_path::AbstractVector{<:Integer}`: Regime path (vector of regime indices).
+- `change_qK`: Symbol or index of the changing qK.
+- `observe_x`: Symbol or index of the observed x.
+- `deduplicate::Bool=false`: Whether to deduplicate the reaction order profile.
+- `keep_singular::Bool=true`: Whether to keep singular regimes in the profile.
+- `keep_nonasymptotic::Bool=true`: Whether to keep non-asymptotic regimes in the profile.
+"""
+function get_reaction_order_path(
+    model::Bnc, rgm_path::AbstractVector{<:Integer}; 
+    change_qK, observe_x,
+    deduplicate::Bool=false,
+    keep_singular::Bool=true,
+    keep_nonasymptotic::Bool=true
+    )::Vector{<:Real}
+
     change_qK_idx = locate_sym_qK(model, change_qK)
     observe_x_idx = locate_sym_x(model, observe_x)
+
     ord_path = _calc_reaction_order_for_single_path(model, rgm_path, change_qK_idx, observe_x_idx)
     
     mask = _get_vertices_mask(model, rgm_path;
@@ -498,40 +700,51 @@ function find_reaction_order_for_path(model::Bnc, rgm_path::Vector{<:Integer}, c
     end
     return ord_path
 end
-
-function find_reaction_order_for_path(model, rgm_paths::Vector{Vector{Int}}, args...; kwargs...)::Vector{Vector{<:Real}}
+"""
+Multiple paths version of `get_reaction_order_path`.
+"""
+function get_reaction_order_path(model, rgm_paths::AbstractVector{<:AbstractVector{<:Integer}}, args...; kwargs...)::Vector{Vector{<:Real}}
     ord_pths = Vector{Vector{<:Real}}(undef, length(rgm_paths))
     Threads.@threads for i in eachindex(rgm_paths)
-        ord_pths[i] = find_reaction_order_for_path(model, rgm_paths[i], args...; kwargs...)
+        ord_pths[i] = get_reaction_order_path(model, rgm_paths[i], args...; kwargs...)
     end
     return ord_pths
 end
 
-function find_reaction_order_for_path(model::SISOPaths,observe_x;kwargs...)
+function get_reaction_order_path(model::SISOPaths, pth_idx = nothing ; observe_x, kwargs...)
+    pth_idx = isnothing(pth_idx) ? (1:length(model.rgm_paths)) : pth_idx
+    rgm_paths = @view model.rgm_paths[pth_idx]
     observe_x_idx = locate_sym_x(model.bn, observe_x)
-    return find_reaction_order_for_path(model.bn, model.rgm_paths, model.change_qK_idx, observe_x_idx; kwargs...)
+    return get_reaction_order_path(model.bn, rgm_paths; 
+        change_qK=model.change_qK_idx, observe_x=observe_x_idx, kwargs...)
 end
+get_reaction_order_path(model::SISOPaths, pth_idx::Integer, args...; kwargs...) = get_reaction_order_path(model, [pth_idx], args... ; kwargs...)
 
 
-# function group_sum(keys::AbstractVector, vals::AbstractVector;sort_values::Bool=true)::Vector{Pair}
-#     @assert length(keys) == length(vals)
-#     dict = Dict{eltype(keys), eltype(vals)}()
-#     @inbounds for (k, v) in zip(keys, vals)
-#         dict[k] = get(dict, k, zero(v)) + v
-#     end
-#     dict_vec = collect(dict)
-#     if sort_values
-#         sort!(dict_vec, by=x->x[2], rev=true)
-#     end
-#     return dict_vec
-# end
 
-function group_sum(keys::AbstractVector, vals::AbstractVector; sort_values::Bool=true) :: Vector{Tuple{Vector{Int}, eltype(keys), eltype(vals)}}
+"""
+    Group sum values by keys.
+
+    # Arguments
+    - `keys::AbstractVector`: Vector of keys.
+    - `vals::AbstractVector`: Vector of values to be summed.
+    - `sort_values::Bool=true`: Whether to sort the output by summed values in descending order.
+
+    # Returns
+    - `Vector{Tuple{Vector{Int}, eltype(keys), eltype(vals)}}`: A vector of tuples, each containing:
+        - A vector of indices corresponding to the original positions of the key.
+        - The key itself.
+        - The summed value for that key.
+"""
+function group_sum(keys::AbstractVector{I}, vals::AbstractVector{J}; 
+    sort_values::Bool=true
+    ) :: Vector{Tuple{Vector{Int}, I, J}} where {I,J}
+
     @assert length(keys) == length(vals)
     # Dictionary to accumulate sum of values for each key
-    dict = Dict{eltype(keys), eltype(vals)}()
+    dict = Dict{I,J}()
     # Store indices of keys for later reference
-    index_dict = Dict{eltype(keys), Vector{Int}}()
+    index_dict = Dict{I, Vector{Int}}()
     
     @inbounds for (i, (k, v)) in enumerate(zip(keys, vals))
         dict[k] = get(dict, k, zero(v)) + v
@@ -547,7 +760,7 @@ function group_sum(keys::AbstractVector, vals::AbstractVector; sort_values::Bool
     end
     
     # Create a Vector of Tuples with (index, key, summed value)
-    result = Vector{Tuple{Vector{Int}, eltype(keys), eltype(vals)}}(undef, length(dict))
+    result = Vector{Tuple{Vector{Int}, I, J}}(undef, length(dict))
     
     # @show dict, index_dict
     for i in eachindex(dict_vec)
@@ -560,26 +773,40 @@ function group_sum(keys::AbstractVector, vals::AbstractVector; sort_values::Bool
 end
 
 
-function summary_path(grh::SISOPaths,observe_x; 
+
+"""
+Show (print) paths stored in SISOPaths.
+
+- Reads `grh.rgm_paths`
+- Optionally computes volumes via `get_volume(grh; kwargs...)`
+"""
+function summary(grh::SISOPaths; show_volume::Bool=true, prefix::AbstractString="#", kwargs...)
+    paths = grh.rgm_paths
+    if show_volume
+        vols = get_volume(grh; kwargs...)
+        # rows = _normalize_rows(paths; volumes=vols)  # ids 默认 1:N
+        print_paths(paths, vols; prefix=prefix)
+    else
+        print_paths(paths; prefix=prefix)
+    end
+    return nothing
+end
+
+
+
+function summary_reaction_order_path(grh::SISOPaths,observe_x; 
     deduplicate::Bool=false,keep_singular::Bool=true,keep_nonasymptotic::Bool=true,kwargs...)
     
-    observe_x_idx = locate_sym_x(grh.bn, observe_x)
+    observe_x_idx = locate_sym_x(get_binding_network(grh), observe_x)
     ord_pth = find_reaction_order_for_path(grh, observe_x_idx; 
         deduplicate=deduplicate,
         keep_singular=keep_singular,
         keep_nonasymptotic=keep_nonasymptotic)
     volumes = get_volume(grh; kwargs...)
-    return group_sum(ord_pth, collect.(volumes))
-end
 
-function summary_path(grh::SISOPaths; kwargs...)
-    get_polyhedra(grh)
-    get_volume(grh; kwargs...)
-    return map(zip(grh.rgm_paths, grh.path_volume, grh.path_volume_err)) do (pth, vol, err)
-        return (pth, [vol, err])
-    end
+    rlts = group_sum(ord_pth, collect.(volumes))
+    show_paths(rlts; prefix="")
+    return nothing
 end
-
-summary(grh::SISOPaths,args...;kwargs...) = summary_path(grh,args...;kwargs...)
 
 

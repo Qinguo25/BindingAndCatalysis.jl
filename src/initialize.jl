@@ -105,6 +105,15 @@ struct CatalysisData
     end
 end
 
+struct Volume
+    mean::Float64
+    var::Float64
+end
+fetch_mean_re(V::Volume) = (V.mean, sqrt(V.var)/V.mean)
+Base.display(V::Volume) = Printf.@sprintf("Volume(mean=%.3e, var=%.3e, rel_error=%.2f%%)", V.mean, V.var, (sqrt(V.var)/V.mean)*100)
+Base.:+(v1::Volume, v2::Volume) = Volume(v1.Value + v2.Value, v1.Var + v2.Var)
+
+
 
 mutable struct Vertex{F,T}
     #--- Parent Bnc model reference ---
@@ -122,10 +131,6 @@ mutable struct Vertex{F,T}
     C_x::SparseMatrixCSC{Int, Int}
     C0_x::Vector{F} 
 
-    # LU decomposition of M
-    # _M_lu::LU
-    # _M_lu::SparseArrays.UMFPACK.UmfpackLU{Float64, Int}
-
     # --- Expensive Calculated Properties ---
     nullity::T
     H::SparseMatrixCSC{Float64, Int} # Taking inverse, can have Float.
@@ -133,12 +138,8 @@ mutable struct Vertex{F,T}
     C_qK::SparseMatrixCSC{Float64, Int}
     C0_qK::Vector{F} 
     
-    #--- Neighbors ---
-    neighbors_idx::Vector{Int}
-    
     #---Realizibility Index
-    volume::Float64 # R_idx
-    eps_volume::Float64 #eps of volume
+    volume::Volume
 
     # The inner constructor also needs to be updated for the parametric type
     function Vertex(;bn::Union{AbstractBnc,Nothing}=nothing, perm, P, P0::Vector{F}, M, M0, C_x, C0_x, idx,real,nullity::T) where {T<:Integer,F<:Real}
@@ -150,9 +151,7 @@ mutable struct Vertex{F,T}
             Vector{F}(undef, 0),          # H0
             SparseMatrixCSC{Float64, Int}(undef, 0, 0), # C_qK
             Vector{F}(undef, 0),          # C0_qK
-            Int[], # neighbors_idx (using empty literal is cleaner)
-            0.0, # Volume
-            0.0, # eps
+            Volume(0.0, 0.0) # volume
         )
     end
 end
@@ -161,46 +160,32 @@ mutable struct VertexEdge{T}
     to::Int
     diff_r::Int
     change_dir_x::SparseVector{Int8, T}
+    intersect_x::Float64
     change_dir_qK::Union{Nothing, SparseVector{Float64, T}}
-    function VertexEdge(to::Int, diff_r::Int, change_dir_x::SparseVector{Int8, T}) where {T}
-        return new{T}(to, diff_r, change_dir_x, nothing)
+    intersect_qK::Union{Nothing, Float64}
+    function VertexEdge(to::Int, diff_r::Int, change_dir_x::SparseVector{Int8, T}, intersect_x::Float64) where {T}
+        return new{T}(to, diff_r, change_dir_x, intersect_x,nothing,nothing)
     end
 end
 
 # Adjacency list + optional caches
 mutable struct VertexGraph{T}
+    bn::AbstractBnc
     x_grh::SimpleGraph 
     neighbors::Vector{Vector{VertexEdge{T}}}
     change_dir_qK_computed::Bool
-    edge_dict::Dict{Set{Int},Int}
-    # boundary_polys_is_computed::BitVector
-    # boundary_polys::Vector{Polyhedron}
-    # current_change_idx::T
-    # ne_for_current_change_idx::Int
-    # ne_full::Int # total number of edges,counts both directions
-    # nullity::Union{Nothing, Vector{T}} # optional cache of nullity for each vertex #Store nullity again.
-    function VertexGraph(neighbors::Vector{Vector{VertexEdge{T}}}) where {T}
-        edge_dict = Dict{Set{Int},Int}()
-        idx = 1
-        for i in eachindex(neighbors)
-            for edge in neighbors[i]
-                if edge.to > i 
-                    edge_dict[Set((i, edge.to))] = idx
-                    idx += 1
-                end
-            end
-        end
+    edge_pos::Vector{Dict{Int, Int}}  # (u,v) -> (u,edge_pos[u][v]) to locate the VertexEdge.
+    function VertexGraph(bn::AbstractBnc, neighbors::Vector{Vector{VertexEdge{T}}}) where {T}
+        edge_pos = [Dict{Int, Int}() for _ in 1:length(neighbors)]
         g = SimpleGraph(length(neighbors))
-        for (i, edges) in enumerate(neighbors)
-            for e in edges
+        Threads.@threads for i in 1:length(neighbors)
+            edges = neighbors[i]
+            for (k, e) in enumerate(edges)
                 add_edge!(g, i, e.to)
+                edge_pos[i][e.to] = k
             end
         end
-        # boundary_polys_is_computed = falses(idx-1)
-        # boundary_polys = Vector{Polyhedron}(undef, idx-1)
-        # ne_full = sum(length.(neighbors))
-        # new{T}(neighbors,false,-1,ne_full/2,ne_full)
-        new{T}(g,neighbors,false,edge_dict)#,boundary_polys_is_computed,boundary_polys)
+        return new{T}(bn, g, neighbors, false, edge_pos)
     end
 end
 
@@ -231,12 +216,6 @@ mutable struct Bnc{T} <: AbstractBnc # T is the int type to save all the indices
     
     #The following are computed when building graphs.
     vertices_graph::Union{Any,Nothing} # Using Any for placeholder for VertexGraph
-
-    # vertices_neighbor_mat::SparseMatrixCSC{T, Int} # distance between vertices, upper triangular
-    # vertices_change_dir_x::SparseMatrixCSC{SparseVector{Int8,T}, Int} # how the vertices should change under x space to reach its neighbor vertices, upper triangular
-    # vertices_change_dir_qK::SparseMatrixCSC{SparseVector{Float64,T}, Int} # how the vertices should change under qK space to reach its neighbor vertices, upper triangular
-    # # _vertices_sym_invperm::Vector{Int}
-
     vertices_data::Vector{Vertex} # Using Any for placeholder for Vertex
     _vertices_is_initialized::BitVector
     _vertices_volume_is_calced::BitVector
@@ -363,6 +342,8 @@ mutable struct Bnc{T} <: AbstractBnc # T is the int type to save all the indices
     end
 end
 
+
+
 struct SISOPaths{T}
     bn::Bnc{T}   # binding Newtork
     qK_grh::SimpleDiGraph # SimpleDiGraph in qK space
@@ -373,16 +354,14 @@ struct SISOPaths{T}
     
     rgm_paths::Vector{Vector{Int}} #All paths from sources to sinks, each path is represented as a vector of vertex idx. Grows exponentially
     path_polys::Vector{Polyhedron} # the polyhedron for each path, lazily calculated when needed, stored in the same order as rgm_paths
-    path_volume::Vector{Float64}# the volume for each path, lazily calculated when needed, stored in the same order as rgm_paths
-    path_volume_err::Vector{Float64} # the error of volume calculation for each path, lazily calculated when needed, stored in the same order as rgm_paths
+    path_volume::Vector{Volume}# the volume for each path, lazily calculated when needed, stored in the same order as rgm_paths
 
     path_volume_is_calc::BitVector # whether the volume for each path is calculated, stored in the same order as rgm_paths
     path_polys_is_calc::BitVector # whether the polyhedron for each path is calculated, stored in the same order as rgm_paths
     
      function SISOPaths(model::Bnc{T}, qK_grh, change_qK_idx, sources, sinks, rgm_paths) where T
         path_polys = Vector{Polyhedron}(undef, length(rgm_paths))
-        path_volume = Vector{Float64}(undef, length(rgm_paths))
-        path_volume_err = Vector{Float64}(undef, length(rgm_paths))
+        path_volume = Vector{Volume}(undef, length(rgm_paths))
         path_volume_is_calc = falses(length(rgm_paths))
         path_polys_is_calc = falses(length(rgm_paths))  
         new{T}(model, qK_grh, change_qK_idx, 

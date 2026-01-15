@@ -8,7 +8,7 @@ qK_sym(args...)= [q_sym(args...); K_sym(args...)]
 
 #special api for SISOPaths
 q_sym(grh::SISOPaths,args...)= begin
-    bn = grh.bn
+    bn = get_binding_network(grh)
     q_sym = if grh.change_qK_idx <= bn.d
         deleteat!(copy(bn.q_sym), grh.change_qK_idx)
     else
@@ -17,7 +17,7 @@ q_sym(grh::SISOPaths,args...)= begin
     return q_sym
 end
 K_sym(grh::SISOPaths,args...)= begin
-    bn = grh.bn
+    bn = get_binding_network(grh)
     K_sym = if grh.change_qK_idx > bn.d
         deleteat!(copy(bn.K_sym), grh.change_qK_idx - bn.d)
     else
@@ -188,14 +188,7 @@ show_equilibrium(Bnc::Bnc;log_space::Bool=true) = show_expression_mapping(Bnc.N,
 
 
 
-function show_interface(Bnc::Bnc, from,to, change_idx::Union{Nothing,Integer}=nothing;kwargs...)
-    C, C0 = get_interface(Bnc,from,to) # C' log qK + C0 =0
-    if isnothing(change_idx)
-        return show_condition_poly(C, C0, [Bnc.q_sym; Bnc.K_sym], 1;kwargs...)
-    else
-        return solve_sym_expr(C,C0, [Bnc.q_sym; Bnc.K_sym], change_idx;kwargs...)
-    end
-end
+
 
 
 
@@ -245,16 +238,110 @@ end
 
 
 
+"""
+Format a single path element for display.
+
+- If it's a Real and close to an integer (after rounding), show as Int.
+- Otherwise show rounded Real (digits).
+- Non-real values fall back to `repr`.
+"""
+@inline function _fmt_elem(x; digits::Int=3)::String
+    if x isa Real
+        if isnan(x)
+            return "NaN"
+        end
+        xr = round(Float64(x); digits=digits)
+        # “接近整数就显示整数”，避免 try/catch
+        if isfinite(xr) && isapprox(xr, round(xr); atol=10.0^(-digits), rtol=0)
+            return string(Int(round(xr)))
+        else
+            return string(xr)
+        end
+    else
+        return repr(x)
+    end
+end
 
 """
-Render an arrow representation of a vector, with an optional appendix before each element.
-eg: render_arrow([1,0,-1],"x") -> "x1 → x0 → x-1"
+Format a path vector as an arrow-separated string.
+
+Example:
+    format_arrow([1,0,-1]; prefix="x") == "x1 → x0 → x-1"
 """
-function render_arrow(a::Vector, appendix="")::String
+function format_arrow(path::AbstractVector; prefix::AbstractString="", digits::Int=3)::String
+    isempty(path) && return ""
+    parts = Vector{String}(undef, length(path))
+    @inbounds for i in eachindex(path)
+        parts[i] = prefix * _fmt_elem(path[i]; digits=digits)
+    end
+    return join(parts, " → ")
+end
+
+"""
+A normalized row for printing:
+- id:     group/path id (any displayable object)
+- path:   the actual path vector Could be either regime path or Reaction order path
+- volume: nothing | Float64 | Tuple(value, err)
+"""
+struct PathRow{I,P,V}
+    id::I
+    path::P
+    volume::V
+end
+
+# 4.1 用户直接给 paths（无 volume），id 自动用 1:N
+function _normalize_rows(paths::AbstractVector{<:AbstractVector}; ids=nothing, volumes=nothing)
+    n = length(paths)
+    ids === nothing && (ids = collect(1:n))
+    volumes === nothing && (volumes = fill(nothing, n))
+
+    @assert length(ids) == n "ids length must match paths length"
+    @assert length(volumes) == n "volumes length must match paths length"
+
+    rows = Vector{PathRow}(undef, n)
+    @inbounds for i in 1:n
+        rows[i] = PathRow(ids[i], paths[i], volumes[i])
+    end
+    return rows
+end
+
+# 4.2 兼容你原来的 tuples 输入：自动拆列
+function _normalize_rows(tuples::AbstractVector{<:Tuple})
+    isempty(tuples) && return PathRow[]
+    k = length(tuples[1])
+
+    if k == 1
+        paths = getindex.(tuples, 1)
+        return _normalize_rows(paths)
+    elseif k == 2
+        paths = getindex.(tuples, 1)
+        vols  = getindex.(tuples, 2)
+        return _normalize_rows(paths; volumes=vols)
+    else
+        ids   = getindex.(tuples, 1)
+        paths = getindex.(tuples, 2)
+        vols  = getindex.(tuples, 3)
+        return _normalize_rows(paths; ids=ids, volumes=vols)
+    end
+end
+
+"""
+Render an arrow-separated representation of a vector.
+
+- `a`: vector to render (e.g. `[1, 0, -1]`)
+- `appendix`: prefix inserted before each element (e.g. `"x"` -> `"x1 → x0 → x-1"`)
+
+Example:
+    format_arrow([1,0,-1], "x") == "x1 → x0 → x-1"
+"""
+
+
+function format_arrow(a::Vector, appendix="")::String
     v = Vector{Any}(undef, length(a))
     for i in eachindex(a)
+        ai = round(a[i];digits=3)
         try 
-            v[i] = Int(round(a[i];digits=3))
+            v[i] = Int(ai)
         catch
             v[i] = a[i]
         end
@@ -267,52 +354,68 @@ function render_arrow(a::Vector, appendix="")::String
     return s
 end
 
+"""
+Print rows of paths in aligned columns.
 
-function render_path(pths::AbstractVector{<:Tuple};kwargs...)
-    if length(pths[1]) == 2
-        return render_path(1:length(pths), getindex.(pths,1), getindex.(pths,2); kwargs...)
-    elseif length(pths[1]) == 1
-        return render_path(1:length(pths), getindex.(pths,1); kwargs...)
-    else
-        return render_path(getindex.(pths,1), getindex.(pths,2),getindex.(pths,3); kwargs...)
-    end
-end
-render_path(groups::AbstractVector{Vector{<:Real}}; kwargs...) = render_path(eachindex(groups), groups, nothing; kwargs...)
-function render_path(groups, pths, volumes=nothing; appendix="")
-    path_width = 15  # "Path" 列的宽度
-    arrow_width = 30  # render_arrow 的列宽度
-    volume_width = 6  # Volume 列的宽度
-    if isnothing(volumes)
-        for (i, pth) in zip(groups, pths)
-            # 格式化输出路径编号、箭头路径和 volume 列（无 volume）
-            println(Printf.@sprintf("Path %-*s  %-*s", path_width, repr(i), arrow_width, render_arrow(pth, appendix)))
+Keyword args:
+- prefix: prefix before each node in arrow (e.g. "#")
+- digits: rounding digits for real display
+- io: output stream
+"""
+function print_paths(rows::AbstractVector{<:PathRow};
+    prefix::AbstractString="",
+    digits::Int=3,
+    io::IO=stdout,
+)
+    isempty(rows) && return nothing
+
+    # 动态列宽：比写死 15/30 更不容易“错位”
+    id_strs    = [repr(r.id) for r in rows]
+    path_strs  = [format_arrow(r.path; prefix=prefix, digits=digits) for r in rows]
+
+    id_width   = max(8, maximum(length.(id_strs)))     # 至少 8
+    path_width = max(10, maximum(length.(path_strs)))  # 至少 10
+
+    for (r, id_s, path_s) in zip(rows, id_strs, path_strs)
+        if r.volume === nothing
+            print(io, "Path %-*s  %-*s\n", id_width, id_s, path_width, path_s)
+        elseif r.volume isa Tuple && length(r.volume) == 2
+            v, e = r.volume
+            print(io, "Path %-*s  %-*s  Volume: %.4f ± %.4f\n", id_width, id_s, path_width, path_s, v, e)
+        else
+            print(io, "Path %-*s  %-*s  Volume: %.4f\n", id_width, id_s, path_width, path_s, r.volume)
         end
-    elseif length(volumes[1]) == 2
-        for (i, pth, vals) in zip(groups, pths, volumes)
-            # 格式化输出路径编号、箭头路径以及体积和误差
-            println(Printf.@sprintf("Path %-*s  %-*s\t  Volume: %-*s ± %-*s", path_width, repr(i), arrow_width, render_arrow(pth, appendix), volume_width, string(round(vals[1], digits=4)), volume_width, string(round(vals[2], digits=4))))
-        end
-    else # volumes[1] is a single value
-        for (i, pth, vals) in zip(groups, pths, volumes)
-            # 格式化输出路径编号、箭头路径以及体积
-            println(Printf.@sprintf("Path %-*s  %-*s\t  Volume: %-*s", path_width, repr(i), arrow_width, render_arrow(pth, appendix), volume_width, string(round(vals, digits=4))))
-        end
-    end
-    return nothing
-end
-function show_path(grh::SISOPaths; show_volume::Bool=true,kwargs...)
-    pths = grh.rgm_paths
-    if show_volume 
-        val =  get_volume(grh,kwargs...)
-        render_path(1:length(pths), pths, val; appendix ="#")
-    else
-        render_path(1:length(pths), pths; appendix ="#")
     end
     return nothing
 end
+# 6.1 直接给 paths
+print_paths(paths::AbstractVector{<:AbstractVector}; kwargs...) =
+    print_paths(_normalize_rows(paths); kwargs...)
+
+
+print_path(path::AbstractVector; kwargs...) =
+    print_paths(_normalize_rows([path]); kwargs...)
 
 
 
+function show_reaction_order_path(model::Bnc, rgm_path)::Vector{Vector{Int}}
+    reaction_order = 
+    ro_paths = Vector{Vector{Int}}(undef, length(rgm_path))
+    for (i,rgm) in enumerate(rgm_path)
+        ro_paths[i] = get_reaction_order(model, rgm)
+    end
+    return ro_paths
+end
+
+
+function show_interface(Bnc::Bnc, from,to, change_idx::Union{Nothing,Integer}=nothing;kwargs...)
+    C, C0 = get_interface(Bnc,from,to) # C' log qK + C0 =0
+    if isnothing(change_idx)
+        return show_condition_poly(C, C0, [Bnc.q_sym; Bnc.K_sym], 1;kwargs...)
+    else
+        return solve_sym_expr(C,C0, [Bnc.q_sym; Bnc.K_sym], change_idx;kwargs...)
+    end
+end
 
 """
 Given a regime path, change_qK_idx, and observe_x_idx, return the symbolic expressions for the path in the form
@@ -335,4 +438,4 @@ function show_expression_path(model::Bnc, rgm_path, change_qK_idx, observe_x_idx
     return (exprs, edges)
 end
 
-show_expression_path(grh::SISOPaths, pth_idx, observe_x; kwargs...)=show_expression_path(grh.bn, grh.rgm_paths[pth_idx], grh.change_qK_idx, observe_x; kwargs...)
+show_expression_path(grh::SISOPaths, pth_idx, observe_x; kwargs...)=show_expression_path(get_binding_network(grh), grh.rgm_paths[pth_idx], grh.change_qK_idx, observe_x; kwargs...)

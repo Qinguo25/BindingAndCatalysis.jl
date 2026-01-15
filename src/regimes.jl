@@ -20,76 +20,7 @@ function _calc_Nρ_inverse(Nρ)::Tuple{SparseMatrixCSC,Int}
         return _adj_singular_matrix(Nρ)
     end
 end
-"""
-    _calc_vertices_graph_from_perms(data::Vector{<:AbstractVector{T}}, n::Int) where T
 
-Build VertexGraph from a list of vertex permutations.
-- Groups vertices differing in exactly one row, creates bidirectional edges with change_dir_x.
-"""
-function  _calc_vertices_graph_from_perms(perms::Vector{<:AbstractVector{T}},n::Int) where {T} # optimized by GPT-5, not fullly understood yet.
-    n_vtxs = length(perms)
-    d=length(perms[1])# n = maximum(v -> maximum(v), data)
-    # n = maximum(v -> maximum(v), data)
-    # 线程本地边集，最后归并
-    thread_edges = [Vector{Tuple{Int, VertexEdge{T}}}() for _ in 1:Threads.maxthreadid()]
-
-    # 按行分桶：key 为去掉该行后的签名（Tuple），值为该签名下的 (顶点索引, 该行取值)
-    for r in 1:d
-        buckets = Dict{Tuple{Vararg{T}}, Vector{Tuple{Int,T}}}()
-
-        # 构建桶
-        @inbounds for i in 1:n_vtxs
-            v = perms[i]
-            sig = if r == 1
-                Tuple(v[2:end])
-            elseif r == d
-                Tuple(v[1:end-1])
-            else
-                Tuple((v[1:r-1]..., v[r+1:end]...))
-            end
-            push!(get!(buckets, sig) do
-                Vector{Tuple{Int,T}}()
-            end, (i, v[r]))
-        end
-
-        groups = collect(values(buckets))
-
-        # 并行生成边：同桶内所有不同取值的顶点两两相连
-        Threads.@threads for gi in 1:length(groups)
-            tid = Threads.threadid()
-            local_edges = thread_edges[tid]
-            group = groups[gi]  # ::Vector{Tuple{Int,T}}
-            m = length(group)
-            m <= 1 && continue
-
-            @inbounds for a in 1:m-1
-                i, xi = group[a]
-                for b in a+1:m
-                    j, xj = group[b]
-                    xi == xj && continue
-
-                    if xi < xj
-                        dx = SparseVector(n, [xi, xj], Int8[-1, 1])
-                        push!(local_edges, (i, VertexEdge(j, r, dx)))
-                        push!(local_edges, (j, VertexEdge(i, r, -dx)))
-                    else
-                        dx = SparseVector(n, [xj, xi], Int8[-1, 1])
-                        push!(local_edges, (i, VertexEdge(j, r, -dx)))
-                        push!(local_edges, (j, VertexEdge(i, r, dx)))
-                    end
-                end
-            end
-        end
-    end
-
-    # 归并线程本地边
-    all_edges = reduce(vcat, thread_edges; init=Tuple{Int, VertexEdge{T}}[])
-    neighbors = [Vector{VertexEdge{T}}() for _ in 1:n_vtxs]
-    for (from, e) in all_edges
-        push!(neighbors[from], e)
-    end
-    return VertexGraph(neighbors)
-end
 """
     _calc_H(Bnc, perm)
 
@@ -107,7 +38,7 @@ function _calc_H(Bnc::Bnc,perm::Vector{<:Integer})::SparseMatrixCSC
          [Nρ_inv_Nc_neg Nρ_inv]]
     elseif Nρ_nullity == 1
         [zeros(Bnc.d,Bnc.n);
-        [Nρ_inv_Nc_neg Nρ_inv]] # Seems there are sign problem within this part.(fixed)
+        [Nρ_inv_Nc_neg Nρ_inv]] 
     else
         error("Nullity greater than 1 not supported")
     end
@@ -274,91 +205,23 @@ function _get_Nρ_inv!(Bnc::Bnc{T}, key::AbstractVector{<:Integer}) where T
         _calc_Nρ_inverse(Nρ)
     end
 end
-"""
-    _build_vertices_graph!(Bnc)
 
-Ensure vertices are discovered and vertex graph is built and cached in Bnc.
-Returns nothing.
-"""
 
-function _fulfill_vertices_graph!(Bnc::Bnc, vtx_graph::VertexGraph)
-    """
-    fill the qK space change dir matrix for all vertices in Bnc.
-    """
-    function _calc_change_dir_qK(Bnc, vi, vj, i, j1, j2)
-        n1 = get_nullity(Bnc, vi)
-        # println("trigger one")
-        n2 = get_nullity(Bnc, vj)
-        # println("trigger two")
-        if n1 > 1 || n2 > 1
-            return nothing
-        end
-
-        # unit vector (Float64) at position i, reused where needed
-        ei = SparseVector(Bnc.n, [i], [1.0])
-
-        if n1 == 0
-            H1 = get_H(Bnc, vi)
-            # println("trigger three")
-            dir = H1[j2, :] - ei
-        elseif n2 == 0
-            H2 = get_H(Bnc, vj)
-            # println("trigger four")
-            dir = ei - H2[j1, :]
-        else
-            # n1 == 1 && n2 == 1
-            H1 = get_H(Bnc, vi)
-            dir = H1[j2, :]
-        end
-        droptol!(dir, 1e-10)
-        return nnz(dir)==0 ? nothing : dir
-    end
-    # pre compute H for all vertices with nullity 0 or 1
-    Threads.@threads for idx in eachindex(vtx_graph.neighbors)
-        if Bnc.vertices_nullity[idx] <= 1
-            get_H(Bnc, idx)
-        end
-    end
-
-    Threads.@threads for vi in eachindex(vtx_graph.neighbors)
-        edges = vtx_graph.neighbors[vi]
-        if Bnc.vertices_nullity[vi] > 1 # jump off those regimes with nullity >1
-            continue
-        end
-        for e in edges
-
-            if !isnothing(e.change_dir_qK) # pass if have been computed
-                continue
-            end
-
-            # from vi to vj, and change happens on ith row that "1" goes from j1 position to j2 position.
-            vj = e.to # target 
-            i = e.diff_r # different row
-            I,V = findnz(e.change_dir_x) # should be two elements
-            (j1,j2) = V[1] > V[2] ? (I[2], I[1]) : (I[1], I[2])
-            
-            # calculate their direction based on formula
-            dir = _calc_change_dir_qK(Bnc, vi, vj,i,j1,j2)
-            e.change_dir_qK = dir
-        end
-    end
-end
-
-"""
-    _locate_C_row(Bnc, i ,j1, j2)
-Locate the row index in C matrix for 1 move from L[i,j1] to L[i,j2].
-(Warning, for CqK, works only for invertible regime as singular will change the row order)
-"""
-function _locate_C_row(Bnc::Bnc, i ,j1, j2)
-    cls_start = Bnc._C_partition_idx[i]
-    i_j1= findfirst(x-> x == j1, Bnc._valid_L_idx[i])
-    i_j2= findfirst(x-> x == j2, Bnc._valid_L_idx[i])
-    if isnothing(i_j1) || isnothing(i_j2)
-        error("Either j1 or j2 is not a valid change direction for regime $i")
-    end
-    i = i_j2 < i_j1 ? i_j2 : i_j2 - 1
-    return cls_start + i-1
-end
+# """
+#     _locate_C_row(Bnc, i ,j1, j2)
+# Locate the row index in C matrix for 1 move from L[i,j1] to L[i,j2].
+# (Warning, for CqK, works only for invertible regime as singular will change the row order)
+# """
+# function _locate_C_row(Bnc::Bnc, i ,j1, j2)
+#     cls_start = Bnc._C_partition_idx[i]
+#     i_j1= findfirst(x-> x == j1, Bnc._valid_L_idx[i])
+#     i_j2= findfirst(x-> x == j2, Bnc._valid_L_idx[i])
+#     if isnothing(i_j1) || isnothing(i_j2)
+#         error("Either j1 or j2 is not a valid change direction for regime $i")
+#     end
+#     i = i_j2 < i_j1 ? i_j2 : i_j2 - 1
+#     return cls_start + i-1
+# end
 
 function _calc_change_col(from::Vector{T},to::Vector{T}) where T<:Integer
     j1 = 0
@@ -508,17 +371,17 @@ function _fill_inv_info!(vtx::Vertex)
     return nothing
 end
 
-function _fill_neighbor_info!(vtx::Vertex)
-    """
-    Fill the neighbor info for a given vertex.
-    """
-    Bnc = vtx.bn
-    if isempty(vtx.neighbors_idx)
-        vtx_grh = get_vertices_graph!(Bnc;full=false)
-        vtx.neighbors_idx = vtx_grh.neighbors[vtx.idx] .|> e -> e.to
-    end
-    return nothing
-end
+# function _fill_neighbor_info!(vtx::Vertex)
+#     """
+#     Fill the neighbor info for a given vertex.
+#     """
+#     Bnc = vtx.bn
+#     if isempty(vtx.neighbors_idx)
+#         vtx_grh = get_vertices_graph!(Bnc;full=false)
+#         vtx.neighbors_idx = vtx_grh.neighbors[vtx.idx] .|> e -> e.to
+#     end
+#     return nothing
+# end
 
 
 #------------------------------------------------------------------------------
@@ -615,7 +478,7 @@ function get_vertices_volume!(Bnc::Bnc,vtxs=nothing; recalculate::Bool=false, kw
     if !isempty(vtxs_to_calc)
         rlts = calc_volume(Bnc,vtxs_to_calc;kwargs...)
         for (i,idx) in enumerate(vtxs_to_calc)
-            vtx = get_vertex(Bnc,idx; inv_info=false,neighbor_info=false)
+            vtx = get_vertex(Bnc,idx; inv_info=false)
             vtx.volume = rlts[i][1]
             vtx.eps_volume = rlts[i][2]
             Bnc._vertices_volume_is_calced[idx]=true
@@ -706,13 +569,13 @@ function get_vertex(Bnc::Bnc, perm; check::Bool=false, kwargs...)::Vertex
     end
     return get_vertex(vtx; kwargs...)
 end
-function get_vertex(vtx::Vertex; inv_info::Bool=true, neighbor_info::Bool=false,kwargs...)::Vertex
+function get_vertex(vtx::Vertex; inv_info::Bool=true,kwargs...)::Vertex
     if inv_info
         _fill_inv_info!(vtx)
     end
-    if neighbor_info
-        _fill_neighbor_info!(vtx)
-    end
+    # if neighbor_info
+    #     _fill_neighbor_info!(vtx)
+    # end
     return vtx
 end
 #-------------------------------------------------------------------------------------------------------------
@@ -728,55 +591,6 @@ have_perm(Bnc::Bnc, perm::Vector{<:Integer}) = (find_all_vertices!(Bnc); haskey(
 have_perm(Bnc::Bnc, idx::Integer) = (find_all_vertices!(Bnc); idx ≥ 1 && idx ≤ length(Bnc.vertices_perm))
 have_perm(Bnc::Bnc, vtx::Vertex) = have_perm(Bnc, get_perm(vtx))
 
-
-
-
-# """
-#     get_all_neighbors!(Bnc::Bnc, perm; return_idx::Bool=false)
-
-# Return all neighbors of the vertex represented by `perm`.
-
-# If the neighbors are not cached in `Bnc`, they will be computed
-# and stored in `vtx.neighbors_idx`.
-
-# # Keyword arguments
-# - `return_idx`: if `true`, return neighbor indices; otherwise, return `vertices_perm[idx]`.
-
-# # Returns
-# A vector of neighbor indices or vertex permutations.
-# """
-# function get_all_neighbors!(Bnc::Bnc, perm; return_idx::Bool=false)
-#     # Get the neighbors of the vertex represented by perm
-#     vtx = get_vertex(Bnc, perm ; inv_info=false)
-#     if isempty(vtx.neighbors_idx)
-#         vtx_grh = get_vertices_graph!(Bnc;full=false)
-#         vtx.neighbors_idx = vtx_grh.neighbors[vtx.idx] .|> e -> e.to
-#     end
-
-#     idx = vtx.neighbors_idx
-#     return return_idx ? idx : Bnc.vertices_perm[idx]
-# end
-# """
-#     get_finite_neighbors(Bnc::Bnc, perm; return_idx::Bool=false)
-
-# Return neighbors of the vertex `perm` that are **finite** (nullity == 0).
-# """
-# function get_finite_neighbors(Bnc::Bnc, perm; return_idx::Bool=false)
-#     nb_idx = get_all_neighbors!(Bnc, perm; return_idx=true)
-#     idx = filter(i->Bnc.vertices_nullity[i] == 0, nb_idx)
-#     return return_idx ? idx : Bnc.vertices_perm[idx]
-# end
-
-# """
-#     get_infinite_neighbors(Bnc::Bnc, perm; return_idx::Bool=false)
-
-# Return neighbors of the vertex `perm` that are **infinite** (nullity > 0).
-# """
-# function get_infinite_neighbors(Bnc::Bnc, perm; return_idx::Bool=false) # nullity_max::Union{Int,Nothing}=nothing
-#     nb_idx = get_all_neighbors!(Bnc, perm; return_idx=true)
-#     idx = filter(i->Bnc.vertices_nullity[i] > 0, nb_idx)
-#     return return_idx ? idx : Bnc.vertices_perm[idx]
-# end
 
 """
     get_neighbors(Bnc::Bnc, perm; singular=nothing, asymptotic::Union{Bool,Nothing}=nothing, return_idx::Bool=false)
@@ -806,7 +620,10 @@ get_neighbors(Bnc, perm; singular=1, asymptotic=false)
 """
 function get_neighbors(args...; singular::Union{Bool,Int,Nothing}=nothing, asymptotic::Union{Bool,Nothing}=nothing, return_idx::Bool=false)
     Bnc = get_binding_network(args...)
-    idx = get_vertex(args...; inv_info=false, neighbor_info=true).neighbors_idx
+    grh = get_vertices_graph!(Bnc;full=true)
+    rgm_idx = get_idx(args...)
+
+    idx = keys(grh.edge_pos[rgm_idx]) |> collect
     
     idx = filter(idx) do i
         nlt = Bnc.vertices_nullity[i]
@@ -821,6 +638,8 @@ function get_neighbors(args...; singular::Union{Bool,Int,Nothing}=nothing, asymp
         ok_asym = isnothing(asymptotic) || (asymptotic == flag_asym)
         return ok_singular && ok_asym 
     end
+
+    sort!(idx)
 
     return return_idx ? idx : Bnc.vertices_perm[idx]
 end
@@ -860,21 +679,21 @@ end::Bool
 """
 Gets P and P0, creating the vertex if necessary.
 """
-get_P_P0(args...) = get_vertex(args...; inv_info=false, neighbor_info=false) |> vtx -> (vtx.P, vtx.P0)
+get_P_P0(args...) = get_vertex(args...; inv_info=false) |> vtx -> (vtx.P, vtx.P0)
 get_P(args...) = get_P_P0(args...)[1]
 get_P0(args...) = get_P_P0(args...)[2]
 
 """
 Gets M and M0, creating the vertex if necessary.
 """
-get_M_M0(args...) = get_vertex(args...; inv_info=false, neighbor_info=false) |> vtx -> (vtx.M, vtx.M0)
+get_M_M0(args...) = get_vertex(args...; inv_info=false) |> vtx -> (vtx.M, vtx.M0)
 get_M(args...) = get_M_M0(args...)[1]
 get_M0(args...) = get_M_M0(args...)[2]
 
 """
 Gets C_x and C0_x, creating the vertex if necessary.
 """
-get_C_C0_x(args...) = get_vertex(args...; inv_info=false, neighbor_info=false) |> vtx -> (vtx.C_x, vtx.C0_x)
+get_C_C0_x(args...) = get_vertex(args...; inv_info=false) |> vtx -> (vtx.C_x, vtx.C0_x)
 get_C_x(args...) = get_C_C0_x(args...)[1]
 get_C0_x(args...) = get_C_C0_x(args...)[2]
 
@@ -882,7 +701,7 @@ get_C0_x(args...) = get_C_C0_x(args...)[2]
 """
 Gets C_qK and C0_qK, ensuring the inv_info  is calculated.
 """
-get_C_C0_nullity_qK(args...) = get_vertex(args...; inv_info=true, neighbor_info=false) |> vtx -> (vtx.C_qK, vtx.C0_qK, vtx.nullity)
+get_C_C0_nullity_qK(args...) = get_vertex(args...; inv_info=true) |> vtx -> (vtx.C_qK, vtx.C0_qK, vtx.nullity)
 get_C_C0_qK(args...) = get_C_C0_nullity_qK(args...)[1:2]
 get_C_qK(args...) = get_C_C0_nullity_qK(args...)[1]
 get_C0_qK(args...) = get_C_C0_nullity_qK(args...)[2]
@@ -892,8 +711,8 @@ get_C0_qK(args...) = get_C_C0_nullity_qK(args...)[2]
 Gets H and H0, ensuring the full vertex is calculated.
 """
 
-get_H_H0(args...) = is_singular(args...) ? @error("Vertex is singular, cannot get H0") : get_vertex(args...; inv_info=true, neighbor_info=false) |> vtx -> (vtx.H, vtx.H0)
-get_H(args...) = get_nullity(args...) > 1 ? @error("Vertex's nullity is bigger than 1, cannot get H") : get_vertex(args...; inv_info=true, neighbor_info=false).H
+get_H_H0(args...) = is_singular(args...) ? @error("Vertex is singular, cannot get H0") : get_vertex(args...; inv_info=true) |> vtx -> (vtx.H, vtx.H0)
+get_H(args...) = get_nullity(args...) > 1 ? @error("Vertex's nullity is bigger than 1, cannot get H") : get_vertex(args...; inv_info=true).H
 get_H0(args...) = get_H_H0(args...)[2]
 
 
@@ -943,14 +762,13 @@ end::Integer
 function get_volume(args...; recalculate::Bool=false, kwargs...)
     model = get_binding_network(args...)
     idx = get_idx(args...)
-    vtx = get_vertex(args...; inv_info=true, neighbor_info=false)
+    vtx = get_vertex(args...; inv_info=true)
     if recalculate || !model._vertices_volume_is_calced[idx]
         vol = calc_volume(model, [idx];kwargs...)[1]
-        vtx.volume = vol[1]
-        vtx.eps_volume = vol[2]
+        vtx.volume = vol
         model._vertices_volume_is_calced[idx] = true
     end
-    return (vtx.volume, vtx.eps_volume)
+    return vtx.volume
 end
 
 
@@ -958,198 +776,81 @@ end
 #          Naive code for figuring out  relationships between two vertices 
 #----------------------------------------------------------------------------------------------------------------------------------------
 
-
-# Direct method:
-function get_polyhedron_intersect(Bnc::Bnc,vtx1,vtx2;cache::Bool=true)::Polyhedron
-    idx1 = get_idx(Bnc, vtx1)
-    idx2 = get_idx(Bnc, vtx2)
-    
-    f(vtx1,vtx2) = begin
-        p1 = get_polyhedron(Bnc, vtx1)
-        p2 = get_polyhedron(Bnc, vtx2)
-        p = intersect(p1,p2)
-        return p
-    end
-
-    if !cache
-        return f(vtx1,vtx2)
-    end
-
-    key = Set([idx1, idx2])
-    vg = get_vertices_graph!(Bnc; full=false) # May not necessary
-    if haskey(vg.edge_dict, key)
-        idx = vg.edge_dict[key]
-        if vg.boundary_polys_is_computed[idx]
-            return vg.boundary_polys[idx]
-        else
-            vg.boundary_polys[idx] = f(vtx1,vtx2)
-            vg.boundary_polys_is_computed[idx] = true
-            return vg.boundary_polys[idx]
-        end
-    end
-    return f(vtx1,vtx2)
-end
-
-
-"""
-Directly judge if two vertices are neighbors by polyhedron intersection.
-"""
-function is_neighbor_direct(Bnc::Bnc,vtx1,vtx2)::Bool
-    if get_nullity(Bnc, vtx1) > 1 || get_nullity(Bnc, vtx2) > 1
-        @warn "Currently we doesn't care neighbor relationships less than your model's dim - 1  ,return false by default"
+function _is_vertex_graph_neighbor(Bnc, vtx1, vtx2)::Bool
+    edge = get_edge(Bnc,vtx1,vtx2) 
+    if edge === nothing || edge.change_dir_qK === nothing
         return false
-    end
-    p = get_polyhedron_intersect(Bnc,vtx1,vtx2)
-    # detecthlinearity!(p)
-    # if nhyperplanes(p) > null || isempty(p)
-    if dim(p)==Bnc.n-1 
-        return true
     else
-        return false
+        return true
     end
 end
-function get_change_dir_qK_direct(Bnc::Bnc, from, to;check=false)
-    p = get_polyhedron_intersect(Bnc,from,to)
-    detecthlinearity!(p)
-    if dim(p)< Bnc.n-1
-        @error("Vertices $get_perm(Bnc, from) and $get_perm(Bnc, to) do not intersect.")
-    end
-    hplanes = hyperplanes(p)
-    hp = first(hplanes)
 
-    a = droptol!(sparse(hp.a), 1e-10)
-    
-    if check
-        point = get_one_inner_point(p2)
-        val = dot(a, point)
-        b = hp.β
-        if val < b 
-            return -a
-        end
+function get_intersect(Bnc,vtx1,vtx2)::Polyhedron
+    p1 = get_polyhedron(Bnc, vtx1)
+    dim1 = dim(p1)
+    p2 = get_polyhedron(Bnc, vtx2)
+    dim2 = dim(p2)
+
+    p = intersect(p1,p2)
+    detecthlinearity!(p)
+    if dim(p)< maximum(dim1,dim2)-1
+        @error("Vertices $get_perm(Bnc, vtx1) and $get_perm(Bnc, vtx2) do not have dim-1 intersect.")
     end
-    return a
-    # judge the direction
+    return p
 end
 
+
 """
-a'x+b =0 is the interface between two neighboring vertices in qK space.
+Get the interface between two regimes,
+a'x+b=0, where a is the change direction in qK space, and b is the intersect point in qK space.
 """
-function get_interface_direct(Bnc::Bnc, from, to)
-    p = get_polyhedron_intersect(Bnc,from,to)
-    detecthlinearity!(p)
-    if dim(p)< Bnc.n-1
-        @error("Vertices $get_perm(Bnc, from) and $get_perm(Bnc, to) do not intersect.")
-    end
+function get_interface_direct(Bnc::Bnc, from, to)::Tuple{SparseVector{Float64,Int}, Float64}
+    p = get_intersect(Bnc, from, to)
     hplanes = hyperplanes(p)
     hp = first(hplanes)
     a = droptol!(sparse(hp.a), 1e-10)
-    b = hp.β
-    return a, -b
+    b = -hp.β
+    return a, b
 end
 
-
-
-# indirect method:
-"""
-Judge if two vertices are neighbors.
-"""
-function is_neighbor_x(Bnc::Bnc,vtx1,vtx2)::Bool
-    nbs = get_all_neighbors!(Bnc, vtx1; return_idx=true)
-    idx2 = get_idx(Bnc, vtx2)
-    if idx2 in nbs
-        return true
+function get_interface_qK(Bnc, from, to)::Tuple{SparseVector{Float64,Int}, Float64}
+    edge = get_edge(Bnc, from, to)
+    if edge === nothing
+        @info "no directly edge found, judge using Polyhedra.jl, could be problematic if you concerning changing direction"
+        return get_interface_direct(Bnc, from, to)
+    elseif edge.change_dir_qK === nothing
+        @error("Vertices $get_perm(Bnc, from) and $get_perm(Bnc, to) are neighbors in x space but not in qK space")
     else
-        return is_neighbor_direct(Bnc,vtx1,vtx2)
-    end
+        a = edge.change_dir_qK
+        b = edge.intersect_qK
+        return a, b
+    end   
 end
 
-function is_neighbor_qK(Bnc::Bnc,vtx1,vtx2)::Bool
-    @assert get_nullity(Bnc, vtx1) <= 1 "Currently we only support neighbor detection for vertices with nullity less than or equal to 1"
-    @assert get_nullity(Bnc, vtx2) <= 1 "Currently we only support neighbor detection for vertices with nullity less than or equal to 1"
-    from = get_idx(Bnc, vtx1)
-    to = get_idx(Bnc, vtx2)
-    vtx_grh = get_vertices_graph!(Bnc,full=true)
-    for ve in vtx_grh.neighbors[from]
-        if ve.to == to
-            return isnothing(ve.change_dir_qK) ? false : true
-        end
+get_interface(args...;kwargs...) = get_interface_qK(args...;kwargs...)
+get_change_dir_qK(args...;kwargs...) = get_interface(args...;kwargs...)[1] # relys on the inner behavior of get_interface, 
+
+function is_neighbor_qK(Bnc, vtx1, vtx2)::Bool
+    try get_interface_qK(Bnc, vtx1, vtx2)
+        return true
+    catch
+        return false
     end
-    # no directly edge found, judge numerically,
-    return is_neighbor_direct(Bnc,vtx1,vtx2)
 end
 is_neighbor(args...;kwargs...) = is_neighbor_qK(args...;kwargs...)
 
 
-function get_change_dir_x(Bnc::Bnc, from, to)
-    from = get_idx(Bnc, from)
-    to = get_idx(Bnc, to)
-    vtx_grh = get_vertices_graph!(Bnc;full=false)
-    for ve in vtx_grh.neighbors[from]
-        if ve.to == to
-            return ve.change_dir_x
-        end
-    end
-    @error("Vertices $get_perm(Bnc, from) and $get_perm(Bnc, to) are not neighbors in x space.")
-end
-
-function get_change_dir_qK(Bnc::Bnc, from, to;check=false)
-    from = get_idx(Bnc, from)
-    to = get_idx(Bnc, to)
-    vtx_grh = get_vertices_graph!(Bnc;full=true)
-    for ve in vtx_grh.neighbors[from]
-        if ve.to == to
-            if isnothing(ve.change_dir_qK)
-                @error("Vertices $get_perm(Bnc, from) and $get_perm(Bnc, to) are not neighbors in qK space.")
-            end
-            return ve.change_dir_qK
-        end
-    end
-    # no directly edge found, judge numerically, or maybe further optimized to judge based on graph.
-    if check && !is_neighbor_direct(Bnc,from,to)
-        @error("Vertices $get_perm(Bnc, from) and $get_perm(Bnc, to) are not neighbors in qK space.")
-    else
-        @assert get_nullity(Bnc, from) ==0 && get_nullity(Bnc, to) ==0 "They are neighbor but change direaction is currently not supported"
-        (i1, i2, j1, j2) = _get_i_j_perms(get_perm(Bnc, from), get_perm(Bnc, to))
-        # n1 = get_nullity(Bnc, from)
-        # n2 = get_nullity(Bnc, to)
-        # a = get_H(Bnc, from)[j2] .- SparseVector(Bnc.n, [i1], [1.0])
-        # b = SparseVector(Bnc.n, [i2], [1.0]) .- get_H(Bnc, to)[j1]
-        # @show a,b
-        dir = (get_H(Bnc, from)[j2, :] - get_H(Bnc, to)[j1, :]) ./ 2
-        return droptol!(dir,1e-10)
+function get_interface_x(Bnc::Bnc, from, to)
+    edge = get_edge(Bnc, from, to)
+    if edge === nothing 
+        @error("Vertices $get_perm(Bnc, from) and $get_perm(Bnc, to) are not neighbors in x space.")
+    else 
+        return edge.change_dir_x, edge.intersect_x
     end
 end
 
+get_change_dir_x(args...;kwargs...) = get_interface_x(args...;kwargs...)[1]
 
-
-"""
-    get_interface(Bnc::Bnc, from, to)
-return the interface (a,b) between two neighboring vertices in qK space, i.e., a'x + b = 0.
-(For now the logic is to find the right row in C and C0, and calculate from then is required.)
-"""
-function get_interface(Bnc::Bnc, from, to)
-    if !is_neighbor(Bnc,from,to)
-        @error("Vertices $get_perm(Bnc, from) and $get_perm(Bnc, to) are not neighbors.")
-    end
-    from = get_perm(Bnc, from)
-    to = get_perm(Bnc, to)
-    n1 = get_nullity(Bnc, from)
-    n2 = get_nullity(Bnc, to)
-
-    # return interface based on nullity
-    if n1 ==1 
-        C,C0 = get_C_C0_qK(Bnc, from)
-        return  C[1,:], C0[1]
-    elseif n2 ==1
-        C,C0 = get_C_C0_qK(Bnc, to)
-        return  C[1,:], C0[1]
-    else
-        (i1,i2,j1,j2) = _get_i_j_perms(from,to)
-        row_idx = _locate_C_row(Bnc, i1, j1, j2) # or i2,j2,j1 while under such case, the next row will change from "from" to "to"
-        C,C0 = get_C_C0_qK(Bnc, from)
-        return  C[row_idx,:], C0[row_idx]
-    end
-end
 
 #-------------------------------------------------------------------------------------
 #         functions of getting vertices with certain properties
@@ -1187,8 +888,6 @@ function get_vertices(Bnc::Bnc; return_idx::Bool=false, kwargs...)
 end
 
 
-
-#
 # filter the vtxs accoring to the criteria
 #
 function _get_vertices_mask(model::Bnc,vtxs::AbstractVector{<:Integer};

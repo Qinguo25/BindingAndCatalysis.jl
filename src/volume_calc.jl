@@ -12,13 +12,15 @@ function calc_volume(
     C0s::AbstractVector{<:AbstractVector{<:Real}};
     confidence_level::Float64 = 0.95,
     contain_overlap::Bool = false,
+    regime_judge_tol::Float64 = 0.0,
     batch_size::Int = 100_000,
     log_lower::Float64 = -6.0,
     log_upper::Float64 = 6.0,
-    tol::Float64 = 0.0,
+    abs_tol::Float64 = 1.0e-8,
     rel_tol::Float64 = 0.005,
-    time_limit::Float64 = 40.0,
-)::Vector{Tuple{Float64, Float64}}
+    time_limit::Float64 = 120.0,
+)::Vector{Volume}
+
 
     @assert length(Cs) == length(C0s) "Cs and C0s must have same length"
     n_regimes = length(Cs)
@@ -47,8 +49,8 @@ function calc_volume(
     # Global stats
     total_counts = zeros(Int, n_regimes)
     total_N = 0
-    stats = fill((0.0, 0.0), n_regimes)
-    rel_errors = fill(Inf, n_regimes)
+    
+    stats = [Volume(0.0, 0.0) for _ in 1:n_regimes]
 
     active_ids = collect(1:n_regimes)
 
@@ -85,6 +87,8 @@ function calc_volume(
 
     p = Progress(n_regimes, desc="Calculating volumes...", dt=1.0)
 
+    regime_judge_tol = abs(regime_judge_tol) # ensure non-negative
+
     while true
         (time() - start_time > time_limit) && (@info "Reached time limit ($(round(time() - start_time, digits=2)) s). Stopping.";break)
         isempty(active_ids) && (@info "All regimes converged after $total_N samples.";break)
@@ -114,7 +118,7 @@ function calc_volume(
                 # check y + b >= -tol  (fuse add+check)
                 ok = true
                 @inbounds for k in 1:length(y)
-                    if y[k] + b[k] < -tol
+                    if y[k] + b[k] < -regime_judge_tol
                         ok = false
                         break
                     end
@@ -140,14 +144,13 @@ function calc_volume(
         sizehint!(new_active, length(active_ids))
         for i in active_ids
             center, margin = wilson_center_margin(total_counts[i], total_N)
-            stats[i] = (center, margin)
+            stats[i] = Volume(center, margin^2)
             re = (center == 0.0) ? Inf : (margin / center)
-            rel_errors[i] = re
-            if re > rel_tol
+            if re > rel_tol && margin > abs_tol
                 push!(new_active, i)
             end
         end
-        next!(p, length(active_ids) - length(new_active))
+        next!(p, step = length(active_ids) - length(new_active))
         active_ids = new_active
     end
     finish!(p)
@@ -169,7 +172,7 @@ calc_volume(C::AbstractMatrix{<:Real}, C0::AbstractVector{<:Real}; kwargs...)::T
 function calc_volume(model::Bnc, perms=nothing;
     asymptotic::Union{Bool,Nothing}=true, 
     kwargs...
-)::Vector{Tuple{Float64, Float64}} # singular/ asymptotic not be put here, as dimensions could reduce and change.
+) # singular/ asymptotic not be put here, as dimensions could reduce and change.
 
 
     # filter out those perms expect to give zero volume
@@ -189,7 +192,7 @@ function calc_volume(model::Bnc, perms=nothing;
 
 
     # initialize the data
-    vals = collect(zip(zeros(Float64, n_all), zeros(Float64, n_all)))
+    vals = [Volume(0.0, 0.0) for _ in 1:n_all]
     
     if isempty(perms_to_calc) # No perms to calc
         return vals
@@ -262,12 +265,12 @@ end
 function calc_volume(polys::AbstractVector{<:Polyhedron};
     asymptotic::Bool=true,
     kwargs...
-)::Vector{Tuple{Float64,Float64}}
+)
     n_all = length(polys)
     idxs = filter_polys(polys; singular=false, asymptotic= asymptotic ? true : nothing, return_idx=true)
     reps = polys[idxs] .|> poly -> MixedMatHRep(hrep(poly)) |> p->(p.A, p.b)
     
-    vals = collect(zip(zeros(Float64, n_all), zeros(Float64, n_all)))
+    vals = [Volume(0.0, 0.0) for _ in 1:n_all]
 
     if isempty(reps)
         return vals

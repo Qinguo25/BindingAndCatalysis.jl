@@ -318,8 +318,8 @@ function draw_vertices_neighbor_graph(model::Bnc, grh=nothing;
 end
 
 function draw_vertices_neighbor_graph(grh::SISOPaths,args...;kwargs...)
-    edge_labels = "+"* repr([grh.bn.q_sym; grh.bn.K_sym][grh.change_qK_idx])
-    f,ax,p = draw_vertices_neighbor_graph(grh.bn, grh.qK_grh, args...; edge_labels = edge_labels, kwargs...)
+    edge_labels = "+"* repr([get_binding_network(grh).q_sym; get_binding_network(grh).K_sym][grh.change_qK_idx])
+    f,ax,p = draw_vertices_neighbor_graph(get_binding_network(grh), grh.qK_grh, args...; edge_labels = edge_labels, kwargs...)
     return f,ax,p
 end
 
