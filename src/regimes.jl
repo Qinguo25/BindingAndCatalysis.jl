@@ -451,18 +451,24 @@ end
 """
 Get the nullity of all vertices in Bnc.
 """
-function get_vertices_nullity(Bnc::Bnc)
+function get_nullities(Bnc::Bnc, rgms::Union{AbstractVector,Nothing}=nothing)
     """
     Calculate the nullity of all vertices in Bnc.
     """
     find_all_vertices!(Bnc)
+    if isnothing(rgms)
+        return Bnc.vertices_nullity
+    else
+        idxs = get_idx.(Ref(Bnc), rgms)
+        return Bnc.vertices_nullity[idxs]
+    end
     return Bnc.vertices_nullity
 end
 
 """
 Get the volume of all vertices in Bnc.
 """
-function get_vertices_volume!(Bnc::Bnc,vtxs=nothing; recalculate::Bool=false, kwargs...)
+function get_volumes(Bnc::Bnc,vtxs::Union{AbstractVector,Nothing}=nothing; recalculate::Bool=false, kwargs...)
     """
     Calculate the volume of all vertices in Bnc. (currently calc all the voluems, but unnecessary)
     """
@@ -479,13 +485,11 @@ function get_vertices_volume!(Bnc::Bnc,vtxs=nothing; recalculate::Bool=false, kw
         rlts = calc_volume(Bnc,vtxs_to_calc;kwargs...)
         for (i,idx) in enumerate(vtxs_to_calc)
             vtx = get_vertex(Bnc,idx; inv_info=false)
-            vtx.volume = rlts[i][1]
-            vtx.eps_volume = rlts[i][2]
+            vtx.volume = rlts[i]
             Bnc._vertices_volume_is_calced[idx]=true
         end
     end
-
-    return [(vtx.volume, vtx.eps_volume) for vtx in Bnc.vertices_data[all_vtxs]]
+    return [vtx.volume for vtx in Bnc.vertices_data[all_vtxs]]
 end
 
 #---------------------------------------------------------------------------------------------
@@ -529,7 +533,7 @@ function get_idx(Bnc::Bnc, idx::T;check::Bool=false) where T<:Integer
     end
    return idx
 end
-get_idx(Bnc,perm::Vector{<:Integer};kwargs...)=(find_all_vertices!(Bnc);Bnc.vertices_perm_dict[perm])
+get_idx(Bnc::Bnc,perm::Vector{<:Integer};kwargs...)=(find_all_vertices!(Bnc);Bnc.vertices_perm_dict[perm])
 get_idx(vtx::Vertex) = vtx.idx
 get_idx(Bnc::Bnc, vtx::Vertex;kwargs...)= get_idx(vtx)
 
@@ -537,7 +541,7 @@ get_idx(Bnc::Bnc, vtx::Vertex;kwargs...)= get_idx(vtx)
 """
 Get perm of a vertex
 """
-function get_perm(Bnc,perm::Vector{<:Integer};check::Bool=false)
+function get_perm(Bnc::Bnc,perm::Vector{<:Integer};check::Bool=false)
     if check
         find_all_vertices!(Bnc)
         @assert haskey(Bnc.vertices_perm_dict, perm) "The given perm is not in Bnc"
@@ -759,16 +763,10 @@ end::Integer
 
 
 
-function get_volume(args...; recalculate::Bool=false, kwargs...)
+function get_volume(args...;  kwargs...)
     model = get_binding_network(args...)
     idx = get_idx(args...)
-    vtx = get_vertex(args...; inv_info=true)
-    if recalculate || !model._vertices_volume_is_calced[idx]
-        vol = calc_volume(model, [idx];kwargs...)[1]
-        vtx.volume = vol
-        model._vertices_volume_is_calced[idx] = true
-    end
-    return vtx.volume
+    return get_volumes(model, [idx]; kwargs...)[1]
 end
 
 

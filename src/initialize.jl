@@ -111,9 +111,10 @@ struct Volume
 end
 fetch_mean_re(V::Volume) = (V.mean, sqrt(V.var)/V.mean)
 Base.display(V::Volume) = Printf.@sprintf("Volume(mean=%.3e, var=%.3e, rel_error=%.2f%%)", V.mean, V.var, (sqrt(V.var)/V.mean)*100)
-Base.:+(v1::Volume, v2::Volume) = Volume(v1.Value + v2.Value, v1.Var + v2.Var)
-
-
+Base.:+(v1::Volume, v2::Volume) = Volume(v1.mean + v2.mean, v1.var + v2.var)
+Base.isless(a::Volume, b::Volume) = a.mean < b.mean
+Base.:(==)(a::Volume, b::Volume) = a.mean == b.mean 
+Base.zero(::Volume) = Volume(0.0, 0.0)
 
 mutable struct Vertex{F,T}
     #--- Parent Bnc model reference ---
@@ -178,7 +179,7 @@ mutable struct VertexGraph{T}
     function VertexGraph(bn::AbstractBnc, neighbors::Vector{Vector{VertexEdge{T}}}) where {T}
         edge_pos = [Dict{Int, Int}() for _ in 1:length(neighbors)]
         g = SimpleGraph(length(neighbors))
-        Threads.@threads for i in 1:length(neighbors)
+        for i in 1:length(neighbors)
             edges = neighbors[i]
             for (k, e) in enumerate(edges)
                 add_edge!(g, i, e.to)
@@ -366,7 +367,7 @@ struct SISOPaths{T}
         path_polys_is_calc = falses(length(rgm_paths))  
         new{T}(model, qK_grh, change_qK_idx, 
             sources, sinks, 
-            rgm_paths, path_polys, path_volume, path_volume_err,
+            rgm_paths, path_polys, path_volume,
             path_volume_is_calc, path_polys_is_calc)
     end
 end

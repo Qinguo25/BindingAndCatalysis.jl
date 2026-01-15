@@ -249,7 +249,7 @@ end
 
 function get_node_size(model::Bnc; default_node_size=50, asymptotic=true, kwargs...)
     # seems properly handel non-asyntotic nodes
-    vals = (asymptotic ? get_vertices_volume!(model) : calc_volume(model;asymptotic=asymptotic, kwargs...)) .|> x->x[1]
+    vals = (asymptotic ? get_volumes(model) : calc_volume(model;asymptotic=asymptotic, kwargs...)) .|> x->x[1]
     
     zero_volume_idx = if asymptotic # both non-asymptotic and singular
         non_asym_idx = get_vertices(model, singular=nothing, asymptotic=false, return_idx=true) # non-asymptotic

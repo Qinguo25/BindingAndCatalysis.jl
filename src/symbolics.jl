@@ -127,6 +127,16 @@ function show_condition_path(Bnc::Bnc, path::AbstractVector{<:Integer}, change_q
     syms = copy(qK_sym(Bnc)) |> x->deleteat!(x,locate_sym_qK(Bnc, change_qK)) 
     show_condition_poly(poly; syms=syms, kwargs...)
 end
+function show_condition_path(grh::SISOPaths, pth_idx; kwargs...)
+    bn = get_binding_network(grh)
+    poly = get_polyhedron(grh, pth_idx)
+    path = get_path(grh, pth_idx; return_idx=true)
+    change_qK = grh.change_qK_idx     
+    show_condition_path(bn, path, change_qK; kwargs...)
+end
+
+
+
 
 
 """
@@ -155,26 +165,6 @@ show_expression_qK(args...;kwargs...)= begin
     x = x_sym(bn)
     show_expression_mapping(get_M_M0(args...), y,x; kwargs...)
 end
-
-
-
-"""
- for a^T x +b = 0 =>  xi = -(1/ai)(b + ∑j≠i aj xj)
-"""
-function solve_sym_expr(a::AbstractVector{<:Real}, b::Real, x, idx; log_space::Bool=true)
-    a = copy(collect(a))
-    x = copy(x)
-    ai = popat!(a, idx)
-    target_x = popat!(x, idx)
-    @assert abs(ai) > 1e-10 "Cannot solve for the variable at index $idx since its coefficient is zero." 
-    a ./= -ai
-    b /= -ai
-
-    target = log_space ? log10(target_x) : target_x
-    expr = log_space ? a' * log10.(x) .+ b : handle_log_weighted_sum(a', x, [b])[1]
-    return target ~ expr
-end
-
 
 
 show_dominant_condition(args...;log_space=false, kwargs...)= begin
@@ -277,6 +267,8 @@ function format_arrow(path::AbstractVector; prefix::AbstractString="", digits::I
     return join(parts, " → ")
 end
 
+
+
 """
 A normalized row for printing:
 - id:     group/path id (any displayable object)
@@ -305,54 +297,7 @@ function _normalize_rows(paths::AbstractVector{<:AbstractVector}; ids=nothing, v
     return rows
 end
 
-# 4.2 兼容你原来的 tuples 输入：自动拆列
-function _normalize_rows(tuples::AbstractVector{<:Tuple})
-    isempty(tuples) && return PathRow[]
-    k = length(tuples[1])
 
-    if k == 1
-        paths = getindex.(tuples, 1)
-        return _normalize_rows(paths)
-    elseif k == 2
-        paths = getindex.(tuples, 1)
-        vols  = getindex.(tuples, 2)
-        return _normalize_rows(paths; volumes=vols)
-    else
-        ids   = getindex.(tuples, 1)
-        paths = getindex.(tuples, 2)
-        vols  = getindex.(tuples, 3)
-        return _normalize_rows(paths; ids=ids, volumes=vols)
-    end
-end
-
-"""
-Render an arrow-separated representation of a vector.
-
-- `a`: vector to render (e.g. `[1, 0, -1]`)
-- `appendix`: prefix inserted before each element (e.g. `"x"` -> `"x1 → x0 → x-1"`)
-
-Example:
-    format_arrow([1,0,-1], "x") == "x1 → x0 → x-1"
-"""
-
-
-function format_arrow(a::Vector, appendix="")::String
-    v = Vector{Any}(undef, length(a))
-    for i in eachindex(a)
-        ai = round(a[i];digits=3)
-        try 
-            v[i] = Int(ai)
-        catch
-            v[i] = a[i]
-        end
-    end
-    # @show v
-    s = appendix*repr(v[1])
-    for x in v[2:end]
-        s *= " → " *appendix* repr(x)
-    end
-    return s
-end
 
 """
 Print rows of paths in aligned columns.
@@ -378,37 +323,66 @@ function print_paths(rows::AbstractVector{<:PathRow};
 
     for (r, id_s, path_s) in zip(rows, id_strs, path_strs)
         if r.volume === nothing
-            print(io, "Path %-*s  %-*s\n", id_width, id_s, path_width, path_s)
-        elseif r.volume isa Tuple && length(r.volume) == 2
-            v, e = r.volume
-            print(io, "Path %-*s  %-*s  Volume: %.4f ± %.4f\n", id_width, id_s, path_width, path_s, v, e)
-        else
-            print(io, "Path %-*s  %-*s  Volume: %.4f\n", id_width, id_s, path_width, path_s, r.volume)
+            Printf.@printf(io, "Path %-*s  %-*s\n", id_width, id_s, path_width, path_s)
+        else#if  r.volume isa Volume
+            @assert typeof(r.volume) <: Volume 
+            v = r.volume.mean
+            e = sqrt(r.volume.var)
+            Printf.@printf(io, "Path %-*s  %-*s  Volume: %.4f ± %.4f\n", id_width, id_s, path_width, path_s, v, e)
         end
     end
     return nothing
 end
 # 6.1 直接给 paths
-print_paths(paths::AbstractVector{<:AbstractVector}; kwargs...) =
-    print_paths(_normalize_rows(paths); kwargs...)
-
-
-print_path(path::AbstractVector; kwargs...) =
-    print_paths(_normalize_rows([path]); kwargs...)
 
 
 
-function show_reaction_order_path(model::Bnc, rgm_path)::Vector{Vector{Int}}
-    reaction_order = 
-    ro_paths = Vector{Vector{Int}}(undef, length(rgm_path))
-    for (i,rgm) in enumerate(rgm_path)
-        ro_paths[i] = get_reaction_order(model, rgm)
-    end
-    return ro_paths
+"""
+print_paths(paths; prefix, ids, volumes, digits, io)
+"""
+
+print_paths(paths::AbstractVector{<:AbstractVector}; volumes, ids, kwargs...) =
+    print_paths(_normalize_rows(paths; volumes=volumes, ids=ids); kwargs...)
+
+
+print_path(path::AbstractVector; id = nothing, volume = nothing, kwargs...) =
+    print_paths(
+        _normalize_rows(
+            [path]; 
+            ids = id === nothing ? nothing : [id], 
+            volumes = volume === nothing ? nothing : [volume]
+        ); kwargs...)
+
+
+
+
+"""
+show Reaction Order for a path.
+"""
+
+
+
+"""
+ for a^T x +b = 0 =>  xi = -(1/ai)(b + ∑j≠i aj xj)
+"""
+function solve_sym_expr(a::AbstractVector{<:Real}, b::Real, x, idx; log_space::Bool=true)
+    a = copy(collect(a))
+    x = copy(x)
+    ai = popat!(a, idx)
+    target_x = popat!(x, idx)
+    @assert abs(ai) > 1e-10 "Cannot solve for the variable at index $idx since its coefficient is zero." 
+    a ./= -ai
+    b /= -ai
+
+    target = log_space ? log10(target_x) : target_x
+    expr = log_space ? a' * log10.(x) .+ b : handle_log_weighted_sum(a', x, [b])[1]
+    return target ~ expr
 end
 
-
-function show_interface(Bnc::Bnc, from,to, change_idx::Union{Nothing,Integer}=nothing;kwargs...)
+"""
+Normally display the expression of the interface, when denoting the idx, whill express the interface in terms of that qK idx.
+"""
+function show_interface(Bnc::Bnc, from,to, change_idx::Union{Nothing,Integer}=nothing; kwargs...)
     C, C0 = get_interface(Bnc,from,to) # C' log qK + C0 =0
     if isnothing(change_idx)
         return show_condition_poly(C, C0, [Bnc.q_sym; Bnc.K_sym], 1;kwargs...)
@@ -416,6 +390,80 @@ function show_interface(Bnc::Bnc, from,to, change_idx::Union{Nothing,Integer}=no
         return solve_sym_expr(C,C0, [Bnc.q_sym; Bnc.K_sym], change_idx;kwargs...)
     end
 end
+
+
+
+
+
+function show_expression_path(grh::SISOPaths, pth_idx::Integer; observe_x=nothing, kwargs...)
+    bn = get_binding_network(grh)
+
+    observe_x_idx = isnothing(observe_x) ? (1:bn.n) : locate_sym_x.(Ref(bn), observe_x)
+    change_qK_idx = grh.change_qK_idx
+
+    xsym = x_sym(bn)[observe_x_idx]
+    qKsym = qK_sym(bn)
+    change_sym = qKsym[change_qK_idx]
+
+    
+    H_H0, rgm_interface = get_expression_path(grh, pth_idx; observe_x = observe_x_idx)
+
+    expr_sym = let 
+        exprs = Vector{Any}(undef, length(H_H0))
+        for (i, (H_row, H0_val)) in enumerate(H_H0)
+            if isnothing(H0_val)# singular regime, expression is just H_row * log(qK)
+                exprs[i] = map(H_row[:,change_qK_idx]) do i 
+                        if abs(i) < 1e-6
+                            nothing
+                        else
+                            if i > 0
+                                :↑
+                            else
+                                :↓
+                            end
+                        end
+                    end
+            else
+                # @show H_row, H0_val,qKsym, xsym
+                exprs[i] = show_expression_mapping(H_row, H0_val, xsym, qKsym  ; kwargs...)
+            end
+        end
+        exprs
+    end
+                
+    interface = rgm_interface .|> x -> solve_sym_expr(x..., qKsym, change_qK_idx; kwargs...)
+    
+    for i in eachindex(expr_sym)
+        if i == 1
+            display(change_sym < interface[1].rhs)
+        elseif i == length(expr_sym)
+            display(change_sym > interface[end].rhs)
+        else
+            display((change_sym > interface[i-1].rhs) & (change_sym < interface[i].rhs))
+        end
+        display(expr_sym[i])
+    end
+
+    return nothing
+end
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 """
 Given a regime path, change_qK_idx, and observe_x_idx, return the symbolic expressions for the path in the form

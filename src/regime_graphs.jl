@@ -17,12 +17,12 @@ function  _calc_vertices_graph(Bnc::Bnc{T}) where {T} # optimized by GPT-5, not 
     thread_edges = [Vector{Tuple{Int, VertexEdge{T}}}() for _ in 1:Threads.maxthreadid()]
 
     # 按行分桶：key 为去掉该行后的签名（Tuple），值为该签名下的 (顶点索引, 该行取值)
-    for i in 1:d
+    @showprogress for i in 1:d
         buckets = Dict{Tuple{Vararg{T}}, Vector{Tuple{Int,T}}}()
 
         # 构建桶
-        @inbounds for i in 1:n_vtxs
-            v = perms[i]
+        @inbounds for q in 1:n_vtxs
+            v = perms[q]
             sig = if i == 1
                     Tuple(v[2:end])
                 elseif i == d
@@ -32,7 +32,7 @@ function  _calc_vertices_graph(Bnc::Bnc{T}) where {T} # optimized by GPT-5, not 
                 end
             push!(get!(buckets, sig) do
                 Vector{Tuple{Int,T}}()
-            end, (i, v[i]))
+            end, (q, v[i]))
         end
 
         groups = collect(values(buckets))
@@ -93,7 +93,7 @@ function _fulfill_vertices_graph!(vtx_graph::VertexGraph)
         n1 = get_nullity(Bnc, p1)
         n2 = get_nullity(Bnc, p2)
         if n1 > 1 || n2 > 1
-            return nothing
+            return (nothing,nothing)
         end
 
         if n1 == 0
@@ -101,7 +101,7 @@ function _fulfill_vertices_graph!(vtx_graph::VertexGraph)
             dir = H[j2, :] - H[j1, :]
             ins_qK = H0[j2] - H0[j1] + ins_x
         elseif n2 == 0
-            H,H0 = get_H_H0(Bnc, p1)
+            H,H0 = get_H_H0(Bnc, p2)
             dir = H[j1, :] - H[j2, :] 
             ins_qK = H0[j1] - H0[j2] - ins_x
         else
@@ -111,7 +111,7 @@ function _fulfill_vertices_graph!(vtx_graph::VertexGraph)
             ins_qK = -dot(dir, M0)
         end
         droptol!(dir, 1e-10)
-        return nnz(dir)==0 ? nothing : (dir, ins_qK)
+        return nnz(dir)==0 ? (nothing,nothing) : (dir, ins_qK)
     end
 
     # pre compute H for all vertices with nullity 0 or 1
@@ -121,7 +121,7 @@ function _fulfill_vertices_graph!(vtx_graph::VertexGraph)
         end
     end
 
-    Threads.@threads for p1 in eachindex(vtx_graph.neighbors)
+    @showprogress Threads.@threads for p1 in eachindex(vtx_graph.neighbors)
         edges = vtx_graph.neighbors[p1]
         if Bnc.vertices_nullity[p1] > 1 # jump off those regimes with nullity >1
             continue
@@ -287,6 +287,8 @@ function _enumerate_paths(
     return out
 end
 
+
+
 function _calc_polyhedra_for_path(
     model::Bnc,
     paths::AbstractVector{<:AbstractVector{<:Integer}},
@@ -360,6 +362,8 @@ function _calc_polyhedra_for_path(
         path_to_edge_idxs.(paths)
     end 
 
+    
+
     out = Vector{Polyhedron}(undef, length(edge_paths))
     @info "Start building polyhedra for paths (total: $(length(edge_paths)))"
     @showprogress Threads.@threads for i in eachindex(edge_paths)
@@ -367,7 +371,7 @@ function _calc_polyhedra_for_path(
     end
     return out
 end
-
+Polyhedra.intersect(p::Polyhedron)= p # a fix for above function for if only one edge, no need to intersect
 
 
 
@@ -403,17 +407,15 @@ function get_vertices_graph!(Bnc::Bnc; full::Bool=false)::VertexGraph
     if full
         vtx_graph = get_vertices_graph!(Bnc; full=false)
         if !vtx_graph.change_dir_qK_computed
-            println("-------Start calculating vertices neighbor graph with qK change dir, It may takes a while.------------")
+            @info "Calculating vertices neighbor graph with qK change dir"
             _fulfill_vertices_graph!(vtx_graph)
             vtx_graph.change_dir_qK_computed = true
-            println("Done.\n")
         end
     else
         if isnothing(Bnc.vertices_graph)
             find_all_vertices!(Bnc)# Ensure vertices are calculated
-            println("----------------Start calculating vertices neighbor graph, It may takes a while.----------------")
+            @info "Start calculating vertices neighbor graph, It may takes a while."
             Bnc.vertices_graph =  _calc_vertices_graph(Bnc)
-            println("Done.\n")
         end
     end
     return Bnc.vertices_graph
@@ -527,11 +529,13 @@ function SISOPaths(model::Bnc{T}, change_qK; rgm_paths=nothing) where {T}
 end
 
 function get_path(grh::SISOPaths, pth_idx::Integer; return_idx::Bool=false)
+    rgm_idxs = grh.rgm_paths[pth_idx]
     if return_idx
-        return grh.rgm_paths[pth_idx]
+        return rgm_idxs
+    else
+        bn = get_binding_network(grh)
+        return get_perm.(Ref(bn), rgm_idxs)
     end
-    bn = get_binding_network(grh)
-    perms = get_perm(bn, pth_idx)
     return perms
 end
 
@@ -562,7 +566,7 @@ get_polyhedron(grh::SISOPaths, pth_idx::Integer)= get_polyhedra(grh, [pth_idx])[
 
 
 
-function get_volume(grh::SISOPaths, pth_idx::Union{AbstractVector{<:Integer},Nothing,Integer}=nothing; 
+function get_volumes(grh::SISOPaths, pth_idx::Union{AbstractVector{<:Integer},Nothing}=nothing; 
     asymptotic=true,recalculate=false, kwargs...)
 
     pth_idx = let 
@@ -585,7 +589,8 @@ function get_volume(grh::SISOPaths, pth_idx::Union{AbstractVector{<:Integer},Not
     end
     return grh.path_volume
 end
-get_volume(grh::SISOPaths, pth_idx::Integer; kwargs...) = get_volume(grh, [pth_idx]; kwargs...)[1]
+
+get_volume(grh::SISOPaths, pth_idx::Integer; kwargs...) = get_volumes(grh, [pth_idx]; kwargs...)[1]
 
 
 
@@ -595,29 +600,63 @@ get_volume(grh::SISOPaths, pth_idx::Integer; kwargs...) = get_volume(grh, [pth_i
 
 function show_regime_path(grh::SISOPaths, pth_idx::Integer)
     pth = get_path(grh, pth_idx; return_idx=true)
-    print_path(pth; prefix="#")
+    vol_is_calc = grh.path_volume_is_calc[pth_idx]
+    volume = vol_is_calc ? grh.path_volume[pth_idx] : nothing
+    print_path(pth; prefix="#",id = pth_idx,volume=volume)
     return nothing
 end
 
-function show_expression_path(grh::SISOPaths, pth_idx::Integer; observe_x=nothing)
+
+function get_expression_path(grh::SISOPaths, pth_idx::Integer; observe_x=nothing)
+    
     bn = get_binding_network(grh)
-    observe_x_idx = isnothing(observe_x) ? bn.n : locate_sym_x.(Ref(bn), observe_x)
     rgm_pth = get_path(grh, pth_idx; return_idx=true)
-    pth = map(rgm_pth) do r
-        is_singular(bn, r) ? fill(NaN, length(observe_x_idx)) : get_expression(bn, r)[observe_x_idx]
+    rgm_nlt = get_nullities(bn, rgm_pth)
+    
+
+    observe_x_idx = isnothing(observe_x) ? (1:bn.n) : locate_sym_x.(Ref(bn), observe_x)
+    
+    rgm_interface = get_interface.(Ref(bn),rgm_pth[1:end-1], rgm_pth[2:end])
+    
+    H_H0 = Vector{Any}(undef, length(rgm_pth))
+    for (rgm, rgm_nlt) in zip(rgm_pth, rgm_nlt)
+        if rgm_nlt == 0
+            H,H0 = get_H_H0(bn, rgm)
+            @views H_H0[rgm] = (H[observe_x_idx, :], H0[observe_x_idx]) 
+        elseif rgm_nlt == 1
+            H = get_H(bn,rgm)
+            @views H_H0[rgm] = (H[observe_x_idx, :], nothing)
+        else
+            error("Nullity > 1 is not supported for expression path.") # should ne change if under constrain.
+        end
     end
-    pth = get_path(grh, pth_idx; return_idx=false)
-    print_expression_path(get_binding_network(grh), pth; prefix="#")
-    return nothing
+
+    return H_H0, rgm_interface
 end
+
+
+
+
+
+
+# function show_expression_path(grh::SISOPaths, pth_idx::Integer; observe_x=nothing)
+#     bn = get_binding_network(grh)
+#     observe_x_idx = isnothing(observe_x) ? bn.n : locate_sym_x.(Ref(bn), observe_x)
+#     rgm_pth = get_path(grh, pth_idx; return_idx=true)
+#     pth = map(rgm_pth) do r
+#         is_singular(bn, r) ? fill(NaN, length(observe_x_idx)) : get_expression(bn, r)[observe_x_idx]
+#     end
+#     pth = get_path(grh, pth_idx; return_idx=false)
+#     print_expression_path(get_binding_network(grh), pth; prefix="#")
+#     return nothing
+# end
 
 #-------------------------------------------------------------------------------------------
 # 
-
 """
 Given a path in regime graph, find the reaction order profile along the path.
 """
-function _calc_reaction_order_for_single_path(model, path::AbstractVector{<:Integer}, change_qK_idx, observe_x_idx)::Vector{<:Real}
+function _calc_RO_for_single_path(model, path::AbstractVector{<:Integer}, change_qK_idx, observe_x_idx)::Vector{<:Real}
     r_ord = Vector{Float64}(undef, length(path))
     for i in eachindex(path)
         if !is_singular(model, path[i])
@@ -663,63 +702,74 @@ end
 
 
 
-
-
-
 """
 Calc reaction order profile for single path in regime graph.
 - `model::Bnc`: Binding network model.
-- `rgm_path::AbstractVector{<:Integer}`: Regime path (vector of regime indices).
+- `rgm_idx_shift_pth::AbstractVector`: Regime path (vector of regime indices).
 - `change_qK`: Symbol or index of the changing qK.
 - `observe_x`: Symbol or index of the observed x.
 - `deduplicate::Bool=false`: Whether to deduplicate the reaction order profile.
 - `keep_singular::Bool=true`: Whether to keep singular regimes in the profile.
 - `keep_nonasymptotic::Bool=true`: Whether to keep non-asymptotic regimes in the profile.
 """
-function get_reaction_order_path(
-    model::Bnc, rgm_path::AbstractVector{<:Integer}; 
+function get_RO_path(
+    model::Bnc,rgm_idx_shift_pth::AbstractVector; 
     change_qK, observe_x,
+    
     deduplicate::Bool=false,
     keep_singular::Bool=true,
     keep_nonasymptotic::Bool=true
     )::Vector{<:Real}
 
-    change_qK_idx = locate_sym_qK(model, change_qK)
-    observe_x_idx = locate_sym_x(model, observe_x)
-
-    ord_path = _calc_reaction_order_for_single_path(model, rgm_path, change_qK_idx, observe_x_idx)
     
-    mask = _get_vertices_mask(model, rgm_path;
+    # get reaction order along the path
+    rgm_idx_shift_pth = get_idx.(Ref(model), rgm_idx_shift_pth)
+
+    ord_path = let 
+        change_qK_idx = locate_sym_qK(model, change_qK)
+        observe_x_idx = locate_sym_x(model, observe_x)
+        _calc_RO_for_single_path(model, rgm_idx_shift_pth, change_qK_idx, observe_x_idx)
+    end
+    
+
+    # apply the regime filter
+    mask = _get_vertices_mask(model, rgm_idx_shift_pth;
         singular=keep_singular ? nothing : false,
         asymptotic=keep_nonasymptotic ? nothing : true)
     
     ord_path = ord_path[mask]
 
+    # remove redundency
     if deduplicate
         ord_path = _dedup(ord_path)
     end
+
     return ord_path
 end
+
 """
-Multiple paths version of `get_reaction_order_path`.
+Multiple paths version of `get_RO_path`.
 """
-function get_reaction_order_path(model, rgm_paths::AbstractVector{<:AbstractVector{<:Integer}}, args...; kwargs...)::Vector{Vector{<:Real}}
+function get_RO_paths(model::Bnc, rgm_paths::AbstractVector{<:AbstractVector{<:Integer}}, args...; kwargs...)::Vector{Vector{<:Real}}
     ord_pths = Vector{Vector{<:Real}}(undef, length(rgm_paths))
     Threads.@threads for i in eachindex(rgm_paths)
-        ord_pths[i] = get_reaction_order_path(model, rgm_paths[i], args...; kwargs...)
+        ord_pths[i] = get_RO_path(model, rgm_paths[i], args...; kwargs...)
     end
     return ord_pths
 end
 
-function get_reaction_order_path(model::SISOPaths, pth_idx = nothing ; observe_x, kwargs...)
+function get_RO_paths(model::SISOPaths, pth_idx::Union{Nothing, AbstractVector{<:Integer}}=nothing ; observe_x, kwargs...)
     pth_idx = isnothing(pth_idx) ? (1:length(model.rgm_paths)) : pth_idx
     rgm_paths = @view model.rgm_paths[pth_idx]
     observe_x_idx = locate_sym_x(model.bn, observe_x)
-    return get_reaction_order_path(model.bn, rgm_paths; 
+    return get_RO_paths(model.bn, rgm_paths; 
         change_qK=model.change_qK_idx, observe_x=observe_x_idx, kwargs...)
 end
-get_reaction_order_path(model::SISOPaths, pth_idx::Integer, args...; kwargs...) = get_reaction_order_path(model, [pth_idx], args... ; kwargs...)
-
+"""
+single path version of `get_RO_paths`.
+"""
+get_RO_path(model::SISOPaths, pth_idx::Integer, args...; kwargs...) = get_RO_paths(model, [pth_idx], args... ; kwargs...)[1]
+    
 
 
 """
@@ -778,34 +828,48 @@ end
 Show (print) paths stored in SISOPaths.
 
 - Reads `grh.rgm_paths`
-- Optionally computes volumes via `get_volume(grh; kwargs...)`
+- Optionally computes volumes via `get_volumes(grh; kwargs...)`
 """
 function summary(grh::SISOPaths; show_volume::Bool=true, prefix::AbstractString="#", kwargs...)
     paths = grh.rgm_paths
     if show_volume
-        vols = get_volume(grh; kwargs...)
-        # rows = _normalize_rows(paths; volumes=vols)  # ids 默认 1:N
-        print_paths(paths, vols; prefix=prefix)
+        vols = get_volumes(grh; kwargs...)
+        print_paths(paths; prefix=prefix, volumes = vols, ids = 1:length(paths))
     else
-        print_paths(paths; prefix=prefix)
+        print_paths(paths; prefix=prefix, ids = 1:length(paths))
     end
     return nothing
 end
 
 
 
-function summary_reaction_order_path(grh::SISOPaths,observe_x; 
-    deduplicate::Bool=false,keep_singular::Bool=true,keep_nonasymptotic::Bool=true,kwargs...)
-    
-    observe_x_idx = locate_sym_x(get_binding_network(grh), observe_x)
-    ord_pth = find_reaction_order_for_path(grh, observe_x_idx; 
+function summary_RO_path(grh::SISOPaths;observe_x, show_volume::Bool=true,
+
+    deduplicate::Bool=true,keep_singular::Bool=true,keep_nonasymptotic::Bool=true,kwargs...)
+
+    ord_pth = get_RO_paths(grh; observe_x=observe_x, 
         deduplicate=deduplicate,
         keep_singular=keep_singular,
         keep_nonasymptotic=keep_nonasymptotic)
-    volumes = get_volume(grh; kwargs...)
 
-    rlts = group_sum(ord_pth, collect.(volumes))
-    show_paths(rlts; prefix="")
+    volumes = if show_volume
+        get_volumes(grh; kwargs...)
+    else
+        fill(nothing, length(grh.rgm_paths))
+    end
+
+
+
+    rsts = group_sum(ord_pth, volumes)
+    # for (id, pth, volume) in rsts
+    #      print_path(pth; prefix="",id=id, volume=volume)
+    # end
+
+    # print 
+    ids = getindex.(rsts, 1)
+    ords = getindex.(rsts, 2)
+    vols = getindex.(rsts, 3)
+    print_paths(ords; prefix="", ids=ids, volumes=vols)
     return nothing
 end
 

@@ -21,7 +21,7 @@ export logder_x_qK, logder_qK_x, ∂logx_∂logqK, ∂logqK_∂logx
 export find_all_vertices
 
 # include("regimes.jl")
-export find_all_vertices!, get_vertices_perm_dict, get_vertices_nullity, get_vertices_volume!, have_perm
+export find_all_vertices!, get_vertices_perm_dict, get_nullities, get_volumes, have_perm
 export get_vertices
 export is_singular, is_asymptotic
 
@@ -48,9 +48,10 @@ export show_dominant_condition, show_conservation, show_equilibrium, show_interf
 
 # include("regime_graphs.jl")
 export get_vertices_graph!, SISOPaths,  get_polyhedra, get_polyhedron, get_SISO_graph
+export get_path
 export get_neighbor_graph_x, get_neighbor_graph_qK,get_neighbor_graph
 export get_sources, get_sinks, get_sources_sinks
-export find_reaction_order_for_path, group_sum
+export find_RO_for_path, group_sum
 # export get_volume, get_C_C0_nullity_qK
 # include("visualize.jl")
 export SISO_plot, get_edge_labels, get_node_positions, get_node_colors, get_node_labels
