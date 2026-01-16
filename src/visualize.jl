@@ -4,8 +4,12 @@
 
 """
 plot function, given a change in qK, plot the trajectory of x and color by dominant regime. 
+
+add_archetype_lines: whether to add archetype lines (x change with only one qK change) for reference.
+
 """
 function SISO_plot(SISOPaths::SISOPaths,pth_idx;rand_line=false, rand_ray=false, extend=4, kwargs...)
+    pth_idx = get_idx(SISOPaths, pth_idx)
     parameters = get_one_inner_point(SISOPaths.path_polys[pth_idx], rand_line=rand_line, rand_ray=rand_ray, extend=extend)
     @show parameters
     return SISO_plot(SISOPaths.bn, parameters, SISOPaths.change_qK_idx; kwargs...)
@@ -187,11 +191,17 @@ function find_proper_bounds_for_graph_plot(p; x_margin=0.1, y_margin=0.1)
     return (xmin, xmax, ymin, ymax)
 end
 
+set_proper_bounds_for_graph_plot!(ax, p; kwargs...) = let
+    bounds = find_proper_bounds_for_graph_plot(p; kwargs...)
+    limits!(ax, bounds...)
+end 
+
 """
-    get_edge_labels(Bnc; sym=false) -> Dict{Edge,String}
+    get_edge_labels(Bnc; half::Bool=false,f=nothing) -> Dict{Edge,String}
+    f: a function for mapping edge to its labels, should return String.
 Get edge labels for qK-space edges. IF half, only label one direction.
 """
-function get_edge_labels(Bnc::Bnc; sym::Bool=false, half::Bool=true)::Dict{Edge,String}
+function get_edge_labels(Bnc::Bnc; half::Bool=false,f=nothing)::Dict{Edge,String}
     vg = get_vertices_graph!(Bnc;full=true)
     labels = Dict{Edge,String}()
     for (i, edges) in enumerate(vg.neighbors)
@@ -199,12 +209,13 @@ function get_edge_labels(Bnc::Bnc; sym::Bool=false, half::Bool=true)::Dict{Edge,
             continue
         end
 
+        f = isnothing(f) ? (from, to) -> get_change_dir_qK(Bnc, from, to)|> x-> sym_direction(Bnc,x) : f
+
         for e in edges
             if isnothing(e.change_dir_qK) || (half && e.to < i)    # only label one direction
                 continue
             end 
-            ch_dir = round.(e.change_dir_qK;digits=1)
-            labels[Edge(i,e.to)] = sym ? sym_direction(Bnc,ch_dir) : repr(Vector(ch_dir))
+            labels[Edge(i, e.to)] = f(i, e.to)
         end
     end
     return labels
@@ -222,6 +233,13 @@ function get_node_positions(model::Bnc; kwargs...)
     posi = p.node_pos[]
     return posi
 end
+
+get_node_positions(p) = p.node_pos[] # support directly passing 
+set_node_positions(p, new_pos)= let
+ new_posi = Point2f.(new_pos)
+ p.node_pos[] = new_posi # support directly setting positions
+end
+
 
 function get_node_colors(model; singular_color="#CCCCFF", asymptotic_color="#FFCCCC", regular_color="#CCFFCC")::Vector{String}
     node_colors = Vector{String}(undef, length(model.vertices_perm))
@@ -249,7 +267,7 @@ end
 
 function get_node_size(model::Bnc; default_node_size=50, asymptotic=true, kwargs...)
     # seems properly handel non-asyntotic nodes
-    vals = (asymptotic ? get_volumes(model) : calc_volume(model;asymptotic=asymptotic, kwargs...)) .|> x->x[1]
+    vals = get_volumes(model; asymptotic=asymptotic, kwargs...) .|> x->x.mean
     
     zero_volume_idx = if asymptotic # both non-asymptotic and singular
         non_asym_idx = get_vertices(model, singular=nothing, asymptotic=false, return_idx=true) # non-asymptotic
@@ -268,34 +286,44 @@ end
 
 
 
+
+
+
 """
     Draw the qK-neighbor graph of the model, with optional edge labels, node colors, and node sizes.
 """
-function draw_vertices_neighbor_graph(model::Bnc, grh=nothing; 
+draw_graph(model; kwargs...) = draw_graph(get_binding_network(model), get_neighbor_graph_qK(model); kwargs...)
+function draw_graph(grh::SISOPaths;kwargs...)
+    bn = get_binding_network(grh)
+    change_sym = qK_sym(bn)[grh.change_qK_idx]
+    grh = get_neighbor_graph_qK(grh)
+    edge_labels = ["+"* repr(change_sym) for _ in 1:ne(grh)]
+    f,ax,p = draw_graph(bn, grh; edge_labels = edge_labels, kwargs...)
+    return f,ax,p
+end
+
+function draw_graph(model::Bnc, grh=nothing; 
     default_node_size=50,
-    edge_labels=nothing, 
+    node_posi =nothing,
+    edge_labels=nothing,
+    node_labels=nothing,
+    node_colors=nothing,
+    add_rgm_idx::Bool=true, 
     figsize=(1000,1000), 
     kwargs...)
 
     # use provided grh or compute a default neighbor graph
     grh = isnothing(grh) ? get_neighbor_graph_qK(model) : grh
 
-    edge_labels =   if isnothing(edge_labels) 
-                        get_edge_labels(model, sym=true) 
-                    elseif isa(edge_labels, String) 
-                        repeat([edge_labels], ne(grh)) 
-                    else 
-                        edge_labels
-                    end
-    
-    posi = get_node_positions(model)
-    node_labels = get_node_labels(model)
-    node_colors = get_node_colors(model)
+    edge_labels =  isnothing(edge_labels) ? get_edge_labels(model) : edge_labels
+    posi = isnothing(node_posi) ? get_node_positions(model) : Point2f.(node_posi)
+    node_labels = isnothing(node_labels) ? get_node_labels(model) : node_labels
+    node_colors = isnothing(node_colors) ? get_node_colors(model) : node_colors
     node_size = get_node_size(model; default_node_size=default_node_size)
 
 
     f = Figure(size = figsize)
-    ax = Axis(f[1, 1],title = "Dominant mode of "*repr(model.q_sym)[4:end], titlealign = :right,titlegap =2)
+    ax = Axis(f[1, 1],title = "Dominant mode of "*strip_before_bracket(repr(model.q_sym)), titlealign = :right,titlegap =2)
 
     
     p = graphplot!(ax, grh;
@@ -311,23 +339,34 @@ function draw_vertices_neighbor_graph(model::Bnc, grh=nothing;
                     )
     hidedecorations!(ax); hidespines!(ax)
 
-    bounds = find_proper_bounds_for_graph_plot(p)
-    limits!(ax, bounds...)
+    
+    set_proper_bounds_for_graph_plot!(ax, p)
 
+    if add_rgm_idx
+        add_nodes_text!(ax,p)
+    end
+    
     return f, ax, p
 end
 
-function draw_vertices_neighbor_graph(grh::SISOPaths,args...;kwargs...)
-    edge_labels = "+"* repr([get_binding_network(grh).q_sym; get_binding_network(grh).K_sym][grh.change_qK_idx])
-    f,ax,p = draw_vertices_neighbor_graph(get_binding_network(grh), grh.qK_grh, args...; edge_labels = edge_labels, kwargs...)
-    return f,ax,p
-end
 
-function add_vertices_idx!(ax,p)
-    posi = p.node_pos[]
-    text!(ax, posi; text = "#".*string.(1:length(posi)),align = (:center, :bottom), color = :black,offset = (0,5))
+
+
+
+function add_nodes_text!(ax,p, texts=nothing; 
+    align = (:center, :bottom), 
+    color = :black,
+    offset = (0,5), kwargs...)
+
+    posi = p.node_pos
+
+    texts = isnothing(texts) ? "#".*string.(1:length(posi[])) : texts
+
+    text!(ax, posi; text = texts,align = align, color = color,offset = offset, kwargs...)
     return nothing
 end
+
+
 
 """
     Add arrows on an existing graph plot based on edge weights from change_qK_idx.

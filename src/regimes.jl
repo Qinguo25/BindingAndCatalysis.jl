@@ -760,8 +760,7 @@ get_nullity(args...) = begin
     return model.vertices_nullity[get_idx(args...)]
 end::Integer
 
-
-
+n_vertices(Bnc::Bnc) = length(Bnc.vertices_perm)
 
 function get_volume(args...;  kwargs...)
     model = get_binding_network(args...)
@@ -791,8 +790,9 @@ function get_intersect(Bnc,vtx1,vtx2)::Polyhedron
 
     p = intersect(p1,p2)
     detecthlinearity!(p)
+    # @show dim1, dim2, dim(p)
     if dim(p)< max(dim1,dim2)-1
-        @error("Vertices $get_perm(Bnc, vtx1) and $get_perm(Bnc, vtx2) do not have dim-1 intersect.")
+        error("Vertices $(get_perm(Bnc, vtx1)) and $(get_perm(Bnc, vtx2)) do not have dim-1 intersect.")
     end
     return p
 end
@@ -805,7 +805,8 @@ a'x+b=0, where a is the change direction in qK space, and b is the intersect poi
 function get_interface_direct(Bnc::Bnc, from, to)::Tuple{SparseVector{Float64,Int}, Float64}
     p = get_intersect(Bnc, from, to)
     hplanes = hyperplanes(p)
-    hp = first(hplanes)
+    # @show hplanes
+    hp = collect(hplanes)[end]
     a = droptol!(sparse(hp.a), 1e-10)
     b = -hp.β
     return a, b
@@ -827,6 +828,7 @@ end
 
 get_interface(args...;kwargs...) = get_interface_qK(args...;kwargs...)
 get_change_dir_qK(args...;kwargs...) = get_interface(args...;kwargs...)[1] # relys on the inner behavior of get_interface, 
+get_change_dir(args...;kwargs...) = get_change_dir_qK(args...;kwargs...)
 
 function is_neighbor_qK(Bnc, vtx1, vtx2)::Bool
     try get_interface_qK(Bnc, vtx1, vtx2)
@@ -835,6 +837,7 @@ function is_neighbor_qK(Bnc, vtx1, vtx2)::Bool
         return false
     end
 end
+
 is_neighbor(args...;kwargs...) = is_neighbor_qK(args...;kwargs...)
 
 
@@ -998,7 +1001,7 @@ function summary_vertex(args...)
     nullity = get_nullity(args...)
     volume = get_volume(args...)
     println("idx=$idx,perm=$perm, asymptotic=$is_real, nullity=$nullity")
-    println("volume=$(volume[1]) +- $(volume[2])")
+    println("volume=$(volume.mean) +- $(sqrt(volume.var))")
     println("Dominante condition")
     display.(show_dominant_condition(args...;log_space=false))
     println("x expression")

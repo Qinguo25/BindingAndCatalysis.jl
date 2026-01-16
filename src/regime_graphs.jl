@@ -89,29 +89,26 @@ function _fulfill_vertices_graph!(vtx_graph::VertexGraph)
     fill the qK space change dir matrix for all vertices in Bnc.
     """
     function _calc_change_dir_qK(Bnc, p1, p2, i, j1, j2, ins_x)
-        # calculate the interface and norm points to p2
         n1 = get_nullity(Bnc, p1)
         n2 = get_nullity(Bnc, p2)
         if n1 > 1 || n2 > 1
-            return (nothing,nothing)
+            return (nothing, nothing)
         end
 
-        if n1 == 0
-            H,H0 = get_H_H0(Bnc, p1)
-            dir = H[j2, :] - H[j1, :]
+        if n1 == 0 || n2 == 0
+            p = (n1 == 0) ? p1 : p2
+            H, H0 = get_H_H0(Bnc, p)
+            dir = H[j2, :] .- H[j1, :]
             ins_qK = H0[j2] - H0[j1] + ins_x
-        elseif n2 == 0
-            H,H0 = get_H_H0(Bnc, p2)
-            dir = H[j1, :] - H[j2, :] 
-            ins_qK = H0[j1] - H0[j2] - ins_x
         else
-            H = get_H(Bnc, p1)
+            H  = get_H(Bnc, p1)
             M0 = get_M0(Bnc, p1)
-            dir = H[j2, :] - H[j1, :]
+            dir = H[j2, :] .- H[j1, :]
             ins_qK = -dot(dir, M0)
         end
+
         droptol!(dir, 1e-10)
-        return nnz(dir)==0 ? (nothing,nothing) : (dir, ins_qK)
+        return nnz(dir) == 0 ? (nothing, nothing) : (dir, ins_qK)
     end
 
     # pre compute H for all vertices with nullity 0 or 1
@@ -374,6 +371,17 @@ end
 Polyhedra.intersect(p::Polyhedron)= p # a fix for above function for if only one edge, no need to intersect
 
 
+function _ensure_full_vertices_graph!(grh::VertexGraph)
+    if !grh.change_dir_qK_computed
+        @info "Calculating vertices neighbor graph with qK change dir"
+        _fulfill_vertices_graph!(grh)
+        grh.change_dir_qK_computed = true
+    end
+    return nothing
+end
+
+
+
 
 #---------------------------------------------------------------------------
 #              Binding Network Graph
@@ -387,6 +395,8 @@ function get_binding_network_grh(Bnc::Bnc)::SimpleGraph
     end
     return g # get first d nodes as total, last n nodes as x
 end
+
+
 
 
 #------------------------------------------------------------------------------
@@ -404,32 +414,34 @@ function get_vertices_graph!(Bnc::Bnc; full::Bool=false)::VertexGraph
     """
     get the neighbor of vertices formed graph.
     """
+
+    initalize_vertices_graph!(Bnc) = let
+        find_all_vertices!(Bnc)# Ensure vertices are calculated
+        @info "Start calculating vertices neighbor graph, It may takes a while."
+        Bnc.vertices_graph =  _calc_vertices_graph(Bnc)
+        nothing
+    end
+
     if full
         vtx_graph = get_vertices_graph!(Bnc; full=false)
-        if !vtx_graph.change_dir_qK_computed
-            @info "Calculating vertices neighbor graph with qK change dir"
-            _fulfill_vertices_graph!(vtx_graph)
-            vtx_graph.change_dir_qK_computed = true
-        end
+        _ensure_full_vertices_graph!(vtx_graph)
     else
         if isnothing(Bnc.vertices_graph)
-            find_all_vertices!(Bnc)# Ensure vertices are calculated
-            @info "Start calculating vertices neighbor graph, It may takes a while."
-            Bnc.vertices_graph =  _calc_vertices_graph(Bnc)
+            initalize_vertices_graph!(Bnc)
         end
     end
+
     return Bnc.vertices_graph
 end
 
 
-function get_edge(grh::VertexGraph, from::Integer, to::Integer; full=false)::Union{Nothing, VertexEdge}
+function get_edge(grh::VertexGraph, from, to; full=false)::Union{Nothing, VertexEdge}
+    
+    from = get_idx(get_binding_network(grh), from)
+    to = get_idx(get_binding_network(grh), to)
+    
     if full
-        if isnothing(Bnc.vertices_graph)
-            find_all_vertices!(Bnc)# Ensure vertices are calculated
-            println("----------------Start calculating vertices neighbor graph, It may takes a while.----------------")
-            Bnc.vertices_graph =  _calc_vertices_graph(Bnc)
-            println("Done.\n")
-        end
+        _ensure_full_vertices_graph!(grh)
     end
     pos = get(grh.edge_pos[from], to, nothing)
     return pos === nothing ? nothing : grh.neighbors[from][pos]
@@ -445,7 +457,7 @@ get_edge(Bnc, from, to; kwargs...)= let
 end
 
 get_binding_network(grh::VertexGraph,args...) = grh.bn
-
+# get_vertices_graph!(grh::VertexGraph,args...; kwargs...) = grh
 
 
 
@@ -453,60 +465,76 @@ get_binding_network(grh::VertexGraph,args...) = grh.bn
 
 
 #-----------------------------------------------------------------------------------
-function get_neighbor_graph_x(Bnc::Bnc)::SimpleGraph
-    vg = get_vertices_graph!(Bnc;full=false)
-    return vg.x_grh
-end
+get_neighbor_graph_x(grh::VertexGraph) = grh.x_grh
+get_neighbor_graph_x(Bnc::Bnc) = get_neighbor_graph_x(get_vertices_graph!(Bnc; full=false))
 
-function get_neighbor_graph_qK(Bnc::Bnc; half::Bool=true)::SimpleGraph
-    vg = get_vertices_graph!(Bnc;full=true)
-    n = length(vg.neighbors)
-    g = SimpleDiGraph(n)
-    for (i, edges) in enumerate(vg.neighbors)
-        if get_nullity(Bnc,i) >1
-            continue
-        end
-        for e in edges
-            if isnothing(e.change_dir_qK) || (half && e.to < i)
+get_neighbor_graph_qK(grh::VertexGraph; both_side::Bool=false)::SimpleDiGraph = let
+    _ensure_full_vertices_graph!(grh)
+
+    qK_grh = let # construct the qK_graph
+        Bnc = get_binding_network(grh)
+        n = length(grh.neighbors)
+        g = SimpleDiGraph(n)
+        for (i, edges) in enumerate(grh.neighbors)
+            if get_nullity(Bnc,i) >1
                 continue
             end
-            add_edge!(g, i, e.to)
+            for e in edges
+                if isnothing(e.change_dir_qK) || (!both_side && e.to < i)
+                    continue
+                end
+                add_edge!(g, i, e.to)
+            end
         end
+        g
     end
-    return g
-end
 
+    return qK_grh
+end
+get_neighbor_graph_qK(Bnc::Bnc; kwargs...) = get_neighbor_graph_qK(get_vertices_graph!(Bnc; full=true); kwargs...)
+get_neighbor_graph_qK(grh::SISOPaths; kwargs...) = grh.qK_grh
 get_neighbor_graph(args...; kwargs...) = get_neighbor_graph_qK(args...; kwargs...)
+
+
 
 """
 Get qK neighbor graph with denoted idx
 """
 
 get_SISO_graph(grh::SISOPaths) = grh.qK_grh
-function get_SISO_graph(Bnc::Bnc,change_qK;)::SimpleDiGraph
-    change_qK_idx = locate_sym_qK(Bnc, change_qK)
-    vg = get_vertices_graph!(Bnc;full=true)
-    n = length(vg.neighbors)
-    g = SimpleDiGraph(n)
-    for (i, edges) in enumerate(vg.neighbors)
-        nlt = get_nullity(Bnc,i)
-        if nlt >1
-            continue
-        end
-        for e in edges
-            if isnothing(e.change_dir_qK) || e.to < i
+get_SISO_graph(model::Bnc, change_qK) = get_SISO_graph(get_vertices_graph!(model; full=true), change_qK)
+function get_SISO_graph(grh::VertexGraph, change_qK)::SimpleDiGraph
+    bn = get_binding_network(grh)
+    change_qK_idx = locate_sym_qK(bn, change_qK)
+    _ensure_full_vertices_graph!(grh)
+
+    n = length(grh.neighbors)
+
+    g = let 
+        g = SimpleDiGraph(n)
+        for (i, edges) in enumerate(grh.neighbors)
+            nlt = get_nullity(bn,i)
+            if nlt >1
                 continue
-            end 
-            val = e.change_dir_qK[change_qK_idx]
-            if val > 1e-6
-                add_edge!(g, i, e.to)
-            elseif val < -1e-6
-                add_edge!(g, e.to, i)
-            end 
+            end
+            for e in edges
+                if isnothing(e.change_dir_qK) || e.to < i
+                    continue
+                end 
+                val = e.change_dir_qK[change_qK_idx]
+                if val > 1e-6
+                    add_edge!(g, i, e.to)
+                elseif val < -1e-6
+                    add_edge!(g, e.to, i)
+                end 
+            end
         end
+        g
     end
+
     return g
 end
+
 
 
 #------------------------------------------------------------------------------
@@ -538,17 +566,33 @@ function get_path(grh::SISOPaths, pth_idx::Integer; return_idx::Bool=false)
     end
     return perms
 end
+function get_path(grh::SISOPaths, pth::AbstractVector; return_idx::Bool=false)
+    bn = get_binding_network(grh)
+    return return_idx ? get_idx.(Ref(bn), pth) : get_perm.(Ref(bn), pth)
+end
 
-get_idx(grh::SISOPaths, pth::AbstractVector{<:Integer}) = findfirst(x -> x == pth, grh.rgm_paths)
 get_binding_network(grh::SISOPaths,args...)= grh.bn
 get_C_C0_nullity_qK(grh::SISOPaths, pth_idx) = get_polyhedron(grh, pth_idx) |> get_C_C0_nullity
 
-function get_polyhedra(grh::SISOPaths, pth_idx::Union{AbstractVector{<:Integer},Nothing} = nothing)::Vector{Polyhedron}
+
+
+get_idx(grh::SISOPaths, pth::AbstractVector) = let
+    bn = get_binding_network(grh)
+    idxs = get_idx.(Ref(bn), pth)
+    grh.paths_dict[idxs] 
+end
+get_idx(grh::SISOPaths, pth::Integer) = pth
+
+
+
+
+
+function get_polyhedra(grh::SISOPaths, pth_idx::Union{AbstractVector,Nothing} = nothing)::Vector{Polyhedron}
     pth_idx = let 
             if isnothing(pth_idx)
                 1:length(grh.rgm_paths)
             else
-                pth_idx
+                get_idx.(Ref(grh), pth_idx)
             end
         end
     
@@ -562,18 +606,18 @@ function get_polyhedra(grh::SISOPaths, pth_idx::Union{AbstractVector{<:Integer},
 
     return grh.path_polys[pth_idx]
 end
-get_polyhedron(grh::SISOPaths, pth_idx::Integer)= get_polyhedra(grh, [pth_idx])[1]
+get_polyhedron(grh::SISOPaths, pth)= get_polyhedra(grh, [get_idx(grh, pth)])[1]
 
 
 
-function get_volumes(grh::SISOPaths, pth_idx::Union{AbstractVector{<:Integer},Nothing}=nothing; 
+function get_volumes(grh::SISOPaths, pth_idx::Union{AbstractVector,Nothing}=nothing; 
     asymptotic=true,recalculate=false, kwargs...)
 
     pth_idx = let 
             if isnothing(pth_idx)
                 1:length(grh.rgm_paths)
             else
-                pth_idx
+                get_idx.(Ref(grh), pth_idx)
             end
         end
     
@@ -590,7 +634,7 @@ function get_volumes(grh::SISOPaths, pth_idx::Union{AbstractVector{<:Integer},No
     return grh.path_volume
 end
 
-get_volume(grh::SISOPaths, pth_idx::Integer; kwargs...) = get_volumes(grh, [pth_idx]; kwargs...)[1]
+get_volume(grh::SISOPaths, pth; kwargs...) = get_volumes(grh, [get_idx(grh, pth)]; kwargs...)[1]
 
 
 
@@ -598,7 +642,8 @@ get_volume(grh::SISOPaths, pth_idx::Integer; kwargs...) = get_volumes(grh, [pth_
 # Regime shifting associated functions
 #-------------------------------------------------------------------------------------
 
-function show_regime_path(grh::SISOPaths, pth_idx::Integer)
+function show_regime_path(grh::SISOPaths, pth)
+    pth_idx = get_idx(grh, pth)
     pth = get_path(grh, pth_idx; return_idx=true)
     vol_is_calc = grh.path_volume_is_calc[pth_idx]
     volume = vol_is_calc ? grh.path_volume[pth_idx] : nothing
@@ -607,10 +652,11 @@ function show_regime_path(grh::SISOPaths, pth_idx::Integer)
 end
 
 
-function get_expression_path(grh::SISOPaths, pth_idx::Integer; observe_x=nothing)
+function get_expression_path(grh::SISOPaths, pth; observe_x=nothing)
     
     bn = get_binding_network(grh)
-    rgm_pth = get_path(grh, pth_idx; return_idx=true)
+    rgm_pth = get_path(grh, pth; return_idx=true)
+    # @show rgm_pth
     rgm_nlt = get_nullities(bn, rgm_pth)
     
 
@@ -619,21 +665,22 @@ function get_expression_path(grh::SISOPaths, pth_idx::Integer; observe_x=nothing
     rgm_interface = get_interface.(Ref(bn),rgm_pth[1:end-1], rgm_pth[2:end])
     
     H_H0 = Vector{Any}(undef, length(rgm_pth))
-    for (rgm, rgm_nlt) in zip(rgm_pth, rgm_nlt)
-        if rgm_nlt == 0
+    for i in eachindex(rgm_pth)
+        rgm = rgm_pth[i]
+        nlt = rgm_nlt[i]
+        if nlt == 0
             H,H0 = get_H_H0(bn, rgm)
-            @views H_H0[rgm] = (H[observe_x_idx, :], H0[observe_x_idx]) 
-        elseif rgm_nlt == 1
+            # @show H,H0, observe_x_idx
+            H_H0[i] = (H[observe_x_idx, :], H0[observe_x_idx]) 
+        elseif nlt == 1
             H = get_H(bn,rgm)
-            @views H_H0[rgm] = (H[observe_x_idx, :], nothing)
+            H_H0[i] = (H[observe_x_idx, :], nothing)
         else
             error("Nullity > 1 is not supported for expression path.") # should ne change if under constrain.
         end
     end
-
     return H_H0, rgm_interface
 end
-
 
 
 
@@ -750,17 +797,18 @@ end
 """
 Multiple paths version of `get_RO_path`.
 """
-function get_RO_paths(model::Bnc, rgm_paths::AbstractVector{<:AbstractVector{<:Integer}}, args...; kwargs...)::Vector{Vector{<:Real}}
-    ord_pths = Vector{Vector{<:Real}}(undef, length(rgm_paths))
-    Threads.@threads for i in eachindex(rgm_paths)
-        ord_pths[i] = get_RO_path(model, rgm_paths[i], args...; kwargs...)
-    end
-    return ord_pths
-end
+function get_RO_paths(model::Bnc, rgm_paths::AbstractVector{<:AbstractVector}, args...; kwargs...)::Vector{Vector{<:Real}}
+    
+    rgm_idx_for_each_paths = rgm_paths .|> x -> get_idx.(Ref(model), x)
 
-function get_RO_paths(model::SISOPaths, pth_idx::Union{Nothing, AbstractVector{<:Integer}}=nothing ; observe_x, kwargs...)
-    pth_idx = isnothing(pth_idx) ? (1:length(model.rgm_paths)) : pth_idx
-    rgm_paths = @view model.rgm_paths[pth_idx]
+    ord_for_each_paths = Vector{Vector{<:Real}}(undef, length(rgm_idx_for_each_paths))
+    Threads.@threads for i in eachindex(rgm_idx_for_each_paths)
+        ord_for_each_paths[i] = get_RO_path(model, rgm_idx_for_each_paths[i], args...; kwargs...)
+    end
+    return ord_for_each_paths
+end
+function get_RO_paths(model::SISOPaths, pth_idx::Union{Nothing, AbstractVector}=nothing ; observe_x, kwargs...)
+    rgm_paths = isnothing(pth_idx) ? model.rgm_paths : get_path.(Ref(model), pth_idx; return_idx=true)
     observe_x_idx = locate_sym_x(model.bn, observe_x)
     return get_RO_paths(model.bn, rgm_paths; 
         change_qK=model.change_qK_idx, observe_x=observe_x_idx, kwargs...)
@@ -768,7 +816,7 @@ end
 """
 single path version of `get_RO_paths`.
 """
-get_RO_path(model::SISOPaths, pth_idx::Integer, args...; kwargs...) = get_RO_paths(model, [pth_idx], args... ; kwargs...)[1]
+get_RO_path(model::SISOPaths, pth_idx, args...; kwargs...) = get_RO_paths(model, [get_idx(model,pth_idx)], args... ; kwargs...)[1]
     
 
 

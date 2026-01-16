@@ -182,8 +182,8 @@ mutable struct VertexGraph{T}
         for i in 1:length(neighbors)
             edges = neighbors[i]
             for (k, e) in enumerate(edges)
-                add_edge!(g, i, e.to)
                 edge_pos[i][e.to] = k
+                add_edge!(g, i, e.to)
             end
         end
         return new{T}(bn, g, neighbors, false, edge_pos)
@@ -345,14 +345,14 @@ end
 
 
 
-struct SISOPaths{T}
+struct SISOPaths{T} 
     bn::Bnc{T}   # binding Newtork
     qK_grh::SimpleDiGraph # SimpleDiGraph in qK space
     change_qK_idx::T  # which qK is changing in this SISO graph
 
     sources::Vector{Int}  # source vertices in the graph
     sinks::Vector{Int}    # sink vertices in the graph
-    
+    paths_dict::Dict{Vector{Int},Int} # map from path (vector of vertex idx) to its idx in rgm_paths
     rgm_paths::Vector{Vector{Int}} #All paths from sources to sinks, each path is represented as a vector of vertex idx. Grows exponentially
     path_polys::Vector{Polyhedron} # the polyhedron for each path, lazily calculated when needed, stored in the same order as rgm_paths
     path_volume::Vector{Volume}# the volume for each path, lazily calculated when needed, stored in the same order as rgm_paths
@@ -364,9 +364,14 @@ struct SISOPaths{T}
         path_polys = Vector{Polyhedron}(undef, length(rgm_paths))
         path_volume = Vector{Volume}(undef, length(rgm_paths))
         path_volume_is_calc = falses(length(rgm_paths))
-        path_polys_is_calc = falses(length(rgm_paths))  
+        path_polys_is_calc = falses(length(rgm_paths))
+        paths_dict = Dict{Vector{Int},Int}()
+        for (i, p) in enumerate(rgm_paths)
+            paths_dict[p] = i
+        end  
         new{T}(model, qK_grh, change_qK_idx, 
             sources, sinks, 
+            paths_dict,
             rgm_paths, path_polys, path_volume,
             path_volume_is_calc, path_polys_is_calc)
     end
@@ -455,16 +460,16 @@ end
 
 
 
-include("helperfunctions.jl")
-include("qK_x_mapping.jl")
-include("volume_calc.jl")
-include("numeric.jl")
-include("regime_enumerate.jl") # before regimes.jl
-include("regimes.jl")
-include("regime_assign.jl")
-include("symbolics.jl")
-include("regime_graphs.jl")
-include("visualize.jl")
+include(joinpath(@__DIR__,"helperfunctions.jl"))
+include(joinpath(@__DIR__,"qK_x_mapping.jl"))
+include(joinpath(@__DIR__,"volume_calc.jl"))
+include(joinpath(@__DIR__,"numeric.jl"))
+include(joinpath(@__DIR__,"regime_enumerate.jl")) # before regimes.jl
+include(joinpath(@__DIR__,"regimes.jl"))
+include(joinpath(@__DIR__,"regime_assign.jl"))
+include(joinpath(@__DIR__,"symbolics.jl"))
+include(joinpath(@__DIR__,"regime_graphs.jl"))
+include(joinpath(@__DIR__,"visualize.jl"))
 
 
 function summary(Bnc::Bnc)

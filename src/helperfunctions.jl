@@ -305,44 +305,7 @@ function _idx_val2Mtx(idx::Vector{Int}, val::Vector{<:T}, col_num::Union{Int,Not
     return Mtx
 end
 
-#= Unused helper for validating sparse index/value representations.
-function _check_valid_idx(idx::Vector{Int},Mtx::Matrix{<:Any})
-    @assert length(idx) == size(Mtx, 1) "idx must have the same length as the number of rows in Mtx"
-    for i in 1:length(idx)
-        @assert Mtx[i, idx[i]] != 0 "Mtx must have non-zero entries at the idx positions"
-    end
-    return true
-end
-=#
 
-#= Unused helper that tracked columnwise maxima in sparse matrices.
-function find_max_indices_per_column(S::SparseMatrixCSC{Tv, Ti}, first_n_col::Union{Int,Nothing}=nothing) where {Tv, Ti}
-    first_n_col = isnothing(first_n_col) ? size(S, 2) : first_n_col
-    max_indices = zeros(Ti, first_n_col)
-
-    colptr = S.colptr
-    rowval = S.rowval
-    nzval  = S.nzval
-
-    @inbounds for j in 1:first_n_col
-        col_start = colptr[j]
-        col_end   = colptr[j+1] - 1
-        if col_start <= col_end
-            max_val = typemin(Tv)
-            max_row = rowval[col_start]
-            @inbounds for idx in col_start:col_end
-                v = nzval[idx]
-                if v > max_val
-                    max_val = v
-                    max_row = rowval[idx]
-                end
-            end
-            max_indices[j] = max_row
-        end
-    end
-    return max_indices
-end
-=#
 
 
 function matrix_iter(f::Function, M::AbstractArray{<:Any,2}; byrow::Bool=true,multithread::Bool=true)

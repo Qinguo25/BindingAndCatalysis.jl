@@ -65,10 +65,11 @@ handle C log(sym) + C0 >= 0 , polyhedron in log space
 function show_condition_poly(C::AbstractMatrix{<:Real},
                         C0::AbstractVector{<:Real},
                         nullity::Integer = 0;
+
                         syms::AbstractVector{Num},
                         log_space::Bool = true,
                         asymptotic::Bool = false
-)::Vector{Num}
+)
 
     # Helper: generate symbolic expression per row
     make_expr(Crow, C0v) = if log_space
@@ -96,7 +97,7 @@ function show_condition_poly(C::AbstractMatrix{<:Real},
     if nullity == 0
         expr = make_expr(C, C0)
         conds = make_cond(expr, :uneq)
-        return conds .|> Num
+        return conds
     else
         eq_expr   = make_expr(C[1:nullity, :], C0[1:nullity])
         uneq_expr = make_expr(C[nullity+1:end, :], C0[nullity+1:end])
@@ -104,7 +105,7 @@ function show_condition_poly(C::AbstractMatrix{<:Real},
         eq   = make_cond(eq_expr, :eq)
         uneq = make_cond(uneq_expr, :uneq)
 
-        return vcat(eq, uneq) .|> Num
+        return vcat(eq, uneq) 
     end
 end
 show_condition_poly(poly::Polyhedron; kwargs...)=show_condition_poly(get_C_C0_nullity(poly)...; kwargs...)
@@ -127,12 +128,11 @@ function show_condition_path(Bnc::Bnc, path::AbstractVector{<:Integer}, change_q
     syms = copy(qK_sym(Bnc)) |> x->deleteat!(x,locate_sym_qK(Bnc, change_qK)) 
     show_condition_poly(poly; syms=syms, kwargs...)
 end
+
 function show_condition_path(grh::SISOPaths, pth_idx; kwargs...)
-    bn = get_binding_network(grh)
     poly = get_polyhedron(grh, pth_idx)
-    path = get_path(grh, pth_idx; return_idx=true)
-    change_qK = grh.change_qK_idx     
-    show_condition_path(bn, path, change_qK; kwargs...)
+    syms = qK_sym(grh)     
+    show_condition_poly(poly; syms=syms, kwargs...)
 end
 
 
@@ -156,14 +156,14 @@ show_expression_x(args...;kwargs...)= begin
     bn = get_binding_network(args...)
     y = x_sym(bn)
     x = qK_sym(bn)
-    show_expression_mapping(get_H_H0(args...), y,x; kwargs...)
+    show_expression_mapping(get_H_H0(args...)..., y,x; kwargs...)
 end
 
 show_expression_qK(args...;kwargs...)= begin
     bn = get_binding_network(args...)
     y = qK_sym(bn)
     x = x_sym(bn)
-    show_expression_mapping(get_M_M0(args...), y,x; kwargs...)
+    show_expression_mapping(get_M_M0(args...)..., y,x; kwargs...)
 end
 
 
@@ -209,18 +209,31 @@ eg: +q1 -q2 +K2 from [1,-1,0,1]
 function sym_direction(Bnc::Bnc,dir)::String
     rst = ""
     for i in 1:Bnc.d
-        if dir[i] > 0
+        if dir[i] > 1e-6
             rst *= "+"*repr(Bnc.q_sym[i])*" "
-        elseif dir[i] < 0
+        elseif dir[i] < -1e-6
             rst *= "-"*repr(Bnc.q_sym[i])*" "
         end
     end
     rst*="; "
     for j in 1:Bnc.r
-        if dir[j+Bnc.d] > 0
+        if dir[j+Bnc.d] > 1e-6
             rst *= "+"*repr(Bnc.K_sym[j])*" "
-        elseif dir[j+Bnc.d] < 0
+        elseif dir[j+Bnc.d] < -1e-6
             rst *= "-"*repr(Bnc.K_sym[j])*" "
+        end
+    end
+    return rst
+end
+
+
+function sym_direction(dir ;syms::AbstractArray{Num})::String
+    rst = ""
+    for i in eachindex(dir)
+        if dir[i] > 1e-6
+            rst *= "+"*repr(Bnc.q_sym[i])*" "
+        elseif dir[i] < -1e-6
+            rst *= "-"*repr(Bnc.q_sym[i])*" "
         end
     end
     return rst
@@ -341,7 +354,7 @@ end
 print_paths(paths; prefix, ids, volumes, digits, io)
 """
 
-print_paths(paths::AbstractVector{<:AbstractVector}; volumes, ids, kwargs...) =
+print_paths(paths::AbstractVector{<:AbstractVector}; volumes=nothing, ids=nothing, kwargs...) =
     print_paths(_normalize_rows(paths; volumes=volumes, ids=ids); kwargs...)
 
 
@@ -382,12 +395,12 @@ end
 """
 Normally display the expression of the interface, when denoting the idx, whill express the interface in terms of that qK idx.
 """
-function show_interface(Bnc::Bnc, from,to, change_idx::Union{Nothing,Integer}=nothing; kwargs...)
+function show_interface(Bnc::Bnc, from,to;  lhs_idx::Union{Nothing,Integer}=nothing, kwargs...)
     C, C0 = get_interface(Bnc,from,to) # C' log qK + C0 =0
-    if isnothing(change_idx)
-        return show_condition_poly(C, C0, 1 , qK_sym(Bnc) ;kwargs...)
+    if isnothing(lhs_idx)
+        return show_condition_poly(C, C0, 1 ;syms =  qK_sym(Bnc) ,kwargs...)
     else
-        return solve_sym_expr(C,C0, qK_sym(Bnc), change_idx;kwargs...)
+        return solve_sym_expr(C,C0, qK_sym(Bnc), lhs_idx;kwargs...)
     end
 end
 
@@ -395,7 +408,8 @@ end
 
 
 
-function show_expression_path(grh::SISOPaths, pth_idx::Integer; observe_x=nothing, kwargs...)
+function show_expression_path(grh::SISOPaths, pth; observe_x=nothing, kwargs...)
+    pth_idx = get_idx(grh, pth)
     bn = get_binding_network(grh)
 
     observe_x_idx = isnothing(observe_x) ? (1:bn.n) : locate_sym_x.(Ref(bn), observe_x)
@@ -405,32 +419,39 @@ function show_expression_path(grh::SISOPaths, pth_idx::Integer; observe_x=nothin
     qKsym = qK_sym(bn)
     change_sym = qKsym[change_qK_idx]
 
-    
+    continuous, upward, downward = :→, :↑, :↓
+    vars = @variables $continuous, $upward, $downward
+
     H_H0, rgm_interface = get_expression_path(grh, pth_idx; observe_x = observe_x_idx)
 
     expr_sym = let 
         exprs = Vector{Any}(undef, length(H_H0))
         for (i, (H_row, H0_val)) in enumerate(H_H0)
-            if isnothing(H0_val)# singular regime, expression is just H_row * log(qK)
-                exprs[i] = map(H_row[:,change_qK_idx]) do i 
-                        if abs(i) < 1e-6
-                            nothing
-                        else
-                            if i > 0
-                                :↑
-                            else
-                                :↓
+
+            exprs[i] = if isnothing(H0_val)# singular regime, expression is just H_row * log(qK)
+                # @show H_row[:,change_qK_idx]
+                            let
+                                a = Vector{Num}(undef, size(H_row,1))
+                                dirs = @view(H_row[:,change_qK_idx])
+                                for j in eachindex(a)
+                                    # @show dirs[j]
+                                    a[j] = if abs(dirs[j]) < 1e-6
+                                                vars[1]
+                                        else  
+                                            dirs[j] > 0 ? vars[2] : vars[3]
+                                        end
+                                end
+                                a
                             end
-                        end
-                    end
-            else
+                    else
                 # @show H_row, H0_val,qKsym, xsym
-                exprs[i] = show_expression_mapping(H_row, H0_val, xsym, qKsym  ; kwargs...)
-            end
+                            show_expression_mapping(H_row, H0_val, xsym, qKsym  ; kwargs...)
+                    end
         end
         exprs
     end
-                
+
+
     interface = rgm_interface .|> x -> solve_sym_expr(x..., qKsym, change_qK_idx; kwargs...)
     
     for i in eachindex(expr_sym)
@@ -441,8 +462,10 @@ function show_expression_path(grh::SISOPaths, pth_idx::Integer; observe_x=nothin
         else
             display((change_sym > interface[i-1].rhs) & (change_sym < interface[i].rhs))
         end
+
         display(expr_sym[i])
     end
+
 
     return nothing
 end
@@ -480,7 +503,7 @@ function show_expression_path(model::Bnc, rgm_path, change_qK_idx, observe_x_idx
     edges = map(@view idx[1:end-1]) do i
         rgm_from = rgm_path[i]
         rgm_to   = rgm_path[i+1]
-        edge = show_interface(model, rgm_from, rgm_to,change_qK_idx;log_space=log_space).rhs
+        edge = show_interface(model, rgm_from, rgm_to; lhs_idx=change_qK_idx, log_space=log_space).rhs
         return edge
     end
     return (exprs, edges)
