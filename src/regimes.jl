@@ -791,7 +791,7 @@ function get_intersect(Bnc,vtx1,vtx2)::Polyhedron
 
     p = intersect(p1,p2)
     detecthlinearity!(p)
-    if dim(p)< maximum(dim1,dim2)-1
+    if dim(p)< max(dim1,dim2)-1
         @error("Vertices $get_perm(Bnc, vtx1) and $get_perm(Bnc, vtx2) do not have dim-1 intersect.")
     end
     return p

@@ -107,7 +107,7 @@ function show_condition_poly(C::AbstractMatrix{<:Real},
         return vcat(eq, uneq) .|> Num
     end
 end
-show_condition_poly(poly::Polyhedron;kwargs...)=show_condition_poly(get_C_C0_nullity(poly)...; kwargs...)
+show_condition_poly(poly::Polyhedron; kwargs...)=show_condition_poly(get_C_C0_nullity(poly)...; kwargs...)
 show_condition_poly(C_qK::AbstractVector{<:Real},C0_qK::Real,args...;kwargs...)=show_condition_poly(C_qK', [C0_qK], args...; kwargs...)[1]
 
 
@@ -385,9 +385,9 @@ Normally display the expression of the interface, when denoting the idx, whill e
 function show_interface(Bnc::Bnc, from,to, change_idx::Union{Nothing,Integer}=nothing; kwargs...)
     C, C0 = get_interface(Bnc,from,to) # C' log qK + C0 =0
     if isnothing(change_idx)
-        return show_condition_poly(C, C0, [Bnc.q_sym; Bnc.K_sym], 1;kwargs...)
+        return show_condition_poly(C, C0, 1 , qK_sym(Bnc) ;kwargs...)
     else
-        return solve_sym_expr(C,C0, [Bnc.q_sym; Bnc.K_sym], change_idx;kwargs...)
+        return solve_sym_expr(C,C0, qK_sym(Bnc), change_idx;kwargs...)
     end
 end
 
