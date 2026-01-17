@@ -1,5 +1,22 @@
 # ----------------Functions for mapping between qK space and x space----------------------------------
 
+"""
+    x2qK(bnc::Bnc, x; input_logspace=false, output_logspace=false, only_q=false)
+
+Map concentrations `x` to totals/binding constants `qK`.
+
+# Arguments
+- `bnc`: Binding network model.
+- `x`: Species concentrations (vector or matrix).
+
+# Keyword Arguments
+- `input_logspace`: Treat `x` as log10 values when `true`.
+- `output_logspace`: Return log10 values when `true`.
+- `only_q`: Return only `q` (conservation totals) when `true`.
+
+# Returns
+- Vector or array containing `q` (and `K` if `only_q=false`).
+"""
 function x2qK(Bnc::Bnc, x::AbstractArray{<:Real};
     input_logspace::Bool=false,
     output_logspace::Bool=false,
@@ -47,6 +64,23 @@ end
 #-----------------------------------------------------------------
 
 
+"""
+    _logqK2logx_nlsolve(bnc::Bnc, logqK; startlogx=nothing, method=missing, kwargs...) -> Vector
+
+Solve for `logx` given `logqK` using a nonlinear solver.
+
+# Arguments
+- `bnc`: Binding network model.
+- `logqK`: Log10 values of q and K.
+
+# Keyword Arguments
+- `startlogx`: Initial guess for log10(x).
+- `method`: NonlinearSolve algorithm symbol.
+- `kwargs...`: Passed through to `solve`.
+
+# Returns
+- Estimated log10(x) vector.
+"""
 function _logqK2logx_nlsolve(Bnc::Bnc, logqK::AbstractArray{<:Real,1};
     startlogx::Union{Vector{<:Real},Nothing}=nothing,
     method ::Union{Symbol,Missing} = missing,
@@ -99,6 +133,32 @@ function _logqK2logx_nlsolve(Bnc::Bnc, logqK::AbstractArray{<:Real,1};
     return sol.u
 end
 
+"""
+    qK2x(bnc::Bnc, qK; K=nothing, logK=nothing, input_logspace=false, output_logspace=false,
+        startlogx=nothing, startlogqK=nothing, use_vtx=false, method=:homotopy,
+        reltol=1e-8, abstol=1e-10, kwargs...) -> Vector
+
+Map from totals/binding constants (`qK`) to species concentrations `x`.
+
+# Arguments
+- `bnc`: Binding network model.
+- `qK`: Vector of totals (and optionally binding constants).
+
+# Keyword Arguments
+- `K`: Binding constants in linear space.
+- `logK`: Binding constants in log10 space.
+- `input_logspace`: Treat inputs as log10 values when `true`.
+- `output_logspace`: Return log10 values when `true`.
+- `startlogx`: Initial guess for log10(x).
+- `startlogqK`: Initial log10(qK) for homotopy.
+- `use_vtx`: Use regime-based closed form when `true`.
+- `method`: Solver method (`:homotopy` or NonlinearSolve symbol).
+- `reltol`, `abstol`: Solver tolerances.
+- `kwargs...`: Passed through to the solver.
+
+# Returns
+- Vector of `x` values in log10 or linear space.
+"""
 function qK2x(Bnc::Bnc, qK::AbstractArray{<:Real,1};
     K::Union{Vector{<:Real},Nothing}=nothing,
     logK::Union{Vector{<:Real},Nothing}=nothing,
@@ -111,10 +171,7 @@ function qK2x(Bnc::Bnc, qK::AbstractArray{<:Real,1};
     reltol = 1e-8,
     abstol = 1e-10,
     kwargs...)::Vector{<:Real}
-    """
-    Map from qK space to x space.
-    Available methods includes: :homotopy, :newton, :manual
-    """
+    # Map from qK space to x space using homotopy or nonlinear solving.
     #---Solve the homotopy ODE to find x from qK.---
 
     # Define the start point 
@@ -171,6 +228,11 @@ function qK2x(Bnc::Bnc, qK::AbstractArray{<:Real,1};
     return x
 end
 
+"""
+    qK2x(bnc::Bnc, qK::AbstractArray{<:Real,2}; kwargs...) -> AbstractArray
+
+Batch mapping from qK space to x space for each column of `qK`.
+"""
 function qK2x(Bnc::Bnc, qK::AbstractArray{<:Real,2};kwargs...)::AbstractArray{<:Real}
     # batch mapping of qK2x for each column of qK and return as matrix.
     # Make thread-safe by creating separate copies for each thread
@@ -180,6 +242,24 @@ end
 
 #----------------Functions using homotopyContinuous to moving across x space along with qK change----------------------
 
+"""
+    x_traj_with_qK_change(bnc::Bnc, start_point, end_point; input_logspace=false, output_logspace=false, kwargs...)
+
+Compute a trajectory in `x` space while `qK` changes linearly in log10 space.
+
+# Arguments
+- `bnc`: Binding network model.
+- `start_point`: Starting `qK` values.
+- `end_point`: Ending `qK` values.
+
+# Keyword Arguments
+- `input_logspace`: Treat inputs as log10 values when `true`.
+- `output_logspace`: Return `x` in log10 space when `true`.
+- `kwargs...`: Passed to the ODE solver.
+
+# Returns
+- Tuple `(t, x_traj)` containing time points and state vectors.
+"""
 function x_traj_with_qK_change(
     Bnc::Bnc,
     start_point::Vector{<:Real},
@@ -204,6 +284,11 @@ function x_traj_with_qK_change(
 end
 
 
+"""
+    x_traj_with_q_change(bnc::Bnc, start_q, end_q; K=nothing, logK=nothing, input_logspace=false, kwargs...)
+
+Compute an `x` trajectory for a change in `q` while holding `K` fixed.
+"""
 function x_traj_with_q_change(
     Bnc::Bnc,
     start_q::Vector{<:Real},
@@ -221,6 +306,11 @@ end
 
 
 
+"""
+    HomotopyParams
+
+Cache container for homotopy-based qK→x integration.
+"""
 struct HomotopyParams{V<:Vector{Float64},SV1<:SubArray,SV2<:SubArray}
 
     ΔlogqK::V
@@ -243,6 +333,12 @@ struct HomotopyParams{V<:Vector{Float64},SV1<:SubArray,SV2<:SubArray}
     # logLx_J_view_local::SV2
 end
 
+"""
+    _logx_traj_with_logqK_change(bnc::Bnc, startlogqK, endlogqK; startlogx=nothing,
+        alg=nothing, reltol=1e-8, abstol=1e-9, ensure_manifold=true, npoints=nothing, kwargs...) -> ODESolution
+
+Integrate a homotopy path in log space to map qK changes to x trajectories.
+"""
 function _logx_traj_with_logqK_change(Bnc::Bnc,
     startlogqK::Union{Vector{<:Real},Nothing},
     endlogqK::Vector{<:Real};
@@ -370,6 +466,12 @@ end
 
 
 
+"""
+    x_traj_cat(bnc::Bnc, qK0_or_q0, tspan; K=nothing, logK=nothing,
+        input_logspace=false, output_logspace=false, kwargs...) -> (Vector, Vector)
+
+Simulate species trajectories under catalysis dynamics.
+"""
 function x_traj_cat(Bnc::Bnc, qK0_or_q0::Vector{<:Real}, tspan::Tuple{Real,Real};
     K::Union{Vector{<:Real},Nothing}=nothing,
     logK::Union{Vector{<:Real},Nothing}=nothing,
@@ -400,6 +502,11 @@ function x_traj_cat(Bnc::Bnc, qK0_or_q0::Vector{<:Real}, tspan::Tuple{Real,Real}
     return _ode_solution_wrapper(sol)
 end
 
+"""
+    qK_traj_cat(bnc::Bnc, args...; only_q=false, output_logspace=false, kwargs...) -> (Vector{Float64}, Matrix{Float64})
+
+Simulate catalysis dynamics and return trajectories in q/K space.
+"""
 function qK_traj_cat(Bnc::Bnc, args...; only_q::Bool=false, output_logspace::Bool=false, kwargs...)::Tuple{Vector{Float64}, Matrix{Float64}}
     t,u = x_traj_cat(Bnc, args...; output_logspace=true, kwargs...)
     u = x2qK(Bnc, u',input_logspace=true, output_logspace=output_logspace, only_q=only_q)'
@@ -407,6 +514,11 @@ function qK_traj_cat(Bnc::Bnc, args...; only_q::Bool=false, output_logspace::Boo
 end
 
 
+"""
+    TimecurveParam
+
+Cache container for catalysis time-course integration.
+"""
 struct TimecurveParam{V<:Vector{Float64},
     SV1<:SubArray,SV2<:SubArray,SV3<:SubArray,SV4<:SubArray}
 
@@ -423,6 +535,11 @@ struct TimecurveParam{V<:Vector{Float64},
     J_bottom::SV4 # View for the right part of the Jacobian matrix
 end
 
+"""
+    catalysis_logx(bnc::Bnc, logx0, tspan; alg=nothing, reltol=1e-8, abstol=1e-9, kwargs...) -> ODESolution
+
+Solve the catalysis ODE system in log space.
+"""
 function catalysis_logx(Bnc::Bnc, logx0::Vector{<:Real}, tspan::Tuple{Real,Real};
     alg=nothing, # Default to nothing, will use Tsit5() if not provided
     reltol=1e-8,

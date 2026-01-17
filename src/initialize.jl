@@ -45,7 +45,10 @@ abstract type AbstractBnc end
 
 
 """
-Catalysis data structure
+    CatalysisData
+
+Container for catalysis network metadata, including stoichiometric changes,
+reaction orders, and rate constants.
 """
 struct CatalysisData
     # Parameters for the catalysis networks
@@ -109,13 +112,49 @@ struct Volume
     mean::Float64
     var::Float64
 end
+"""
+    fetch_mean_re(V::Volume) -> (Float64, Float64)
+
+Return the mean and relative error (standard deviation / mean) for a `Volume`.
+"""
 fetch_mean_re(V::Volume) = (V.mean, sqrt(V.var)/V.mean)
+"""
+    Base.display(V::Volume)
+
+Display a compact summary of a `Volume`.
+"""
 Base.display(V::Volume) = Printf.@sprintf("Volume(mean=%.3e, var=%.3e, rel_error=%.2f%%)", V.mean, V.var, (sqrt(V.var)/V.mean)*100)
+"""
+    Base.:+(v1::Volume, v2::Volume) -> Volume
+
+Add two `Volume` values by summing means and variances.
+"""
 Base.:+(v1::Volume, v2::Volume) = Volume(v1.mean + v2.mean, v1.var + v2.var)
+"""
+    Base.isless(a::Volume, b::Volume) -> Bool
+
+Compare `Volume` objects by mean value.
+"""
 Base.isless(a::Volume, b::Volume) = a.mean < b.mean
+"""
+    Base.:(==)(a::Volume, b::Volume) -> Bool
+
+Return `true` when two `Volume` objects have identical means.
+"""
 Base.:(==)(a::Volume, b::Volume) = a.mean == b.mean 
+"""
+    Base.zero(::Volume) -> Volume
+
+Return a zero `Volume` with zero mean and variance.
+"""
 Base.zero(::Volume) = Volume(0.0, 0.0)
 
+"""
+    Vertex
+
+Representation of a regime/vertex in a binding network, including cached
+linear maps and polyhedral conditions.
+"""
 mutable struct Vertex{F,T}
     #--- Parent Bnc model reference ---
     bn::Union{AbstractBnc,Nothing} # Reference to the parent Bnc model
@@ -157,6 +196,11 @@ mutable struct Vertex{F,T}
     end
 end
 
+"""
+    VertexEdge
+
+Edge metadata connecting neighboring vertices in a regime graph.
+"""
 mutable struct VertexEdge{T}
     to::Int
     diff_r::Int
@@ -170,6 +214,11 @@ mutable struct VertexEdge{T}
 end
 
 # Adjacency list + optional caches
+"""
+    VertexGraph
+
+Adjacency structure for vertices with optional caches for change directions.
+"""
 mutable struct VertexGraph{T}
     bn::AbstractBnc
     x_grh::SimpleGraph 
@@ -190,6 +239,12 @@ mutable struct VertexGraph{T}
     end
 end
 
+"""
+    Bnc
+
+Binding network model with stoichiometry, conservation laws, and derived
+structures for regime analysis.
+"""
 mutable struct Bnc{T} <: AbstractBnc # T is the int type to save all the indices
     # ----Parameters of the binding networks------
     N::Matrix{Int} # binding reaction matrix
@@ -381,7 +436,28 @@ end
 
 
 
-# Define a separate outer function for keyword-based construction, needs to be refine later.
+"""
+    Bnc(; N=nothing, L=nothing, x_sym=nothing, q_sym=nothing, K_sym=nothing,
+        S=nothing, aT=nothing, k=nothing, cat_x_idx=nothing) -> Bnc
+
+Construct a binding network model from stoichiometry (`N`) or conservation (`L`)
+matrices and optional symbol metadata. Catalysis data can be attached through
+`S`, `aT`, and `k`.
+
+# Keyword Arguments
+- `N`: Stoichiometry matrix (reactions × species).
+- `L`: Conservation matrix (totals × species).
+- `x_sym`: Symbols for species concentrations.
+- `q_sym`: Symbols for total concentrations.
+- `K_sym`: Symbols for binding constants.
+- `S`: Catalysis change matrix in qK space.
+- `aT`: Catalysis index and coefficient matrix.
+- `k`: Catalysis rate constants.
+- `cat_x_idx`: Index of catalytic species.
+
+# Returns
+- A `Bnc` model with derived matrices and caches initialized.
+"""
 function Bnc(;N=nothing,L=nothing,
     x_sym=nothing,q_sym=nothing,K_sym=nothing,
     S=nothing,aT=nothing,k=nothing,
@@ -425,28 +501,29 @@ end
 
 
 
+"""
+    update_catalysis!(bnc::Bnc; S=nothing, aT=nothing, k=nothing, cat_x_idx=nothing) -> Bnc
+
+Attach or update catalysis data on a `Bnc` model in-place.
+
+# Arguments
+- `bnc`: Binding network model to update.
+
+# Keyword Arguments
+- `S`: Catalysis change matrix in qK space.
+- `aT`: Catalysis index and coefficient matrix.
+- `k`: Rate constants.
+- `cat_x_idx`: Index of catalytic species.
+
+# Returns
+- The updated `bnc`.
+"""
 function update_catalysis!(Bnc::Bnc;
     S::Union{Matrix{Int},Nothing}=nothing,
     aT::Union{Matrix{Int},Nothing}=nothing,
     k::Union{Vector{<:Real},Nothing}=nothing,
     cat_x_idx::Union{Vector{Int},Nothing}=nothing,
     )
-    """
-    Updates the catalysis data of a `Bnc` object in-place
-
-    # Arguments
-    - `bnc::Bnc`: The binding network object to modify.
-
-    # Keyword Arguments
-    - `S::Matrix{Int}`: The new catalysis change matrix.
-    - `aT::Matrix{Int}`: The new catalysis index and coefficient matrix.
-    - `k::Vector{<:Real}`: The new rate constants.
-    - `cat_x_idx::Vector{Int}`: The new index of catalytic species.
-
-    Any fields left as `nothing` will not be updated unless a new `CatalysisData`
-    object needs to be created.
-
-    """
     if isnothing(bnc.catalysis)
         bnc.catalysis = CatalysisData(bnc.n, S, aT, k, cat_x_idx)
     else
@@ -456,6 +533,7 @@ function update_catalysis!(Bnc::Bnc;
         cat_x_idx = isnothing(cat_x_idx) ? bnc.catalysis.cat_x_idx : cat_x_idx
         bnc.catalysis = CatalysisData(bnc.n, S, aT, k, cat_x_idx)
     end
+    return bnc
 end
 
 
@@ -472,6 +550,11 @@ include(joinpath(@__DIR__,"regime_graphs.jl"))
 include(joinpath(@__DIR__,"visualize.jl"))
 
 
+"""
+    summary(bnc::Bnc) -> String
+
+Print a summary of a binding network model to standard output.
+"""
 function summary(Bnc::Bnc)
     println("----------Binding Network Summary:-------------")
     println("Number of species (n): ", Bnc.n)
@@ -495,6 +578,11 @@ function summary(Bnc::Bnc)
     println("-----------------------------------------------")
 end
 
+"""
+    show(io::IO, ::MIME"text/plain", bnc::Bnc)
+
+Pretty-print a `Bnc` model in plain text contexts.
+"""
 function show(io::IO, ::MIME"text/plain", bnc::Bnc)
     println(io, "----------Binding Network Summary:-------------")
     println(io, "Number of species (n): ", bnc.n)

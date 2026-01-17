@@ -3,13 +3,9 @@
 #-----------------------------------------------------------------
 
 """
-Assign regimes given a point in x space.
+    assign_vertex_x(bnc::Bnc, x; input_logspace=false, asymptotic_only=true, return_idx=false)
 
-# Arguments
-- `Bnc::Bnc{T}`: The BindingAndCatalysis model.
-- `x::AbstractVector{<:Real}`: The point in x space.
-- `input_logspace::Bool=false`: Whether the input x is in log space.
-- `asymptotic_only::Bool=true`: Whether to consider only asymptotic regimes.
+Assign a regime given a point in x space.
 """
 function assign_vertex_x(Bnc::Bnc{T}, x::AbstractVector{<:Real};
     input_logspace::Bool=false,
@@ -52,19 +48,20 @@ end
 # end
 
 """
-Assign regimes given qK.
+    assign_vertex_qK(bnc::Bnc; x, input_logspace=false, kwargs...) -> Vector
 
-# Arguments
-- `Bnc::Bnc{T}`: The BindingAndCatalysis model.
-- `x::AbstractVector{<:Real}`: The point in x space.
-- `input_logspace::Bool=false`: Whether the input x is in log space.
-- `asymptotic::Bool=true`: Whether to consider only asymptotic regimes.
+Assign a regime given a point in x space by first mapping to qK.
 """
 function assign_vertex_qK(Bnc::Bnc ; x::AbstractVector{<:Real}, input_logspace::Bool=false, kwargs...) 
     # @show all_vertice_idx
     logqK = x2qK(Bnc,x; input_logspace=input_logspace, output_logspace=true)
     return assign_vertex_qK(Bnc, logqK; input_logspace=true, kwargs...)
 end
+"""
+    assign_vertex_qK(bnc::Bnc, qK; input_logspace=false, asymptotic_only=false, eps=0, return_idx=false)
+
+Assign a regime given qK coordinates.
+"""
 function assign_vertex_qK(Bnc::Bnc, qK::AbstractVector{<:Real}; input_logspace::Bool=false, asymptotic_only::Bool=false, eps=0, return_idx::Bool=false) 
     real_only = asymptotic_only ? true : nothing
     all_vertice_idx = get_vertices(Bnc, singular=false, asymptotic = real_only, return_idx = true)
@@ -90,12 +87,22 @@ function assign_vertex_qK(Bnc::Bnc, qK::AbstractVector{<:Real}; input_logspace::
     return return_idx ? idx : get_perm(Bnc, idx)
 end
 
+"""
+    assign_vertex(args...; kwargs...) -> Vector
+
+Alias for `assign_vertex_qK`.
+"""
 assign_vertex(args...;kwargs...)=assign_vertex_qK(args...;kwargs...)
 
 
 #-------------------------------------------------------------------------------------------------------------------------------------------------------
 
 # Trying speedup assign_vertex_qK, but not success yet.
+"""
+    get_i_j(model::Bnc, perm, t) -> (Int, Int, Int)
+
+Return row/column indices for a constraint index `t`.
+"""
 function get_i_j(model::Bnc,perm::Vector{<:Integer}, t::Integer)
     i = findfirst(>(t),model._C_partition_idx) - 1
     j1 = perm[i]
@@ -105,6 +112,11 @@ function get_i_j(model::Bnc,perm::Vector{<:Integer}, t::Integer)
     return i, j1, j2
 end
 
+"""
+    assign_vertex_qK_test(bnc::Bnc, qK; input_logspace=false, asymptotic=true, eps=0)
+
+Experimental qK regime assignment using constraint violation updates.
+"""
 function assign_vertex_qK_test(Bnc::Bnc{T}, qK::AbstractVector{<:Real};
                                input_logspace::Bool=false,
                                asymptotic::Bool=true, eps=0) where T

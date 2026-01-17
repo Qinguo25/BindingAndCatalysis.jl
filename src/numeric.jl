@@ -1,5 +1,18 @@
 #----------------Functions for calculates the derivative of log(x) with respect to log(qK) and vice versa----------------------
 
+"""
+    ∂logqK_∂logx(bnc::Bnc; x=nothing, qK=nothing, q=nothing) -> Matrix
+
+Compute the Jacobian of `log(q,K)` with respect to `log(x)` at a given point.
+
+# Keyword Arguments
+- `x`: Species concentrations in linear space.
+- `qK`: Totals/binding constants in linear space.
+- `q`: Totals (subset of `qK`) in linear space.
+
+# Returns
+- Jacobian matrix of `logqK` with respect to `logx`.
+"""
 function ∂logqK_∂logx(Bnc::Bnc;
     x::Union{AbstractVector{<:Real},Nothing}=nothing,
     qK::Union{AbstractVector{<:Real},Nothing}=nothing,
@@ -31,6 +44,11 @@ function ∂logqK_∂logx(Bnc::Bnc;
         Bnc.N
     ]
 end
+"""
+    ∂logx_∂logqK(bnc::Bnc; x=nothing, qK=nothing, q=nothing) -> Matrix
+
+Compute the Jacobian of `log(x)` with respect to `log(q,K)`.
+"""
 function ∂logx_∂logqK(Bnc::Bnc;
     x::Union{AbstractVector{<:Real},Nothing}=nothing,
     qK::Union{AbstractVector{<:Real},Nothing}=nothing,
@@ -38,11 +56,39 @@ function ∂logx_∂logqK(Bnc::Bnc;
 
     inv(∂logqK_∂logx(Bnc; x=x, q=q, qK=qK))
 end
+"""
+    logder_x_qK(args...; kwargs...) -> Matrix
+
+Alias for `∂logx_∂logqK`.
+"""
 logder_x_qK(args...;kwargs...) = ∂logx_∂logqK(args...;kwargs...)
+"""
+    logder_qK_x(args...; kwargs...) -> Matrix
+
+Alias for `∂logqK_∂logx`.
+"""
 logder_qK_x(args...;kwargs...) = ∂logqK_∂logx(args...;kwargs...)
 
 # ---------------------------------------------------------------Get regime data from resulting matrix---------------------------------------
 
+"""
+    get_reaction_order(bnc::Bnc, x_mat, q_mat=nothing; x_idx=nothing, qK_idx=nothing, only_q=false) -> Array{Float64,3}
+
+Compute reaction-order-like sensitivities over a trajectory.
+
+# Arguments
+- `bnc`: Binding network model.
+- `x_mat`: Matrix of species concentrations (rows = time points).
+- `q_mat`: Optional matrix of totals/binding constants.
+
+# Keyword Arguments
+- `x_idx`: Indices of species to include.
+- `qK_idx`: Indices of `qK` to include.
+- `only_q`: Restrict to totals `q` when `true`.
+
+# Returns
+- 3D array of sensitivities with shape `(time, x_idx, qK_idx)`.
+"""
 function get_reaction_order(Bnc::Bnc, x_mat::Matrix{<:Real}, q_mat::Union{Matrix{<:Real},Nothing}=nothing;
     x_idx::Union{Vector{Int},Nothing}=nothing,
     qK_idx::Union{Vector{Int},Nothing}=nothing,
@@ -221,7 +267,6 @@ end
 
 
 # for now as the perm is not defined , we shall 
-
 
 
 

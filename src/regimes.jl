@@ -1,11 +1,16 @@
 #--------------Core computation functions-------------------------
 
 """
-    _calc_Nρ_inverse(Nρ) -> (Nρ_inv::SparseMatrixCSC, nullity::Int)
+    _calc_Nρ_inverse(Nρ) -> (SparseMatrixCSC, Int)
 
-Compute inverse or adjacency for possibly singular Nρ.
-- If Nρ is square and factorizable: returns sparse(inv(Nρ)), nullity = 0
-- If singular: delegates to _adj_singular_matrix(Nρ) to get adjacency and nullity.
+Compute a sparse inverse-like matrix for `Nρ` and its nullity.
+
+# Arguments
+- `Nρ`: Square or rectangular submatrix of `N`.
+
+# Returns
+- Tuple `(Nρ_inv, nullity)` where `Nρ_inv` is sparse and `nullity` is the
+  inferred nullity.
 """
 function _calc_Nρ_inverse(Nρ)::Tuple{SparseMatrixCSC,Int}
 
@@ -22,10 +27,16 @@ function _calc_Nρ_inverse(Nρ)::Tuple{SparseMatrixCSC,Int}
 end
 
 """
-    _calc_H(Bnc, perm)
+    _calc_H(bnc::Bnc, perm) -> SparseMatrixCSC
 
-Compute H for a vertex permutation using cached Nρ_inv where possible.
-Returns a dense H matrix; caller may sparsify.
+Compute the `H` mapping for a vertex permutation using cached `Nρ_inv`.
+
+# Arguments
+- `bnc`: Binding network model.
+- `perm`: Regime permutation vector.
+
+# Returns
+- Sparse matrix `H` mapping log(qK) to log(x).
 """
 function _calc_H(Bnc::Bnc,perm::Vector{<:Integer})::SparseMatrixCSC
     key = _get_Nρ_key(Bnc, perm)
@@ -48,14 +59,11 @@ function _calc_H(Bnc::Bnc,perm::Vector{<:Integer})::SparseMatrixCSC
     return H
 end
 """
-    _calc_P_and_P0(Bnc, perm)
+    _calc_P_and_P0(bnc::Bnc, perm) -> (SparseMatrixCSC, Vector{Float64})
 
-Build sparse selection matrix P (d×n) and P0 (d-vector) for a permutation.
+Build the selection matrix `P` and offset `P0` for a permutation.
 """
 function _calc_P_and_P0(Bnc::Bnc{T}, perm::Vector{<:Integer})::Tuple{SparseMatrixCSC{Int,Int}, Vector{Float64}} where T
-    """
-    Creates the P and P0 matrices from a permutation.
-    """
     d, n = Bnc.d, Bnc.n
     
     # The non-zero elements are at rows i and columns perm[i].
@@ -73,15 +81,14 @@ function _calc_P_and_P0(Bnc::Bnc{T}, perm::Vector{<:Integer})::Tuple{SparseMatri
     return P, P0
 end
 """
-    _calc_C_C0_x(Bnc, perm)
+    _calc_C_C0_x(bnc::Bnc, perm) -> (SparseMatrixCSC, Vector{Float64})
 
-Construct x-space inequality matrix C_x (num_ineq×n) and c0_x (num_ineq).
-Exactly two nonzeros per inequality: (-1 at col, +1 at chosen rgm column).
+Construct x-space inequality matrices `(C_x, C0_x)` for a permutation.
+
+# Returns
+- Sparse constraint matrix `C_x` and offset vector `C0_x`.
 """
 function _calc_C_C0_x(Bnc::Bnc{T}, perm::Vector{<:Integer})::Tuple{SparseMatrixCSC{Int,Int}, Vector{Float64}} where T # highly optimized version
-    """
-    Creates the C and C0 matrices from a permutation.
-    """
     # This fucntion is created by chatgpt with numeric verification from dense version.
     # Is the lowest level, maximum-speed version.
     num_ineq = length(Bnc._L_sparse.nzval) - Bnc.d
@@ -144,10 +151,9 @@ function _calc_C_C0_x(Bnc::Bnc{T}, perm::Vector{<:Integer})::Tuple{SparseMatrixC
     return c_mtx, c0
 end
 """
-    _calc_C_C0_qK_singular(Bnc, vtx_perm)
+    _calc_C_C0_qK_singular(bnc::Bnc, vtx) -> (SparseMatrixCSC, Vector)
 
-Build qK-space constraints (C_qK, C0_qK) for singular vertices via affine mapping.
-Returns: (C_qK::SparseMatrixCSC, C0_qK::Vector)
+Build qK-space constraints `(C_qK, C0_qK)` for singular vertices via affine mapping.
 """
 function _calc_C_C0_qK_singular(Bnc::Bnc, vtx)
     M,M0 = get_M_M0(Bnc,vtx)
@@ -168,12 +174,10 @@ end
 #------------------Storage layer functions -----------------------------
 
 """
-    _build_Nρ_cache_parallel!(Bnc)
+    _build_Nρ_cache_parallel!(bnc::Bnc, perms) -> nothing
 
-Precompute and cache Nρ inverse info for all distinct complements of vertices.
-Returns nothing.
+Precompute and cache `Nρ` inverse information for all unique permutations.
 """
-
 function _build_Nρ_cache_parallel!(Bnc::Bnc{T},perms::Vector{Vector{T}}) where T
     perm_set = Set(Set(perm) for perm in perms) # Unique sets of permutations
     keys = [_get_Nρ_key(Bnc, perm) for perm in perm_set]
@@ -195,9 +199,9 @@ function _build_Nρ_cache_parallel!(Bnc::Bnc{T},perms::Vector{Vector{T}}) where 
 end
 
 """
-    _get_Nρ_inv!(Bnc, key)
+    _get_Nρ_inv!(bnc::Bnc, key) -> (SparseMatrixCSC, Int)
 
-Get (Nρ_inv, nullity) from cache or compute.
+Get `(Nρ_inv, nullity)` from cache or compute and store it.
 """
 function _get_Nρ_inv!(Bnc::Bnc{T}, key::AbstractVector{<:Integer}) where T
     get!(Bnc._vertices_Nρ_inv_dict, key) do
@@ -223,6 +227,11 @@ end
 #     return cls_start + i-1
 # end
 
+"""
+    _calc_change_col(from, to) -> Tuple
+
+Compute the change direction between two permutations.
+"""
 function _calc_change_col(from::Vector{T},to::Vector{T}) where T<:Integer
     j1 = 0
     j2 = 0
@@ -249,10 +258,12 @@ function _calc_change_col(from::Vector{T},to::Vector{T}) where T<:Integer
     end
 end
 
+"""
+    _get_i_j_perms(from, to) -> (Int, Int, Int, Int)
+
+Return indices and column selections that differ between two permutations.
+"""
 function _get_i_j_perms(from::Vector{T},to::Vector{T}) where T<:Integer
-    """
-    We shall find the source col+row and target col+row directly from two permutations.
-    """
     inconsis_idx = findall(from .!= to)
     if length(inconsis_idx) == 1
         i1 = inconsis_idx[1]
@@ -275,18 +286,18 @@ function _get_i_j_perms(from::Vector{T},to::Vector{T}) where T<:Integer
 end
 #------------------Helper functions -------------------------------------------
 """
-    _nrho_key_for_perm(Bnc, perm) -> Vector{Int}
+    _get_Nρ_key(bnc::Bnc, perm) -> Vector
 
-Indices of columns not in `perm` (complement) used to form Nρ.
+Indices of columns not in `perm` (the complement) used to form `Nρ`.
 """
 function _get_Nρ_key(Bnc::Bnc{T}, perm)::Vector{T} where T 
    return [i for i in 1:Bnc.n if i ∉ perm]
 end
 _get_Nρ_inv_from_perm!(Bnc, perm) = _get_Nρ_inv!(Bnc, _get_Nρ_key(Bnc, perm))
 """
-    _vertex_graph_to_sparse(G; weight_fn = e->1.0)
+    _vertex_graph_to_sparse(g::VertexGraph; weight_fn=e->1) -> SparseMatrixCSC
 
-Convert VertexGraph to sparse adjacency (weights from weight_fn).
+Convert a `VertexGraph` to a sparse adjacency matrix.
 """
 function _vertex_graph_to_sparse(G::VertexGraph{T}; weight_fn = e -> 1) where T
     n = length(G.neighbors)
@@ -307,15 +318,11 @@ function _vertex_graph_to_sparse(G::VertexGraph{T}; weight_fn = e -> 1) where T
     return sparse(I,J,V, n, n) |> dropzeros!
 end
 """
-    _create_vertex(Bnc, perm) -> Vertex
+    _create_vertex(bnc::Bnc, perm) -> Vertex
 
-Create a partially-filled Vertex (P/P0, M/M0, C_x/C0_x are ready).
+Create a partially-filled `Vertex` (P/P0, M/M0, C_x/C0_x are ready).
 """
 function _create_vertex(Bnc::Bnc, perm::Vector{<:Integer})::Vertex
-    """
-    Creates a new, partially-filled Vertex object.
-    This function performs the initial, less expensive calculations.
-    """
     find_all_vertices!(Bnc)
     idx = Bnc.vertices_perm_dict[perm] # Index of the vertex in the Bnc.vertices_perm list
     real = Bnc.vertices_asymptotic_flag[idx] # Check if the vertex is real or fake
@@ -337,10 +344,9 @@ function _create_vertex(Bnc::Bnc, perm::Vector{<:Integer})::Vertex
     )
 end
 """
-    _fill_inv_info!(vtx)
+    _fill_inv_info!(vtx::Vertex) -> nothing
 
-Ensure Vertex has H/H0 and qK constraints computed and cached.
-Mutates vtx. Returns nothing.
+Ensure a `Vertex` has `H/H0` and qK constraints computed and cached.
 """
 function _fill_inv_info!(vtx::Vertex)
     # Check if already calculated
@@ -389,15 +395,10 @@ end
 # ------------------------------------------------------------------------------
 
 """
-    find_all_vertices!(Bnc)
+    find_all_vertices!(bnc::Bnc) -> Vector{Vector{Int}}
 
-Compute and cache:
-- all vertex permutations and index dict
-- asymptotic flags
-- Nρ inverse cache (parallel)
-- vertex nullity
-
-Returns Vector{Vector{Int}} of vertex permutations.
+Compute and cache all vertex permutations, asymptotic flags, Nρ inverse cache,
+and vertex nullities.
 """
 function find_all_vertices!(Bnc::Bnc{T};) where T # cheap enough for now
     if isempty(Bnc.vertices_perm) || isempty(Bnc.vertices_asymptotic_flag)
@@ -439,17 +440,18 @@ end
 
 
 """
-Return a dict with key: vertex perm, value: its index in Bnc.vertices_perm
+    get_vertices_perm_dict(bnc::Bnc) -> Dict
+
+Return a dictionary mapping permutation vectors to vertex indices.
 """
 function get_vertices_perm_dict(Bnc::Bnc)
-    """
-    get vertices mapping dict
-    """
     find_all_vertices!(Bnc) # Ensure vertices are calculated
     return Bnc.vertices_perm_dict
 end
 """
-Get the nullity of all vertices in Bnc.
+    get_nullities(bnc::Bnc, rgms=nothing) -> Vector
+
+Return nullity values for selected regimes.
 """
 function get_nullities(Bnc::Bnc, rgms::Union{AbstractVector,Nothing}=nothing)
     """
@@ -466,12 +468,11 @@ function get_nullities(Bnc::Bnc, rgms::Union{AbstractVector,Nothing}=nothing)
 end
 
 """
-Get the volume of all vertices in Bnc.
+    get_volumes(bnc::Bnc, vtxs=nothing; recalculate=false, kwargs...) -> Vector{Volume}
+
+Return volumes for selected vertices, computing missing volumes as needed.
 """
 function get_volumes(Bnc::Bnc,vtxs::Union{AbstractVector,Nothing}=nothing; recalculate::Bool=false, kwargs...)
-    """
-    Calculate the volume of all vertices in Bnc. (currently calc all the voluems, but unnecessary)
-    """
     all_vtxs = isnothing(vtxs) ? get_vertices(Bnc;return_idx=true) : [get_idx(Bnc, vtx) for vtx in vtxs]
 
     vtxs_to_calc = 
@@ -496,23 +497,22 @@ end
 #   Functions involving vertices relationships, (neighbors finding and changedir finding)
 #---------------------------------------------------------------------------------------------
 """
-    get_vertices_neighbor_mat!(Bnc) -> SparseMatrixCSC
+    get_vertices_neighbor_mat_x(bnc::Bnc) -> SparseMatrixCSC
 
-Return x-space adjacency matrix of the vertex graph (unweighted → 1.0).
+Return the x-space adjacency matrix of the vertex graph.
 """
 function get_vertices_neighbor_mat_x(Bnc::Bnc)
-    """
-    # find the x space neighbor of all vertices in Bnc, the value denotes for two perms, which row they differ at.
-    """
     grh = get_vertices_graph!(Bnc;full=false)
     spmat = _vertex_graph_to_sparse(grh; weight_fn = e -> 1)
     return spmat
 end
 
+"""
+    get_vertices_neighbor_mat_qK(bnc::Bnc) -> SparseMatrixCSC
+
+Return the qK-space adjacency matrix of the vertex graph.
+"""
 function get_vertices_neighbor_mat_qK(Bnc::Bnc)
-    """
-    # find the x space neighbor of all vertices in Bnc, the value denotes for two perms, which row they differ at.
-    """
     grh = get_vertices_graph!(Bnc;full=true)
     f(x::VertexEdge) = isnothing(x.change_dir_qK) ? 0.0 : 1.0
     spmat = _vertex_graph_to_sparse(grh; weight_fn = f)
@@ -524,7 +524,9 @@ end
 #         functions involving single vertex and lazy calculate  its properties, act as keys for higher level functions
 # ------------------------------------------------------------------------------------
 """
-Get a vertex's index
+    get_idx(bnc::Bnc, idx::Integer; check=false) -> Integer
+
+Return the vertex index, optionally validating it.
 """
 function get_idx(Bnc::Bnc, idx::T;check::Bool=false) where T<:Integer
     if check
@@ -539,7 +541,9 @@ get_idx(Bnc::Bnc, vtx::Vertex;kwargs...)= get_idx(vtx)
 
 
 """
-Get perm of a vertex
+    get_perm(bnc::Bnc, perm; check=false) -> Vector
+
+Return the permutation vector, optionally validating it.
 """
 function get_perm(Bnc::Bnc,perm::Vector{<:Integer};check::Bool=false)
     if check
@@ -554,7 +558,9 @@ get_perm(Bnc::Bnc, vtx::Vertex;kwargs...)= get_perm(vtx)
 
 
 """
-Retrieves a vertex from cache or creates it if it doesn't exist.
+    get_vertex(bnc::Bnc, perm; check=false, kwargs...) -> Vertex
+
+Retrieve a vertex from cache or create it if missing.
 """
 function get_vertex(Bnc::Bnc, perm; check::Bool=false, kwargs...)::Vertex
     find_all_vertices!(Bnc) #initialize perm_data
@@ -573,6 +579,11 @@ function get_vertex(Bnc::Bnc, perm; check::Bool=false, kwargs...)::Vertex
     end
     return get_vertex(vtx; kwargs...)
 end
+"""
+    get_vertex(vtx::Vertex; inv_info=true, kwargs...) -> Vertex
+
+Ensure a vertex has requested cached fields and return it.
+"""
 function get_vertex(vtx::Vertex; inv_info::Bool=true,kwargs...)::Vertex
     if inv_info
         _fill_inv_info!(vtx)
@@ -585,11 +596,18 @@ end
 #-------------------------------------------------------------------------------------------------------------
 
 
+"""
+    get_binding_network(bnc_or_vertex, args...) -> Bnc
+
+Return the binding network associated with a vertex or the model itself.
+"""
 get_binding_network(Bnc::Bnc,args...)=Bnc
 get_binding_network(vtx::Vertex,args...)=vtx.bn
 
 """
-    Check if the vertex represented by perm is within the Bnc.
+    have_perm(bnc::Bnc, perm_or_idx) -> Bool
+
+Return `true` when a permutation or index exists in the model.
 """
 have_perm(Bnc::Bnc, perm::Vector{<:Integer}) = (find_all_vertices!(Bnc); haskey(Bnc.vertices_perm_dict, perm))
 have_perm(Bnc::Bnc, idx::Integer) = (find_all_vertices!(Bnc); idx ≥ 1 && idx ≤ length(Bnc.vertices_perm))
@@ -597,30 +615,14 @@ have_perm(Bnc::Bnc, vtx::Vertex) = have_perm(Bnc, get_perm(vtx))
 
 
 """
-    get_neighbors(Bnc::Bnc, perm; singular=nothing, asymptotic::Union{Bool,Nothing}=nothing, return_idx::Bool=false)
+    get_neighbors(args...; singular=nothing, asymptotic=nothing, return_idx=false) -> Vector
 
-Return neighbors of the vertex `perm` that satisfy certain conditions.
+Return neighbors of a vertex filtered by singularity and asymptotic flags.
 
-# Keyword arguments
-- `singular`:
-    - `true` → only singular vertices (`nullity > 0`)
-    - `false` → only non-singular vertices (`nullity == 0`)
-    - `Int` → vertices with `nullity ≤ singular`
-    - `nothing` → no filter on nullity
-- `asymptotic`:
-    - `true` → only asymptotic (real) vertices
-    - `false` → only fake vertices
-    - `nothing` → no filter
-- `return_idx`: if `true`, return neighbor indices; otherwise, return permutations.
-
-# Example
-julia
-get_neighbors(Bnc, perm)                       # all neighbors
-get_neighbors(Bnc, perm; singular=true)        # only singular ones
-get_neighbors(Bnc, perm; singular=2)           # nullity ≤ 2
-get_neighbors(Bnc, perm; asymptotic=true)      # only asymptotic ones
-get_neighbors(Bnc, perm; singular=1, asymptotic=false)
-
+# Keyword Arguments
+- `singular`: `true`, `false`, integer threshold, or `nothing`.
+- `asymptotic`: `true`, `false`, or `nothing`.
+- `return_idx`: Return indices when `true`; otherwise return permutations.
 """
 function get_neighbors(args...; singular::Union{Bool,Int,Nothing}=nothing, asymptotic::Union{Bool,Nothing}=nothing, return_idx::Bool=false)
     Bnc = get_binding_network(args...)
@@ -662,14 +664,17 @@ end
 # end::Integer
 
 """
-Checks if a vertex is singular (nullity > 0)
-"""
+    is_singular(args...) -> Bool
 
+Return `true` if the vertex has nonzero nullity.
+"""
 is_singular(args...)= get_nullity(args...) > 0
 
 
 """
-Checks if a vertex is asymptotic (real)
+    is_asymptotic(args...) -> Bool
+
+Return `true` if the vertex is asymptotic (real).
 """
 is_asymptotic(args...) = begin
     model = get_binding_network(args...)
@@ -681,45 +686,114 @@ end::Bool
 
 #---------------------------------These properties are calculate when creating Vertex object---------------------------------------
 """
-Gets P and P0, creating the vertex if necessary.
+    get_P_P0(args...) -> (SparseMatrixCSC, Vector)
+
+Return `(P, P0)` for a vertex, creating it if needed.
 """
 get_P_P0(args...) = get_vertex(args...; inv_info=false) |> vtx -> (vtx.P, vtx.P0)
+"""
+    get_P(args...) -> SparseMatrixCSC
+
+Return `P` for a vertex.
+"""
 get_P(args...) = get_P_P0(args...)[1]
+"""
+    get_P0(args...) -> Vector
+
+Return `P0` for a vertex.
+"""
 get_P0(args...) = get_P_P0(args...)[2]
 
 """
-Gets M and M0, creating the vertex if necessary.
+    get_M_M0(args...) -> (SparseMatrixCSC, Vector)
+
+Return `(M, M0)` for a vertex, creating it if needed.
 """
 get_M_M0(args...) = get_vertex(args...; inv_info=false) |> vtx -> (vtx.M, vtx.M0)
+"""
+    get_M(args...) -> SparseMatrixCSC
+
+Return `M` for a vertex.
+"""
 get_M(args...) = get_M_M0(args...)[1]
+"""
+    get_M0(args...) -> Vector
+
+Return `M0` for a vertex.
+"""
 get_M0(args...) = get_M_M0(args...)[2]
 
 """
-Gets C_x and C0_x, creating the vertex if necessary.
+    get_C_C0_x(args...) -> (SparseMatrixCSC, Vector)
+
+Return `(C_x, C0_x)` for a vertex.
 """
 get_C_C0_x(args...) = get_vertex(args...; inv_info=false) |> vtx -> (vtx.C_x, vtx.C0_x)
+"""
+    get_C_x(args...) -> SparseMatrixCSC
+
+Return `C_x` for a vertex.
+"""
 get_C_x(args...) = get_C_C0_x(args...)[1]
+"""
+    get_C0_x(args...) -> Vector
+
+Return `C0_x` for a vertex.
+"""
 get_C0_x(args...) = get_C_C0_x(args...)[2]
 
 
 """
-Gets C_qK and C0_qK, ensuring the inv_info  is calculated.
+    get_C_C0_nullity_qK(args...) -> (SparseMatrixCSC, Vector, Int)
+
+Return `(C_qK, C0_qK, nullity)` for a vertex.
 """
 get_C_C0_nullity_qK(args...) = get_vertex(args...; inv_info=true) |> vtx -> (vtx.C_qK, vtx.C0_qK, vtx.nullity)
+"""
+    get_C_C0_qK(args...) -> (SparseMatrixCSC, Vector)
+
+Return `(C_qK, C0_qK)` for a vertex.
+"""
 get_C_C0_qK(args...) = get_C_C0_nullity_qK(args...)[1:2]
+"""
+    get_C_qK(args...) -> SparseMatrixCSC
+
+Return `C_qK` for a vertex.
+"""
 get_C_qK(args...) = get_C_C0_nullity_qK(args...)[1]
+"""
+    get_C0_qK(args...) -> Vector
+
+Return `C0_qK` for a vertex.
+"""
 get_C0_qK(args...) = get_C_C0_nullity_qK(args...)[2]
 
 
 """
-Gets H and H0, ensuring the full vertex is calculated.
-"""
+    get_H_H0(args...) -> (SparseMatrixCSC, Vector)
 
+Return `(H, H0)` for a non-singular vertex.
+"""
 get_H_H0(args...) = is_singular(args...) ? @error("Vertex is singular, cannot get H0") : get_vertex(args...; inv_info=true) |> vtx -> (vtx.H, vtx.H0)
+"""
+    get_H(args...) -> SparseMatrixCSC
+
+Return `H` for a vertex when nullity <= 1.
+"""
 get_H(args...) = get_nullity(args...) > 1 ? @error("Vertex's nullity is bigger than 1, cannot get H") : get_vertex(args...; inv_info=true).H
+"""
+    get_H0(args...) -> Vector
+
+Return `H0` for a vertex.
+"""
 get_H0(args...) = get_H_H0(args...)[2]
 
 
+"""
+    get_polyhedron(C, C0, nullity=0) -> Polyhedron
+
+Construct a polyhedron from inequality constraints in qK space.
+"""
 function get_polyhedron(C::AbstractMatrix{<:Real}, C0::AbstractVector{<:Real}, nullity::Integer=0)::Polyhedron 
     if nullity ==0
         return hrep(-C,C0) |> x-> polyhedron(x,CDDLib.Library())
@@ -728,10 +802,20 @@ function get_polyhedron(C::AbstractMatrix{<:Real}, C0::AbstractVector{<:Real}, n
         return hrep(-C,C0,linset) |> x-> polyhedron(x,CDDLib.Library())
     end
 end
+"""
+    get_polyhedron(args...) -> Polyhedron
+
+Convenience wrapper that pulls constraints from a vertex or model.
+"""
 get_polyhedron(args...)=get_polyhedron(get_C_C0_nullity_qK(args...)...)
 
 
 
+"""
+    get_C_C0_nullity(poly::Polyhedron) -> (Matrix, Vector, Int)
+
+Extract `(C, C0, nullity)` from a polyhedron in H-representation.
+"""
 function get_C_C0_nullity(poly::Polyhedron) #Have to make sure the polyhedron has been already detecthlinearity.
     p = MixedMatHRep(hrep(poly))
     C = -p.A
@@ -748,20 +832,60 @@ function get_C_C0_nullity(poly::Polyhedron) #Have to make sure the polyhedron ha
     end
     return (C, C0, nullity)
 end
+"""
+    get_C_C0_nullity(args...; kwargs...) -> (Matrix, Vector, Int)
+
+Return `(C, C0, nullity)` for a vertex or polyhedron.
+"""
 get_C_C0_nullity(args...;kwargs...) = get_C_C0_nullity_qK(args...;kwargs...)
+"""
+    get_C_C0(args...; kwargs...) -> (Matrix, Vector)
+
+Return `(C, C0)` for a vertex or polyhedron.
+"""
 get_C_C0(args...;kwargs...) = get_C_C0_nullity(args...;kwargs...) |> x->(x[1], x[2]) 
+"""
+    get_C(args...; kwargs...) -> Matrix
+
+Return `C` for a vertex or polyhedron.
+"""
 get_C(args...;kwargs...) = get_C_C0_nullity(args...;kwargs...)[1]
+"""
+    get_C0(args...; kwargs...) -> Vector
+
+Return `C0` for a vertex or polyhedron.
+"""
 get_C0(args...;kwargs...) = get_C_C0_nullity(args...;kwargs...)[2]
 
+"""
+    get_nullity(poly::Polyhedron, args...; kwargs...) -> Int
+
+Return the nullity encoded in a polyhedron's linear constraints.
+"""
 get_nullity(poly::Polyhedron,args...;kwargs...) = get_C_C0_nullity(poly::Polyhedron,args...;kwargs...)[3]
+"""
+    get_nullity(args...) -> Int
+
+Return the nullity of a vertex.
+"""
 get_nullity(args...) = begin
     model = get_binding_network(args...)
     find_all_vertices!(model)
     return model.vertices_nullity[get_idx(args...)]
 end::Integer
 
+"""
+    n_vertices(bnc::Bnc) -> Int
+
+Return the number of vertices in the model.
+"""
 n_vertices(Bnc::Bnc) = length(Bnc.vertices_perm)
 
+"""
+    get_volume(args...; kwargs...) -> Volume
+
+Return the volume for a single vertex.
+"""
 function get_volume(args...;  kwargs...)
     model = get_binding_network(args...)
     idx = get_idx(args...)
@@ -773,6 +897,11 @@ end
 #          Naive code for figuring out  relationships between two vertices 
 #----------------------------------------------------------------------------------------------------------------------------------------
 
+"""
+    _is_vertex_graph_neighbor(bnc, vtx1, vtx2) -> Bool
+
+Return `true` if vertices are neighbors in the vertex graph.
+"""
 function _is_vertex_graph_neighbor(Bnc, vtx1, vtx2)::Bool
     edge = get_edge(Bnc,vtx1,vtx2) 
     if edge === nothing || edge.change_dir_qK === nothing
@@ -782,6 +911,11 @@ function _is_vertex_graph_neighbor(Bnc, vtx1, vtx2)::Bool
     end
 end
 
+"""
+    get_intersect(bnc, vtx1, vtx2) -> Polyhedron
+
+Return the intersection polyhedron between two vertices in qK space.
+"""
 function get_intersect(Bnc,vtx1,vtx2)::Polyhedron
     p1 = get_polyhedron(Bnc, vtx1)
     dim1 = dim(p1)
@@ -799,8 +933,9 @@ end
 
 
 """
-Get the interface between two regimes,
-a'x+b=0, where a is the change direction in qK space, and b is the intersect point in qK space.
+    get_interface_direct(bnc::Bnc, from, to) -> (SparseVector, Float64)
+
+Compute the interface hyperplane directly from polyhedral intersection.
 """
 function get_interface_direct(Bnc::Bnc, from, to)::Tuple{SparseVector{Float64,Int}, Float64}
     p = get_intersect(Bnc, from, to)
@@ -812,6 +947,11 @@ function get_interface_direct(Bnc::Bnc, from, to)::Tuple{SparseVector{Float64,In
     return a, b
 end
 
+"""
+    get_interface_qK(bnc, from, to) -> (SparseVector, Float64)
+
+Return the interface hyperplane between two vertices in qK space.
+"""
 function get_interface_qK(Bnc, from, to)::Tuple{SparseVector{Float64,Int}, Float64}
     edge = get_edge(Bnc, from, to)
     if edge === nothing
@@ -826,10 +966,30 @@ function get_interface_qK(Bnc, from, to)::Tuple{SparseVector{Float64,Int}, Float
     end   
 end
 
+"""
+    get_interface(args...; kwargs...) -> (SparseVector, Float64)
+
+Convenience wrapper for `get_interface_qK`.
+"""
 get_interface(args...;kwargs...) = get_interface_qK(args...;kwargs...)
+"""
+    get_change_dir_qK(args...; kwargs...) -> SparseVector
+
+Return the qK change direction between neighboring vertices.
+"""
 get_change_dir_qK(args...;kwargs...) = get_interface(args...;kwargs...)[1] # relys on the inner behavior of get_interface, 
+"""
+    get_change_dir(args...; kwargs...) -> SparseVector
+
+Alias for `get_change_dir_qK`.
+"""
 get_change_dir(args...;kwargs...) = get_change_dir_qK(args...;kwargs...)
 
+"""
+    is_neighbor_qK(bnc, vtx1, vtx2) -> Bool
+
+Return `true` if two vertices are neighbors in qK space.
+"""
 function is_neighbor_qK(Bnc, vtx1, vtx2)::Bool
     try get_interface_qK(Bnc, vtx1, vtx2)
         return true
@@ -838,9 +998,19 @@ function is_neighbor_qK(Bnc, vtx1, vtx2)::Bool
     end
 end
 
+"""
+    is_neighbor(args...; kwargs...) -> Bool
+
+Alias for `is_neighbor_qK`.
+"""
 is_neighbor(args...;kwargs...) = is_neighbor_qK(args...;kwargs...)
 
 
+"""
+    get_interface_x(bnc::Bnc, from, to) -> (SparseVector, Float64)
+
+Return the interface hyperplane between two vertices in x space.
+"""
 function get_interface_x(Bnc::Bnc, from, to)
     edge = get_edge(Bnc, from, to)
     if edge === nothing 
@@ -850,6 +1020,11 @@ function get_interface_x(Bnc::Bnc, from, to)
     end
 end
 
+"""
+    get_change_dir_x(args...; kwargs...) -> SparseVector
+
+Return the x-space change direction between neighboring vertices.
+"""
 get_change_dir_x(args...;kwargs...) = get_interface_x(args...;kwargs...)[1]
 
 
@@ -857,29 +1032,9 @@ get_change_dir_x(args...;kwargs...) = get_interface_x(args...;kwargs...)[1]
 #         functions of getting vertices with certain properties
 # -------------------------------------------------------------------------------------
 """
-    get_vertices(Bnc::Bnc; singular=nothing, asymptotic=nothing, return_idx=false)
+    get_vertices(bnc::Bnc; singular=nothing, asymptotic=nothing, return_idx=false) -> Vector
 
-Return all vertices of `Bnc` that satisfy given filters.
-
-# Keyword arguments
-- `singular`:
-    - `true` → only singular vertices (`nullity > 0`)
-    - `false` → only nonsingular vertices (`nullity == 0`)
-    - `Int` → vertices with `nullity ≤ singular`
-    - `nothing` → no filter
-- `asymptotic`:
-    - `true` → only real/asymptotic vertices
-    - `false` → only fake vertices
-    - `nothing` → no filter
-- `return_idx`: if `true`, return vertex indices; otherwise return vertex permutations.
-
-# Example
-julia
-get_vertices(Bnc)                          # all vertices
-get_vertices(Bnc; singular=true)           # singular only
-get_vertices(Bnc; singular=2)              # nullity ≤ 2
-get_vertices(Bnc; asymptotic=true)         # real/asymptotic vertices
-get_vertices(Bnc; singular=false, asymptotic=false)
+Return vertices that satisfy singularity/asymptotic filters.
 """
 function get_vertices(Bnc::Bnc; return_idx::Bool=false, kwargs...)
     find_all_vertices!(Bnc)
@@ -889,8 +1044,11 @@ function get_vertices(Bnc::Bnc; return_idx::Bool=false, kwargs...)
 end
 
 
-# filter the vtxs accoring to the criteria
-#
+"""
+    _get_vertices_mask(model::Bnc, vtxs; singular=nothing, asymptotic=nothing) -> Vector{Bool}
+
+Return a boolean mask for vertices matching filter criteria.
+"""
 function _get_vertices_mask(model::Bnc,vtxs::AbstractVector{<:Integer};
      singular::Union{Bool,Integer,Nothing}=nothing, 
      asymptotic::Union{Bool,Nothing}=nothing)::Vector{Bool}
@@ -920,7 +1078,11 @@ end
 #-------------------------------------------------------------
 # Functions using Polyhedra.jl  to calculate and fufill the 
 #polyhedron helper functions
-#--------------------------------------------------
+"""
+    hyperplane_project_func(polyhedra::Polyhedron) -> Function
+
+Return a projection function onto the affine subspace defined by polyhedron hyperplanes.
+"""
 function hyperplane_project_func(polyhedra::T)::Function where T<:Polyhedron
     if !hashyperplanes(polyhedra)
         error("polyhedra doesn't have hyperplanes")
@@ -938,6 +1100,11 @@ end
 
 
 
+"""
+    get_one_inner_point(poly::Polyhedron; rand_line=true, rand_ray=true, extend=3) -> Vector
+
+Return a point guaranteed to lie inside the polyhedron.
+"""
 function get_one_inner_point(poly::T;rand_line=true,rand_ray=true,extend=3) where T<:Polyhedron
     vrep_poly = MixedMatVRep(vrep(poly))
     point = [mean(p) for p in eachcol(vrep_poly.V)]
@@ -957,20 +1124,18 @@ function get_one_inner_point(poly::T;rand_line=true,rand_ray=true,extend=3) wher
     end
     return (point.+ ray_avg)
 end
+"""
+    get_one_inner_point(args...; kwargs...) -> Vector
+
+Convenience wrapper that builds a polyhedron from a vertex/model.
+"""
 get_one_inner_point(args...;kwargs...)=get_one_inner_point(get_polyhedron(args...);kwargs...)
 
 
 """
-    get_C_C0(poly::Polyhedron)
-Get the C and C0 matrices from a Polyhedron's H-representation.
-Returns C, C0, linset, the original polyhedra can be represented as {x | Cx ≤ C0, Cx = C0 for linset}
-"""
+    check_feasibility_with_constraint(args...; C, C0, nullity=0) -> Bool
 
-
-
-
-"""
-    Check if the vertex represented by perm is feasible under additional constraints C,C0,nullity
+Check whether a vertex/polyhedron remains feasible under extra constraints.
 """
 function check_feasibility_with_constraint(args...;C::AbstractMatrix{<:Real},C0::AbstractVector{<:Real},nullity::Int=0)
     poly_additional = get_polyhedron(C,C0,nullity)
@@ -980,6 +1145,11 @@ function check_feasibility_with_constraint(args...;C::AbstractMatrix{<:Real},C0:
     return !isempty(ins)
 end
 
+"""
+    feasible_vertieces_with_constraint(bnc::Bnc; C, C0, nullity=0, kwargs...) -> Vector
+
+Return vertices feasible under additional constraints.
+"""
 function feasible_vertieces_with_constraint(Bnc::Bnc; C::AbstractMatrix{<:Real},C0::AbstractVector{<:Real},nullity::Int=0,kwargs...)
     all_vtx = get_vertices(Bnc;kwargs...)
     feasible_vtx = Vector{eltype(all_vtx)}()
@@ -994,6 +1164,11 @@ end
 #-------------------------------------------------------------
 #Other higher lever functions
 #----------------------------------------------------------------
+"""
+    summary_vertex(args...) -> nothing
+
+Print a detailed summary for a single vertex.
+"""
 function summary_vertex(args...)
     idx= get_idx(args...)
     perm = get_perm(args...)
@@ -1015,7 +1190,17 @@ function summary_vertex(args...)
     return nothing
 end
 
+"""
+    summary(bnc::Bnc, perm) -> nothing
+
+Alias for `summary_vertex`.
+"""
 summary(Bnc::Bnc, perm)= summary_vertex(Bnc, perm)
+"""
+    summary(vtx::Vertex) -> nothing
+
+Alias for `summary_vertex`.
+"""
 summary(vtx::Vertex)= summary_vertex(vtx)
 
 
@@ -1024,4 +1209,3 @@ summary(vtx::Vertex)= summary_vertex(vtx)
 #     vtx .|> x->summary_vertex(Bnc,x)
 #     return nothing
 # end
-

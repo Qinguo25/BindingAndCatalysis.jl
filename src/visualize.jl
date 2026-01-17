@@ -3,10 +3,9 @@
 #----------------------------------------------------------------
 
 """
-plot function, given a change in qK, plot the trajectory of x and color by dominant regime. 
+    SISO_plot(pths::SISOPaths, pth_idx; rand_line=false, rand_ray=false, extend=4, kwargs...) -> Figure
 
-add_archetype_lines: whether to add archetype lines (x change with only one qK change) for reference.
-
+Plot a SISO path trajectory in x space colored by dominant regime.
 """
 function SISO_plot(SISOPaths::SISOPaths,pth_idx;rand_line=false, rand_ray=false, extend=4, kwargs...)
     pth_idx = get_idx(SISOPaths, pth_idx)
@@ -14,6 +13,12 @@ function SISO_plot(SISOPaths::SISOPaths,pth_idx;rand_line=false, rand_ray=false,
     @show parameters
     return SISO_plot(SISOPaths.bn, parameters, SISOPaths.change_qK_idx; kwargs...)
 end
+"""
+    SISO_plot(model::Bnc, parameters, change_idx; npoints=1000, start=-6, stop=6, colormap=:rainbow,
+        size=(800, 600), draw_idx=nothing, add_archeatype_lines=false, asymptotic_only=false) -> Figure
+
+Plot x trajectories for a single changing qK coordinate.
+"""
 function SISO_plot(model::Bnc, parameters, change_idx; 
         npoints=1000,start=-6, stop=6,colormap=:rainbow, size = (800,600),draw_idx=nothing,
         add_archeatype_lines::Bool=false,
@@ -76,11 +81,9 @@ end
 
 
 """
-Add the colorbar of the regimes 
-- `F`: the figure to add colorbar to
-- `unique_rgm`: the unique regimes to label on the colorbar, shall be sorted in the same order as the colormap, eg. `unique_rgm = sort!(unique(rgms))`
-- `colormap`: the colormap to use for the colorbar, shall be striped with the same number of colors as unique_rgm,
-eg. `add_rgm_colorbar!(F, unique_rgm; colormap=cmap_disc)`
+    add_rgm_colorbar!(F, unique_rgm; colormap) -> nothing
+
+Add a regime colorbar and labels to a Makie figure.
 """
 function add_rgm_colorbar!(F, unique_rgm;colormap)
     txt_length = length(string.(unique_rgm[1]))*26
@@ -113,6 +116,9 @@ function add_rgm_colorbar!(F, unique_rgm;colormap)
 end
 
 """
+    get_color_map(vec; colormap=:rainbow) -> (Dict, Any)
+
+Return a mapping from values to color indices and a categorical colormap.
 """
 function get_color_map(vec::AbstractArray; colormap=:rainbow)
     keys = sort!(unique(vec))
@@ -122,6 +128,11 @@ function get_color_map(vec::AbstractArray; colormap=:rainbow)
     cmap_disc = cgrad(colormap, nlevels, categorical=true)
     return col_map_dict, cmap_disc
 end
+"""
+    get_color_map(model::Bnc, args...; colormap=:rainbow, kwargs...) -> (Dict, Any)
+
+Return a color map for vertices in a model.
+"""
 get_color_map(model::Bnc, args...;colormap=:rainbow, kwargs...) = get_color_map(get_vertices(model,args...;kwargs...), colormap=colormap)
 
 
@@ -136,8 +147,9 @@ get_color_map(model::Bnc, args...;colormap=:rainbow, kwargs...) = get_color_map(
 #-------------------------------------------------------------
 
 """
-    get_edge_weight_vec(Bnc, change_qK_idx) -> Vector{Tuple{Edge,Dict{Symbol,Any}}}
-Given the change_qK_idx, return the edges that contains the change in that direction with weight magnitude.
+    get_edge_weight_vec(bnc::Bnc, change_qK_idx) -> Vector{Tuple{Edge, Dict{Symbol,Any}}}
+
+Return edges with weights for a specified qK change direction.
 """
 function get_edge_weight_vec(Bnc::Bnc,change_qK_idx)::Vector{Tuple{Edge,Dict{Symbol,Any}}}
     vg = get_vertices_graph!(Bnc;full=true)
@@ -170,6 +182,11 @@ end
 
 
 
+"""
+    find_proper_bounds_for_graph_plot(p; x_margin=0.1, y_margin=0.1) -> Tuple
+
+Return axis bounds with margins for a graph plot.
+"""
 function find_proper_bounds_for_graph_plot(p; x_margin=0.1, y_margin=0.1)
     # 支持 p.node_pos[] (Observable) 或直接 Vector / Dict
     # ps = node_pos isa Observable ? node_pos[] : node_pos
@@ -191,15 +208,20 @@ function find_proper_bounds_for_graph_plot(p; x_margin=0.1, y_margin=0.1)
     return (xmin, xmax, ymin, ymax)
 end
 
+"""
+    set_proper_bounds_for_graph_plot!(ax, p; kwargs...) -> nothing
+
+Set axis limits using graph plot bounds.
+"""
 set_proper_bounds_for_graph_plot!(ax, p; kwargs...) = let
     bounds = find_proper_bounds_for_graph_plot(p; kwargs...)
     limits!(ax, bounds...)
 end 
 
 """
-    get_edge_labels(Bnc; half::Bool=false,f=nothing) -> Dict{Edge,String}
-    f: a function for mapping edge to its labels, should return String.
-Get edge labels for qK-space edges. IF half, only label one direction.
+    get_edge_labels(bnc::Bnc; half=false, f=nothing) -> Dict{Edge,String}
+
+Return edge labels for qK-space edges, optionally only one direction.
 """
 function get_edge_labels(Bnc::Bnc; half::Bool=false,f=nothing)::Dict{Edge,String}
     vg = get_vertices_graph!(Bnc;full=true)
@@ -225,7 +247,9 @@ end
 
 
 """
-    Get fixed node positions for the qK-neighbor from x-neighbor graph of the model.
+    get_node_positions(model::Bnc; kwargs...) -> Vector{Point2f}
+
+Return node positions derived from the x-neighbor graph layout.
 """
 function get_node_positions(model::Bnc; kwargs...)
     grh = get_neighbor_graph_x(model)
@@ -234,13 +258,27 @@ function get_node_positions(model::Bnc; kwargs...)
     return posi
 end
 
+"""
+    get_node_positions(p) -> Vector{Point2f}
+
+Return node positions from a graphplot object.
+"""
 get_node_positions(p) = p.node_pos[] # support directly passing 
+"""
+    set_node_positions(p, new_pos) -> nothing
+
+Set node positions on a graphplot object.
+"""
 set_node_positions(p, new_pos)= let
  new_posi = Point2f.(new_pos)
  p.node_pos[] = new_posi # support directly setting positions
 end
 
+"""
+    get_node_colors(model; singular_color="#CCCCFF", asymptotic_color="#FFCCCC", regular_color="#CCFFCC") -> Vector{String}
 
+Return node colors based on regime types.
+"""
 function get_node_colors(model; singular_color="#CCCCFF", asymptotic_color="#FFCCCC", regular_color="#CCFFCC")::Vector{String}
     node_colors = Vector{String}(undef, length(model.vertices_perm))
     for i in eachindex(model.vertices_perm)
@@ -259,12 +297,22 @@ function get_node_colors(model; singular_color="#CCCCFF", asymptotic_color="#FFC
     return node_colors
 end
 
+"""
+    get_node_labels(model::Bnc) -> Vector{String}
+
+Return labels for nodes based on dominant species symbols.
+"""
 function get_node_labels(model::Bnc)
     model.vertices_perm .|>
         x -> model.x_sym[x] |>
         repr |> strip_before_bracket
 end
 
+"""
+    get_node_size(model::Bnc; default_node_size=50, asymptotic=true, kwargs...) -> Dict
+
+Return node sizes scaled by regime volumes.
+"""
 function get_node_size(model::Bnc; default_node_size=50, asymptotic=true, kwargs...)
     # seems properly handel non-asyntotic nodes
     vals = get_volumes(model; asymptotic=asymptotic, kwargs...) .|> x->x.mean
@@ -290,9 +338,16 @@ end
 
 
 """
-    Draw the qK-neighbor graph of the model, with optional edge labels, node colors, and node sizes.
+    draw_graph(model; kwargs...) -> (Figure, Axis, Plot)
+
+Draw the qK-neighbor graph of the model.
 """
 draw_graph(model; kwargs...) = draw_graph(get_binding_network(model), get_neighbor_graph_qK(model); kwargs...)
+"""
+    draw_graph(grh::SISOPaths; kwargs...) -> (Figure, Axis, Plot)
+
+Draw a SISO path graph with direction labels.
+"""
 function draw_graph(grh::SISOPaths;kwargs...)
     bn = get_binding_network(grh)
     change_sym = qK_sym(bn)[grh.change_qK_idx]
@@ -302,6 +357,12 @@ function draw_graph(grh::SISOPaths;kwargs...)
     return f,ax,p
 end
 
+"""
+    draw_graph(model::Bnc, grh=nothing; default_node_size=50, node_posi=nothing, edge_labels=nothing,
+        node_labels=nothing, node_colors=nothing, add_rgm_idx=true, figsize=(1000,1000), kwargs...) -> (Figure, Axis, Plot)
+
+Draw a graph with customizable node/edge annotations.
+"""
 function draw_graph(model::Bnc, grh=nothing; 
     default_node_size=50,
     node_posi =nothing,
@@ -353,6 +414,11 @@ end
 
 
 
+"""
+    add_nodes_text!(ax, p; texts=nothing, align=(:center,:bottom), color=:black, offset=(0,0), kwargs...) -> nothing
+
+Add custom text labels to graph nodes.
+"""
 function add_nodes_text!(ax,p, texts=nothing; 
     align = (:center, :bottom), 
     color = :black,
@@ -369,7 +435,9 @@ end
 
 
 """
-    Add arrows on an existing graph plot based on edge weights from change_qK_idx.
+    add_arrows!(ax, p, model, change_qK_idx; color=(:green, 0.5), kwargs...) -> nothing
+
+Add arrows on an existing graph plot based on edge weights for a qK index.
 """
 function add_arrows!(ax,p, model,change_qK_idx;color = (:green, 0.5), kwargs...)
     edge_dir = get_edge_weight_vec(model,change_qK_idx)
@@ -393,12 +461,22 @@ function add_arrows!(ax,p, model,change_qK_idx;color = (:green, 0.5), kwargs...)
 end
 
 
+"""
+    draw_qK_neighbor_grh(args...; kwargs...)
+
+Alias for `draw_vertices_neighbor_graph` (legacy name).
+"""
 draw_qK_neighbor_grh(args...;kwargs...) = draw_vertices_neighbor_graph(args...; kwargs...)
 
 
 
 
 
+"""
+    draw_binding_network_grh(bnc::Bnc, grh=nothing; figsize=(800,800), q_color="#A2A544", x_color="#DBCC8C") -> (Figure, Axis, Plot)
+
+Draw the bipartite binding network graph with q and x nodes.
+"""
 function draw_binding_network_grh(Bnc::Bnc,grh::Union{AbstractGraph, Nothing}=nothing; figsize=(800,800),q_color="#A2A544", x_color="#DBCC8C")
     f = Figure(size = figsize)
     grh = isnothing(grh) ? get_binding_network_grh(Bnc) : grh
@@ -421,15 +499,16 @@ end
 # Draw plot helper functions
 #--------------------------------------
 
-# find boundary between different regimes for regime map, to draw boundary for different regimes.
+"""
+    find_bounds(lattice) -> BitMatrix
+
+Compute regime boundaries using a Laplacian filter.
+"""
 function find_bounds(lattice)
     col_asym_x_bounds = imfilter(lattice, Kernel.Laplacian(), "replicate") # findboundary
     edge_map = col_asym_x_bounds .!= 0
     return edge_map
 end
-
-
-
 
 
 

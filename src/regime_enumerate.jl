@@ -1,3 +1,8 @@
+"""
+    _enumerate_vertices_nonasymptotic(L, ::Val{T}; eps=1e-9) -> Vector{Vector{T}}
+
+Enumerate non-asymptotic regime assignments based on `L`.
+"""
 function _enumerate_vertices_nonasymptotic(L, ::Val{T} ;eps=1e-9) where T
     d, n = size(L)
     # T = get_int_type(n)  # Determine integer type based on n
@@ -73,6 +78,12 @@ function _enumerate_vertices_nonasymptotic(L, ::Val{T} ;eps=1e-9) where T
     dfs(1, Int[])
     return results
 end
+
+"""
+    _enumerate_vertices_asymptotic(L, ::Val{T}) -> Vector{Vector{T}}
+
+Enumerate asymptotic regime assignments based on `L`.
+"""
 function _enumerate_vertices_asymptotic(L, ::Val{T}) where T
     d, n = size(L)
     J = [findall(x -> x != 0, row) for row in eachrow(L)]
@@ -154,17 +165,27 @@ function _enumerate_vertices_asymptotic(L, ::Val{T}) where T
     return results
 end
 
+"""
+    find_all_vertices_nonasym(L; kwargs...) -> Vector{Vector{Int}}
+
+Convenience wrapper for non-asymptotic vertex enumeration.
+"""
 find_all_vertices_nonasym(L;kwargs...) = _enumerate_vertices_nonasymptotic(L,Val(get_int_type(size(L)[2]));kwargs...) 
+"""
+    find_all_vertices_asym(L; kwargs...) -> Vector{Vector{Int}}
+
+Convenience wrapper for asymptotic vertex enumeration.
+"""
 find_all_vertices_asym(L;kwargs...) = _enumerate_vertices_asymptotic(L,Val(get_int_type(size(L)[2]));kwargs...)
 """
-    find_all_vertices(L; eps=1e-9, dominance_ratio=nothing, mode="auto")
+    find_all_vertices(L; eps=1e-9, dominance_ratio=Inf, asymptotic=nothing) -> Vector{Vector{Int}}
 
-Find all feasible "vertex" regimes for matrix `L` (d × n).
-Returns Vector{Vector{Int}} where each inner Vector is a length-d assignment (1-based column indices).
-Options:
-- eps: small slack for weighted mode
-- dominance_ratio: Float64
-- asymptotic::Bool
+Find all feasible regime assignments for conservation matrix `L`.
+
+# Keyword Arguments
+- `eps`: Slack used for non-asymptotic mode.
+- `dominance_ratio`: Dominance ratio (Inf for exact).
+- `asymptotic`: Force asymptotic (`true`) or non-asymptotic (`false`) enumeration.
 """
 function find_all_vertices(L::Matrix{Int} ; eps=1e-9, dominance_ratio=Inf, asymptotic::Union{Bool,Nothing}=nothing)
     asymptotic =  (isnothing(asymptotic) && dominance_ratio == Inf) || (asymptotic == true)
