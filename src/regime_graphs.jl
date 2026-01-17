@@ -2,10 +2,10 @@
 #This is graph associated functions for Bnc models and archetyple behaviors associated code
 #-----------------------------------------------------------------------------------------------
 """
-    _calc_vertices_graph(data::Vector{<:AbstractVector{T}}, n::Int) where T
+    _calc_vertices_graph(bnc::Bnc) -> VertexGraph
 
-Build VertexGraph from a list of vertex permutations.
-- Groups vertices differing in exactly one row, creates bidirectional edges with change_dir_x.
+Build a `VertexGraph` from vertex permutations, connecting vertices that differ
+in exactly one row.
 """
 function  _calc_vertices_graph(Bnc::Bnc{T}) where {T} # optimized by GPT-5, not fullly understood yet.
     perms = Bnc.vertices_perm
@@ -77,12 +77,10 @@ end
 
 
 """
-    _fulfill_vertices_graph!(Bnc, vtx_graph)
+    _fulfill_vertices_graph!(vtx_graph::VertexGraph) -> nothing
 
-Ensure vertices are discovered and vertex graph is built and cached in Bnc.
-Returns nothing.
+Compute qK-space change directions for edges in the vertex graph.
 """
-
 function _fulfill_vertices_graph!(vtx_graph::VertexGraph)
     Bnc = vtx_graph.bn
     """
@@ -147,10 +145,30 @@ end
 #----------------------------------------------------------------------------------------------------
 
 
+"""
+    get_sources(g::AbstractGraph) -> Set{Int}
+
+Return source vertices with zero indegree.
+"""
 get_sources(g::AbstractGraph) = Set(v for v in vertices(g) if indegree(g, v) == 0)
+"""
+    get_sinks(g::AbstractGraph) -> Set{Int}
+
+Return sink vertices with zero outdegree.
+"""
 get_sinks(g::AbstractGraph)   = Set(v for v in vertices(g) if outdegree(g, v) == 0)
+"""
+    get_sources_sinks(g::AbstractGraph) -> (Set{Int}, Set{Int})
+
+Return sources and sinks for a graph.
+"""
 get_sources_sinks(g::AbstractGraph) = (get_sources(g), get_sinks(g))
 
+"""
+    get_sources_sinks(model::Bnc, g::AbstractGraph) -> (Vector{Int}, Vector{Int})
+
+Return sources and sinks while excluding singular regimes.
+"""
 function get_sources_sinks(model::Bnc, g::AbstractGraph)
     sources_all = get_sources(g) 
     sinks_all   = get_sinks(g) 
@@ -164,6 +182,11 @@ function get_sources_sinks(model::Bnc, g::AbstractGraph)
 end
 
 # 只遍历子图：sources 可达 & 能到 sinks
+"""
+    _reachable_from_sources(g::AbstractGraph, sources) -> Vector{Bool}
+
+Return a boolean mask of vertices reachable from sources.
+"""
 function _reachable_from_sources(g::AbstractGraph, sources::AbstractVector{Int})
     n = nv(g)
     seen = falses(n)
@@ -186,6 +209,11 @@ function _reachable_from_sources(g::AbstractGraph, sources::AbstractVector{Int})
     return seen
 end
 
+"""
+    _can_reach_sinks(g::AbstractGraph, sinks) -> Vector{Bool}
+
+Return a boolean mask of vertices that can reach sinks.
+"""
 function _can_reach_sinks(g::AbstractGraph, sinks::AbstractVector{Int})
     n = nv(g)
     seen = falses(n)
@@ -209,8 +237,9 @@ function _can_reach_sinks(g::AbstractGraph, sinks::AbstractVector{Int})
 end
 
 """
-DAG 专用：自底向上缓存后缀路径
-返回所有从 sources 到 sinks 的简单路径（DAG 中天然无环）
+    _enumerate_paths(g; sources, sinks) -> Vector{Vector{Int}}
+
+Enumerate all paths in a DAG from `sources` to `sinks`.
 """
 function _enumerate_paths(
     g::AbstractGraph;
@@ -286,6 +315,11 @@ end
 
 
 
+"""
+    _calc_polyhedra_for_path(model::Bnc, paths, change_qK_idx) -> Vector{Polyhedron}
+
+Compute qK-space polyhedra for each regime path.
+"""
 function _calc_polyhedra_for_path(
     model::Bnc,
     paths::AbstractVector{<:AbstractVector{<:Integer}},
@@ -368,9 +402,19 @@ function _calc_polyhedra_for_path(
     end
     return out
 end
+"""
+    Polyhedra.intersect(p::Polyhedron) -> Polyhedron
+
+Identity overload for single-polyhedron intersections.
+"""
 Polyhedra.intersect(p::Polyhedron)= p # a fix for above function for if only one edge, no need to intersect
 
 
+"""
+    _ensure_full_vertices_graph!(grh::VertexGraph) -> nothing
+
+Ensure qK change directions are computed for a vertex graph.
+"""
 function _ensure_full_vertices_graph!(grh::VertexGraph)
     if !grh.change_dir_qK_computed
         @info "Calculating vertices neighbor graph with qK change dir"
@@ -386,6 +430,11 @@ end
 #---------------------------------------------------------------------------
 #              Binding Network Graph
 #-------------------------------------------------------------------------
+"""
+    get_binding_network_grh(bnc::Bnc) -> SimpleGraph
+
+Build the bipartite binding network graph between q and x symbols.
+"""
 function get_binding_network_grh(Bnc::Bnc)::SimpleGraph
     g = SimpleGraph(Bnc.d + Bnc.n)
     for vi in eachindex(Bnc._valid_L_idx)
@@ -403,17 +452,11 @@ end
 #                  Getting the Graph of of regimes
 #----------------------------------------------------------------------------
 """
-    get_vertices_graph!(Bnc; full=false) -> VertexGraph
+    get_vertices_graph!(bnc::Bnc; full=false) -> VertexGraph
 
-    full::Bool=false: whether to compute qK change directions on edges.
-
-Ensure vertex graph is built; if full=true, also compute qK change directions on edges.
-Returns the cached VertexGraph.
+Ensure the vertex graph is built; when `full=true`, also compute qK change directions.
 """
 function get_vertices_graph!(Bnc::Bnc; full::Bool=false)::VertexGraph
-    """
-    get the neighbor of vertices formed graph.
-    """
 
     initalize_vertices_graph!(Bnc) = let
         find_all_vertices!(Bnc)# Ensure vertices are calculated
@@ -435,6 +478,11 @@ function get_vertices_graph!(Bnc::Bnc; full::Bool=false)::VertexGraph
 end
 
 
+"""
+    get_edge(grh::VertexGraph, from, to; full=false) -> Union{Nothing, VertexEdge}
+
+Return the edge between two vertices, optionally computing qK directions.
+"""
 function get_edge(grh::VertexGraph, from, to; full=false)::Union{Nothing, VertexEdge}
     
     from = get_idx(get_binding_network(grh), from)
@@ -448,6 +496,11 @@ function get_edge(grh::VertexGraph, from, to; full=false)::Union{Nothing, Vertex
 end
 
 
+"""
+    get_edge(bnc, from, to; kwargs...) -> Union{Nothing, VertexEdge}
+
+Convenience wrapper to fetch an edge from a model.
+"""
 get_edge(Bnc, from, to; kwargs...)= let
     vtx_grh = get_vertices_graph!(Bnc; full=false)
     bn = get_binding_network(Bnc)
@@ -456,6 +509,11 @@ get_edge(Bnc, from, to; kwargs...)= let
     get_edge(vtx_grh, from, to; kwargs...)
 end
 
+"""
+    get_binding_network(grh::VertexGraph, args...) -> Bnc
+
+Return the model backing a vertex graph.
+"""
 get_binding_network(grh::VertexGraph,args...) = grh.bn
 # get_vertices_graph!(grh::VertexGraph,args...; kwargs...) = grh
 
@@ -465,9 +523,24 @@ get_binding_network(grh::VertexGraph,args...) = grh.bn
 
 
 #-----------------------------------------------------------------------------------
+"""
+    get_neighbor_graph_x(grh::VertexGraph) -> SimpleGraph
+
+Return the x-space neighbor graph for a vertex graph.
+"""
 get_neighbor_graph_x(grh::VertexGraph) = grh.x_grh
+"""
+    get_neighbor_graph_x(bnc::Bnc) -> SimpleGraph
+
+Return the x-space neighbor graph for a model.
+"""
 get_neighbor_graph_x(Bnc::Bnc) = get_neighbor_graph_x(get_vertices_graph!(Bnc; full=false))
 
+"""
+    get_neighbor_graph_qK(grh::VertexGraph; both_side=false) -> SimpleDiGraph
+
+Return the qK-space neighbor graph for a vertex graph.
+"""
 get_neighbor_graph_qK(grh::VertexGraph; both_side::Bool=false)::SimpleDiGraph = let
     _ensure_full_vertices_graph!(grh)
 
@@ -491,18 +564,45 @@ get_neighbor_graph_qK(grh::VertexGraph; both_side::Bool=false)::SimpleDiGraph = 
 
     return qK_grh
 end
+"""
+    get_neighbor_graph_qK(bnc::Bnc; kwargs...) -> SimpleDiGraph
+
+Return the qK neighbor graph for a model.
+"""
 get_neighbor_graph_qK(Bnc::Bnc; kwargs...) = get_neighbor_graph_qK(get_vertices_graph!(Bnc; full=true); kwargs...)
+"""
+    get_neighbor_graph_qK(grh::SISOPaths; kwargs...) -> SimpleDiGraph
+
+Return the qK neighbor graph for a SISO path object.
+"""
 get_neighbor_graph_qK(grh::SISOPaths; kwargs...) = grh.qK_grh
+"""
+    get_neighbor_graph(args...; kwargs...) -> SimpleDiGraph
+
+Alias for `get_neighbor_graph_qK`.
+"""
 get_neighbor_graph(args...; kwargs...) = get_neighbor_graph_qK(args...; kwargs...)
 
 
 
 """
-Get qK neighbor graph with denoted idx
+    get_SISO_graph(grh::SISOPaths) -> SimpleDiGraph
+
+Return the SISO graph stored in a `SISOPaths` object.
 """
 
 get_SISO_graph(grh::SISOPaths) = grh.qK_grh
+"""
+    get_SISO_graph(model::Bnc, change_qK) -> SimpleDiGraph
+
+Return a SISO graph for a chosen qK coordinate.
+"""
 get_SISO_graph(model::Bnc, change_qK) = get_SISO_graph(get_vertices_graph!(model; full=true), change_qK)
+"""
+    get_SISO_graph(grh::VertexGraph, change_qK) -> SimpleDiGraph
+
+Build a SISO graph from a vertex graph for a chosen qK coordinate.
+"""
 function get_SISO_graph(grh::VertexGraph, change_qK)::SimpleDiGraph
     bn = get_binding_network(grh)
     change_qK_idx = locate_sym_qK(bn, change_qK)
@@ -541,6 +641,11 @@ end
 # Higher wrapper for regime graph paths
 #------------------------------------------------------------------------------------------
 
+"""
+    SISOPaths(model::Bnc, change_qK; rgm_paths=nothing) -> SISOPaths
+
+Construct a `SISOPaths` object for a chosen qK coordinate.
+"""
 function SISOPaths(model::Bnc{T}, change_qK; rgm_paths=nothing) where {T}
     change_qK_idx = locate_sym_qK(model, change_qK)
 
@@ -556,6 +661,11 @@ function SISOPaths(model::Bnc{T}, change_qK; rgm_paths=nothing) where {T}
     return SISOPaths(model, qK_grh, change_qK_idx, sources, sinks, rgm_paths)
 end
 
+"""
+    get_path(grh::SISOPaths, pth_idx; return_idx=false) -> Vector
+
+Return a path by index, optionally as vertex indices.
+"""
 function get_path(grh::SISOPaths, pth_idx::Integer; return_idx::Bool=false)
     rgm_idxs = grh.rgm_paths[pth_idx]
     if return_idx
@@ -566,27 +676,57 @@ function get_path(grh::SISOPaths, pth_idx::Integer; return_idx::Bool=false)
     end
     return perms
 end
+"""
+    get_path(grh::SISOPaths, pth::AbstractVector; return_idx=false) -> Vector
+
+Normalize a path representation to indices or permutations.
+"""
 function get_path(grh::SISOPaths, pth::AbstractVector; return_idx::Bool=false)
     bn = get_binding_network(grh)
     return return_idx ? get_idx.(Ref(bn), pth) : get_perm.(Ref(bn), pth)
 end
 
+"""
+    get_binding_network(grh::SISOPaths, args...) -> Bnc
+
+Return the model backing a SISO path object.
+"""
 get_binding_network(grh::SISOPaths,args...)= grh.bn
+"""
+    get_C_C0_nullity_qK(grh::SISOPaths, pth_idx) -> (Matrix, Vector, Int)
+
+Return constraints for a SISO path polyhedron.
+"""
 get_C_C0_nullity_qK(grh::SISOPaths, pth_idx) = get_polyhedron(grh, pth_idx) |> get_C_C0_nullity
 
 
 
+"""
+    get_idx(grh::SISOPaths, pth) -> Int
+
+Return the index for a SISO path specification.
+"""
 get_idx(grh::SISOPaths, pth::AbstractVector) = let
     bn = get_binding_network(grh)
     idxs = get_idx.(Ref(bn), pth)
     grh.paths_dict[idxs] 
 end
+"""
+    get_idx(grh::SISOPaths, pth::Integer) -> Int
+
+Return the provided path index.
+"""
 get_idx(grh::SISOPaths, pth::Integer) = pth
 
 
 
 
 
+"""
+    get_polyhedra(grh::SISOPaths, pth_idx=nothing) -> Vector{Polyhedron}
+
+Return polyhedra for selected SISO paths.
+"""
 function get_polyhedra(grh::SISOPaths, pth_idx::Union{AbstractVector,Nothing} = nothing)::Vector{Polyhedron}
     pth_idx = let 
             if isnothing(pth_idx)
@@ -606,10 +746,20 @@ function get_polyhedra(grh::SISOPaths, pth_idx::Union{AbstractVector,Nothing} = 
 
     return grh.path_polys[pth_idx]
 end
+"""
+    get_polyhedron(grh::SISOPaths, pth) -> Polyhedron
+
+Return the polyhedron for a single SISO path.
+"""
 get_polyhedron(grh::SISOPaths, pth)= get_polyhedra(grh, [get_idx(grh, pth)])[1]
 
 
 
+"""
+    get_volumes(grh::SISOPaths, pth_idx=nothing; asymptotic=true, recalculate=false, kwargs...) -> Vector{Volume}
+
+Compute volumes for SISO paths.
+"""
 function get_volumes(grh::SISOPaths, pth_idx::Union{AbstractVector,Nothing}=nothing; 
     asymptotic=true,recalculate=false, kwargs...)
 
@@ -634,6 +784,11 @@ function get_volumes(grh::SISOPaths, pth_idx::Union{AbstractVector,Nothing}=noth
     return grh.path_volume
 end
 
+"""
+    get_volume(grh::SISOPaths, pth; kwargs...) -> Volume
+
+Return the volume for a single SISO path.
+"""
 get_volume(grh::SISOPaths, pth; kwargs...) = get_volumes(grh, [get_idx(grh, pth)]; kwargs...)[1]
 
 
@@ -642,6 +797,11 @@ get_volume(grh::SISOPaths, pth; kwargs...) = get_volumes(grh, [get_idx(grh, pth)
 # Regime shifting associated functions
 #-------------------------------------------------------------------------------------
 
+"""
+    show_regime_path(grh::SISOPaths, pth) -> nothing
+
+Print a formatted regime path with optional volume.
+"""
 function show_regime_path(grh::SISOPaths, pth)
     pth_idx = get_idx(grh, pth)
     pth = get_path(grh, pth_idx; return_idx=true)
@@ -652,6 +812,11 @@ function show_regime_path(grh::SISOPaths, pth)
 end
 
 
+"""
+    get_expression_path(grh::SISOPaths, pth; observe_x=nothing) -> (Vector, Vector)
+
+Return expression coefficients and interfaces along a SISO path.
+"""
 function get_expression_path(grh::SISOPaths, pth; observe_x=nothing)
     
     bn = get_binding_network(grh)
@@ -701,7 +866,9 @@ end
 #-------------------------------------------------------------------------------------------
 # 
 """
-Given a path in regime graph, find the reaction order profile along the path.
+    _calc_RO_for_single_path(model, path, change_qK_idx, observe_x_idx) -> Vector
+
+Compute the reaction-order profile along a single path.
 """
 function _calc_RO_for_single_path(model, path::AbstractVector{<:Integer}, change_qK_idx, observe_x_idx)::Vector{<:Real}
     r_ord = Vector{Float64}(undef, length(path))
@@ -719,6 +886,11 @@ function _calc_RO_for_single_path(model, path::AbstractVector{<:Integer}, change
     end
     return r_ord
 end
+"""
+    _dedup(ord_path) -> Vector
+
+Deduplicate consecutive reaction-order values while preserving discontinuities.
+"""
 function _dedup(ord_path::AbstractVector{T})::Vector{T} where T<:Real
     isempty(ord_path) && return T[]
     out = T[ord_path[1]]
@@ -750,14 +922,10 @@ end
 
 
 """
-Calc reaction order profile for single path in regime graph.
-- `model::Bnc`: Binding network model.
-- `rgm_idx_shift_pth::AbstractVector`: Regime path (vector of regime indices).
-- `change_qK`: Symbol or index of the changing qK.
-- `observe_x`: Symbol or index of the observed x.
-- `deduplicate::Bool=false`: Whether to deduplicate the reaction order profile.
-- `keep_singular::Bool=true`: Whether to keep singular regimes in the profile.
-- `keep_nonasymptotic::Bool=true`: Whether to keep non-asymptotic regimes in the profile.
+    get_RO_path(model::Bnc, rgm_idx_shift_pth; change_qK, observe_x,
+        deduplicate=false, keep_singular=true, keep_nonasymptotic=true) -> Vector
+
+Calculate the reaction-order profile for a single regime path.
 """
 function get_RO_path(
     model::Bnc,rgm_idx_shift_pth::AbstractVector; 
@@ -795,7 +963,9 @@ function get_RO_path(
 end
 
 """
-Multiple paths version of `get_RO_path`.
+    get_RO_paths(model::Bnc, rgm_paths, args...; kwargs...) -> Vector{Vector}
+
+Calculate reaction-order profiles for multiple regime paths.
 """
 function get_RO_paths(model::Bnc, rgm_paths::AbstractVector{<:AbstractVector}, args...; kwargs...)::Vector{Vector{<:Real}}
     
@@ -807,6 +977,11 @@ function get_RO_paths(model::Bnc, rgm_paths::AbstractVector{<:AbstractVector}, a
     end
     return ord_for_each_paths
 end
+"""
+    get_RO_paths(model::SISOPaths, pth_idx=nothing; observe_x, kwargs...) -> Vector{Vector}
+
+Calculate reaction-order profiles for paths in a `SISOPaths` object.
+"""
 function get_RO_paths(model::SISOPaths, pth_idx::Union{Nothing, AbstractVector}=nothing ; observe_x, kwargs...)
     rgm_paths = isnothing(pth_idx) ? model.rgm_paths : get_path.(Ref(model), pth_idx; return_idx=true)
     observe_x_idx = locate_sym_x(model.bn, observe_x)
@@ -814,25 +989,18 @@ function get_RO_paths(model::SISOPaths, pth_idx::Union{Nothing, AbstractVector}=
         change_qK=model.change_qK_idx, observe_x=observe_x_idx, kwargs...)
 end
 """
-single path version of `get_RO_paths`.
+    get_RO_path(model::SISOPaths, pth_idx, args...; kwargs...) -> Vector
+
+Single-path wrapper for `get_RO_paths`.
 """
 get_RO_path(model::SISOPaths, pth_idx, args...; kwargs...) = get_RO_paths(model, [get_idx(model,pth_idx)], args... ; kwargs...)[1]
     
 
 
 """
-    Group sum values by keys.
+    group_sum(keys, vals; sort_values=true) -> Vector{Tuple}
 
-    # Arguments
-    - `keys::AbstractVector`: Vector of keys.
-    - `vals::AbstractVector`: Vector of values to be summed.
-    - `sort_values::Bool=true`: Whether to sort the output by summed values in descending order.
-
-    # Returns
-    - `Vector{Tuple{Vector{Int}, eltype(keys), eltype(vals)}}`: A vector of tuples, each containing:
-        - A vector of indices corresponding to the original positions of the key.
-        - The key itself.
-        - The summed value for that key.
+Group values by keys, returning indices, key, and summed values.
 """
 function group_sum(keys::AbstractVector{I}, vals::AbstractVector{J}; 
     sort_values::Bool=true
@@ -873,10 +1041,9 @@ end
 
 
 """
-Show (print) paths stored in SISOPaths.
+    summary(grh::SISOPaths; show_volume=true, prefix="#", kwargs...) -> nothing
 
-- Reads `grh.rgm_paths`
-- Optionally computes volumes via `get_volumes(grh; kwargs...)`
+Print the paths stored in `SISOPaths`, optionally with volumes.
 """
 function summary(grh::SISOPaths; show_volume::Bool=true, prefix::AbstractString="#", kwargs...)
     paths = grh.rgm_paths
@@ -891,6 +1058,12 @@ end
 
 
 
+"""
+    summary_RO_path(grh::SISOPaths; observe_x, show_volume=true, deduplicate=true,
+        keep_singular=true, keep_nonasymptotic=true, kwargs...) -> nothing
+
+Summarize reaction-order paths grouped by profile.
+"""
 function summary_RO_path(grh::SISOPaths;observe_x, show_volume::Bool=true,
 
     deduplicate::Bool=true,keep_singular::Bool=true,keep_nonasymptotic::Bool=true,kwargs...)
@@ -920,5 +1093,3 @@ function summary_RO_path(grh::SISOPaths;observe_x, show_volume::Bool=true,
     print_paths(ords; prefix="", ids=ids, volumes=vols)
     return nothing
 end
-
-

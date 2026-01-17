@@ -1,12 +1,35 @@
 #----------------------------------------------------------Symbolics calculation fucntions-----------------------------------------------------------
 
-# General method for binding network
+"""
+    x_sym(args...) -> Vector{Num}
+
+Return species symbols for a binding network.
+"""
 x_sym(args...)=get_binding_network(args...).x_sym
+"""
+    q_sym(args...) -> Vector{Num}
+
+Return total concentration symbols for a binding network.
+"""
 q_sym(args...)=get_binding_network(args...).q_sym
+"""
+    K_sym(args...) -> Vector{Num}
+
+Return binding constant symbols for a binding network.
+"""
 K_sym(args...)=get_binding_network(args...).K_sym
+"""
+    qK_sym(args...) -> Vector{Num}
+
+Return concatenated `[q; K]` symbols for a binding network.
+"""
 qK_sym(args...)= [q_sym(args...); K_sym(args...)]
 
-#special api for SISOPaths
+"""
+    q_sym(grh::SISOPaths, args...) -> Vector{Num}
+
+Return q symbols for a SISO path, excluding the varying coordinate.
+"""
 q_sym(grh::SISOPaths,args...)= begin
     bn = get_binding_network(grh)
     q_sym = if grh.change_qK_idx <= bn.d
@@ -16,6 +39,11 @@ q_sym(grh::SISOPaths,args...)= begin
     end
     return q_sym
 end
+"""
+    K_sym(grh::SISOPaths, args...) -> Vector{Num}
+
+Return K symbols for a SISO path, excluding the varying coordinate.
+"""
 K_sym(grh::SISOPaths,args...)= begin
     bn = get_binding_network(grh)
     K_sym = if grh.change_qK_idx > bn.d
@@ -27,7 +55,9 @@ K_sym(grh::SISOPaths,args...)= begin
 end
 
 """
-Symbolicly calculate ∂logqK/∂logx
+    ∂logqK_∂logx_sym(bnc::Bnc; show_x_space=false) -> Matrix{Num}
+
+Symbolically compute `∂log(qK)/∂log(x)`.
 """
 function ∂logqK_∂logx_sym(Bnc::Bnc; show_x_space::Bool=false)::Matrix{Num}
 
@@ -42,16 +72,28 @@ function ∂logqK_∂logx_sym(Bnc::Bnc; show_x_space::Bool=false)::Matrix{Num}
         Bnc.N
     ]
 end
+"""
+    logder_qK_x_sym(args...; kwargs...) -> Matrix{Num}
+
+Alias for `∂logqK_∂logx_sym`.
+"""
 logder_qK_x_sym(args...;kwargs...) = ∂logqK_∂logx_sym(args...;kwargs...)
 
 """
-Symbolicly calculate ∂logx/∂logqK
+    ∂logx_∂logqK_sym(bnc::Bnc; show_x_space=false) -> Matrix{Num}
+
+Symbolically compute `∂log(x)/∂log(qK)`.
 """
 function ∂logx_∂logqK_sym(Bnc::Bnc;show_x_space::Bool=false)::Matrix{Num}
     # Calculate the symbolic derivative of log(qK) with respect to log(x)
     # This function is used for symbolic calculations, not numerical ones.
     return inv(∂logqK_∂logx_sym(Bnc; show_x_space=show_x_space)).|> Symbolics.simplify
 end
+"""
+    logder_x_qK_sym(args...; kwargs...) -> Matrix{Num}
+
+Alias for `∂logx_∂logqK_sym`.
+"""
 logder_x_qK_sym(args...;kwargs...) = ∂logx_∂logqK_sym(args...;kwargs...)
 
 
@@ -60,7 +102,9 @@ logder_x_qK_sym(args...;kwargs...) = ∂logx_∂logqK_sym(args...;kwargs...)
 #---------------------------------------------------------
 
 """
-handle C log(sym) + C0 >= 0 , polyhedron in log space
+    show_condition_poly(C, C0, nullity=0; syms, log_space=true, asymptotic=false) -> Vector
+
+Return symbolic inequality/equality conditions for polyhedral constraints.
 """
 function show_condition_poly(C::AbstractMatrix{<:Real},
                         C0::AbstractVector{<:Real},
@@ -108,18 +152,45 @@ function show_condition_poly(C::AbstractMatrix{<:Real},
         return vcat(eq, uneq) 
     end
 end
+"""
+    show_condition_poly(poly::Polyhedron; kwargs...) -> Vector
+
+Convenience wrapper for polyhedron constraints.
+"""
 show_condition_poly(poly::Polyhedron; kwargs...)=show_condition_poly(get_C_C0_nullity(poly)...; kwargs...)
+"""
+    show_condition_poly(C_qK::AbstractVector, C0_qK::Real, args...; kwargs...) -> Any
+
+Return a single condition for a 1-row constraint.
+"""
 show_condition_poly(C_qK::AbstractVector{<:Real},C0_qK::Real,args...;kwargs...)=show_condition_poly(C_qK', [C0_qK], args...; kwargs...)[1]
 
 
+"""
+    show_condition_x(args...; kwargs...) -> Vector
+
+Show symbolic conditions in x space.
+"""
 show_condition_x(args...; kwargs...)= show_condition_poly(get_C_C0_x(args...)...; syms=x_sym(args...), kwargs...)
+"""
+    show_condition_qK(args...; kwargs...) -> Vector
+
+Show symbolic conditions in qK space.
+"""
 show_condition_qK(args...; kwargs...)= show_condition_poly(get_C_C0_nullity_qK(args...)...; syms=qK_sym(args...), kwargs...)
+"""
+    show_condition(args...; kwargs...) -> Vector
+
+Alias for `show_condition_qK`.
+"""
 show_condition(args...; kwargs...)= show_condition_qK(args...; kwargs...)
 
 
 
 """
-Show the symbolic conditions for a given regime path.
+    show_condition_path(bnc::Bnc, path, change_qK; kwargs...) -> Vector
+
+Show symbolic conditions for a regime path.
 """
 function show_condition_path(Bnc::Bnc, path::AbstractVector{<:Integer}, change_qK; kwargs...)
     # we couldn't name it as "show_condition" as "path" will be confused with perms
@@ -129,6 +200,11 @@ function show_condition_path(Bnc::Bnc, path::AbstractVector{<:Integer}, change_q
     show_condition_poly(poly; syms=syms, kwargs...)
 end
 
+"""
+    show_condition_path(grh::SISOPaths, pth_idx; kwargs...) -> Vector
+
+Show symbolic conditions for a SISO path.
+"""
 function show_condition_path(grh::SISOPaths, pth_idx; kwargs...)
     poly = get_polyhedron(grh, pth_idx)
     syms = qK_sym(grh)     
@@ -140,7 +216,9 @@ end
 
 
 """
-handle log(y) = C log(x) + C0
+    show_expression_mapping(C, C0, y, x; log_space=true, asymptotic=false) -> Vector{Equation}
+
+Return symbolic expressions for mappings of the form `log(y) = C log(x) + C0`.
 """
 function show_expression_mapping(C::AbstractMatrix{<:Real}, C0::AbstractVector{<:Real}, y, x; log_space::Bool=true,asymptotic::Bool=false)::Vector{Equation}
     if log_space
@@ -150,8 +228,18 @@ function show_expression_mapping(C::AbstractMatrix{<:Real}, C0::AbstractVector{<
     end
     return expr 
 end
+"""
+    show_expression_mapping(C::AbstractVector, C0::Real, args...; kwargs...) -> Equation
+
+Return a single mapping expression for a 1-row constraint.
+"""
 show_expression_mapping(C::AbstractVector{<:Real}, C0::Real, args...;kwargs...)=show_expression_mapping(C', [C0], args...;kwargs...)[1]
 
+"""
+    show_expression_x(args...; kwargs...) -> Vector{Equation}
+
+Show symbolic expressions for x as a function of qK.
+"""
 show_expression_x(args...;kwargs...)= begin
     bn = get_binding_network(args...)
     y = x_sym(bn)
@@ -159,6 +247,11 @@ show_expression_x(args...;kwargs...)= begin
     show_expression_mapping(get_H_H0(args...)..., y,x; kwargs...)
 end
 
+"""
+    show_expression_qK(args...; kwargs...) -> Vector{Equation}
+
+Show symbolic expressions for qK as a function of x.
+"""
 show_expression_qK(args...;kwargs...)= begin
     bn = get_binding_network(args...)
     y = qK_sym(bn)
@@ -167,13 +260,28 @@ show_expression_qK(args...;kwargs...)= begin
 end
 
 
+"""
+    show_dominant_condition(args...; log_space=false, kwargs...) -> Vector{Equation}
+
+Show dominant conservation conditions for a vertex.
+"""
 show_dominant_condition(args...;log_space=false, kwargs...)= begin
     bn = get_binding_network(args...)
     y = q_sym(bn)
     x = x_sym(bn)
     show_expression_mapping(get_P_P0(args...)..., y,x; log_space=log_space,kwargs...)
 end
+"""
+    show_conservation(bnc::Bnc) -> Vector{Equation}
+
+Return conservation equations `q = Lx`.
+"""
 show_conservation(Bnc::Bnc)=Bnc.q_sym .~ Bnc._L_sparse * Bnc.x_sym
+"""
+    show_equilibrium(bnc::Bnc; log_space=true) -> Vector{Equation}
+
+Return equilibrium equations relating `K` and `x`.
+"""
 show_equilibrium(Bnc::Bnc;log_space::Bool=true) = show_expression_mapping(Bnc.N, zeros(Int,Bnc.r), Bnc.K_sym, Bnc.x_sym; log_space=log_space)
 
 
@@ -186,10 +294,9 @@ show_equilibrium(Bnc::Bnc;log_space::Bool=true) = show_expression_mapping(Bnc.N,
 
 
 """
-Symbolic helper function to convert a sum of log10 terms into a product form.
-from A*log x + b  to x^A*10^b
+    handle_log_weighted_sum(A, x, b=nothing) -> Vector{Num}
 
-The final expression contains ∏b^a term.
+Convert `A*log10(x) + b` into a multiplicative form `x^A * 10^b`.
 """
 function handle_log_weighted_sum(A::AbstractMatrix{<:Real}, x , b::Union{Nothing,AbstractVector{<:Real}}=nothing)::Vector{Num}
     rows = size(A,1)
@@ -203,8 +310,9 @@ end
 
 
 """
-Create a symbolic representation of the direction change in qK-space.
-eg: +q1 -q2 +K2 from [1,-1,0,1]
+    sym_direction(bnc::Bnc, dir) -> String
+
+Create a symbolic representation of a qK direction vector.
 """
 function sym_direction(Bnc::Bnc,dir)::String
     rst = ""
@@ -227,6 +335,11 @@ function sym_direction(Bnc::Bnc,dir)::String
 end
 
 
+"""
+    sym_direction(dir; syms) -> String
+
+Create a symbolic representation of a direction vector using provided symbols.
+"""
 function sym_direction(dir ;syms::AbstractArray{Num})::String
     rst = ""
     for i in eachindex(dir)
@@ -242,11 +355,9 @@ end
 
 
 """
-Format a single path element for display.
+    _fmt_elem(x; digits=3) -> String
 
-- If it's a Real and close to an integer (after rounding), show as Int.
-- Otherwise show rounded Real (digits).
-- Non-real values fall back to `repr`.
+Format a single path element for display.
 """
 @inline function _fmt_elem(x; digits::Int=3)::String
     if x isa Real
@@ -266,10 +377,9 @@ Format a single path element for display.
 end
 
 """
-Format a path vector as an arrow-separated string.
+    format_arrow(path; prefix="", digits=3) -> String
 
-Example:
-    format_arrow([1,0,-1]; prefix="x") == "x1 → x0 → x-1"
+Format a path vector as an arrow-separated string.
 """
 function format_arrow(path::AbstractVector; prefix::AbstractString="", digits::Int=3)::String
     isempty(path) && return ""
@@ -294,7 +404,11 @@ struct PathRow{I,P,V}
     volume::V
 end
 
-# 4.1 用户直接给 paths（无 volume），id 自动用 1:N
+"""
+    _normalize_rows(paths; ids=nothing, volumes=nothing) -> Vector{PathRow}
+
+Normalize paths, ids, and volumes into `PathRow` entries.
+"""
 function _normalize_rows(paths::AbstractVector{<:AbstractVector}; ids=nothing, volumes=nothing)
     n = length(paths)
     ids === nothing && (ids = collect(1:n))
@@ -313,12 +427,9 @@ end
 
 
 """
-Print rows of paths in aligned columns.
+    print_paths(rows; prefix="", digits=3, io=stdout) -> nothing
 
-Keyword args:
-- prefix: prefix before each node in arrow (e.g. "#")
-- digits: rounding digits for real display
-- io: output stream
+Print rows of paths in aligned columns.
 """
 function print_paths(rows::AbstractVector{<:PathRow};
     prefix::AbstractString="",
@@ -351,13 +462,19 @@ end
 
 
 """
-print_paths(paths; prefix, ids, volumes, digits, io)
-"""
+    print_paths(paths; volumes=nothing, ids=nothing, kwargs...) -> nothing
 
+Convenience wrapper that builds `PathRow` entries.
+"""
 print_paths(paths::AbstractVector{<:AbstractVector}; volumes=nothing, ids=nothing, kwargs...) =
     print_paths(_normalize_rows(paths; volumes=volumes, ids=ids); kwargs...)
 
 
+"""
+    print_path(path; id=nothing, volume=nothing, kwargs...) -> nothing
+
+Print a single path entry.
+"""
 print_path(path::AbstractVector; id = nothing, volume = nothing, kwargs...) =
     print_paths(
         _normalize_rows(
@@ -370,13 +487,9 @@ print_path(path::AbstractVector; id = nothing, volume = nothing, kwargs...) =
 
 
 """
-show Reaction Order for a path.
-"""
+    solve_sym_expr(a, b, x, idx; log_space=true) -> Equation
 
-
-
-"""
- for a^T x +b = 0 =>  xi = -(1/ai)(b + ∑j≠i aj xj)
+Solve `a'x + b = 0` for the variable at `idx` symbolically.
 """
 function solve_sym_expr(a::AbstractVector{<:Real}, b::Real, x, idx; log_space::Bool=true)
     a = copy(collect(a))
@@ -393,7 +506,9 @@ function solve_sym_expr(a::AbstractVector{<:Real}, b::Real, x, idx; log_space::B
 end
 
 """
-Normally display the expression of the interface, when denoting the idx, whill express the interface in terms of that qK idx.
+    show_interface(bnc::Bnc, from, to; lhs_idx=nothing, kwargs...) -> Any
+
+Display the interface expression between two regimes.
 """
 function show_interface(Bnc::Bnc, from,to;  lhs_idx::Union{Nothing,Integer}=nothing, kwargs...)
     C, C0 = get_interface(Bnc,from,to) # C' log qK + C0 =0
@@ -408,6 +523,11 @@ end
 
 
 
+"""
+    show_expression_path(grh::SISOPaths, pth; observe_x=nothing, kwargs...) -> nothing
+
+Display piecewise symbolic expressions along a SISO path.
+"""
 function show_expression_path(grh::SISOPaths, pth; observe_x=nothing, kwargs...)
     pth_idx = get_idx(grh, pth)
     bn = get_binding_network(grh)
@@ -489,8 +609,9 @@ end
 
 
 """
-Given a regime path, change_qK_idx, and observe_x_idx, return the symbolic expressions for the path in the form
-[expression1, edge1, expression2, edge2,...]
+    show_expression_path(model::Bnc, rgm_path, change_qK_idx, observe_x_idx; log_space=false) -> (Vector, Vector)
+
+Return symbolic expressions and interface locations along a regime path.
 """
 function show_expression_path(model::Bnc, rgm_path, change_qK_idx, observe_x_idx;log_space::Bool=false)::Tuple{Vector,Vector}
     change_qK_idx = locate_sym([model.q_sym;model.K_sym],change_qK_idx)
@@ -509,4 +630,9 @@ function show_expression_path(model::Bnc, rgm_path, change_qK_idx, observe_x_idx
     return (exprs, edges)
 end
 
+"""
+    show_expression_path(grh::SISOPaths, pth_idx, observe_x; kwargs...) -> (Vector, Vector)
+
+Convenience wrapper for `show_expression_path` with a SISO path index.
+"""
 show_expression_path(grh::SISOPaths, pth_idx, observe_x; kwargs...)=show_expression_path(get_binding_network(grh), grh.rgm_paths[pth_idx], grh.change_qK_idx, observe_x; kwargs...)

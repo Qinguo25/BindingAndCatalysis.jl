@@ -1,11 +1,7 @@
 """
-    calc_volume(Cs, C0s; kwargs...) -> Vector{Tuple{Float64,Float64}}
+    calc_volume(Cs, C0s; kwargs...) -> Vector{Volume}
 
-Monte Carlo estimate for each polyhedron/regime defined by `A*x + b >= -tol`
-(where `A = Cs[i]`, `b = C0s[i]`), using Wilson score interval to stop per-regime
-when relative error <= `rel_tol` (or `time_limit` hit).
-
-Returns `stats[i] = (center, margin)` for each regime.
+Monte Carlo estimate for polyhedron volumes defined by `A*x + b >= -tol`.
 """
 function calc_volume(
     Cs::AbstractVector{<:AbstractMatrix{<:Real}},
@@ -158,6 +154,11 @@ function calc_volume(
 end
 
 
+"""
+    calc_volume(C, C0; kwargs...) -> Volume
+
+Compute volume for a single polyhedron.
+"""
 calc_volume(C::AbstractMatrix{<:Real}, C0::AbstractVector{<:Real}; kwargs...)::Tuple{Float64,Float64} = calc_volume([C], [C0]; kwargs...)[1]
 
 
@@ -169,6 +170,11 @@ calc_volume(C::AbstractMatrix{<:Real}, C0::AbstractVector{<:Real}; kwargs...)::T
 #------------------------------------------------------------------------------------------------
 
 
+"""
+    calc_volume(model::Bnc, perms=nothing; asymptotic=true, kwargs...) -> Vector{Volume}
+
+Compute volumes for selected regimes in a model.
+"""
 function calc_volume(model::Bnc, perms=nothing;
     asymptotic::Union{Bool,Nothing}=true, 
     kwargs...
@@ -218,12 +224,22 @@ end
 #--------------------------------------------------------------------------------------
 
 # filter and then calculate volumes for polyhedra
+"""
+    _remove_poly_intersect(poly::Polyhedron) -> Polyhedron
+
+Remove intersection offsets to test asymptoticity in polyhedra.
+"""
 function _remove_poly_intersect(poly::Polyhedron)
     (A,b,linset) = MixedMatHRep(hrep(poly)) |> p->(p.A, p.b,p.linset)
     p_new = hrep(A, zeros(size(b)), linset) |> x-> polyhedron(x,CDDLib.Library())
     return p_new
 end
 
+"""
+    _get_polys_mask(polys; singular=nothing, asymptotic=nothing) -> Vector{Bool}
+
+Return a boolean mask for polyhedra matching singularity/asymptotic filters.
+"""
 function _get_polys_mask(polys::AbstractVector{<:Polyhedron};
      singular::Union{Bool,Integer,Nothing}=nothing, 
      asymptotic::Union{Bool,Nothing}=nothing)::Vector{Bool}
@@ -256,12 +272,22 @@ function _get_polys_mask(polys::AbstractVector{<:Polyhedron};
     return [ check_singular(nlt[i]) && check_asym(flag_asym[i]) for i in 1:n ]
 end
 
+"""
+    filter_polys(polys; return_idx=false, kwargs...) -> Vector
+
+Filter polyhedra by singularity/asymptotic criteria.
+"""
 function filter_polys(polys; return_idx::Bool=false, kwargs...)
     mask = _get_polys_mask(polys; kwargs...)
     return return_idx ? findall(mask) : polys[mask]
 end
 
 
+"""
+    calc_volume(polys::AbstractVector{<:Polyhedron}; asymptotic=true, kwargs...) -> Vector{Volume}
+
+Compute volumes for a collection of polyhedra.
+"""
 function calc_volume(polys::AbstractVector{<:Polyhedron};
     asymptotic::Bool=true,
     kwargs...
@@ -284,4 +310,9 @@ function calc_volume(polys::AbstractVector{<:Polyhedron};
     return vals
 end
 
+"""
+    calc_volume(poly::Polyhedron; kwargs...) -> Volume
+
+Compute the volume for a single polyhedron.
+"""
 calc_volume(poly::Polyhedron;kwargs...) = calc_volume([poly]; kwargs...)[1]

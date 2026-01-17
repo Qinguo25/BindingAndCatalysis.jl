@@ -1,4 +1,15 @@
-#helper function to convert N matrix to L matrix if L is not provided.
+"""
+    L_from_N(N::Matrix{Int}) -> Matrix{Int}
+
+Compute a conservation matrix `L` from a stoichiometry matrix `N` such that
+`N * L' = 0`.
+
+# Arguments
+- `N`: Stoichiometry matrix with reactions as rows.
+
+# Returns
+- A conservation matrix `L` whose rows span the left nullspace of `N`.
+"""
 function L_from_N(N::Matrix{Int})::Matrix{Int}
     r, n = size(N)
     d = n - r
@@ -7,6 +18,18 @@ function L_from_N(N::Matrix{Int})::Matrix{Int}
     hcat(Matrix(I, d, d), -(N_2 \ N_1)')
 end
 
+"""
+    N_from_L(L::Matrix{Int}) -> Matrix{Int}
+
+Recover a stoichiometry matrix `N` from a conservation matrix `L` assuming the
+standard block structure used in this package.
+
+# Arguments
+- `L`: Conservation matrix where rows correspond to conserved totals.
+
+# Returns
+- A stoichiometry matrix `N` compatible with `L`.
+"""
 function N_from_L(L::Matrix{Int})::Matrix{Int}
     d, n = size(L)
     r = n - d
@@ -14,6 +37,17 @@ function N_from_L(L::Matrix{Int})::Matrix{Int}
     hcat(L2',Matrix(-I,r,r))
 end
 
+"""
+    name_converter(name::Vector{<:T}) -> Vector{Num}
+
+Convert a vector of symbols or numbers into Symbolics variables.
+
+# Arguments
+- `name`: Vector of `Symbol`, `String`, or `Num`.
+
+# Returns
+- Vector of `Symbolics.Num` objects.
+"""
 function name_converter(name::Vector{<:T})::Vector{Num} where T 
     if T <: Num
         return name
@@ -23,6 +57,20 @@ function name_converter(name::Vector{<:T})::Vector{Num} where T
 end
 
 
+"""
+    rowmask_indices(A::SparseMatrixCSC, start_row::Int, end_row::Int)
+
+Return the row indices, column indices, and nzval positions for nonzeros in a
+row range of a sparse matrix.
+
+# Arguments
+- `A`: Sparse matrix to scan.
+- `start_row`: First row (inclusive).
+- `end_row`: Last row (inclusive).
+
+# Returns
+- Tuple `(rows, cols, idxs)` where `idxs` indexes `A.nzval`.
+"""
 function rowmask_indices(A::SparseMatrixCSC, start_row::Int, end_row::Int)
     # 获取稀疏矩阵 A 中前 d行 的非零元素的行、列索引及其在 nzval 中的位置
     rows = Int[]        # 存储行坐标
@@ -42,6 +90,18 @@ function rowmask_indices(A::SparseMatrixCSC, start_row::Int, end_row::Int)
     return rows, cols, idxs
 end
 
+"""
+    diag_indices(A::SparseMatrixCSC, end_row::Int) -> Vector{Int}
+
+Return indices into `A.nzval` for diagonal entries up to `end_row`.
+
+# Arguments
+- `A`: Sparse matrix.
+- `end_row`: Last diagonal entry to include.
+
+# Returns
+- Vector of nzval indices for the diagonal.
+"""
 function diag_indices(A::SparseMatrixCSC,end_row::Int)
     # 获取稀疏矩阵 A 中对角线前end_row行元素在 nzval 中的位置
     # rows = Int[]        # 存储行坐标
@@ -87,10 +147,22 @@ end
 =#
 
 # helper funtions to taking inverse when the matrix is singular.
+"""
+    _adj_singular_matrix(A::AbstractMatrix; atol=1e-12) -> (SparseMatrixCSC, Int)
+
+Compute a sparse adjugate-like matrix for a near-singular square matrix using
+its smallest singular vector, and return the inferred nullity.
+
+# Arguments
+- `A`: Square matrix to analyze.
+
+# Keyword Arguments
+- `atol`: Absolute tolerance for identifying zero singular values.
+
+# Returns
+- Tuple `(adj_A, nullity)`.
+"""
 function  _adj_singular_matrix(A::AbstractMatrix; atol=1e-12)::Tuple{SparseMatrixCSC,Int}
-    """
-    Calculate the adjoint of a singular matrix M, and return the nullity.
-    """
     n, m = size(A)
     @assert n == m "A must be square"
     F = svd(Array(A))
@@ -123,10 +195,24 @@ end
 # end
 
 
+"""
+    randomize(n::Int, size; kwargs...) -> Array{Vector{Float64}}
+
+Generate an array of random vectors in log space.
+
+# Arguments
+- `n`: Length of each random vector.
+- `size`: Dimensions of the output array.
+
+# Keyword Arguments
+- `log_lower`: Lower bound in log10 space.
+- `log_upper`: Upper bound in log10 space.
+- `output_logspace`: Return log10 values when `true`.
+
+# Returns
+- Array of random vectors.
+"""
 function randomize(n::Int, size; kwargs...)::Array{Vector{Float64}}
-    """
-    Generate a random matrix of size (m, n) with values between 10^log_lower and 10^log_upper, in log space
-    """
     N = Array{Vector{Float64}}(undef, size...)
     
     Threads.@threads for i in eachindex(N)
@@ -135,10 +221,23 @@ function randomize(n::Int, size; kwargs...)::Array{Vector{Float64}}
     return N
 end
 
+"""
+    randomize(n::Int; log_lower=-6, log_upper=6, output_logspace=true) -> Vector{Float64}
+
+Generate a random vector with entries sampled uniformly in log10 space.
+
+# Arguments
+- `n`: Length of the vector.
+
+# Keyword Arguments
+- `log_lower`: Lower bound in log10 space.
+- `log_upper`: Upper bound in log10 space.
+- `output_logspace`: When `false`, return values in linear space.
+
+# Returns
+- Vector of random values (log10 or linear).
+"""
 function randomize(n::Int; log_lower=-6, log_upper=6, output_logspace::Bool=true)::Vector{Float64}
-    """
-    Generate a random vector of size n with values between 10^log_lower and 10^log_upper, equally spaced in log space
-    """
     #turn lowerbound and upperbound into bases of e
     if !output_logspace
         exp10.(rand(n) .* (log_upper - log_lower) .+ log_lower)
@@ -149,10 +248,19 @@ end
 randomize(Bnc::Bnc, size; kwargs...) = randomize(Bnc.n, size; kwargs...)
 
 
+"""
+    arr_to_vector(arr)
+
+Convert a multidimensional array into nested vectors, preserving the first
+dimension as the outer vector.
+
+# Arguments
+- `arr`: Array of any dimension.
+
+# Returns
+- Nested vector representation.
+"""
 function arr_to_vector(arr)
-    """convert a multidimensional array to a vector or list,
-    eg: a matrix to a vector of vector, which contains each colums as a vector,
-    """
     d = ndims(arr)
     if d == 0
         return arr[]  # 处理0维数组（标量）
@@ -165,6 +273,14 @@ function arr_to_vector(arr)
 end
 #= Unused helper retained for optional console pretty-printing.
 =#
+"""
+    pythonprint(arr) -> nothing
+
+Pretty-print an array in JSON format for easy inspection.
+
+# Arguments
+- `arr`: Array-like input.
+"""
 function pythonprint(arr)
     txt = JSON3.write(arr_to_vector(arr), pretty=true, indent=4, escape_unicode=false)
     println(txt)
@@ -173,6 +289,22 @@ end
 
 
 
+"""
+    N_generator(r::Int, n::Int; min_binder=2, max_binder=2) -> Matrix{Int}
+
+Generate a random stoichiometry matrix with `r` reactions and `n` species.
+
+# Arguments
+- `r`: Number of reactions.
+- `n`: Number of species.
+
+# Keyword Arguments
+- `min_binder`: Minimum number of binders per reaction.
+- `max_binder`: Maximum number of binders per reaction.
+
+# Returns
+- Random stoichiometry matrix `N`.
+"""
 function N_generator(r::Int, n::Int; min_binder::Int=2, max_binder::Int=2)::Matrix{Int}
     @assert n > r "n must be greater than r"
     @assert min_binder >= 1 && max_binder >= min_binder "min_binder and max_binder must be at least 1"
@@ -189,12 +321,38 @@ function N_generator(r::Int, n::Int; min_binder::Int=2, max_binder::Int=2)::Matr
     return N
 end
 
+"""
+    L_generator(d::Int, n::Int; kwargs...) -> Matrix{Int}
+
+Generate a random conservation matrix `L` with `d` conserved totals.
+
+# Arguments
+- `d`: Number of conservation laws.
+- `n`: Number of species.
+
+# Keyword Arguments
+- Passed through to [`N_generator`](@ref).
+
+# Returns
+- Conservation matrix `L`.
+"""
 function L_generator(d::Int, n::Int; kwargs...)::Matrix{Int}
     N = N_generator(n - d, n; kwargs...)
     L = L_from_N(N)
     return L
 end
 
+"""
+    independent_row_idx(N::AbstractMatrix)
+
+Return indices of linearly independent rows in `N`.
+
+# Arguments
+- `N`: Input matrix.
+
+# Returns
+- Vector of row indices.
+"""
 function independent_row_idx(N::AbstractMatrix{T}) where T
     # find linear independent rows of a matrix N and return the index
     Nt_lu = lu(N',check=false)
@@ -204,12 +362,20 @@ function independent_row_idx(N::AbstractMatrix{T}) where T
     return pivot_indices
 end
 
+"""
+    _ode_solution_wrapper(solution::ODESolution) -> (Vector{Float64}, Vector{Vector{Float64}})
+
+Convert a DifferentialEquations.jl solution into time and state arrays.
+
+# Arguments
+- `solution`: ODESolution object.
+
+# Returns
+- Tuple `(t, u)` where `t` is the time vector and `u` is the state history.
+"""
 function _ode_solution_wrapper(
     solution::ODESolution
     )::Tuple{Vector{Float64}, Vector{Vector{Float64}}}
-    """
-    A wrapper function to convert the ODESolution to a t vector and u matrix
-    """
     return solution.t, solution.u
 end
 
@@ -241,10 +407,32 @@ end
 =#
 
 
+"""
+    log10_sym(x) -> Num
+
+Symbolic `log10` wrapper that preserves `Num(0)` for unity.
+"""
 log10_sym(x) = x==1 ? Num(0) : Symbolics.wrap(Symbolics.Term(log10, [x,]))
+
+"""
+    exp10_sym(x) -> Num
+
+Symbolic `exp10` wrapper.
+"""
 exp10_sym(x) = Symbolics.wrap(Symbolics.Term(exp10, [x,]))
 
 
+"""
+    get_int_type(n) -> Type
+
+Select the smallest signed integer type that can represent `n + 1`.
+
+# Arguments
+- `n`: Maximum value to represent.
+
+# Returns
+- Integer type (`Int8`, `Int16`, `Int32`, `Int64`, or `Int128`).
+"""
 function get_int_type(n)
     # Get the integer type based on the number of bits
     m = n+1
@@ -264,6 +452,17 @@ end
 
 
 #Pure helper functions for converting between matrix and index-value pairs.
+"""
+    _Mtx2idx_val(Mtx::Matrix) -> (Vector{Int}, Vector)
+
+Convert a single-nonzero-per-row matrix into index and value vectors.
+
+# Arguments
+- `Mtx`: Matrix with at most one nonzero per row.
+
+# Returns
+- Tuple `(idx, val)` storing column index and value for each row.
+"""
 function _Mtx2idx_val(Mtx::Matrix{<:T}) where T
     row_num, col_num  = size(Mtx)
     idx = Vector{Int}(undef, row_num)
@@ -279,6 +478,19 @@ function _Mtx2idx_val(Mtx::Matrix{<:T}) where T
     end
     return idx,val
 end
+"""
+    _idx_val2Mtx(idx::Vector{Int}, val::T=1; col_num=nothing) -> Matrix
+
+Create a matrix with one nonzero per row from index and value vectors.
+
+# Arguments
+- `idx`: Column indices per row.
+- `val`: Scalar value for each row.
+- `col_num`: Optional number of columns.
+
+# Returns
+- Dense matrix with specified nonzeros.
+"""
 function _idx_val2Mtx(idx::Vector{Int}, val::T=1, col_num::Union{Int,Nothing}=nothing) where T
     n = length(idx)
     col_num = isnothing(col_num) ? n : col_num # if col_num is not provided, use the maximum idx value
@@ -291,6 +503,19 @@ function _idx_val2Mtx(idx::Vector{Int}, val::T=1, col_num::Union{Int,Nothing}=no
     return Mtx
     
 end
+"""
+    _idx_val2Mtx(idx::Vector{Int}, val::Vector; col_num=nothing) -> Matrix
+
+Create a matrix with one nonzero per row using per-row values.
+
+# Arguments
+- `idx`: Column indices per row.
+- `val`: Values per row.
+- `col_num`: Optional number of columns.
+
+# Returns
+- Dense matrix with specified nonzeros.
+"""
 function _idx_val2Mtx(idx::Vector{Int}, val::Vector{<:T}, col_num::Union{Int,Nothing}=nothing) where T
     # Convert idx and val to a matrix of size (d, n)
     n = length(idx)
@@ -308,6 +533,23 @@ end
 
 
 
+"""
+    matrix_iter(f, M; byrow=true, multithread=true) -> Matrix
+
+Apply a function to each row or column of a matrix and collect results in a
+matrix.
+
+# Arguments
+- `f`: Function applied to each slice.
+- `M`: Input matrix.
+
+# Keyword Arguments
+- `byrow`: When `true`, apply to rows; otherwise columns.
+- `multithread`: Use multithreading when available.
+
+# Returns
+- Matrix of results with one row/column per input slice.
+"""
 function matrix_iter(f::Function, M::AbstractArray{<:Any,2}; byrow::Bool=true,multithread::Bool=true)
     # Get the number of rows from the input matrix
     if byrow
@@ -376,7 +618,16 @@ end
 
 
 """
-Helper functions to find difference between two vectors
+    vector_difference(v1, v2) -> Vector
+
+Summarize the differences between two vectors as counts of value transitions.
+
+# Arguments
+- `v1`: First vector.
+- `v2`: Second vector of the same length.
+
+# Returns
+- Sorted vector of `(pair => count)` entries.
 """
 function vector_difference(v1::AbstractVector{T}, v2::AbstractVector{T}) where T
     diff_index = findall(v1 .!= v2)
@@ -403,22 +654,42 @@ end
 # some other helper functions 
 #------------------------------
 """
-Helper function to locate the index of a symbol in a vector of symbols.
-If the target is already an integer, return it directly.
+    locate_sym(syms, target_sym) -> Int
+
+Locate a symbol in a list of Symbolics variables.
+
+# Arguments
+- `syms`: Vector of Symbolics variables.
+- `target_sym`: Symbol, string, or integer.
+
+# Returns
+- Index of the symbol in `syms`.
 """
 function locate_sym(syms, target_sym)
     target_sym = Symbol(target_sym)
     return findfirst(x -> x.val.name == target_sym, syms)
 end
+"""
+    locate_sym(syms, target_sym::Integer) -> Integer
+
+Return the provided index directly for convenience.
+"""
 function locate_sym(syms, target_sym::Integer)
     return target_sym
 end
 """
-Helper function to locate the index of a symbol in Bnc model.
+    locate_sym_x(model::Bnc, target_sym) -> Int
+
+Locate a species symbol in a `Bnc` model.
 """
 function locate_sym_x(model::Bnc,target_sym)
     return locate_sym(model.x_sym, target_sym)
 end
+"""
+    locate_sym_qK(model::Bnc, target_sym) -> Int
+
+Locate a total or binding constant symbol in a `Bnc` model.
+"""
 function locate_sym_qK(model::Bnc,target_sym)
     return locate_sym([model.q_sym;model.K_sym], target_sym)
 end
@@ -430,6 +701,11 @@ end
 #--------------------------------------------
 #heler functions to handle strings
 #---------------------------------------------
+"""
+    strip_before_bracket(s::AbstractString) -> String
+
+Remove everything before the first `[` character, including the bracket.
+"""
 strip_before_bracket(s::AbstractString) =    replace(s, r"^[^\[]*" => "")
 
 #----------------------------------
@@ -454,6 +730,18 @@ rest = removed_copy(v, i)
 #------------------------------------------------------------
 # Helper function for construcing graphs
 #----------------------------------------------------------
+"""
+    graph_from_paths(paths; nv=nothing) -> SimpleDiGraph
+
+Construct a directed graph from a collection of vertex paths.
+
+# Arguments
+- `paths`: Vector of vertex index paths.
+- `nv`: Optional number of vertices.
+
+# Returns
+- Directed graph with edges following the paths.
+"""
 function graph_from_paths(paths::AbstractVector{<:AbstractVector{<:Integer}}, nv=nothing)::SimpleDiGraph
     nv = nv === nothing ? maximum(Iterators.flatten(paths)) : nv
 
@@ -467,6 +755,17 @@ function graph_from_paths(paths::AbstractVector{<:AbstractVector{<:Integer}}, nv
     return grh
 end
 
+"""
+    sources_sinks_from_paths(paths) -> (Vector{Int}, Vector{Int})
+
+Return unique source and sink vertices for a collection of paths.
+
+# Arguments
+- `paths`: Vector of vertex index paths.
+
+# Returns
+- Tuple `(sources, sinks)`.
+"""
 function sources_sinks_from_paths(paths::AbstractVector{<:AbstractVector{<:Integer}})::Tuple{Vector{Int}, Vector{Int}}
     sources = unique(p -> p[1], paths)
     sinks = unique(p -> p[end], paths)
@@ -520,12 +819,29 @@ end
 #     return sol
 # end
 
+"""
+    norm_vec_space(x::AbstractVector{<:Real}) -> Vector{Float64}
+
+Normalize a vector to have unit length in Euclidean space.
+"""
 function norm_vec_space(x::AbstractVector{<:Real})::Vector{Float64}
     n = length(x)
     num_to_norm = median!(filter!(>(1e-9), abs.(x)))
     return x./num_to_norm
 end
 
+"""
+    render_array(M, empty_posi_subs=nothing) -> String
+
+Render an array as a formatted string, optionally replacing specified entries.
+
+# Arguments
+- `M`: Array to render.
+- `empty_posi_subs`: Optional subscripts to mark as empty.
+
+# Returns
+- Pretty-printed string.
+"""
 function render_array(M::AbstractArray,empty_posi_subs=nothing)
     A = Array{Any}(M)
     f(x) = begin
