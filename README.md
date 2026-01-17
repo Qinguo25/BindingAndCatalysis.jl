@@ -94,6 +94,18 @@ The best end-to-end tutorial is in [`Examples/Minimal_example.ipynb`](Examples/M
 - numerical mapping between `qK` and `x`
 - more advanced SISO path analysis
 
+To run the notebook, make sure Jupyter is configured with Julia via IJulia.jl. Follow the official IJulia documentation to install and register the Julia kernel: <https://julialang.github.io/IJulia.jl/stable/>. When installing Julia for the first time, you may want to add a multi-threaded Jupyter kernel so the notebook can take advantage of multiple CPU threads. For example:
+
+```julia
+using IJulia
+installkernel(
+    "Julia (multi threads)",
+    env = Dict("JULIA_NUM_THREADS" => "auto")
+)
+```
+
+This creates a Jupyter kernel named “Julia (multi threads)” with automatic multi-thread configuration.
+
 ## API overview
 
 Core entry points:

@@ -31,8 +31,7 @@ Symbolics = "0c5d862f-8b57-4792-8d23-62f2024744c7"
 ProgressMeter = "1.11.0"
 
 [extras]
-CairoMakie = "13f3f980-e62b-5c42-98c6-ff1f3baf88f0"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [targets]
-test = ["Test", "CairoMakie"]
+test = ["Test"]
