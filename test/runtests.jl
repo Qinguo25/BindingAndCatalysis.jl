@@ -1,3 +1,4 @@
+Pkg.resolve()
 using BindingAndCatalysis
 using Random
 using Test
