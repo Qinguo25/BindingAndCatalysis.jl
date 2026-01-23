@@ -8,7 +8,6 @@ Compute the Jacobian of `log(q,K)` with respect to `log(x)` at a given point.
 # Keyword Arguments
 - `x`: Species concentrations in linear space.
 - `qK`: Totals/binding constants in linear space.
-- `q`: Totals (subset of `qK`) in linear space.
 
 # Returns
 - Jacobian matrix of `logqK` with respect to `logx`.
@@ -16,46 +15,40 @@ Compute the Jacobian of `log(q,K)` with respect to `log(x)` at a given point.
 function ∂logqK_∂logx(Bnc::Bnc;
     x::Union{AbstractVector{<:Real},Nothing}=nothing,
     qK::Union{AbstractVector{<:Real},Nothing}=nothing,
-    q::Union{AbstractVector{<:Real},Nothing}=nothing)::Matrix{<:Real}
+    input_logspace::Bool=false)::Matrix{<:Real}
 
-    # 1. Ensure x is defined
-    if isnothing(x)
-        if isnothing(qK)
-            error("Either x or qK must be provided")
+    x = if isnothing(x)
+            if isnothing(qK)
+                error("Either x or qK must be provided")
+            else
+                qK2x(Bnc, qK; input_logspace=input_logspace, output_logspace=false) # Derive x from qK
+            end
+        elseif input_logspace
+            exp10.(x) # Convert from log space to linear space
         else
-            x = qK2x(Bnc, qK) # Derive x from qK
+            x
         end
-    end
 
-    # 2. Ensure q is defined
-    if isnothing(q)
-        if isnothing(qK)
-            # If qK is not provided but x is (which it must be by this point),
-            # derive q from x
-            q = Bnc.L * x
+    q = if isnothing(qK)
+            Bnc.L * x
+        elseif input_logspace
+            exp10.(qK[1:Bnc.d])
         else
-            # If qK is provided, q is part of qK
-            q = qK[1:Bnc.d]
+            qK[1:Bnc.d]
         end
-    end
 
-    return [
-        transpose(x) .* Bnc.L ./ q
+    return vcat(
+        x' .* Bnc.L ./ q,
         Bnc.N
-    ]
+    )
 end
 """
     ∂logx_∂logqK(bnc::Bnc; x=nothing, qK=nothing, q=nothing) -> Matrix
 
 Compute the Jacobian of `log(x)` with respect to `log(q,K)`.
 """
-function ∂logx_∂logqK(Bnc::Bnc;
-    x::Union{AbstractVector{<:Real},Nothing}=nothing,
-    qK::Union{AbstractVector{<:Real},Nothing}=nothing,
-    q::Union{AbstractVector{<:Real},Nothing}=nothing)::Matrix{<:Real}
+∂logx_∂logqK(args...;kwargs...) = inv(∂logqK_∂logx(args...;kwargs...))
 
-    inv(∂logqK_∂logx(Bnc; x=x, q=q, qK=qK))
-end
 """
     logder_x_qK(args...; kwargs...) -> Matrix
 
