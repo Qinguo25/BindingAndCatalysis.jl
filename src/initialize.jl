@@ -131,6 +131,12 @@ Add two `Volume` values by summing means and variances.
 """
 Base.:+(v1::Volume, v2::Volume) = Volume(v1.mean + v2.mean, v1.var + v2.var)
 """
+    Base.:-(v1::Volume, v2::Volume) -> Volume
+
+Add two `Volume` values by summing means and variances.
+"""
+Base.:-(v1::Volume, v2::Volume) = Volume(v1.mean - v2.mean, v1.var + v2.var)
+"""
     Base.isless(a::Volume, b::Volume) -> Bool
 
 Compare `Volume` objects by mean value.

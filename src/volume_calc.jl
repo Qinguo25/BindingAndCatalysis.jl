@@ -27,6 +27,9 @@ function calc_volume(
 
     # --- perf/UX ---
     show_progress::Bool = false,
+
+    # --- rebase---
+    rebase_mat:: Union{AbstractMatrix{<:Real},Nothing} = nothing
 )::Vector{Volume}
 
     @assert length(Cs) == length(C0s) "Cs and C0s must have same length"
@@ -41,6 +44,11 @@ function calc_volume(
         @assert size(Cs[i], 1) == length(C0s[i]) "size(Cs[$i],1) must match length(C0s[$i])"
     end
 
+    Cs = if isnothing(rebase_mat)
+           Cs
+        else
+            [ Cs[i] * rebase_mat for i in 1:n_regimes ]
+        end
     # z for Wilson interval
     z = quantile(Normal(), (1 + confidence_level) / 2)
 
@@ -353,66 +361,7 @@ Compute volume for a single polyhedron.
 """
 calc_volume(C::AbstractMatrix{<:Real}, C0::AbstractVector{<:Real}; kwargs...)::Tuple{Float64,Float64} = calc_volume([C], [C0]; kwargs...)[1]
 
-
-
-
-
-#------------------------------------------------------------------------------------------------
-# calculate volume for Bnc regimes,
-#------------------------------------------------------------------------------------------------
-
-
-"""
-    calc_volume(model::Bnc, perms=nothing; asymptotic=true, kwargs...) -> Vector{Volume}
-
-Compute volumes for selected regimes in a model.
-"""
-function calc_volume(model::Bnc, perms=nothing;
-    asymptotic::Union{Bool,Nothing}=true, 
-    re_base_K::Bool = false,
-    kwargs...
-) # singular/ asymptotic not be put here, as dimensions could reduce and change.
-
-
-    # filter out those perms expect to give zero volume
-    if isnothing(perms)
-        find_all_vertices!(model)  # ensure vertices_perm is populated
-        n_all  = length(model.vertices_perm)
-        # get index for those worth calculate volume
-        idxs = get_vertices(model, singular=false, asymptotic= asymptotic; return_idx=true) # Are both index and perms!!!!!!
-        perms_to_calc = idxs
-    else
-        n_all = length(perms)
-        idxs = findall(perms) do perm # not perms!!!!!!!!!!!
-                !is_singular(model,perm) && (isnothing(asymptotic) || is_asymptotic(model,perm) == asymptotic)
-            end
-        perms_to_calc = perms[idxs]
-    end
-
-
-    # initialize the data
-    vals = [Volume(0.0, 0.0) for _ in 1:n_all]
-    
-    if isempty(perms_to_calc) # No perms to calc
-        return vals
-    end
-
-    CC0s = [get_C_C0_qK(model,perm) for perm in perms_to_calc]
-    Cs = if re_base_K
-            [ rep[1] for rep in CC0s ]
-        else
-            [ rep[1] for rep in CC0s ]
-        end
-    C0s = asymptotic ? [zeros(size(rep[2])) for rep in CC0s] : [ rep[2] for rep in CC0s ]
-    
-    vals[idxs] .= calc_volume(Cs, C0s; kwargs...)
-    return vals
-end
 # calc_vertex_volume(Bnc::Bnc, perm;kwargs...) = calc_vertices_volume(Bnc,[perm]; kwargs...)[1]
-
-
-
-
 
 
 
@@ -433,11 +382,11 @@ function _remove_poly_intersect(poly::Polyhedron)
 end
 
 """
-    _get_polys_mask(polys; singular=nothing, asymptotic=nothing) -> Vector{Bool}
+    _get_mask(polys; singular=nothing, asymptotic=nothing) -> Vector{Bool}
 
 Return a boolean mask for polyhedra matching singularity/asymptotic filters.
 """
-function _get_polys_mask(polys::AbstractVector{<:Polyhedron};
+function _get_mask(polys::AbstractVector{<:Polyhedron};
      singular::Union{Bool,Integer,Nothing}=nothing, 
      asymptotic::Union{Bool,Nothing}=nothing)::Vector{Bool}
     # ensure nullity and asymptotic flags are calculated
@@ -475,32 +424,45 @@ end
 Filter polyhedra by singularity/asymptotic criteria.
 """
 function filter_polys(polys; return_idx::Bool=false, kwargs...)
-    mask = _get_polys_mask(polys; kwargs...)
+    mask = _get_mask(polys; kwargs...)
     return return_idx ? findall(mask) : polys[mask]
 end
 
+#------------------------------------------------------------------------------------------------
+# calculate volume for Bnc regimes,
+#------------------------------------------------------------------------------------------------
 
 """
-    calc_volume(polys::AbstractVector{<:Polyhedron}; asymptotic=true, kwargs...) -> Vector{Volume}
+    calc_volume(rgms::Union{AbstractVector{<:Vertex}, AbstractVector{<:Polyhedron}}; asymptotic=true, kwargs...) -> Vector{Volume}
 
-Compute volumes for a collection of polyhedra.
+Compute volumes for a collection of polyhedra or vertices.
+
+    calc_volume(model::Bnc, perms=nothing; asymptotic=true, kwargs...) -> Vector{Volume}
+
+Compute volumes for selected regimes in a model.
 """
-function calc_volume(polys::AbstractVector{<:Polyhedron};
+function calc_volume(rgms::Union{AbstractVector{<:Vertex}, AbstractVector{<:Polyhedron}};
+    # model::Bnc, perms=nothing;
     asymptotic::Bool=true,
     kwargs...
-)
-    n_all = length(polys)
-    idxs = filter_polys(polys; singular=false, asymptotic= asymptotic ? true : nothing, return_idx=true)
-    reps = polys[idxs] .|> poly -> MixedMatHRep(hrep(poly)) |> p->(p.A, p.b)
+) # singular/ asymptotic not be put here, as dimensions could reduce and change.
+
+    n_all = length(rgms)
+
+    idxs = _get_mask(rgms; 
+        singular=false, 
+        asymptotic= asymptotic ? true : nothing)
+
+    C_C0s = rgms[idxs] .|> get_C_C0
     
     vals = [Volume(0.0, 0.0) for _ in 1:n_all]
 
-    if isempty(reps)
+    if isempty(C_C0s)
         return vals
     end    
 
-    Cs = [ -rep[1] for rep in reps ]
-    C0s = asymptotic ? [zeros(size(rep[2])) for rep in reps] : [ rep[2] for rep in reps ]
+    Cs = getindex.(C_C0s, 1)
+    C0s = asymptotic ? [zeros(size(rep[2])) for rep in C_C0s] : getindex.(C_C0s, 2)
     
     
     vals[idxs] .= calc_volume(Cs, C0s; kwargs...)
