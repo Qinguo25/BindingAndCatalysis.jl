@@ -761,7 +761,9 @@ get_polyhedron(grh::SISOPaths, pth)= get_polyhedra(grh, [get_idx(grh, pth)])[1]
 Compute volumes for SISO paths.
 """
 function get_volumes(grh::SISOPaths, pth_idx::Union{AbstractVector,Nothing}=nothing; 
-    asymptotic=true,recalculate=false, kwargs...)
+    rebase_K = false,
+    rebase_mat = nothing,
+    recalculate=false, kwargs...)
 
     pth_idx = let 
             if isnothing(pth_idx)
@@ -774,14 +776,27 @@ function get_volumes(grh::SISOPaths, pth_idx::Union{AbstractVector,Nothing}=noth
     idxes_to_calculate = recalculate ? pth_idx : filter(x -> !grh.path_volume_is_calc[x], pth_idx)
     
     if !isempty(idxes_to_calculate)
+
+        rebase_mat = if  !isnothing(rebase_mat)
+                    @assert !rebase_K "Cannot specify both rebase_K and providing rebase_mat"
+                    rebase_mat
+                elseif rebase_K
+                    Bnc = get_binding_network(grh) 
+                    Q = rebase_mat_lgK(Bnc.N)
+                    blockdiag(spdiagm(fill(Rational(1), Bnc.d-1)), Q)
+                else
+                    nothing
+                end
+
         polys = get_polyhedra(grh, idxes_to_calculate)
-        rlts = calc_volume(polys; asymptotic=asymptotic, kwargs...)
+
+        rlts = calc_volume(polys; rebase_mat=rebase_mat, kwargs...)
         for (i, idx) in enumerate(idxes_to_calculate)
             grh.path_volume[idx] = rlts[i]
             grh.path_volume_is_calc[idx] = true
         end
     end
-    return grh.path_volume
+    return grh.path_volume[pth_idx]
 end
 
 """
@@ -824,7 +839,7 @@ function get_expression_path(grh::SISOPaths, pth; observe_x=nothing)
     # @show rgm_pth
     rgm_nlt = get_nullities(bn, rgm_pth)
     
-
+    change_qK_idx = grh.change_qK_idx
     observe_x_idx = isnothing(observe_x) ? (1:bn.n) : locate_sym_x.(Ref(bn), observe_x)
     
     rgm_interface = get_interface.(Ref(bn),rgm_pth[1:end-1], rgm_pth[2:end])
@@ -833,13 +848,13 @@ function get_expression_path(grh::SISOPaths, pth; observe_x=nothing)
     for i in eachindex(rgm_pth)
         rgm = rgm_pth[i]
         nlt = rgm_nlt[i]
-        if nlt == 0
+        if nlt == 0 # for non-singular regime, we care about the expression, tells by the H[i，：]
             H,H0 = get_H_H0(bn, rgm)
             # @show H,H0, observe_x_idx
             H_H0[i] = (H[observe_x_idx, :], H0[observe_x_idx]) 
-        elseif nlt == 1
+        elseif nlt == 1 # for singular regime, we care about the contiuity, tells by the H[i,j]
             H = get_H(bn,rgm)
-            H_H0[i] = (H[observe_x_idx, :], nothing)
+            H_H0[i] = (H[observe_x_idx, change_qK_idx], nothing)
         else
             error("Nullity > 1 is not supported for expression path.") # should ne change if under constrain.
         end
@@ -948,7 +963,7 @@ function get_RO_path(
     
 
     # apply the regime filter
-    mask = _get_vertices_mask(model, rgm_idx_shift_pth;
+    mask = _get_mask(model, rgm_idx_shift_pth;
         singular=keep_singular ? nothing : false,
         asymptotic=keep_nonasymptotic ? nothing : true)
     

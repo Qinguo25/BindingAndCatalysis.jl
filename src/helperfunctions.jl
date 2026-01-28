@@ -342,6 +342,31 @@ function L_generator(d::Int, n::Int; kwargs...)::Matrix{Int}
     return L
 end
 
+
+"""
+    rebase_mat_lgK(N::AbstractMatrix) -> AbstractMatrix
+give a rebase matrix "Q" for logK from  Nlogx = logK to   ̃N logx = log ̃K 
+where logK = Q log ̃K,
+
+# Based on  ̃N is v^⊤ from svd of N which span same space as N, Q= Σ^{-1}U^⊤
+
+Based on independent energy for complexes
+"""
+
+function rebase_mat_lgK(N::AbstractMatrix)
+    N2 = N_from_L(L_from_N(N))
+    Q_inv = Rational.(round.(Int, N2/N))
+    return sparse(inv(Q_inv))
+end
+
+
+# function rebase_mat_lgK(N::AbstractMatrix)::AbstractMatrix
+#     U,σ,V = svd(N)
+#     Q = U' ./σ
+#     return Q
+# end
+
+
 """
     independent_row_idx(N::AbstractMatrix)
 

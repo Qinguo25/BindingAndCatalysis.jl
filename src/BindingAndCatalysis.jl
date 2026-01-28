@@ -37,6 +37,7 @@ export get_C_C0_nullity, get_C_C0, get_C, get_C0
 export check_feasibility_with_constraint, feasible_vertieces_with_constraint
 export get_polyhedron, get_volume
 export is_neighbor, get_interface, get_change_dir
+export get_function
 
 
 # include("regime_assign.jl")
@@ -58,7 +59,7 @@ export get_RO_path, group_sum, get_RO_paths, summary_RO_path
 
 # include("visualize.jl")
 export SISO_plot, get_edge_labels,set_proper_bounds_for_graph_plot!
-export get_node_positions, get_node_colors, get_node_labels,get_node_size
+export get_node_positions, get_node_colors, get_node_labels, get_node_size
 export draw_graph, add_vertices_idx!,add_arrows!,add_nodes_text!, set_node_positions
 export draw_qK_neighbor_grh, find_bounds, add_rgm_colorbar!, get_color_map
 

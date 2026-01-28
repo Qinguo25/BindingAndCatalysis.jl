@@ -15,12 +15,12 @@ function SISO_plot(SISOPaths::SISOPaths,pth_idx;rand_line=false, rand_ray=false,
 end
 """
     SISO_plot(model::Bnc, parameters, change_idx; npoints=1000, start=-6, stop=6, colormap=:rainbow,
-        size=(800, 600), draw_idx=nothing, add_archeatype_lines=false, asymptotic_only=false) -> Figure
+        size=(800, 600), observe_x=nothing, add_archeatype_lines=false, asymptotic_only=false) -> Figure
 
 Plot x trajectories for a single changing qK coordinate.
 """
 function SISO_plot(model::Bnc, parameters, change_idx; 
-        npoints=1000,start=-6, stop=6,colormap=:rainbow, size = (800,600),draw_idx=nothing,
+        npoints=1000,start=-6, stop=6,colormap=:rainbow, size = (800,600),observe_x=nothing,
         add_archeatype_lines::Bool=false,
         asymptotic_only::Bool=false)
 
@@ -48,16 +48,15 @@ function SISO_plot(model::Bnc, parameters, change_idx;
 
     #assign color
     rgms = logx .|> x-> assign_vertex_x(model, x;input_logspace=true,asymptotic_only=asymptotic_only, return_idx=true)
-    unique_rgm =  sort!(unique(rgms))
-    col_map_dict, colormap_disc = get_color_map(unique_rgm; colormap=colormap)
-    colors = getindex.(Ref(col_map_dict), rgms)
+    cmap = get_color_map(rgms; colormap=colormap)
+    colors = getindex.(Ref(cmap), rgms)
 
 
     @info "Change in $(change_sym)"
     @info "parameters: $([i=>j for (i,j) in zip([model.q_sym;model.K_sym] |> x->deleteat!(x,change_idx), parameters)])"
     
     # draw plots
-    draw_idx = isnothing(draw_idx) ? (1:model.n) : draw_idx
+    draw_idx = isnothing(observe_x) ? (1:model.n) : locate_sym_x(model, observe_x)
     F = Figure(size = size)
     axes = Axis[]
     for (i, j) in enumerate(draw_idx)
@@ -75,43 +74,64 @@ function SISO_plot(model::Bnc, parameters, change_idx;
     end
     linkxaxes!(axes...)
 
-    add_rgm_colorbar!(F, unique_rgm; colormap=colormap_disc)
+    add_rgm_colorbar!(F, cmap)
     return F
 end
 
 
-"""
-    add_rgm_colorbar!(F, unique_rgm; colormap) -> nothing
+struct RegimeColorMap{K,C,R}
+    keys::Vector{K}          # 有序的 regime 列表（顺序即 colorbar 顺序）
+    index::Dict{K,Int}       # regime => 颜色等级（1..n）
+    cmap::C                  # categorical colormap (cgrad(..., categorical=true))
+    render::R                # regime -> String 的渲染函数（可选）
+end
 
-Add a regime colorbar and labels to a Makie figure.
-"""
-function add_rgm_colorbar!(F, unique_rgm;colormap)
-    txt_length = length(string.(unique_rgm[1]))*26
+Base.getindex(rcm::RegimeColorMap, key) = rcm.cmap[rcm.index[key]]
 
-    render(rgm) = if typeof(unique_rgm[1])<: AbstractArray
-        repr(rgm)
-    else
-        "#"*string(rgm)
-    end
+# Makie.to_colormap(rcm::RegimeColorMap) = let  # try to support using RegimeColorMap as colormap directly
+#    cmap = copy(rcm.cmap)
+#    cmap.values = rcm.keys 
+# end
+
+
+"""
+    add_rgm_colorbar!(F, cmap::RegimeColorMap) -> nothing
+
+Add a regime colorbar and labels to a Makie figure. 
+"""
+function add_rgm_colorbar!(F, cmap::RegimeColorMap)::Nothing
+
+    text = cmap.render.(cmap.keys)
+    txt_length = length(text[1])*26
 
     ncol = size(F.layout)[2]              # 当前已有列数
     cb_col   = ncol + 1                   # colorbar col
     text_col = ncol + 2
     
     # add colorbar
-    Colorbar(F[:,end+1], colormap = colormap,ticks=[-1]) # DO NOT ADD COLORRANGE, 
-    #add perm label
-    ax = Axis(F[:,end+1])
-    hidexdecorations!(ax)
-    hideydecorations!(ax)
-    hidespines!(ax)
-    for i in eachindex(unique_rgm)
-        y_pos = (i - 0.5)*(1/length(unique_rgm))
-        text!(ax, Point2f(0.5,y_pos); text = render(unique_rgm[i]), align = (:center, :center), color = :black)
+    Colorbar(F[:,end+1], colormap = cmap.cmap,ticks=[-1]) # DO NOT ADD COLORRANGE, by defining ticts= [-1] may other more elegant way?
+    
+    # add perm label
+    ## initialize axis for text
+    ax = let 
+        ax = Axis(F[:,end+1])
+        hidexdecorations!(ax)
+        hideydecorations!(ax)
+        hidespines!(ax)
+        ylims!(ax, (0,1))
+        ax
     end
-    ylims!(ax, (0,1))
+    
+    ## add text labels
+    for i in eachindex(cmap.keys)
+        y_pos = (i - 0.5)*(1/length(text))
+        text!(ax, Point2f(0.5,y_pos); text = text[i], align = (:center, :center), color = :black)
+    end
+    
+    ## adjust layout
     colsize!(F.layout, cb_col,   Fixed(0))
     colsize!(F.layout, text_col, Fixed(txt_length))
+
     return nothing
 end
 
@@ -120,14 +140,29 @@ end
 
 Return a mapping from values to color indices and a categorical colormap.
 """
-function get_color_map(vec::AbstractArray; colormap=:rainbow)
+function get_color_map(vec::AbstractArray; colormap=:rainbow,render_func=nothing,appendix = "#")::RegimeColorMap
     keys = sort!(unique(vec))
+
     col_map_dict = Dict(keys[i]=>i for i in eachindex(keys))
-    crange =(1, length(keys))
-    nlevels = crange[2]-crange[1] + 1
-    cmap_disc = cgrad(colormap, nlevels, categorical=true)
-    return col_map_dict, cmap_disc
+    
+    cmap_disc = let
+            crange =(1, length(keys))
+            nlevels = crange[2]-crange[1] + 1
+            cgrad(colormap, nlevels, categorical=true)
+        end
+
+    # funcion of how to render regime key
+    render(rgm) = if !isnothing(render_func)
+            render_func(rgm)
+        elseif typeof(vec[1])<: AbstractArray  
+            repr(rgm) |> strip_before_bracket
+        else 
+            appendix*string(rgm)
+        end
+
+    return RegimeColorMap(keys, col_map_dict, cmap_disc, render)
 end
+
 """
     get_color_map(model::Bnc, args...; colormap=:rainbow, kwargs...) -> (Dict, Any)
 

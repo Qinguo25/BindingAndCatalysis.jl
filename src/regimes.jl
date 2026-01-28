@@ -472,7 +472,12 @@ end
 
 Return volumes for selected vertices, computing missing volumes as needed.
 """
-function get_volumes(Bnc::Bnc,vtxs::Union{AbstractVector,Nothing}=nothing; recalculate::Bool=false, kwargs...)
+function get_volumes(Bnc::Bnc,vtxs::Union{AbstractVector,Nothing}=nothing; 
+    recalculate::Bool=false, 
+    rebase_K::Bool = false, 
+    rebase_mat:: Union{AbstractMatrix{<:Real},Nothing} = nothing,
+    kwargs...)
+
     all_vtxs = isnothing(vtxs) ? get_vertices(Bnc;return_idx=true) : [get_idx(Bnc, vtx) for vtx in vtxs]
 
     vtxs_to_calc = 
@@ -483,7 +488,27 @@ function get_volumes(Bnc::Bnc,vtxs::Union{AbstractVector,Nothing}=nothing; recal
         end
     
     if !isempty(vtxs_to_calc)
-        rlts = calc_volume(Bnc,vtxs_to_calc;kwargs...)
+
+        rebase_mat = if  !isnothing(rebase_mat)
+                    @assert !rebase_K "Cannot specify both rebase_K and providing rebase_mat"
+                    rebase_mat
+                elseif rebase_K
+                    Q = rebase_mat_lgK(Bnc.N)
+                    blockdiag(spdiagm(fill(Rational(1), Bnc.d)), Q)
+                else
+                    nothing
+                end
+        
+        #ensure conditions for volume calculation are calced, may further replaced by other functions
+        Threads.@threads for idx in vtxs_to_calc
+           get_vertex(Bnc,idx; inv_info=true)
+        end
+        
+        vtxs = @view Bnc.vertices_data[vtxs_to_calc]
+
+
+
+        rlts = calc_volume(vtxs; rebase_mat=rebase_mat, kwargs...)
         for (i,idx) in enumerate(vtxs_to_calc)
             vtx = get_vertex(Bnc,idx; inv_info=false)
             vtx.volume = rlts[i]
@@ -681,6 +706,7 @@ is_asymptotic(args...) = begin
     find_all_vertices!(model)
     return model.vertices_asymptotic_flag[get_idx(args...)]
 end::Bool
+is_asymptotic(vtx::Vertex) = vtx.real
 
 
 
@@ -873,6 +899,7 @@ get_nullity(args...) = begin
     find_all_vertices!(model)
     return model.vertices_nullity[get_idx(args...)]
 end::Integer
+get_nullity(vtx::Vertex) = vtx.nullity
 
 """
     n_vertices(bnc::Bnc) -> Int
@@ -1039,17 +1066,17 @@ Return vertices that satisfy singularity/asymptotic filters.
 function get_vertices(Bnc::Bnc; return_idx::Bool=false, kwargs...)
     find_all_vertices!(Bnc)
     idx_all = eachindex(Bnc.vertices_data)
-    masks = _get_vertices_mask(Bnc, idx_all; kwargs...)
+    masks = _get_mask(Bnc, idx_all; kwargs...)
     return return_idx ? findall(masks) : Bnc.vertices_perm[masks]
 end
 
 
 """
-    _get_vertices_mask(model::Bnc, vtxs; singular=nothing, asymptotic=nothing) -> Vector{Bool}
+    _get_mask(model::Bnc, vtxs; singular=nothing, asymptotic=nothing) -> Vector{Bool}
 
 Return a boolean mask for vertices matching filter criteria.
 """
-function _get_vertices_mask(model::Bnc,vtxs::AbstractVector{<:Integer};
+function _get_mask(model::Bnc,vtxs::AbstractVector{<:Integer};
      singular::Union{Bool,Integer,Nothing}=nothing, 
      asymptotic::Union{Bool,Nothing}=nothing)::Vector{Bool}
     # ensure nullity and asymptotic flags are calculated
@@ -1058,20 +1085,34 @@ function _get_vertices_mask(model::Bnc,vtxs::AbstractVector{<:Integer};
     nlt = model.vertices_nullity
     flag_asym = model.vertices_asymptotic_flag
 
-    f(nlt) = isnothing(singular) || (
+    @inline f(nlt) = isnothing(singular) || (
         (singular === true  && nlt > 0) ||
         (singular === false && nlt == 0) ||
         (singular isa Int   && nlt ≤ singular)
     )
 
-    g(flag_asym) = isnothing(asymptotic) || (asymptotic == flag_asym)
+    @inline g(flag_asym) = isnothing(asymptotic) || (asymptotic == flag_asym)
     
     return map(vtxs) do i
         f(nlt[i]) && g(flag_asym[i])
     end
 end
+function _get_mask(rgms::AbstractVector{<:Vertex};
+     singular::Union{Bool,Integer,Nothing}=nothing, 
+     asymptotic::Union{Bool,Nothing}=nothing)::Vector{Bool}
+    
+    @inline f(nlt) = isnothing(singular) || (
+        (singular === true  && nlt > 0) ||
+        (singular === false && nlt == 0) ||
+        (singular isa Int   && nlt ≤ singular)
+    )
 
+    @inline g(flag_asym) = isnothing(asymptotic) || (asymptotic == flag_asym)
 
+    return map(rgms) do vtx
+        f(get_nullity(vtx)) && g(is_asymptotic(vtx))
+    end
+end
 
 
 
@@ -1209,3 +1250,16 @@ summary(vtx::Vertex)= summary_vertex(vtx)
 #     vtx .|> x->summary_vertex(Bnc,x)
 #     return nothing
 # end
+
+
+function get_function(vtx::Vertex)
+    H,H0 = get_H_H0(vtx)
+    
+    f = function(qK::AbstractArray{<:Real}; input_logspace::Bool=false, output_logspace::Bool=false)
+            lgqK = input_logspace ? qK : log10.(qK)
+            lgx = H * lgqK .+ H0
+        return output_logspace ? lgx : exp10.(lgx)
+    end
+
+    return f
+end
