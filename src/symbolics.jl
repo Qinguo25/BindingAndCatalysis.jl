@@ -548,23 +548,21 @@ function show_expression_path(grh::SISOPaths, pth; observe_x=nothing, kwargs...)
         exprs = Vector{Any}(undef, length(H_H0))
         for (i, (H_row, H0_val)) in enumerate(H_H0)
 
-            exprs[i] = if isnothing(H0_val)# singular regime, expression is just H_row * log(qK)
-                # @show H_row[:,change_qK_idx]
+            exprs[i] = if isnothing(H0_val)
+                        #1. singular regime, expression is just H_row * log(qK)
                             let
-                                a = Vector{Num}(undef, size(H_row,1))
-                                dirs = @view(H_row[:,change_qK_idx])
+                                a = Vector{Num}(undef, size(H_row,1)) # number of x observed
                                 for j in eachindex(a)
-                                    # @show dirs[j]
-                                    a[j] = if abs(dirs[j]) < 1e-6
+                                    a[j] = if abs(H_row[j]) < 1e-6
                                                 vars[1]
                                         else  
-                                            dirs[j] > 0 ? vars[2] : vars[3]
+                                            H_row[j] > 0 ? vars[2] : vars[3]
                                         end
                                 end
                                 a
                             end
                     else
-                # @show H_row, H0_val,qKsym, xsym
+                        # 2. regular regime, expression is H_row * log(qK) + H0_val
                             show_expression_mapping(H_row, H0_val, xsym, qKsym  ; kwargs...)
                     end
         end

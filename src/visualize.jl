@@ -15,12 +15,12 @@ function SISO_plot(SISOPaths::SISOPaths,pth_idx;rand_line=false, rand_ray=false,
 end
 """
     SISO_plot(model::Bnc, parameters, change_idx; npoints=1000, start=-6, stop=6, colormap=:rainbow,
-        size=(800, 600), draw_idx=nothing, add_archeatype_lines=false, asymptotic_only=false) -> Figure
+        size=(800, 600), observe_x=nothing, add_archeatype_lines=false, asymptotic_only=false) -> Figure
 
 Plot x trajectories for a single changing qK coordinate.
 """
 function SISO_plot(model::Bnc, parameters, change_idx; 
-        npoints=1000,start=-6, stop=6,colormap=:rainbow, size = (800,600),draw_idx=nothing,
+        npoints=1000,start=-6, stop=6,colormap=:rainbow, size = (800,600),observe_x=nothing,
         add_archeatype_lines::Bool=false,
         asymptotic_only::Bool=false)
 
@@ -56,7 +56,7 @@ function SISO_plot(model::Bnc, parameters, change_idx;
     @info "parameters: $([i=>j for (i,j) in zip([model.q_sym;model.K_sym] |> x->deleteat!(x,change_idx), parameters)])"
     
     # draw plots
-    draw_idx = isnothing(draw_idx) ? (1:model.n) : draw_idx
+    draw_idx = isnothing(observe_x) ? (1:model.n) : locate_sym_x(model, observe_x)
     F = Figure(size = size)
     axes = Axis[]
     for (i, j) in enumerate(draw_idx)
@@ -140,7 +140,7 @@ end
 
 Return a mapping from values to color indices and a categorical colormap.
 """
-function get_color_map(vec::AbstractArray; colormap=:rainbow)::RegimeColorMap
+function get_color_map(vec::AbstractArray; colormap=:rainbow,render_func=nothing,appendix = "#")::RegimeColorMap
     keys = sort!(unique(vec))
 
     col_map_dict = Dict(keys[i]=>i for i in eachindex(keys))
@@ -152,10 +152,12 @@ function get_color_map(vec::AbstractArray; colormap=:rainbow)::RegimeColorMap
         end
 
     # funcion of how to render regime key
-    render(rgm) = if typeof(vec[1])<: AbstractArray  
-            repr(rgm)
-        else
-            "#"*string(rgm)
+    render(rgm) = if !isnothing(render_func)
+            render_func(rgm)
+        elseif typeof(vec[1])<: AbstractArray  
+            repr(rgm) |> strip_before_bracket
+        else 
+            appendix*string(rgm)
         end
 
     return RegimeColorMap(keys, col_map_dict, cmap_disc, render)

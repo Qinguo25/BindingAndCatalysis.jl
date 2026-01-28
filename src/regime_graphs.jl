@@ -783,7 +783,7 @@ function get_volumes(grh::SISOPaths, pth_idx::Union{AbstractVector,Nothing}=noth
                 elseif rebase_K
                     Bnc = get_binding_network(grh) 
                     Q = rebase_mat_lgK(Bnc.N)
-                    blockdiag(spdiagm(fill(Rational(1), Bnc.d)), Q)
+                    blockdiag(spdiagm(fill(Rational(1), Bnc.d-1)), Q)
                 else
                     nothing
                 end
@@ -839,7 +839,7 @@ function get_expression_path(grh::SISOPaths, pth; observe_x=nothing)
     # @show rgm_pth
     rgm_nlt = get_nullities(bn, rgm_pth)
     
-
+    change_qK_idx = grh.change_qK_idx
     observe_x_idx = isnothing(observe_x) ? (1:bn.n) : locate_sym_x.(Ref(bn), observe_x)
     
     rgm_interface = get_interface.(Ref(bn),rgm_pth[1:end-1], rgm_pth[2:end])
@@ -848,13 +848,13 @@ function get_expression_path(grh::SISOPaths, pth; observe_x=nothing)
     for i in eachindex(rgm_pth)
         rgm = rgm_pth[i]
         nlt = rgm_nlt[i]
-        if nlt == 0
+        if nlt == 0 # for non-singular regime, we care about the expression, tells by the H[i，：]
             H,H0 = get_H_H0(bn, rgm)
             # @show H,H0, observe_x_idx
             H_H0[i] = (H[observe_x_idx, :], H0[observe_x_idx]) 
-        elseif nlt == 1
+        elseif nlt == 1 # for singular regime, we care about the contiuity, tells by the H[i,j]
             H = get_H(bn,rgm)
-            H_H0[i] = (H[observe_x_idx, :], nothing)
+            H_H0[i] = (H[observe_x_idx, change_qK_idx], nothing)
         else
             error("Nullity > 1 is not supported for expression path.") # should ne change if under constrain.
         end

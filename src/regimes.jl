@@ -1250,3 +1250,16 @@ summary(vtx::Vertex)= summary_vertex(vtx)
 #     vtx .|> x->summary_vertex(Bnc,x)
 #     return nothing
 # end
+
+
+function get_function(vtx::Vertex)
+    H,H0 = get_H_H0(vtx)
+    
+    f = function(qK::AbstractArray{<:Real}; input_logspace::Bool=false, output_logspace::Bool=false)
+            lgqK = input_logspace ? qK : log10.(qK)
+            lgx = H * lgqK .+ H0
+        return output_logspace ? lgx : exp10.(lgx)
+    end
+
+    return f
+end

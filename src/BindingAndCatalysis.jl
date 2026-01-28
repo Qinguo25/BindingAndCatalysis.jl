@@ -37,6 +37,7 @@ export get_C_C0_nullity, get_C_C0, get_C, get_C0
 export check_feasibility_with_constraint, feasible_vertieces_with_constraint
 export get_polyhedron, get_volume
 export is_neighbor, get_interface, get_change_dir
+export get_function
 
 
 # include("regime_assign.jl")
