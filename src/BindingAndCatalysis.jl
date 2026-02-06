@@ -1,6 +1,7 @@
 __precompile__(false)
 module BindingAndCatalysis
 
+include(joinpath(@__DIR__, "predeclare.jl"))
 include(joinpath(@__DIR__, "initialize.jl"))
 
 export Bnc
