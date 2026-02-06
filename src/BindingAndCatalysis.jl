@@ -10,7 +10,7 @@ export update_catalysis!
 export locate_sym_x, locate_sym_qK, pythonprint, N_generator, L_generator, randomize
 
 # include("qK_x_mapping.jl")
-export x2qK, qK2x, x_traj_with_qK_change, x_traj_with_q_change, x_traj_cat, qK_traj_cat 
+export x2qK, qK2x, x_traj_with_qK_change, x_traj_with_q_change, x_traj_cat, qK_traj_cat, q_traj_cat
 
 # include("volume_calc.jl")
 export calc_volume

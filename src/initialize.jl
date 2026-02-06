@@ -474,7 +474,7 @@ function Bnc(;N=nothing,L=nothing,
     q_sym = isnothing(q_sym) ? Symbolics.variables(:q, 1:d) : name_converter(q_sym) # convert q_sym to a vector of symbols
     K_sym = isnothing(K_sym) ? Symbolics.variables(:K, 1:r) : name_converter(K_sym) # convert K_sym to a vector of symbols
 
-    catalysis_data = CatalysisData(kwargs...)
+    catalysis_data = CatalysisData(;kwargs...)
 
     T = get_int_type(n) 
     Bnc{T}(N, L, x_sym, q_sym, K_sym, catalysis_data)
@@ -504,19 +504,18 @@ Attach or update catalysis data on a `Bnc` model in-place.
 function update_catalysis!(bnc::Bnc;
     S::Union{Matrix{Int},Nothing}=nothing,
     aT::Union{Matrix{Int},Nothing}=nothing,
-    k::Union{Vector{<:Real},Nothing}=nothing,
-    cat_x_idx::Union{Vector{Int},Nothing}=nothing,
+    k_sym::Union{Num,Nothing}=nothing,
     )
     if isnothing(bnc.catalysis)
-        bnc.catalysis = CatalysisData(bnc.n, S, aT, k, cat_x_idx)
+        bnc.catalysis = CatalysisData(S=S, aT=aT, k_sym=k_sym)
     else
         S = isnothing(S) ? bnc.catalysis.S : S
         aT = isnothing(aT) ? bnc.catalysis.aT : aT
-        k = isnothing(k) ? bnc.catalysis.k : k
-        cat_x_idx = isnothing(cat_x_idx) ? bnc.catalysis.cat_x_idx : cat_x_idx
-        bnc.catalysis = CatalysisData(bnc.n, S, aT, k, cat_x_idx)
+        k_sym = isnothing(k_sym) ? bnc.catalysis.k_sym : k_sym
+        bnc.catalysis = CatalysisData(S=S, aT=aT, k_sym=k_sym)
     end
-    return bnc
+    _ensure_catalysis_meet_with_bnc(bnc.d, bnc.n, bnc.catalysis)
+    return nothing
 end
 
 

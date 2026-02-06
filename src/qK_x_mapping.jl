@@ -497,7 +497,7 @@ function x_traj_cat(Bnc::Bnc, x0::Vector{<:Real}, tspan::Tuple{Real,Real};
     x0 = input_logspace ? x0 : log10.(x0)
     # startlogx = qK2x(Bnc, qK0; input_logspace=input_logspace, output_logspace=true)
     #---Solve the ODE to find the time curve of log(x) as catalysis happens
-    sol = catalysis_logx(Bnc, startlogx, tspan;
+    sol = catalysis_logx(Bnc, x0, tspan;
         dense = false, #manually handle later
         kwargs...
     )
@@ -517,107 +517,198 @@ function qK_traj_cat(Bnc::Bnc, qK0::Vector{<:Real}, args...;
     only_q::Bool=false,
     input_logspace::Bool=false,
     output_logspace::Bool=false,
+    kwargs...
     )
 
     logx0 = qK2x(Bnc, qK0; input_logspace=input_logspace, output_logspace=true)
-    t,u = x_traj_cat(Bnc, logx0, args...; output_logspace=true, kwargs...)
+    t,u = x_traj_cat(Bnc, logx0, args...; input_logspace=true,output_logspace=true, kwargs...)
     u = x2qK.(Ref(Bnc), u;input_logspace=true,output_logspace=output_logspace, only_q=only_q)
     return (t,u)
 end
+
 q_traj_cat(args...;kwargs...) = qK_traj_cat(args...;only_q=true,kwargs...)
 
 
 function have_catalysis(model::Bnc)
     return !isnothing(model.catalysis)
 end
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+#--------------------------------------------------------------------------
+#   Below are most AI generated code, which is more experimental and less tested, especially for the catalysis part. Use with caution and report any issues.
+#--------------------------------------------------------------------------
+
+
+
+
+
+
+
+
+
 """
     TimecurveParam
     ### Constant
-    # k: R^rcat
+    # logk: R^rcat  # Changed to log10(k) for stability
 
     ### Cache
-    # x: R^d, x
-    # v: R^rcat, Λ_k x^aT, 
-    # f: R^n, first d value: Sv 
-    # f: R^n, first d value: Λ_q^-1 S x^aT
-    # M, M_lu
-
+    # x: R^n  # Now used as buffer for scaled computations
+    # q: R^d  # Buffer for q_scaled or log_q if needed
+    # v: R^rcat  # Buffer for log(v_cat) = aT * u + logk
+    # f: R^n  # First d values: Λ_q^{-1} S v_cat(x)
+    # M: SparseMatrixCSC{Float64,Int}  # Jacobian matrix buffer [diag(1/q) L diag(x); N]
+    # M_lu: SparseArrays.UMFPACK.UmfpackLU{Float64,Int}  # LU decomposition of M
 Cache container for catalysis time-course integration.
 """
 struct TimecurveParam{V<:Vector{Float64}}
-    k::V # catalysis constant  
+    logk::V  # log10(k)
     x::V 
+    q::V
     v::V 
     f::V 
-    M::SparseMatrixCSC{Float64,Int} # Jacobian matrix buffer
-    M_lu::SparseArrays.UMFPACK.UmfpackLU{Float64,Int} # LU decomposition of J
+    M::SparseMatrixCSC{Float64,Int}
+    M_lu::SparseArrays.UMFPACK.UmfpackLU{Float64,Int}
 end
 
 """
 Get the catalysis parameter for ODE f construction
 """
-function get_catalysis_param(model::Bnc,k)
-    @assert have_catalysis(Bnc) "Should fill catalysis data first"
-    k = Float64.(k)
-    x = Vector{Float64}(undef, model.n)
-    v = Vector{Float64}(undef, length(k)) # catalysis flux vector
-    f = Vector{Float64}(undef, Bnc.n) # catalysis rate vector
-    M = deepcopy(Bnc._LN_sparse) # Use the sparse version of the Jacobian matrix
-    M_lu = deepcopy(Bnc._LN_lu) # LU decomposition of J
-    # create view for the M_buffer , for updating [LΛ_x; Λ_KN]
-    TimecurveParam(k, x, v, f, M, M_lu)
+function get_catalysis_param(model::Bnc, k)
+    @assert have_catalysis(model) "Should fill catalysis data first"
+    logk = log10.(k)
+    x = Vector{Float64}(undef, model.n)  # Buffer
+    q = Vector{Float64}(undef, model.d)  # Buffer
+    v = Vector{Float64}(undef, length(logk))  # Catalysis flux buffer (log scale)
+    f = zeros(model.n)  # Catalysis rate vector
+    M = deepcopy(model._LN_sparse)  # Sparse [L; N]
+    M_lu = deepcopy(model._LN_lu)  # LU decomp
+    TimecurveParam(logk, x, q, v, f, M, M_lu)
 end
 
 """
 return the f(du,u,p,t) for ODE solver
 """
 function get_catalysis_ode(model::Bnc)
-    @assert have_catalysis(Bnc) "Should fill catalysis data first"
-    L_nzval = log10.(model._LN_sparse.nzval[model._LN_top_idx]) # copy the nzval to avoid shared access
-    
-    @inline function update_M_lu(M_lu,M,max_try=100)
-        lu!(M_lu, M,check=false) # recalculate the LU decomposition of J
+    @assert have_catalysis(model) "Should fill catalysis data first"
+    # No longer need L_nzval as log10, since we avoid exp10 in matrix updates
+
+    @inline function update_M_lu(M_lu, M, max_try=100)
+        lu!(M_lu, M, check=false)
         try_count = 0
         while !issuccess(M_lu) && try_count < max_try
-            @.M.nzval[model._LN_top_diag_idx] += eps() # perturb the diagonal elements a bit to avoid singularity
-            lu!(M_lu, M,check=false)
+            # Clamp to prevent extreme values (though less needed now)
+            # clamp!(M.nzval, 1e-100, 1e100)
+            # Perturb diagonal elements slightly
+            @. M.nzval[model._LN_top_diag_idx] += 1e-10 * rand()  # Random small perturbation
+            lu!(M_lu, M, check=false)
             try_count += 1
         end
         if try_count == max_try
-            @error("Jacobian is still singular after maximum perturbation attempts.")
-            @show M
+            @error("M is still singular after maximum perturbation attempts.")
         end
     end
 
-    function f(du,u,p::TimecurveParam, t) 
-        @unpack x, k,  v, f, M, M_lu = p
-        ### Constant
-        # k: R^rcat
+    function f(du, u, p::TimecurveParam, t) 
+        @unpack logk, x, q, v, f, M, M_lu = p
 
-        ### Cache
-        # x: R^d
-        # v: R^rcat, Λ_k x^aT, 
-        # f: R^d, Sv 
-        # f: R^d Λ_q^-1 S x^aT
-        # M, M_lu
-        # using log x to updata the flux vector
-        mul!(v, model.catalysis.aT_sparse, u)   # aT * log x 
-        @. v = k * exp10(v) # v = Λ_k x^aT
-        mul!(f, model.catalysis.S_sparse, v) # Sv = S * Λ_k x^aT
+        # Compute v = aT * u + logk  (log10(v_cat))
+        mul!(v, model.catalysis._aT_sparse, u)
+        v .+= logk
 
-        x .= exp10.(u) # x
-        mul!(q, model.L, x)  # q = Lx
-        @. v[1:model.d] = v/q # Λ_q^{-1} * S * Λ_k x^aT
+        # Stably compute f[1:d] = Λ_q^{-1} * S * 10^v  (where 10^v = v_cat)
+        # And simultaneously compute scaled x and q for M update
+        # Scale for x: exp10(u) = 10^{max_u} * exp10(u - max_u)
+        max_u = maximum(u)
+        @. x = exp10.(u - max_u)  # x_scaled in (0,1]
+        mul!(q, model._L_sparse, x)  # q_scaled = L * x_scaled
+        @. q = max(q, 1e-300)  # Floor to avoid div-by-zero or tiny denoms
 
-        # update M_lu
-        q .= log10.(q)
-        @. M.nzval[Bnc._LN_top_idx] = exp10(@view(u[model._LN_top_cols]) - @view(q[model._LN_top_rows]) + L_nzval)
-        update_M_lu(M_lu, M) # recalculate the LU decomposition of J
+        # Update M top block: diag(1/q_scaled) * L * diag(x_scaled)
+        # This is equivalent to (L * exp10(u)) ./ q but scaled: since exp10(u) = 10^{max_u} x_scaled, q = 10^{max_u} q_scaled
+        # So (L exp10(u)) ./ q = (L * 10^{max_u} x_scaled) ./ (10^{max_u} q_scaled) = (L x_scaled) ./ q_scaled
+        # We scale L copy in-place for efficiency
+        M_top = @view M[1:model.d, :]  # View of top block (L part)
+        # Reset M_top to original L_sparse values (assuming M was initialized with [L; N] as Float64)
+        M.nzval[model._LN_top_idx] .= model._L_sparse.nzval  # Reset to L values
+        # Scale columns by x_scaled
+        for j = 1:model.n
+            for p = M.colptr[j]:(M.colptr[j+1]-1)
+                if M.rowval[p] <= model.d  # Only top block
+                    M.nzval[p] *= x[j]
+                end
+            end
+        end
+        # Scale rows by 1 ./ q
+        for j = 1:model.n
+            for p = M.colptr[j]:(M.colptr[j+1]-1)
+                row = M.rowval[p]
+                if row <= model.d
+                    M.nzval[p] /= q[row]
+                end
+            end
+        end
+        # Bottom block remains N (unchanged)
 
-        # calculate du
-        ldiv!(du, M_lu, v) # Use the LU decomposition for fast calculation
+        # Now update LU
+        update_M_lu(M_lu, M)
+
+        # Compute f[1:d] using stable_Linv_Sexp10: (S * 10^v) ./ (L * 10^u) = Λ_q^{-1} S v_cat
+        @view(f[1:model.d]) .= stable_Linv_Sexp10(model._L_sparse, model.catalysis._S_sparse, u, v)
+        fill!(@view(f[model.d+1:end]), 0.0)  # Last r are 0
+
+        # Solve du = M_lu \ f
+        ldiv!(du, M_lu, f)
+        if any(isnan, du)
+            @error("du has NaN values, cannot proceed.")
+        end
     end
 end
+
+"""
+Compute  Λ_{L*exp10(a)}^{-1} * S*exp10(b) in a stable way
+(No changes needed, but included for completeness)
+"""
+function stable_Linv_Sexp10(L::SparseMatrixCSC{<:Real,Int},
+                            S::SparseMatrixCSC{<:Real,Int},
+                            a::AbstractVector{<:Real},
+                            b::AbstractVector{<:Real};
+                            q_floor::Float64 = 1e-300)
+    # Scale exp10(a) to avoid overflow/underflow: exp10(a) = 10^c * exp10(a-c)
+    c = maximum(a)
+    xscaled = exp10.(Float64.(a) .- c)               # in (0,1]
+    qscaled = Vector{Float64}(undef, size(L,1))
+    mul!(qscaled, sparse(Float64.(L)), xscaled)      # qscaled = L * exp10(a-c)
+    # q = 10^c * qscaled, so 1/q = 10^(-c) ./ qscaled
+    @inbounds @. qscaled = max(qscaled, q_floor)
+    # Scale exp10(b): exp10(b) = 10^d * exp10(b-d)
+    d = maximum(b)
+    vscaled = exp10.(Float64.(b) .- d)               # in (0,1]
+    yscaled = Vector{Float64}(undef, size(S,1))
+    mul!(yscaled, sparse(Float64.(S)), vscaled)      # yscaled = S * exp10(b-d)
+    # Combine scales: (S*10^b) ./ (L*10^a) = 10^(d-c) * (yscaled ./ qscaled)
+    scale = exp10(d - c)
+    out = Vector{Float64}(undef, length(yscaled))
+    @inbounds @. out = (yscaled / qscaled) * scale
+    return out
+end
+
 
 
 """
@@ -640,3 +731,132 @@ function catalysis_logx(Bnc::Bnc, logx0::Vector{<:Real}, tspan::Tuple{Real,Real}
     sol = ODE.solve(prob, alg; reltol=reltol, abstol=abstol, kwargs...)
     return sol
 end
+
+
+
+
+
+
+# Helper functions to scale sparse matrices
+function scale_columns!(A::SparseMatrixCSC{Float64, Int}, s::Vector{Float64})
+    n = size(A, 2)
+    @inbounds for j = 1:n
+        for p = A.colptr[j]:(A.colptr[j+1]-1)
+            A.nzval[p] *= s[j]
+        end
+    end
+    return A
+end
+
+function scale_rows!(A::SparseMatrixCSC{Float64, Int}, s::Vector{Float64})
+    @inbounds for j = 1:size(A, 2)
+        for p = A.colptr[j]:(A.colptr[j+1]-1)
+            row = A.rowval[p]
+            A.nzval[p] *= s[row]
+        end
+    end
+    return A
+end
+
+# The right-hand side function for the ODE: dy/dt = f(y)
+function ode_rhs!(dy::Vector{Float64}, y::Vector{Float64}, p, t)
+    Lf, Sf, Nf, af, k::Vector{Float64}, q_floor::Float64 = p
+
+    n = length(y)
+    d = size(Lf, 1)
+    r = size(Nf, 1)
+
+    # Scale x = 10.^y
+    max_y = maximum(y)
+    xscaled = exp10.(y .- max_y)
+
+    # qscaled = L * xscaled
+    qscaled = Vector{Float64}(undef, d)
+    mul!(qscaled, Lf, xscaled)
+    @. qscaled = max(qscaled, q_floor)
+
+    # Build A = Λ_q^{-1} * L * Λ_x (stably: diag(1./qscaled) * L * diag(xscaled))
+    L_scaled = copy(Lf)
+    scale_columns!(L_scaled, xscaled)
+    scale_rows!(L_scaled, 1.0 ./ qscaled)  # Now L_scaled is A
+
+    # Build M = [A; N]
+    M = vcat(L_scaled, Nf)
+
+    # Compute v_cat stably: v_cat = k .* exp10.(a .* y)
+    u = af * y
+    c = maximum(u)
+    vscaled = exp10.(u .- c)
+    v_cat_scaled = k .* vscaled
+
+    # sv_scaled = S * v_cat_scaled
+    sv_scaled = Vector{Float64}(undef, d)
+    mul!(sv_scaled, Sf, v_cat_scaled)
+
+    # zscaled = (1 ./ qscaled) .* sv_scaled
+    zscaled = (1.0 ./ qscaled) .* sv_scaled
+
+    # Full scale for z = exp10(c - max_y) * zscaled
+    scale = exp10(c - max_y)
+    z = scale .* zscaled
+
+    # w = [z; zeros(r)]
+    w = vcat(z, zeros(Float64, r))
+
+    # Solve M * dy = w (using factorization for sparse matrix)
+    fact = factorize(M)
+    dy[:] = fact \ w
+
+    return nothing
+end
+
+# Main simulation function
+function simulate_ode(L::SparseMatrixCSC{<:Real, Int},
+                      S::SparseMatrixCSC{<:Real, Int},
+                      N::SparseMatrixCSC{<:Real, Int},
+                      a::SparseMatrixCSC{<:Real, Int},
+                      k::AbstractVector{<:Real},  # Assuming Lambda_k is a vector k
+                      y0::AbstractVector{<:Real},  # Initial log10(x)
+                      tspan::Tuple{<:Real, <:Real};
+                      q_floor::Float64 = 1e-300,
+                      rtol::Float64 = 1e-6,
+                      atol::Float64 = 1e-6,
+                      solver = ODE.Tsit5())  # Can change to other solvers like Rodas5() for stiff systems
+    # Convert to Float64 sparse matrices
+    Lf = sparse(Float64.(L))
+    Sf = sparse(Float64.(S))
+    Nf = sparse(Float64.(N))
+    af = sparse(Float64.(a))
+
+    # Convert vectors to Float64
+    kf = Float64.(k)
+    y0f = Float64.(y0)
+
+    # Pack parameters
+    p = (Lf, Sf, Nf, af, kf, q_floor)
+
+    # Define ODE problem
+    prob = ODE.ODEProblem(ode_rhs!, y0f, tspan, p)
+
+    # Solve
+    sol = ODE.solve(prob, solver; reltol=rtol, abstol=atol)
+
+    return sol
+end
+
+# function catalysis_logx(Bnc::Bnc, logx0::Vector{<:Real}, tspan::Tuple{Real,Real};
+#     k::AbstractVector{<:Real},
+#     alg=nothing, # Default to nothing, will use Tsit5() if not provided
+#     reltol=1e-8,
+#     abstol=1e-9,
+#     kwargs...
+# )::ODESolution
+#     return simulate_ode(Bnc._L_sparse, 
+#             Bnc.catalysis._S_sparse, 
+#             Bnc._N_sparse, 
+#             sparse(Bnc.catalysis.aT), 
+#             k, 
+#             logx0,
+#             tspan; 
+#             rtol=reltol, atol=abstol, solver=alg === nothing ? ODE.Tsit5() : alg)
+# end
