@@ -20,7 +20,10 @@ end
 Plot x trajectories for a single changing qK coordinate.
 """
 function SISO_plot(model::Bnc, parameters, change_idx; 
-        npoints=1000,start=-6, stop=6,colormap=:rainbow, size = (800,600),observe_x=nothing,
+        npoints=1000,start=-6, stop=6,colormap=:rainbow, size = (800,600),
+        observe_x=nothing,
+        fx = nothing,
+        farchx = nothing,
         add_archeatype_lines::Bool=false,
         asymptotic_only::Bool=false)
 
@@ -55,24 +58,47 @@ function SISO_plot(model::Bnc, parameters, change_idx;
     @info "Change in $(change_sym)"
     @info "parameters: $([i=>j for (i,j) in zip([model.q_sym;model.K_sym] |> x->deleteat!(x,change_idx), parameters)])"
     
-    # draw plots
-    draw_idx = isnothing(observe_x) ? (1:model.n) : locate_sym_x(model, observe_x)
-    F = Figure(size = size)
-    axes = Axis[]
-    for (i, j) in enumerate(draw_idx)
-        target_sym = "log"*repr(model.x_sym[j])
-        @info "Target syms contains: $(target_sym) "
-        ax = Axis(F[i,1]; xlabel = change_sym, ylabel = target_sym)
-        push!(axes, ax)
-        
-        y = getindex.(logx, j)
-        lines!(ax, change_S, y; color = colors)
-        if add_archeatype_lines
-            yarch = getindex.(logx_arch, j)
-            lines!(ax, change_S, yarch; color = :black, linestyle = :dash)
+    F = if isnothing(fx)
+            # draw plots
+            draw_idx = isnothing(observe_x) ? (1:model.n) : locate_sym_x(model, observe_x)
+            F = Figure(size = size)
+            axes = Axis[]
+            for (i, j) in enumerate(draw_idx)
+                target_sym = "log"*repr(model.x_sym[j])
+                @info "Target syms contains: $(target_sym) "
+                ax = Axis(F[i,1]; xlabel = change_sym, ylabel = target_sym,aspect = DataAspect())
+                push!(axes, ax)
+                
+                y = getindex.(logx, j)
+                lines!(ax, change_S, y; color = colors)
+
+                if add_archeatype_lines
+                    yarch = getindex.(logx_arch, j)
+                    lines!(ax, change_S, yarch; color = :black, linestyle = :dash)
+                end
+
+            end
+            linkxaxes!(axes...)
+            F
+        else 
+            F = Figure(size = size)
+            ax = Axis(F[1,1]; xlabel = change_sym,aspect = DataAspect())
+            y = fx.(logx)
+            lines!(ax, change_S, y; color = colors)
+
+            if add_archeatype_lines
+                farchx =
+                    if isnothing(farchx) 
+                        @warn "No farchx provided, using fx as for archetype line."
+                        fx
+                    else
+                        farchx
+                    end
+                yarch = farchx.(logx_arch)
+                lines!(ax, change_S, yarch; color = :black, linestyle = :dash)
+            end 
+            F
         end
-    end
-    linkxaxes!(axes...)
 
     add_rgm_colorbar!(F, cmap)
     return F
@@ -169,9 +195,6 @@ end
 Return a color map for vertices in a model.
 """
 get_color_map(model::Bnc, args...;colormap=:rainbow, kwargs...) = get_color_map(get_vertices(model,args...;kwargs...), colormap=colormap)
-
-
-
 
 
 
@@ -544,8 +567,3 @@ function find_bounds(lattice)
     edge_map = col_asym_x_bounds .!= 0
     return edge_map
 end
-
-
-
-
-

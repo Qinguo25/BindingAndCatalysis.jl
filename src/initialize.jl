@@ -103,7 +103,8 @@ fetch_mean_re(V::Volume) = (V.mean, sqrt(V.var)/V.mean)
 
 Display a compact summary of a `Volume`.
 """
-Base.display(V::Volume) = Printf.@sprintf("Volume(mean=%.3e, var=%.3e, rel_error=%.2f%%)", V.mean, V.var, (sqrt(V.var)/V.mean)*100)
+Base.display(V::Volume) = Printf.@sprintf("Volume(Mean=%.3e, STD=%.3e, RelError=%.2f%%)", V.mean, sqrt(V.var), (sqrt(V.var)/V.mean)*100)
+Base.show(io::IO, V::Volume) = print(io, Printf.@sprintf("Volume(Mean=%.3e, STD=%.3e, RelError=%.2f%%)", V.mean, sqrt(V.var), (sqrt(V.var)/V.mean)*100))
 """
     Base.:+(v1::Volume, v2::Volume) -> Volume
 
@@ -134,6 +135,13 @@ Base.:(==)(a::Volume, b::Volume) = a.mean == b.mean
 Return a zero `Volume` with zero mean and variance.
 """
 Base.zero(::Volume) = Volume(0.0, 0.0)
+
+Base.:*(c::Real, v::Volume) = Volume(c * v.mean, c^2 * v.var)
+Base.:*(v::Volume, c::Real) = c * v
+Base.:/(v::Volume, c::Real) = Volume(v.mean / c, v.var / c^2)
+
+
+
 
 """
     Vertex
@@ -297,7 +305,7 @@ mutable struct Bnc{T} <: AbstractBnc # T is the int type to save all the indices
     _LN_bottom_cols::Vector{Int} # the corresponding column number in N for _LN_bottom_idx
     _LN_top_diag_idx::Vector{Int} # the diagonal index of the top d rows of _LN_sparse, used for fast calculation
 
-    _LN_lu::SparseArrays.UMFPACK.UmfpackLU{Float64,Int} # LU decomposition of _LNt_sparse, used for fast calculation
+    _LN_lu::Union{SparseArrays.UMFPACK.UmfpackLU{Float64,Int}, Nothing} # LU decomposition of _LNt_sparse, used for fast calculation
     # _val_num_L::Int # number of non-zero elements in the sparse matrix L
     
 
@@ -344,7 +352,7 @@ mutable struct Bnc{T} <: AbstractBnc # T is the int type to save all the indices
         (_LN_bottom_rows, _LN_bottom_cols, _LN_bottom_idx) = rowmask_indices(_LN_sparse, d+1,n) # record the position of non-zero elements in N within _LN_sparse
         _LN_top_diag_idx = diag_indices(_LN_sparse, d)
 
-        _LN_lu = lu(_LN_sparse) # LU decomposition of _LNt_sparse, used for fast calculation
+        _LN_lu = rank(_LN_sparse)== n ? lu(_LN_sparse) : nothing # LU decomposition of _LNt_sparse, used for fast calculation
         # _N_sparse = sparse(N) # sparse version of N, used for fast calculation
 
         new(
@@ -452,21 +460,27 @@ function Bnc(;N=nothing,L=nothing,
     kwargs...
 )::Bnc
     # if N is not provided, derive it from L, if provided, check its linear indenpendency
-    isnothing(N) ? (N = N_from_L(L)) : begin 
-        r = size(N,1)
-        row_idx = independent_row_idx(N)
-        r_new = length(row_idx)
-        r != r_new ? @warn("N has been reduced from $r to $r_new rows, for linear dependent.") : nothing
-        N = N[row_idx, :] # reduce N to independent rows
-        if !isnothing(K_sym) && length(K_sym) == r
-            K_sym = K_sym[row_idx] # reduce K_sym to independent rows 
+    
+    N = isnothing(N) ? N_from_L(L) : N
+    row_idx = independent_row_idx(N)
+    r = length(row_idx)
+
+    if isnothing(L)
+        if r != size(N,1) @warn("N has been reduced from $r to $r_new rows, for linear dependent.") : nothing
+            N = N[row_idx, :] # reduce N to independent rows
+            if !isnothing(K_sym) && length(K_sym) == r
+                K_sym = K_sym[row_idx] # reduce K_sym to independent rows 
+            end
+        end
+    else # L is provided
+        if r!= size(N,1) && size(N,1) +size(L,1) ==size(N,2)
+            @warn "N is not full row rank and can't be reduced, numerical issures could happen"
         end
     end
 
-    !isnothing(L) || (L = L_from_N(N)) # if L is not provided, derive it from N
-
     r,n = size(N)
-    d = size(L, 1)
+    d = size(L,1)
+    
 
     # Call the inner constructor
     # Number of variables in the binding network
