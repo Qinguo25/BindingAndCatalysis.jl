@@ -276,6 +276,15 @@ mutable struct Bnc{T} <: AbstractBnc # T is the int type to save all the indices
     vertices_asymptotic_flag::Vector{Bool} # While this vertice is real
     vertices_nullity::Vector{T} # nullity of one vertex.
     
+    # Xiaoyu's global pool storage of H-representation of the polyhedra -- NOT IMPLEMENTED YET
+    # will wait for further analysis on what types of hyperplanes can be shared among different vertices, and how to efficiently store and update them.
+    # the implementation of this global pool will theoretically speed up the following rotation step (a part of path condition calculation) by at least 100 folds
+    # each hyperplane can be writen as: w^T x + b = 0
+    vertices_hyperplane_wT::Vector{Vector{Float64}} # the w^T for all of the hyperplanes of vertices
+    vertices_hyperplane_b::Vector{Vector{Float64}} # the b for all of the hyperplanes of vertices
+    vertices_polyhedron::Vector{Int} # the index of hyperplanes for each vertex, the hyperplanes are stored in the vertices_hyperplane_wT and vertices_hyperplane_b
+    vertices_poly_direction::Vector{Int} # the direction of the hyperplanes for each vertex, 1 for w^T x + b >= 0, -1 for w^T x + b <= 0, stored in the same order as vertices_polyhedron
+
     #The following are computed when building graphs.
     vertices_graph::Union{Any,Nothing} # Using Any for placeholder for VertexGraph
     vertices_data::Vector{Vertex} # Using Any for placeholder for Vertex
@@ -373,6 +382,13 @@ mutable struct Bnc{T} <: AbstractBnc # T is the int type to save all the indices
             Dict{Vector{T},Int}(),            # verices_idx
             Bool[],                          # vertices_asymptotic_flag
             T[],                          # vertices_nullity
+
+            # Xiaoyu's global pool storage of H-representation of the polyhedra
+            Vector{Vector{Float64}}(), # vertices_hyperplane_wT
+            Vector{Vector{Float64}}(), # vertices_hyperplane_b
+            Vector{Int}[], # vertices_polyhedron
+            Vector{Int}[], # vertices_poly_direction
+
             nothing,                         # vertices_graph
             # SparseMatrixCSC{Bool, Int}(undef, 0, 0),             # vertices_neighbor_mat
             # SparseMatrixCSC{SparseVector{Int8,T}, Int}(undef, 0, 0),             # vertices_change_dir_x
@@ -554,6 +570,7 @@ include(joinpath(@__DIR__,"regime_assign.jl"))
 include(joinpath(@__DIR__,"symbolics.jl"))
 include(joinpath(@__DIR__,"regime_graphs.jl"))
 include(joinpath(@__DIR__,"visualize.jl"))
+include(joinpath(@__DIR__,"better_path.jl"))
 
 
 """
