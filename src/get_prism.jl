@@ -34,6 +34,55 @@ function _apply_householder_in_hrep(
 end
 
 """
+    _restore_projected_polyhedron_coordinates(
+        p_proj::Polyhedra.Polyhedron,
+        axis_to_eliminate::Int,
+        H::Union{Matrix{Float64}, Nothing}
+    )::Polyhedra.Polyhedron
+
+Lift a projected `(n-1)`-dimensional polyhedron back to `n` dimensions by
+re-introducing the eliminated coordinate as a free axis (zero coefficient in
+all rows). If projection was done in Householder-rotated coordinates
+(`axis_to_eliminate == -1`), map constraints back to original coordinates.
+"""
+function _restore_projected_polyhedron_coordinates(
+    p_proj::Polyhedra.Polyhedron,
+    axis_to_eliminate::Int,
+    H::Union{Matrix{Float64}, Nothing} = nothing,
+    )::Polyhedra.Polyhedron
+
+    C_red, C0, nullity = get_C_C0_nullity(p_proj)
+    C_red = Matrix{Float64}(C_red)
+
+    n_red = size(C_red, 2)
+    n_full = n_red + 1
+
+    axis = if axis_to_eliminate == -1
+        isnothing(H) && error("Householder matrix H must be provided when axis_to_eliminate == -1.")
+        size(H, 1)
+    else
+        axis_to_eliminate
+    end
+    1 <= axis <= n_full || error("Invalid eliminated axis $axis for lifted dimension $n_full.")
+
+    # Re-introduce eliminated coordinate as a free variable.
+    C_full_current = hcat(C_red[:, 1:axis-1], zeros(Float64, size(C_red, 1), 1), C_red[:, axis:end])
+
+    # If projection happened in rotated q-coordinates, map back to original qK.
+    C_full_original = if axis_to_eliminate == -1
+        d = size(H, 1)
+        d <= n_full || error("Householder matrix dimension cannot exceed lifted polyhedron variable dimension.")
+        H_full = Matrix{Float64}(I, n_full, n_full)
+        H_full[1:d, 1:d] = H
+        C_full_current * H_full
+    else
+        C_full_current
+    end
+
+    return get_polyhedron(C_full_original, C0, nullity)
+end
+
+"""
     _get_interface_prism(
         bnc_sys::Bnc,
         vertex_idx_from::Int,
@@ -78,6 +127,9 @@ function _get_interface_prism(
     eliminate_axis = axis_to_eliminate == -1 ? size(H, 1) : axis_to_eliminate
     p = eliminate(p, eliminate_axis)
     removehredundancy!(p)
+
+    # 4. lift back to original qK coordinates before returning
+    p = _restore_projected_polyhedron_coordinates(p, axis_to_eliminate, H)
 
     return p
 end
@@ -127,6 +179,9 @@ function _get_polyhedron_prism(
     if axis_to_eliminate == -1
         removehredundancy!(p)
     end
+
+    # 4. lift back to original qK coordinates before returning
+    p = _restore_projected_polyhedron_coordinates(p, axis_to_eliminate, H)
 
     return p
 end
