@@ -7,8 +7,8 @@ using SparseArrays
 """
     _get_interface_prism(
         bnc_sys::Bnc,
-        vertex_idx_from::Vector{Int},
-        vertex_idx_to::Vector{Int},
+        vertex_idx_from::Int,
+        vertex_idx_to::Int,
         axis_to_eliminate::Int,
         H::Matrix{Float64}
     )::Polyhedra.Polyhedron
@@ -19,10 +19,10 @@ H is the Householder transformation matrix
 """
 function _get_interface_prism(
     bnc_sys::Bnc,
-    vertex_idx_from::Vector{Int},
-    vertex_idx_to::Vector{Int},
+    vertex_idx_from::Int,
+    vertex_idx_to::Int,
     axis_to_eliminate::Int,
-    H::Matrix{Float64} = nothing,
+    H::Union{Matrix{Float64}, Nothing} = nothing,
     )::Polyhedra.Polyhedron
     
     # 1. get the interface polyhedron of the two vertices
@@ -38,19 +38,60 @@ function _get_interface_prism(
 
     # if the vector v is not aligned with any coordinate axis
     if axis_to_eliminate == -1
+        isnothing(H) && error("Householder matrix H must be provided when axis_to_eliminate == -1.")
+        size(H, 1) == size(H, 2) || error("Householder matrix H must be square.")
         # 2. apply Householder transformation to the polyhedron to make v the last coordinate axis
         # this step enables the elimination of the dimension along V
         p = linear_map(H, p)
     end
 
     # 3. remove the corresponding coordinate to get the interface prism
-    p = eliminate(p, axis_to_eliminate)
+    eliminate_axis = axis_to_eliminate == -1 ? size(H, 1) : axis_to_eliminate
+    p = eliminate(p, eliminate_axis)
     removehredundancy!(p)
 
-    # 4. apply inverse Householder transformation to the interface prism to get the final result
-    if axis_to_eliminate == -1
-        p = linear_map(inv(H), p)
+    return p
+end
+
+"""
+    _get_polyhedron_prism(
+        bnc_sys::Bnc,
+        vertex_idx::Int,
+        axis_to_eliminate::Int,
+        H::Matrix{Float64}
+    )::Polyhedra.Polyhedron
+
+Get the polyhedron prism of a vertex, which is the projection of the vertex's polyhedron onto the subspace orthogonal to the vector v.
+The polyhedron prism is represented as a polyhedron in H-representation.
+"""
+function _get_polyhedron_prism(
+    bnc_sys::Bnc,
+    vertex_idx::Int,
+    axis_to_eliminate::Int,
+    H::Union{Matrix{Float64}, Nothing} = nothing,
+    )::Polyhedra.Polyhedron
+
+    # 1. get the polyhedron of the vertex and eliminate the corresponding coordinate to get the prism
+    p = get_polyhedron(bnc_sys, vertex_idx)
+    detecthlinearity!(p)
+    removehredundancy!(p)
+
+    if isempty(p)
+        return p
     end
+
+    # 2. if the vector v is not aligned with any coordinate axis
+    if axis_to_eliminate == -1
+        isnothing(H) && error("Householder matrix H must be provided when axis_to_eliminate == -1.")
+        size(H, 1) == size(H, 2) || error("Householder matrix H must be square.")
+        p = linear_map(H, p)
+    end
+
+    # 3. remove the corresponding coordinate to get the prism
+    eliminate_axis = axis_to_eliminate == -1 ? size(H, 1) : axis_to_eliminate
+    p = eliminate(p, eliminate_axis)
+    removehredundancy!(p)
+
     return p
 end
 
@@ -65,8 +106,9 @@ function _get_axis_to_eliminate(
     )::Int
     # if the vector v is aligned with any coordinate axis, return the index of that axis
     axis_to_eliminate = -1
+    tol = 1e-12
     for i in 1:length(v)
-        if v[i] != 0.0
+        if abs(v[i]) > tol
             if axis_to_eliminate == -1
                 axis_to_eliminate = i
             else
