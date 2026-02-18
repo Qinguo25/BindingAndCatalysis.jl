@@ -5,6 +5,35 @@ using LinearAlgebra
 using SparseArrays
 
 """
+    _apply_householder_in_hrep(
+        p::Polyhedra.Polyhedron,
+        H::Matrix{Float64}
+    )::Polyhedra.Polyhedron
+
+Apply the variable change `y = H*x` to an H-representation polyhedron `p`.
+If `p` is `C*x <= C0`, then in `y`-space constraints are `C*H'*y <= C0`.
+"""
+function _apply_householder_in_hrep(
+    p::Polyhedra.Polyhedron,
+    H::Matrix{Float64}
+    )::Polyhedra.Polyhedron
+
+    C, C0, nullity = get_C_C0_nullity(p)
+    n_vars = size(C, 2)
+    d = size(H, 1)
+    d == size(H, 2) || error("Householder matrix H must be square.")
+    d <= n_vars || error("Householder matrix dimension cannot exceed polyhedron variable dimension.")
+
+    # qK variables are ordered as [q; K]. Rotate only q-part and keep K-part unchanged.
+    H_full = Matrix{Float64}(I, n_vars, n_vars)
+    H_full[1:d, 1:d] = H
+
+    C_t = Matrix(C) * transpose(H_full)
+    p_t = get_polyhedron(C_t, C0, nullity)
+    return p_t
+end
+
+"""
     _get_interface_prism(
         bnc_sys::Bnc,
         vertex_idx_from::Int,
@@ -42,7 +71,7 @@ function _get_interface_prism(
         size(H, 1) == size(H, 2) || error("Householder matrix H must be square.")
         # 2. apply Householder transformation to the polyhedron to make v the last coordinate axis
         # this step enables the elimination of the dimension along V
-        p = linear_map(H, p)
+        p = _apply_householder_in_hrep(p, H)
     end
 
     # 3. remove the corresponding coordinate to get the interface prism
@@ -84,13 +113,20 @@ function _get_polyhedron_prism(
     if axis_to_eliminate == -1
         isnothing(H) && error("Householder matrix H must be provided when axis_to_eliminate == -1.")
         size(H, 1) == size(H, 2) || error("Householder matrix H must be square.")
-        p = linear_map(H, p)
+        p = _apply_householder_in_hrep(p, H)
     end
 
     # 3. remove the corresponding coordinate to get the prism
     eliminate_axis = axis_to_eliminate == -1 ? size(H, 1) : axis_to_eliminate
     p = eliminate(p, eliminate_axis)
-    removehredundancy!(p)
+
+    # NOTE:
+    # For some axis-aligned projections, `removehredundancy!` on the eliminated
+    # polyhedron can trigger a CDD blow-up / process kill. We therefore skip
+    # post-elimination redundancy removal in the axis-aligned branch.
+    if axis_to_eliminate == -1
+        removehredundancy!(p)
+    end
 
     return p
 end
