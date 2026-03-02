@@ -472,6 +472,7 @@ function Bnc(;N=nothing,L=nothing,
                 K_sym = K_sym[row_idx] # reduce K_sym to independent rows 
             end
         end
+        L = L_from_N(N)
     else # L is provided
         if r!= size(N,1) && size(N,1) +size(L,1) ==size(N,2)
             @warn "N is not full row rank and can't be reduced, numerical issures could happen"
