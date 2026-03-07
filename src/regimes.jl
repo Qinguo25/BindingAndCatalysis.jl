@@ -301,11 +301,12 @@ Convert a `VertexGraph` to a sparse adjacency matrix.
 """
 function _vertex_graph_to_sparse(G::VertexGraph{T}; weight_fn = e -> 1) where T
     n = length(G.neighbors)
+    Ty = eltype(weight_fn(first(G.neighbors[1]))) # infer the type of weights from the first edge
     # 预分配估计：平均度 × n
     nnz = sum(length(v) for v in G.neighbors)
     I = Vector{Int}(undef, nnz)
     J = Vector{Int}(undef, nnz)
-    V = Vector{Float64}(undef, nnz)
+    V = Vector{Ty}(undef, nnz)
     idx = 0
     for i in 1:n
         for e in G.neighbors[i] #Edge
@@ -539,10 +540,12 @@ Return the qK-space adjacency matrix of the vertex graph.
 """
 function get_vertices_neighbor_mat_qK(Bnc::Bnc)
     grh = get_vertices_graph!(Bnc;full=true)
-    f(x::VertexEdge) = isnothing(x.change_dir_qK) ? 0.0 : 1.0
+    f(x::VertexEdge) = isnothing(x.change_dir_qK) ? 0 : 1
     spmat = _vertex_graph_to_sparse(grh; weight_fn = f)
     return spmat
 end
+
+get_vertices_neighbor_mat(args...;kwargs...) =  get_vertices_neighbor_mat_qK(args...;kwargs...)
 
 
 #-------------------------------------------------------------------------------------
