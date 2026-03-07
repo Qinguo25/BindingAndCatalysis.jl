@@ -778,16 +778,16 @@ function draw_ROP(model::Bnc, pairs::AbstractVector{<:Tuple{Any, Any}};
     end
 
     function get_label(i, j)
-        sym_i = string(latexify(x_sym(model)[i]))
-        sym_j = string(latexify(qK_sym(model)[j]))
-        return L"\frac{\partial \log{%$(sym_i)} }{\partial \log{%$(sym_j)}}"
+        sym_i = string(x_sym(model)[i])
+        sym_j = string(qK_sym(model)[j])
+        "∂log $(sym_i)/∂log $(sym_j)"
     end
 
     # Now we have all the points and lines, we can plot them using Makie
     f = Figure()
     ax = if length(pairs) == 3
             Axis3(f[1, 1], title = "Reaction Order Polyhedra",
-            xlabel = get_label.(pairs[1]...), ylabel = get_label.(pairs[2]...), zlabel = get_label.(pairs[3]...))
+            xlabel = get_label(pairs[1]...), ylabel = get_label(pairs[2]...), zlabel = get_label(pairs[3]...))
         else
             Axis(f[1, 1], title = "Reaction Order Polyhedra",
             xlabel = get_label(pairs[1]...), ylabel = get_label(pairs[2]...))
