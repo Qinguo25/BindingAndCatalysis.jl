@@ -2,6 +2,11 @@
 # Key visualizing functions
 #----------------------------------------------------------------
 
+
+
+#-------------------------------------------------------------------------------------------------------------
+#           Functions for plotting SISO paths and trajectories
+#-------------------------------------------------------------------------------------------------------------
 """
     SISO_plot(pths::SISOPaths, pth_idx; rand_line=false, rand_ray=false, extend=4, kwargs...) -> Figure
 
@@ -20,7 +25,10 @@ end
 Plot x trajectories for a single changing qK coordinate.
 """
 function SISO_plot(model::Bnc, parameters, change_idx; 
-        npoints=1000,start=-6, stop=6,colormap=:rainbow, size = (800,600),observe_x=nothing,
+        npoints=1000,start=-6, stop=6,colormap=:rainbow, size = (800,600),
+        observe_x=nothing,
+        fx = nothing,
+        farchx = nothing,
         add_archeatype_lines::Bool=false,
         asymptotic_only::Bool=false)
 
@@ -55,24 +63,47 @@ function SISO_plot(model::Bnc, parameters, change_idx;
     @info "Change in $(change_sym)"
     @info "parameters: $([i=>j for (i,j) in zip([model.q_sym;model.K_sym] |> x->deleteat!(x,change_idx), parameters)])"
     
-    # draw plots
-    draw_idx = isnothing(observe_x) ? (1:model.n) : locate_sym_x(model, observe_x)
-    F = Figure(size = size)
-    axes = Axis[]
-    for (i, j) in enumerate(draw_idx)
-        target_sym = "log"*repr(model.x_sym[j])
-        @info "Target syms contains: $(target_sym) "
-        ax = Axis(F[i,1]; xlabel = change_sym, ylabel = target_sym)
-        push!(axes, ax)
-        
-        y = getindex.(logx, j)
-        lines!(ax, change_S, y; color = colors)
-        if add_archeatype_lines
-            yarch = getindex.(logx_arch, j)
-            lines!(ax, change_S, yarch; color = :black, linestyle = :dash)
+    F = if isnothing(fx)
+            # draw plots
+            draw_idx = isnothing(observe_x) ? (1:model.n) : locate_sym_x(model, observe_x)
+            F = Figure(size = size)
+            axes = Axis[]
+            for (i, j) in enumerate(draw_idx)
+                target_sym = "log"*repr(model.x_sym[j])
+                @info "Target syms contains: $(target_sym) "
+                ax = Axis(F[i,1]; xlabel = change_sym, ylabel = target_sym,aspect = DataAspect())
+                push!(axes, ax)
+                
+                y = getindex.(logx, j)
+                lines!(ax, change_S, y; color = colors)
+
+                if add_archeatype_lines
+                    yarch = getindex.(logx_arch, j)
+                    lines!(ax, change_S, yarch; color = :black, linestyle = :dash)
+                end
+
+            end
+            linkxaxes!(axes...)
+            F
+        else 
+            F = Figure(size = size)
+            ax = Axis(F[1,1]; xlabel = change_sym,aspect = DataAspect())
+            y = fx.(logx)
+            lines!(ax, change_S, y; color = colors)
+
+            if add_archeatype_lines
+                farchx =
+                    if isnothing(farchx) 
+                        @warn "No farchx provided, using fx as for archetype line."
+                        fx
+                    else
+                        farchx
+                    end
+                yarch = farchx.(logx_arch)
+                lines!(ax, change_S, yarch; color = :black, linestyle = :dash)
+            end 
+            F
         end
-    end
-    linkxaxes!(axes...)
 
     add_rgm_colorbar!(F, cmap)
     return F
@@ -174,7 +205,9 @@ get_color_map(model::Bnc, args...;colormap=:rainbow, kwargs...) = get_color_map(
 
 
 
-
+#-------------------------------------------------------------------------------------------------------------
+#           Functions for plotting regime graphs
+#-------------------------------------------------------------------------------------------------------------
 
 
 #-------------------------------------------------------------
@@ -314,22 +347,28 @@ end
 
 Return node colors based on regime types.
 """
-function get_node_colors(model; singular_color="#CCCCFF", asymptotic_color="#FFCCCC", regular_color="#CCFFCC")::Vector{String}
-    node_colors = Vector{String}(undef, length(model.vertices_perm))
-    for i in eachindex(model.vertices_perm)
-        is_sin = is_singular(model, i)
-        is_asym = is_asymptotic(model, i)
-        if is_sin
-            node_colors[i] = singular_color  # light blue for singular regimes
-        else
-            if is_asym
-                node_colors[i] = asymptotic_color  # light green for asymptotic regimes
-            else
-                node_colors[i] = regular_color  # light red for regular regimes
+function get_node_colors(model, regimes=nothing; singular_color="#CCCCFF", asymptotic_color="#FFCCCC", regular_color="#CCFFCC")::Vector{String}
+    
+    all_regimes = isnothing(regimes) ? get_vertices(model;return_idx=true) : regimes
+    all_node_colors = let 
+            node_colors = Vector{String}(undef, length(all_regimes))
+            for (i,j) in enumerate(all_regimes)
+                is_sin = is_singular(model, j)
+                is_asym = is_asymptotic(model, j)
+                if is_sin
+                    node_colors[i] = singular_color  # light blue for singular regimes
+                else
+                    if is_asym
+                        node_colors[i] = asymptotic_color  # light green for asymptotic regimes
+                    else
+                        node_colors[i] = regular_color  # light red for regular regimes
+                    end
+                end
             end
+            node_colors
         end
-    end
-    return node_colors
+
+    return all_node_colors
 end
 
 """
@@ -530,6 +569,258 @@ function draw_binding_network_grh(Bnc::Bnc,grh::Union{AbstractGraph, Nothing}=no
 end
 
 
+
+#-------------------------------------------------------------------------------------------------------------
+#           Functions for plotting Reaction Order Polyhedra
+#-------------------------------------------------------------------------------------------------------------
+
+# For ploting the Reaction Order Polyhedra, the following properties are needed:
+# 1. The vertices with properties: color
+# 2. the edges 
+# Inherently we need two properties, 1. the neighbor information 2. the specific value of H
+
+function draw_ROP(model::Bnc, pairs::AbstractVector{<:Tuple{Any, Any}};
+    add_inner_points::Bool=true,
+    npoints = 50000,
+    singular_extends::Float64 = 2.0,singular_color="#CCCCFF", asymptotic_color="#FFCCCC", regular_color="#CCFFCC")
+
+    #####################################################################################################################
+    # The first part of these code are purely model related. Intend to find the realationship between different regiems.
+    #####################################################################################################################
+
+    # all potential vertices, could be direction for singular regimes.
+    V = get_vertices(model, singular = 1,return_idx=true) # only regimes with maximum singularity 1.
+
+    # find all singular and non-singular regimes, and we assign singular to their neighbor regimes.
+    V_non_singular = filter(V) do v 
+        !is_singular(model, v)
+    end
+
+    V_singular = filter(V) do v 
+        is_singular(model, v)
+    end
+
+    neighbor_mat = get_vertices_neighbor_mat(model)
+    singular_neighbor_mat = neighbor_mat[V_singular, V_singular]
+    nonsingular_neighbor_mat = neighbor_mat[V_non_singular, V_non_singular]
+
+
+    # The first job, assign singular regime to their non-singular neighbors
+    
+    vtx_bag = [(Set{Int}(), Set{Int}()) for _ in eachindex(V_non_singular)] # dirct adjacent, indirect adjacent.
+
+    rgm_dct = let # keys: non-singular regime sub-index, values: set of singular regime sub-index that are directly adjacent to the non-singular regime
+        groups, labels = connected_components_sparse(singular_neighbor_mat)
+        dct = Dict{Int, Set{Int}}()
+        for i in eachindex(V_singular)
+            dct[i] = Set(groups[labels[i]])
+        end
+        dct
+    end
+
+    function get_direct_neighbor_with_singular_regime(i) # i is in singular
+        nbs = Int[]
+        for (idx, j) in enumerate(V_non_singular)
+            if neighbor_mat[i,j] == 1
+                push!(nbs,idx) 
+            end
+        end
+        nbs
+    end
+    
+    function fill_indirect_adj!(j)
+        rgms = getindex.(Ref(rgm_dct), collect(vtx_bag[j][1]))
+        all_rgms = isempty(rgms) ? Set{Int}() : union(rgms...)
+        union!(vtx_bag[j][2], setdiff(all_rgms, vtx_bag[j][1]))
+    end
+
+
+    for (idx, i) in enumerate(V_singular)
+        nbs = get_direct_neighbor_with_singular_regime(i)
+        for nb in nbs
+            push!(vtx_bag[nb][1], idx) # direct adjacent singular regimes for non-singular regime nb
+        end
+    end
+
+    for j in eachindex(vtx_bag)
+        fill_indirect_adj!(j)
+    end
+
+
+    # The second job, find dirct and indirect non-singular neighbor pairs.
+
+    # Direct neighbor pairs
+    direct_neighbor_pairs = let 
+        I,J,_ = findnz(tril(nonsingular_neighbor_mat)) # lower triangular to avoid double counting
+        collect(zip(I,J))
+    end
+
+
+    # find the newly formed adjacency:
+    new_form_neighbor_mat = let 
+        neighbor_mat_compressed = compress_adjacency(neighbor_mat, V_non_singular)
+        dropzeros!(neighbor_mat_compressed .- nonsingular_neighbor_mat)
+    end
+
+    indirect_neighbor_pairs = let 
+        I,J,_ = findnz(tril(new_form_neighbor_mat)) # lower triangular to avoid double counting
+        collect(zip(I,J))
+    end
+
+    #####################################################################################################################
+    # The second part of the code is to perparing data for visualization
+    #####################################################################################################################
+
+    if length(pairs) > 3
+        @warn "More than 3 pairs provided, only the first 3 will be used for 3D visualization."
+        pairs = pairs[1:3]
+    end
+    if length(pairs) < 2
+        @error "At least 2 pairs are needed for visualization."
+        return nothing
+    end
+
+    pairs = pairs .|> x -> (locate_sym_x(model, x[1]), locate_sym_qK(model, x[2]))
+    get_val(H) = [H[pair...] for pair in pairs]
+
+
+    Ptype = if length(pairs) == 3
+            Point3f
+        else
+            Point2f
+        end
+
+    get_col(i) = if  is_asymptotic(model, i)
+            asymptotic_color
+        else
+            regular_color
+        end
+    
+
+    pnts = get_H.(Ref(model), V_non_singular) .|> get_val
+    dirs = get_H.(Ref(model), V_singular) .|> get_val
+
+    # The points
+    
+    Points = Ptype.(pnts)
+    Points_color = get_col.(V_non_singular)
+
+    # The direct lines between non-singular neighbors
+    direct_lines = let 
+        normal_lines = Tuple{Ptype, Ptype}[]
+        for (i, j) in direct_neighbor_pairs
+            push!(normal_lines, (Points[i], Points[j]))
+        end
+        normal_lines
+    end
+
+    # The indirect lines between non-singular neighbors
+
+    indirect_lines = let 
+        normal_lines = Tuple{Ptype, Ptype}[]
+        for (i, j) in indirect_neighbor_pairs
+            push!(normal_lines, (Points[i], Points[j]))
+        end
+        normal_lines
+    end
+
+    # The direct rays 
+
+    direct_rays = let 
+        rays = Tuple{Ptype, Ptype}[]
+        for i in eachindex(vtx_bag)
+            for j in vtx_bag[i][1] # direct adjacent singular regimes
+                push!(rays, (Points[i], Points[i] + dirs[j] * singular_extends))
+            end
+        end
+        rays
+    end
+
+    # The indirect rays
+    indirect_rays = let 
+        rays = Tuple{Ptype, Ptype}[]
+        for i in eachindex(vtx_bag)
+            for j in vtx_bag[i][2] # indirect adjacent singular regimes
+                push!(rays, (Points[i], Points[i] + dirs[j] * singular_extends))
+            end
+        end
+        rays
+    end
+    #####################################################################################################################
+    # The third part of the code is the optional adding of inner points for better visualization of the regime 
+    #####################################################################################################################
+    if add_inner_points
+        inner_pnts = let 
+            x_smp = randomize(model, npoints)
+            pnts = x_smp .|> x -> ∂logx_∂logqK(model; x = x, input_logspace=true) |> get_val
+            Ptype.(pnts)
+        end
+    end
+
+
+
+    #####################################################################################################################
+    # The last part of the code is the visualization itself
+    #####################################################################################################################
+
+    function lock_current_limits!(ax::Axis)
+        r = ax.finallimits[]   # current auto-computed 2D limits
+        x0, y0 = r.origin
+        wx, wy = r.widths
+        limits!(ax, x0, x0 + wx, y0, y0 + wy)
+    end
+
+    function lock_current_limits!(ax::Axis3)
+        r = ax.targetlimits[]  # current 3D limits box
+        x0, y0, z0 = r.origin
+        wx, wy, wz = r.widths
+        limits!(ax, x0, x0 + wx, y0, y0 + wy, z0, z0 + wz)
+    end
+
+    function get_label(i, j)
+        sym_i = string(x_sym(model)[i])
+        sym_j = string(qK_sym(model)[j])
+        "∂log $(sym_i)/∂log $(sym_j)"
+    end
+
+    # Now we have all the points and lines, we can plot them using Makie
+    f = Figure()
+    ax = if length(pairs) == 3
+            Axis3(f[1, 1], title = "Reaction Order Polyhedra",
+            xlabel = get_label(pairs[1]...), ylabel = get_label(pairs[2]...), zlabel = get_label(pairs[3]...))
+        else
+            Axis(f[1, 1], title = "Reaction Order Polyhedra",
+            xlabel = get_label(pairs[1]...), ylabel = get_label(pairs[2]...))
+        end
+
+    for (p1, p2) in direct_lines
+        lines!(ax, [p1, p2]; color = :black, linewidth = 2)
+    end
+    for (p1, p2) in indirect_lines
+        lines!(ax, [p1, p2]; color = :black, linewidth = 2, linestyle = :dash)
+    end
+
+    for (p1, p2) in direct_rays
+        lines!(ax, [p1, p2]; color = singular_color, linewidth = 5)
+    end
+
+    for (p1, p2) in indirect_rays
+        lines!(ax, [p1, p2]; color = singular_color, linewidth = 5, linestyle = :dash)
+    end
+
+    scatter!(ax, Points; color = Points_color, markersize = 15)
+
+    autolimits!(ax)
+    lock_current_limits!(ax)
+
+    if add_inner_points
+         scatter!(ax, inner_pnts; color = (:gray,0.1), markersize = 5)
+    end
+
+    return f, ax 
+end
+
+
 #-----------------------------------
 # Draw plot helper functions
 #--------------------------------------
@@ -544,8 +835,3 @@ function find_bounds(lattice)
     edge_map = col_asym_x_bounds .!= 0
     return edge_map
 end
-
-
-
-
-

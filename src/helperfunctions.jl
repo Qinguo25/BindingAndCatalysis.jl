@@ -708,7 +708,7 @@ end
 Locate a species symbol in a `Bnc` model.
 """
 function locate_sym_x(model::Bnc,target_sym)
-    return locate_sym(model.x_sym, target_sym)
+    return locate_sym(x_sym(model), target_sym)
 end
 """
     locate_sym_qK(model::Bnc, target_sym) -> Int
@@ -716,7 +716,7 @@ end
 Locate a total or binding constant symbol in a `Bnc` model.
 """
 function locate_sym_qK(model::Bnc,target_sym)
-    return locate_sym([model.q_sym;model.K_sym], target_sym)
+    return locate_sym(qK_sym(model), target_sym)
 end
 
 
@@ -879,4 +879,164 @@ function render_array(M::AbstractArray,empty_posi_subs=nothing)
         end
     A = f.(A)
     return latexify(A)
+end
+
+
+
+#--------------------------------------------------------
+# Helper functions to handle adjency matrix compress
+#---------------------------------------------------------
+
+function compress_adjacency(
+    A::SparseMatrixCSC,
+    keep::AbstractVector{<:Integer};
+    drop_stored_zeros::Bool = true,
+)
+    n = size(A, 1)
+    size(A, 2) == n || throw(ArgumentError("A must be square"))
+
+    A2 = drop_stored_zeros ? dropzeros(A) : A
+
+    keep_set = Set(keep)
+    length(keep_set) == length(keep) || throw(ArgumentError("keep contains duplicates"))
+    all(1 <= v <= n for v in keep) || throw(ArgumentError("keep contains out-of-range indices"))
+
+    m = length(keep)
+
+    # 原图编号 -> 压缩后编号；非 keep 节点记 0
+    keep_pos = zeros(Int, n)
+    for (i, v) in enumerate(keep)
+        keep_pos[v] = i
+    end
+
+    iskeep = falses(n)
+    isdrop = trues(n)
+    for v in keep
+        iskeep[v] = true
+        isdrop[v] = false
+    end
+
+    rows = rowvals(A2)
+
+    I = Int[]
+    J = Int[]
+
+    # 1) 保留 keep-keep 原始边
+    @inbounds for j in keep
+        jj = keep_pos[j]
+        for p in nzrange(A2, j)
+            i = rows[p]
+            if i != j && iskeep[i]
+                ii = keep_pos[i]
+                push!(I, ii)
+                push!(J, jj)
+            end
+        end
+    end
+
+    # 2) 在 drop 子图中找连通块；每个连通块接触到的 keep 点两两补边
+    visited = falses(n)
+    stack = Int[]
+
+    touched = Int[]
+    touched_mark = zeros(Int, m)
+    stamp = 0
+
+    @inbounds for s in 1:n
+        if !isdrop[s] || visited[s]
+            continue
+        end
+
+        empty!(stack)
+        push!(stack, s)
+        visited[s] = true
+
+        empty!(touched)
+        stamp += 1
+
+        while !isempty(stack)
+            u = pop!(stack)
+
+            for p in nzrange(A2, u)
+                v = rows[p]
+                v == u && continue
+
+                if isdrop[v]
+                    if !visited[v]
+                        visited[v] = true
+                        push!(stack, v)
+                    end
+                else
+                    kv = keep_pos[v]
+                    if kv != 0 && touched_mark[kv] != stamp
+                        touched_mark[kv] = stamp
+                        push!(touched, kv)
+                    end
+                end
+            end
+        end
+
+        t = length(touched)
+        for a in 1:t-1
+            ia = touched[a]
+            for b in a+1:t
+                ib = touched[b]
+                push!(I, ia); push!(J, ib)
+                push!(I, ib); push!(J, ia)
+            end
+        end
+    end
+
+    # 用逻辑或合并重复边，得到 Bool 稀疏邻接矩阵
+    B = sparse(I, J, fill(true, length(I)), m, m, |)
+
+    # 去掉自环
+    if nnz(B) > 0
+        B = B - spdiagm(0 => diag(B))
+        dropzeros!(B)
+    end
+
+    return B
+end
+
+
+
+function connected_components_sparse(A::SparseMatrixCSC)
+    n = size(A, 1)
+    size(A, 2) == n || throw(ArgumentError("A must be square"))
+
+    rows = rowvals(A)
+    visited = falses(n)
+    labels = zeros(Int, n)
+    groups = Vector{Vector{Int}}()
+    cid = 0
+
+    for s in 1:n
+        visited[s] && continue
+
+        cid += 1
+        labels[s] = cid
+        stack = [s]
+        visited[s] = true
+        comp = Int[]
+
+        while !isempty(stack)
+            u = pop!(stack)
+            push!(comp, u)
+
+            # 遍历第 u 列所有非零行号
+            for p in nzrange(A, u)
+                v = rows[p]
+                if v != u && !visited[v]
+                    visited[v] = true
+                    labels[v] = cid
+                    push!(stack, v)
+                end
+            end
+        end
+
+        push!(groups, comp)
+    end
+
+    return Set.(groups), labels
 end
