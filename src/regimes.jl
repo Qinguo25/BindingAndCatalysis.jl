@@ -563,7 +563,7 @@ function get_idx(Bnc::Bnc, idx::T;check::Bool=false) where T<:Integer
     end
    return idx
 end
-get_idx(Bnc::Bnc,perm::Vector{<:Integer};kwargs...)=(find_all_vertices!(Bnc);Bnc.vertices_perm_dict[perm])
+get_idx(Bnc::Bnc,perm::AbstractVector;kwargs...)=(find_all_vertices!(Bnc);Bnc.vertices_perm_dict[get_perm(Bnc, perm)])
 get_idx(vtx::Vertex) = vtx.idx
 get_idx(Bnc::Bnc, vtx::Vertex;kwargs...)= get_idx(vtx)
 
@@ -580,6 +580,7 @@ function get_perm(Bnc::Bnc,perm::Vector{<:Integer};check::Bool=false)
     end
     return perm
 end
+get_perm(Bnc::Bnc, perm::AbstractVector) = get_perm(Bnc, locate_sym_x.(Ref(Bnc), perm))
 get_perm(Bnc::Bnc, idx::Integer; kwargs...)=(find_all_vertices!(Bnc); Bnc.vertices_perm[idx])
 get_perm(vtx::Vertex) = vtx.perm
 get_perm(Bnc::Bnc, vtx::Vertex;kwargs...)= get_perm(vtx)
@@ -616,9 +617,6 @@ function get_vertex(vtx::Vertex; inv_info::Bool=true,kwargs...)::Vertex
     if inv_info
         _fill_inv_info!(vtx)
     end
-    # if neighbor_info
-    #     _fill_neighbor_info!(vtx)
-    # end
     return vtx
 end
 #-------------------------------------------------------------------------------------------------------------
@@ -637,7 +635,7 @@ get_binding_network(vtx::Vertex,args...)=vtx.bn
 
 Return `true` when a permutation or index exists in the model.
 """
-have_perm(Bnc::Bnc, perm::Vector{<:Integer}) = (find_all_vertices!(Bnc); haskey(Bnc.vertices_perm_dict, perm))
+have_perm(Bnc::Bnc, perm::AbstractVector) = (find_all_vertices!(Bnc); haskey(Bnc.vertices_perm_dict, get_perm(Bnc, perm)))
 have_perm(Bnc::Bnc, idx::Integer) = (find_all_vertices!(Bnc); idx ≥ 1 && idx ≤ length(Bnc.vertices_perm))
 have_perm(Bnc::Bnc, vtx::Vertex) = have_perm(Bnc, get_perm(vtx))
 
@@ -1221,14 +1219,14 @@ function summary_vertex(args...)
     volume = get_volume(args...)
     println("idx=$idx,perm=$perm, asymptotic=$is_real, nullity=$nullity")
     println("volume=$(volume.mean) +- $(sqrt(volume.var))")
-    println("Dominante condition")
+    println("Dominante Relation")
     display.(show_dominant_condition(args...;log_space=false))
-    println("x expression")
+    println("Expression")
     try
         display.(show_expression_x(args...;log_space=false))
     catch
     end
-    println("condition:")
+    println("Condition:")
     display.(show_condition_qK(args...;log_space=false))
     
     return nothing

@@ -699,25 +699,20 @@ end
 
 Return the provided index directly for convenience.
 """
-function locate_sym(syms, target_sym::Integer)
-    return target_sym
-end
+locate_sym(syms, target_sym::Integer) = target_sym
+
 """
     locate_sym_x(model::Bnc, target_sym) -> Int
 
 Locate a species symbol in a `Bnc` model.
 """
-function locate_sym_x(model::Bnc,target_sym)
-    return locate_sym(x_sym(model), target_sym)
-end
+locate_sym_x(model::Bnc,target_sym) = locate_sym(x_sym(model), target_sym)
 """
     locate_sym_qK(model::Bnc, target_sym) -> Int
 
 Locate a total or binding constant symbol in a `Bnc` model.
 """
-function locate_sym_qK(model::Bnc,target_sym)
-    return locate_sym(qK_sym(model), target_sym)
-end
+locate_sym_qK(model::Bnc,target_sym) = locate_sym(qK_sym(model), target_sym)
 
 
 

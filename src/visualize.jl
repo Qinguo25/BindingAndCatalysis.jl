@@ -580,9 +580,11 @@ end
 # Inherently we need two properties, 1. the neighbor information 2. the specific value of H
 
 function draw_ROP(model::Bnc, pairs::AbstractVector{<:Tuple{Any, Any}};
+    emphasize_regimes::AbstractVector=Int[],
     add_inner_points::Bool=true,
     npoints = 50000,
-    singular_extends::Float64 = 2.0,singular_color="#CCCCFF", asymptotic_color="#FFCCCC", regular_color="#CCFFCC")
+    singular_extends::Float64 = 2.0,
+    singular_color="#CCCCFF", asymptotic_color="#FFCCCC", regular_color="#CCFFCC", emphasize_color="#FF0000")
 
     #####################################################################################################################
     # The first part of these code are purely model related. Intend to find the realationship between different regiems.
@@ -726,26 +728,20 @@ function draw_ROP(model::Bnc, pairs::AbstractVector{<:Tuple{Any, Any}};
 
     # The direct rays 
 
-    direct_rays = let 
-        rays = Tuple{Ptype, Ptype}[]
+    (direct_rays, indirect_rays) = let 
+        rays1 = Tuple{Ptype, Ptype}[]
+        rays2 = Tuple{Ptype, Ptype}[]
         for i in eachindex(vtx_bag)
             for j in vtx_bag[i][1] # direct adjacent singular regimes
-                push!(rays, (Points[i], Points[i] + dirs[j] * singular_extends))
+                push!(rays1, (Points[i], Points[i] + dirs[j] * singular_extends))
+            end
+            for j in vtx_bag[i][2] # indirect adjacent singular regimes
+                push!(rays2, (Points[i], Points[i] + dirs[j] * singular_extends))
             end
         end
-        rays
+        (rays1, rays2)
     end
 
-    # The indirect rays
-    indirect_rays = let 
-        rays = Tuple{Ptype, Ptype}[]
-        for i in eachindex(vtx_bag)
-            for j in vtx_bag[i][2] # indirect adjacent singular regimes
-                push!(rays, (Points[i], Points[i] + dirs[j] * singular_extends))
-            end
-        end
-        rays
-    end
     #####################################################################################################################
     # The third part of the code is the optional adding of inner points for better visualization of the regime 
     #####################################################################################################################
@@ -755,6 +751,45 @@ function draw_ROP(model::Bnc, pairs::AbstractVector{<:Tuple{Any, Any}};
             pnts = x_smp .|> x -> ∂logx_∂logqK(model; x = x, input_logspace=true) |> get_val
             Ptype.(pnts)
         end
+    end
+
+    #####################################################################################################################
+    # The forth part of the code is to emphasize specific regimes if needed
+    #####################################################################################################################
+    if !isempty(emphasize_regimes)
+        idx = get_idx.(Ref(model), emphasize_regimes)
+        
+        inv_rgm = Set{Int}() # their index in the non-singular regime list
+        singular_rgm = Set{Int}() # their index in the singular regime list
+        for i in idx
+            if is_singular(model, i)
+                push!(singular_rgm, findfirst(isequal(i), V_singular))
+            else
+                push!(inv_rgm, findfirst(isequal(i), V_non_singular))
+            end
+        end
+
+        # Points can be directly fetch
+        emphasize_Points = Points[collect(inv_rgm)]
+        # rays we need to compute again
+        (emph_rays_direct, emph_rays_indirect) = let 
+            rays1 = Tuple{Ptype, Ptype}[]
+            rays2 = Tuple{Ptype, Ptype}[]
+            for i in eachindex(vtx_bag)
+                for j in vtx_bag[i][1] # direct adjacent singular regimes
+                    if j in singular_rgm
+                        push!(rays1, (Points[i], Points[i] + dirs[j] * singular_extends))
+                    end
+                end
+                for j in vtx_bag[i][2] # indirect adjacent singular regimes
+                    if j in singular_rgm
+                        push!(rays2, (Points[i], Points[i] + dirs[j] * singular_extends))
+                    end
+                end
+            end
+            (rays1, rays2)
+        end
+
     end
 
 
@@ -813,6 +848,21 @@ function draw_ROP(model::Bnc, pairs::AbstractVector{<:Tuple{Any, Any}};
     autolimits!(ax)
     lock_current_limits!(ax)
 
+    # Optional, add emphasis on specific regimes
+    if !isempty(emphasize_regimes)
+        @show emph_rays_direct
+        scatter!(ax, emphasize_Points; color = emphasize_color, markersize = 20)
+
+        for (p1, p2) in emph_rays_direct
+            lines!(ax, [p1, p2]; color = emphasize_color, linewidth = 5)
+        end
+
+        for (p1, p2) in emph_rays_indirect
+            lines!(ax, [p1, p2]; color = emphasize_color, linewidth = 5, linestyle = :dash)
+        end
+    end
+
+    # Optional, add inner points for better visualization of the regime
     if add_inner_points
          scatter!(ax, inner_pnts; color = (:gray,0.1), markersize = 5)
     end
