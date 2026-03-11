@@ -465,7 +465,7 @@ function get_nullities(Bnc::Bnc, rgms::Union{AbstractVector,Nothing}=nothing)
         idxs = get_idx.(Ref(Bnc), rgms)
         return Bnc.vertices_nullity[idxs]
     end
-    return Bnc.vertices_nullity
+
 end
 
 """
