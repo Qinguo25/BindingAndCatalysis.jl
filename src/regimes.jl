@@ -171,6 +171,81 @@ function _calc_C_C0_qK_singular(Bnc::Bnc, vtx)
     return CqK, C0qK
 end
 
+
+
+#------------------Canonical provenance pools-----------------------------
+
+@inline function _x_halfspace_key(i::Int, j1::Int, j2::Int)
+    a, b = minmax(j1, j2)
+    return (i, a, b)
+end
+
+function _get_or_add_x_halfspace!(Bnc::Bnc, i::Int, j1::Int, j2::Int)
+    key = _x_halfspace_key(i, j1, j2)
+    id = get(Bnc.x_halfspace_key_to_id, key, 0)
+    if id != 0
+        return id
+    end
+    a, b = key[2], key[3]
+    normal = sparsevec([a, b], Int8[-1, 1], Bnc.n)
+    offset_pos = log10(Bnc.L[i, b] / Bnc.L[i, a])
+    atom = XHalfspaceAtom(i, a, b, normal, offset_pos)
+    push!(Bnc.x_halfspace_atoms, atom)
+    id = length(Bnc.x_halfspace_atoms)
+    Bnc.x_halfspace_key_to_id[key] = id
+    return id
+end
+
+function _x_halfspace_orientation(atom::XHalfspaceAtom, dominant_col::Int)
+    dominant_col == atom.max_col && return Int8(1)
+    dominant_col == atom.min_col && return Int8(-1)
+    error("Dominant column $dominant_col is incompatible with x-halfspace atom $(atom.conservation_row, atom.min_col, atom.max_col)")
+end
+
+function _materialize_C_x_from_refs(Bnc::Bnc, refs::Vector{Tuple{Int,Int8}})
+    m = length(refs)
+    I = Int[]; J = Int[]; V = Int[]
+    c0 = Vector{Float64}(undef, m)
+    sizehint!(I, 2m); sizehint!(J, 2m); sizehint!(V, 2m)
+    for (row, (hid, sgn)) in enumerate(refs)
+        atom = Bnc.x_halfspace_atoms[hid]
+        # canonical normal corresponds to +orientation (max dominates min)
+        push!(I, row); push!(J, atom.min_col); push!(V, -Int(sgn))
+        push!(I, row); push!(J, atom.max_col); push!(V, Int(sgn))
+        c0[row] = sgn * atom.offset_pos
+    end
+    C = sparse(I, J, V, m, Bnc.n)
+    return C, c0
+end
+
+function _mapping_cache_key(kind::Symbol, H::SparseMatrixCSC, H0::Vector{<:Real}, nullity::Int)
+    return (kind, hash(H), hash(H0), nullity)
+end
+
+function _get_or_add_mapping!(Bnc::Bnc, kind::Symbol, H::SparseMatrixCSC, H0::Vector{<:Real}, nullity::Int)
+    key = _mapping_cache_key(kind, H, H0, nullity)
+    id = get(Bnc.mapping_key_to_id, key, 0)
+    if id != 0
+        return id
+    end
+    push!(Bnc.mapping_pool, MappingObject(kind, copy(H), Float64.(H0), nullity))
+    id = length(Bnc.mapping_pool)
+    Bnc.mapping_key_to_id[key] = id
+    return id
+end
+
+function _get_or_add_qK_atom!(Bnc::Bnc, x_halfspace_id::Int, mapping_id::Int, orientation::Int8, normal::SparseVector{Float64,Int}, offset::Float64)
+    key = (x_halfspace_id, mapping_id, orientation)
+    id = get(Bnc.qK_atom_key_to_id, key, 0)
+    if id != 0
+        return id
+    end
+    push!(Bnc.qK_hyperplane_atoms, QKHyperplaneAtom(x_halfspace_id, mapping_id, normal, offset))
+    id = length(Bnc.qK_hyperplane_atoms)
+    Bnc.qK_atom_key_to_id[key] = id
+    return id
+end
+
 #------------------Storage layer functions -----------------------------
 
 """
@@ -329,8 +404,20 @@ function _create_vertex(Bnc::Bnc, perm::Vector{<:Integer})::Vertex
     real = Bnc.vertices_asymptotic_flag[idx] # Check if the vertex is real or fake
     nullity = Bnc.vertices_nullity[idx] # Get the nullity of the vertex
     
-    P, P0 = _calc_P_and_P0(Bnc, perm); 
-    C_x, C0_x = _calc_C_C0_x(Bnc, perm)
+    P, P0 = _calc_P_and_P0(Bnc, perm)
+
+    x_halfspaces = Tuple{Int,Int8}[]
+    for i in 1:Bnc.d
+        rgm = perm[i]
+        for col in Bnc._valid_L_idx[i]
+            col == rgm && continue
+            hid = _get_or_add_x_halfspace!(Bnc, i, rgm, col)
+            atom = Bnc.x_halfspace_atoms[hid]
+            orient = _x_halfspace_orientation(atom, rgm)
+            push!(x_halfspaces, (hid, orient))
+        end
+    end
+    C_x, C0_x = _materialize_C_x_from_refs(Bnc, x_halfspaces)
 
     M = vcat(P, Bnc._N_sparse)
     M0 = vcat(P0, zeros(eltype(P0), Bnc.r))
@@ -342,7 +429,10 @@ function _create_vertex(Bnc::Bnc, perm::Vector{<:Integer})::Vertex
         perm = perm, 
         real = real,
         M = M, M0 = M0, P = P, P0 = P0, C_x = C_x, C0_x = C0_x
-    )
+    ) |> vtx -> begin
+        vtx.x_halfspaces = x_halfspaces
+        vtx
+    end
 end
 """
     _fill_inv_info!(vtx::Vertex) -> nothing
@@ -356,25 +446,36 @@ function _fill_inv_info!(vtx::Vertex)
         return nothing
     end
     if vtx.nullity == 0
-        H = _calc_H(Bnc, vtx.perm) 
-        vtx.H = H # Calculate the inverse matrix from pre-computed LU decomposition of M H=M^-1
-        vtx.H0 = - H * vtx.M0  # H0 = -M^-1 * M0
-        vtx.C_qK = droptol!(sparse(vtx.C_x * H),1e-10) # C_qK = C_x * H
-        vtx.C0_qK = vtx.C0_x + vtx.C_x * vtx.H0 # C0_qK = C0_x + C_x * H0 
+        H = _calc_H(Bnc, vtx.perm)
+        vtx.H = H
+        vtx.H0 = - H * vtx.M0
+        vtx.C_qK = droptol!(sparse(vtx.C_x * H),1e-10)
+        vtx.C0_qK = vtx.C0_x + vtx.C_x * vtx.H0
+        vtx.mapping_id = _get_or_add_mapping!(Bnc, :regular, vtx.H, vtx.H0, vtx.nullity)
     else
         if vtx.nullity ==1
-            # we need to check where this nullity comes from.
-            if length(Set(vtx.perm)) == Bnc.d # the nullity comes from N
-                vtx.H = _calc_H(Bnc, vtx.perm).* Bnc.direction 
-            else # the nullity comes from P
+            if length(Set(vtx.perm)) == Bnc.d
+                vtx.H = _calc_H(Bnc, vtx.perm).* Bnc.direction
+            else
                 H = _adj_singular_matrix(vtx.M)[1]
                 vtx.H = droptol!(sparse(H),1e-10).* Bnc.direction
             end
-        else # nullity>1 , H, HO is nolonger avaliable
-            vtx.H = spzeros(Bnc.n, Bnc.n) # fill value as a sign that this regime is fully computed
+        else
+            vtx.H = spzeros(Bnc.n, Bnc.n)
         end
         vtx.C_qK, vtx.C0_qK = _calc_C_C0_qK_singular(Bnc, vtx.perm)
+        vtx.H0 = zeros(eltype(vtx.C0_qK), Bnc.n)
+        vtx.mapping_id = _get_or_add_mapping!(Bnc, :singular, vtx.H, vtx.H0, vtx.nullity)
     end
+
+    qk_refs = Tuple{Int,Int8}[]
+    for (k,(hid,orient)) in enumerate(vtx.x_halfspaces)
+        dir = sparse(Vector(vtx.C_qK[k, :]))
+        off = vtx.C0_qK[k]
+        qid = _get_or_add_qK_atom!(Bnc, hid, vtx.mapping_id, orient, dir, off)
+        push!(qk_refs, (qid, orient))
+    end
+    vtx.qK_constraints = qk_refs
     return nothing
 end
 
@@ -755,7 +856,7 @@ get_M0(args...) = get_M_M0(args...)[2]
 
 Return `(C_x, C0_x)` for a vertex.
 """
-get_C_C0_x(args...) = get_vertex(args...; inv_info=false) |> vtx -> (vtx.C_x, vtx.C0_x)
+get_C_C0_x(args...) = get_vertex(args...; inv_info=false) |> vtx -> _materialize_C_x_from_refs(vtx.bn, vtx.x_halfspaces)
 """
     get_C_x(args...) -> SparseMatrixCSC
 
@@ -768,6 +869,50 @@ get_C_x(args...) = get_C_C0_x(args...)[1]
 Return `C0_x` for a vertex.
 """
 get_C0_x(args...) = get_C_C0_x(args...)[2]
+
+
+"""
+    get_x_halfspace_refs(args...) -> Vector{Tuple{Int,Int8}}
+
+Return `(x_halfspace_id, orientation)` references used by a regime.
+"""
+get_x_halfspace_refs(args...) = get_vertex(args...; inv_info=false).x_halfspaces
+
+"""
+    get_mapping_id(args...) -> Int
+
+Return the pooled mapping-object id for a regime.
+"""
+get_mapping_id(args...) = get_vertex(args...; inv_info=true).mapping_id
+
+"""
+    get_qK_atom_refs(args...) -> Vector{Tuple{Int,Int8}}
+
+Return `(qK_atom_id, orientation)` references used by a regime.
+"""
+get_qK_atom_refs(args...) = get_vertex(args...; inv_info=true).qK_constraints
+
+"""
+    get_x_halfspace_atom(bnc::Bnc, id::Integer) -> XHalfspaceAtom
+"""
+get_x_halfspace_atom(Bnc::Bnc, id::Integer) = Bnc.x_halfspace_atoms[id]
+
+"""
+    get_mapping_object(bnc::Bnc, id::Integer) -> MappingObject
+"""
+get_mapping_object(Bnc::Bnc, id::Integer) = Bnc.mapping_pool[id]
+
+"""
+    get_qK_hyperplane_atom(bnc::Bnc, id::Integer) -> QKHyperplaneAtom
+"""
+get_qK_hyperplane_atom(Bnc::Bnc, id::Integer) = Bnc.qK_hyperplane_atoms[id]
+
+"""
+    list_atom_pool_sizes(bnc::Bnc)
+
+Return a named tuple with cardinalities of canonical x/mapping/qK pools.
+"""
+list_atom_pool_sizes(Bnc::Bnc) = (x_halfspaces=length(Bnc.x_halfspace_atoms), mappings=length(Bnc.mapping_pool), qK_atoms=length(Bnc.qK_hyperplane_atoms))
 
 
 """

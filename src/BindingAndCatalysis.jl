@@ -31,6 +31,8 @@ export get_P_P0, get_P,get_P0
 export get_M_M0, get_M, get_M0
 export get_H_H0,get_H,get_H0
 export get_C_C0_x,get_C_x, get_C0_x
+export get_x_halfspace_refs, get_mapping_id, get_qK_atom_refs
+export get_x_halfspace_atom, get_mapping_object, get_qK_hyperplane_atom, list_atom_pool_sizes
 export get_C_C0_nullity_qK, get_C_C0_qK, get_C_qK, get_C0_qK
 export get_C_C0_nullity, get_C_C0, get_C, get_C0
 
@@ -51,7 +53,7 @@ export sym_direction, print_path, print_paths, format_arrow
 
 # include("regime_graphs.jl")
 export get_vertices_graph!, SISOPaths,  get_polyhedra, get_polyhedron, get_SISO_graph
-export get_path, get_edge, get_intersect
+export get_path, get_edge, get_intersect, get_edge_interface_provenance
 export get_neighbor_graph_x, get_neighbor_graph_qK,get_neighbor_graph
 export get_sources, get_sinks, get_sources_sinks
 export get_RO_path, group_sum, get_RO_paths, summary_RO_path

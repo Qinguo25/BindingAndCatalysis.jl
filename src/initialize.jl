@@ -171,6 +171,11 @@ mutable struct Vertex{F,T}
     H0::Vector{F} 
     C_qK::SparseMatrixCSC{Float64, Int}
     C0_qK::Vector{F} 
+
+    # factorized provenance-aware representation
+    x_halfspaces::Vector{Tuple{Int,Int8}}
+    mapping_id::Int
+    qK_constraints::Vector{Tuple{Int,Int8}}
     
     #---Realizibility Index
     volume::Volume
@@ -185,9 +190,34 @@ mutable struct Vertex{F,T}
             Vector{F}(undef, 0),          # H0
             SparseMatrixCSC{Float64, Int}(undef, 0, 0), # C_qK
             Vector{F}(undef, 0),          # C0_qK
+            Tuple{Int,Int8}[],            # x_halfspaces
+            0,                            # mapping_id
+            Tuple{Int,Int8}[],            # qK_constraints
             Volume(0.0, 0.0) # volume
         )
     end
+end
+
+struct XHalfspaceAtom
+    conservation_row::Int
+    min_col::Int
+    max_col::Int
+    normal::SparseVector{Int8,Int}
+    offset_pos::Float64
+end
+
+struct MappingObject
+    kind::Symbol
+    H::SparseMatrixCSC{Float64,Int}
+    H0::Vector{Float64}
+    nullity::Int
+end
+
+struct QKHyperplaneAtom
+    x_halfspace_id::Int
+    mapping_id::Int
+    normal::SparseVector{Float64,Int}
+    offset::Float64
 end
 
 """
@@ -202,8 +232,11 @@ mutable struct VertexEdge{T}
     intersect_x::Float64
     change_dir_qK::Union{Nothing, SparseVector{Float64, T}}
     intersect_qK::Union{Nothing, Float64}
+    boundary_halfspace_id::Int
+    from_qK_atom_id::Union{Nothing,Int}
+    to_qK_atom_id::Union{Nothing,Int}
     function VertexEdge(to::Int, diff_r::Int, change_dir_x::SparseVector{Int8, T}, intersect_x::Float64) where {T}
-        return new{T}(to, diff_r, change_dir_x, intersect_x,nothing,nothing)
+        return new{T}(to, diff_r, change_dir_x, intersect_x,nothing,nothing,0,nothing,nothing)
     end
 end
 
@@ -276,6 +309,14 @@ mutable struct Bnc{T} <: AbstractBnc # T is the int type to save all the indices
     _vertices_is_initialized::BitVector
     _vertices_volume_is_calced::BitVector
     _vertices_Nρ_inv_dict::Dict{Vector{T}, Tuple{SparseMatrixCSC{Float64, Int},T}} # cache the N_inv for each vertex permutation
+
+    #------canonical pools preserving x -> mapping -> qK provenance------
+    x_halfspace_atoms::Vector{XHalfspaceAtom}
+    x_halfspace_key_to_id::Dict{NTuple{3,Int},Int}
+    mapping_pool::Vector{MappingObject}
+    mapping_key_to_id::Dict{Tuple{Symbol,UInt64,UInt64,Int},Int}
+    qK_hyperplane_atoms::Vector{QKHyperplaneAtom}
+    qK_atom_key_to_id::Dict{Tuple{Int,Int,Int8},Int}
 
     #------other helper parameters------
     direction::Int8 # direction of the binding reactions, determine the ray direction for invertible regime, calculated by sign of det[L;N]
@@ -374,6 +415,12 @@ mutable struct Bnc{T} <: AbstractBnc # T is the int type to save all the indices
             BitVector(),                     # _vertices_is_initialized
             BitVector(),                     # _R_idx_is_calced
             Dict{Vector{T}, Tuple{SparseMatrixCSC{Float64, Int},T}}(), # _vertices_perm_Ninv_dict
+            XHalfspaceAtom[],
+            Dict{NTuple{3,Int},Int}(),
+            MappingObject[],
+            Dict{Tuple{Symbol,UInt64,UInt64,Int},Int}(),
+            QKHyperplaneAtom[],
+            Dict{Tuple{Int,Int,Int8},Int}(),
             # Fields 13-28 (Calculated values)
             direction,
             _anchor_log_x, _anchor_log_qK,

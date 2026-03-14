@@ -59,8 +59,13 @@ function  _calc_vertices_graph(Bnc::Bnc{T}) where {T} # optimized by GPT-5, not 
 
                     ins_x = log10(L[i, j1]) - log10(L[i, j2]) # go from p2 to p1
 
-                    push!(local_edges, (p2, VertexEdge(p1, i, dx, ins_x))) # p2 to p1,
-                    push!(local_edges, (p1, VertexEdge(p2, i, -dx, -ins_x)))  # p1 to p2
+                    e21 = VertexEdge(p1, i, dx, ins_x)
+                    e12 = VertexEdge(p2, i, -dx, -ins_x)
+                    hid = _get_or_add_x_halfspace!(Bnc, i, j1, j2)
+                    e21.boundary_halfspace_id = hid
+                    e12.boundary_halfspace_id = hid
+                    push!(local_edges, (p2, e21)) # p2 to p1,
+                    push!(local_edges, (p1, e12))  # p1 to p2
                 end
             end
         end
@@ -135,6 +140,16 @@ function _fulfill_vertices_graph!(vtx_graph::VertexGraph)
             end
             # calculate their direction based on formula
             (e.change_dir_qK, e.intersect_qK) = _calc_change_dir_qK(Bnc, p1, p2, i, j1,j2, ins_x)
+            v_from = get_vertex(Bnc, p1; inv_info=true)
+            v_to = get_vertex(Bnc, p2; inv_info=true)
+            e.from_qK_atom_id = let xh = e.boundary_halfspace_id
+                pos = findfirst(t -> t[1] == xh, v_from.x_halfspaces)
+                isnothing(pos) ? nothing : v_from.qK_constraints[pos][1]
+            end
+            e.to_qK_atom_id = let xh = e.boundary_halfspace_id
+                pos = findfirst(t -> t[1] == xh, v_to.x_halfspaces)
+                isnothing(pos) ? nothing : v_to.qK_constraints[pos][1]
+            end
         end
     end
     return nothing
@@ -507,6 +522,26 @@ get_edge(Bnc, from, to; kwargs...)= let
     from = get_idx(Bnc, from)
     to = get_idx(Bnc, to)
     get_edge(vtx_grh, from, to; kwargs...)
+end
+
+
+"""
+    get_edge_interface_provenance(bnc::Bnc, from, to)
+
+Return a named tuple describing the causal interface chain carried by an
+x-space graph edge: canonical x-halfspace id and per-side qK atom ids.
+"""
+function get_edge_interface_provenance(Bnc::Bnc, from, to)
+    e = get_edge(Bnc, from, to; full=true)
+    isnothing(e) && return nothing
+    return (
+        diff_row = e.diff_r,
+        x_halfspace_id = e.boundary_halfspace_id,
+        from_qK_atom_id = e.from_qK_atom_id,
+        to_qK_atom_id = e.to_qK_atom_id,
+        qK_change_dir = e.change_dir_qK,
+        qK_intersect = e.intersect_qK,
+    )
 end
 
 """

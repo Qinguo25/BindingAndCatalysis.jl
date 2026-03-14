@@ -1,0 +1,70 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{enumitem}
+\title{BindingAndCatalysis.jl Regime Representation Refactor\\Canonical Atoms, Provenance, and Graph Interface Semantics}
+\author{Automated Refactor Report}
+\date{\today}
+\begin{document}
+\maketitle
+
+\section{Problem Statement}
+The previous representation primarily stored dense per-regime matrices $C_x,C_{0,x},H,H_0,C_{qK},C_{0,qK}$ directly on each vertex. This captured final inequalities but not the causal chain
+\[
+\text{x-space boundary atom} \to \text{mapping object} \to \text{qK-space atom}.
+\]
+As a result, structural duplication and edge-level geometric provenance were weakly represented.
+
+\section{New Architecture}
+We implemented a factorized, provenance-first data model with three global pools on \texttt{Bnc}:
+\begin{enumerate}[label=(\alph*)]
+\item \textbf{x-halfspace atom pool}: canonical atom key $(i,\min(j_1,j_2),\max(j_1,j_2))$.
+\item \textbf{mapping object pool}: canonical regular/singular mapping objects identified by kind and matrix/vector hash signatures.
+\item \textbf{qK atom pool}: atoms indexed by $(\text{x\_halfspace\_id},\text{mapping\_id},\text{orientation})$ with stored transformed normal and intercept.
+\end{enumerate}
+
+Each \texttt{Vertex} now stores lightweight references:
+\begin{itemize}
+\item \texttt{x\_halfspaces::Vector\{(id,sign)\}}
+\item \texttt{mapping\_id}
+\item \texttt{qK\_constraints::Vector\{(id,sign)\}}
+\end{itemize}
+in addition to backward-compatible cached matrices.
+
+\section{Design Decisions}
+\subsection{Canonical x-space atoms}
+A hyperplane is stored once independent of direction. Direction is encoded per-regime by orientation $\pm1$, preventing duplicate storage when two regimes use opposite dominance directions.
+
+\subsection{Mapping objects as first-class pooled entities}
+Regular and singular regimes now both register a \texttt{MappingObject} with explicit \texttt{kind} and \texttt{nullity}. This provides a stable handle for future rank-1 graph traversal updates.
+
+\subsection{qK atom provenance}
+Every qK atom stores its generating pair \texttt{(x\_halfspace\_id, mapping\_id)} and geometric coefficients. This preserves causality and supports queries like ``which x-boundary produced this qK interface?''
+
+\section{Graph Semantics Improvements}
+\texttt{VertexEdge} now stores:
+\begin{itemize}
+\item canonical \texttt{boundary\_halfspace\_id},
+\item \texttt{from\_qK\_atom\_id} and \texttt{to\_qK\_atom\_id}.
+\end{itemize}
+A new API \texttt{get\_edge\_interface\_provenance} returns a direct edge-level causal interface summary.
+
+\section{API Additions}
+New user-facing inspection helpers:
+\begin{itemize}
+\item \texttt{get\_x\_halfspace\_refs}, \texttt{get\_mapping\_id}, \texttt{get\_qK\_atom\_refs}
+\item \texttt{get\_x\_halfspace\_atom}, \texttt{get\_mapping\_object}, \texttt{get\_qK\_hyperplane\_atom}
+\item \texttt{list\_atom\_pool\_sizes}
+\item \texttt{get\_edge\_interface\_provenance}
+\end{itemize}
+
+\section{Compatibility and Materialization}
+\texttt{get\_C\_C0\_x} now materializes from canonical references, making reference-based storage primary and matrix form derived. Existing matrix-returning APIs remain available.
+
+\section{Singular Regimes}
+Singular regimes are represented explicitly in mapping pool entries with \texttt{kind=:singular} and nullity metadata. qK constraints for singular regimes remain computed through the existing polyhedral path but are now linked into the same provenance pipeline.
+
+\section{Future Rank-1 Update Readiness}
+The architecture now naturally supports edge-driven mapping updates: traversing an edge gives the changed x-boundary atom and per-side mapping IDs. A future solver can update mapping objects incrementally (e.g., Sherman--Morrison where valid) and re-register/refresh affected qK atoms without re-deriving full regime matrices.
+
+\end{document}
