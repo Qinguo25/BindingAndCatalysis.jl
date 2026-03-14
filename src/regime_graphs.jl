@@ -59,8 +59,9 @@ function  _calc_vertices_graph(Bnc::Bnc{T}) where {T} # optimized by GPT-5, not 
 
                     ins_x = log10(L[i, j1]) - log10(L[i, j2]) # go from p2 to p1
 
-                    push!(local_edges, (p2, VertexEdge(p1, i, dx, ins_x))) # p2 to p1,
-                    push!(local_edges, (p1, VertexEdge(p2, i, -dx, -ins_x)))  # p1 to p2
+                    hid,_ = _get_or_create_x_halfspace_atom!(Bnc, i, j1, j2)
+                    push!(local_edges, (p2, VertexEdge(p1, i, dx, ins_x; x_halfspace_id=hid))) # p2 to p1,
+                    push!(local_edges, (p1, VertexEdge(p2, i, -dx, -ins_x; x_halfspace_id=hid)))  # p1 to p2
                 end
             end
         end
@@ -135,6 +136,16 @@ function _fulfill_vertices_graph!(vtx_graph::VertexGraph)
             end
             # calculate their direction based on formula
             (e.change_dir_qK, e.intersect_qK) = _calc_change_dir_qK(Bnc, p1, p2, i, j1,j2, ins_x)
+            if Bnc.vertices_nullity[p1] <= 1
+                v_from = get_vertex(Bnc, p1; inv_info=true)
+                v_to = get_vertex(Bnc, p2; inv_info=true)
+                sgn_from = j1 > j2 ? Int8(1) : Int8(-1)
+                sgn_to = Int8(-sgn_from)
+                map_from = Bnc.mapping_pool[v_from.mapping_id]
+                map_to = Bnc.mapping_pool[v_to.mapping_id]
+                e.qk_atom_id_from = _get_or_create_qk_atom!(Bnc, e.x_halfspace_id, sgn_from, map_from)
+                e.qk_atom_id_to = _get_or_create_qk_atom!(Bnc, e.x_halfspace_id, sgn_to, map_to)
+            end
         end
     end
     return nothing

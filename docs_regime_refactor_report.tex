@@ -1,0 +1,68 @@
+\documentclass[11pt]{article}
+\usepackage{amsmath,amssymb,geometry,enumitem}
+\geometry{margin=1in}
+\title{BindingAndCatalysis.jl: Regime Canonicalization, Provenance, and Singular-Aware Mapping Refactor}
+\author{Internal Technical Report}
+\date{\today}
+\begin{document}
+\maketitle
+
+\section{Problem Statement}
+The prior regime representation stored dense per-regime constraints and mappings as primary ownership. This duplicated three levels of structure: (i) repeated $x$-space dominance boundaries, (ii) closely related mapping objects across neighboring regimes, and (iii) transformed $qK$-space inequalities. Most importantly, geometric provenance was not first-class: one could not reliably query which $x$-space boundary atom, transported through which mapping object, generated a specific $qK$ interface.
+
+\section{Refactor Goals}
+We implemented a structural model preserving the causal chain
+\[
+\text{$x$-halfspace atom}\to\text{mapping object}\to\text{$qK$ atom},
+\]
+while keeping existing materialized APIs compatible.
+
+\section{New Architecture}
+\subsection{Layer A: Canonical $x$-space atoms}
+A new global pool stores unique undirected halfspace atoms keyed by
+\((i,\min(j_1,j_2),\max(j_1,j_2))\).
+Each atom stores one canonical direction and offset, while regime-local orientation is stored separately as an \texttt{Int8} sign.
+
+\subsection{Layer B: Mapping-object pool}
+Each vertex now references a canonical mapping ID. Mapping objects carry nullity, $H$, $H_0$ (when defined), and $M_0$ plus singular-normal metadata for nullity-1 interpretability.
+
+\subsection{Layer C: Canonical $qK$ atoms with provenance}
+A $qK$ atom is pooled by the key
+\((\texttt{x\_halfspace\_id},\texttt{orientation},\texttt{mapping\_id})\).
+Hence every inequality/hyperplane in projected space carries explicit provenance and can be traced back without recomputing dense matrices.
+
+\subsection{Layer D: Lightweight regime ownership}
+\texttt{Vertex} stores references:
+\begin{itemize}[leftmargin=1.5em]
+\item \texttt{x\_halfspace\_refs::Vector\{(id,sign)\}}
+\item \texttt{mapping\_id}
+\item \texttt{qk\_atom\_ids}
+\end{itemize}
+Materialized \texttt{C\_x,C0\_x} and \texttt{C\_qK,C0\_qK} remain available for compatibility but are now derived/cache views.
+
+\subsection{Layer E: Edge-level geometric semantics}
+\texttt{VertexEdge} now records boundary provenance directly (
+\texttt{x\_halfspace\_id}, \texttt{qk\_atom\_id\_from}, \texttt{qk\_atom\_id\_to}
+), making graph transitions geometrically interpretable and singular-aware.
+
+\section{Singular Regime Handling}
+Nullity-1 regimes are treated as first-class. The mapping pool keeps singular metadata and $qK$-atom generation is still provenance-complete. This keeps singular/full-dimensional interfaces comparable in one data model.
+
+\section{API Additions}
+New queries expose the factorized structure directly:
+\begin{itemize}[leftmargin=1.5em]
+\item \texttt{get\_x\_halfspace\_refs}
+\item \texttt{get\_x\_halfspace\_atom}
+\item \texttt{get\_mapping\_object}
+\item \texttt{get\_qk\_atom\_ids}
+\item \texttt{get\_qk\_atoms}
+\item \texttt{get\_qk\_atom}
+\end{itemize}
+
+\section{Why This Supports Future Rank-1 Traversal}
+The key dependency is now explicit: a regime edge updates one dominance choice, therefore one boundary atom transition paired with one mapping transition. Since mappings are pooled and edge semantics are explicit, introducing Sherman--Morrison style updates can be attached to mapping transitions instead of rebuilding all constraints.
+
+\section{Remaining Work}
+A future pass should add an explicit neighbor-to-neighbor incremental mapping updater and canonical equivalence keys that deduplicate numerically equal mappings from different permutations when mathematically justified.
+
+\end{document}

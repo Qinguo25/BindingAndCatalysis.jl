@@ -164,6 +164,7 @@ mutable struct Vertex{F,T}
     M0::Vector{F} #
     C_x::SparseMatrixCSC{Int, Int}
     C0_x::Vector{F} 
+    x_halfspace_refs::Vector{Tuple{Int,Int8}} # (halfspace atom id, orientation)
 
     # --- Expensive Calculated Properties ---
     nullity::T
@@ -171,6 +172,8 @@ mutable struct Vertex{F,T}
     H0::Vector{F} 
     C_qK::SparseMatrixCSC{Float64, Int}
     C0_qK::Vector{F} 
+    mapping_id::Int
+    qk_atom_ids::Vector{Int}
     
     #---Realizibility Index
     volume::Volume
@@ -179,15 +182,61 @@ mutable struct Vertex{F,T}
     function Vertex(;bn::Union{AbstractBnc,Nothing}=nothing, perm, P, P0::Vector{F}, M, M0, C_x, C0_x, idx,real,nullity::T) where {T<:Integer,F<:Real}
         # _M_lu = lu(M, check=false) # It's good practice to ensure M is Float64 for LU
         # Use new{T} to construct an instance of Vertex{T}
-        return new{F,T}(bn, perm, idx,real, P, P0, M, M0, C_x, C0_x,
+        return new{F,T}(bn, perm, idx,real, P, P0, M, M0, C_x, C0_x, Tuple{Int,Int8}[],
             nullity,
             SparseMatrixCSC{Float64, Int}(undef, 0, 0), # H
             Vector{F}(undef, 0),          # H0
             SparseMatrixCSC{Float64, Int}(undef, 0, 0), # C_qK
             Vector{F}(undef, 0),          # C0_qK
+            0,
+            Int[],
             Volume(0.0, 0.0) # volume
         )
     end
+end
+
+"""
+    XHalfspaceAtom
+
+Canonical undirected x-space dominance boundary atom.
+"""
+struct XHalfspaceAtom
+    row::Int
+    j_lo::Int
+    j_hi::Int
+    dir::SparseVector{Int8,Int}
+    c0_signed::Float64 # offset for the canonical orientation (j_hi - j_lo)
+end
+
+"""
+    MappingObject
+
+Canonical mapping object used to transport x-space boundary atoms to qK-space.
+For singular nullity-1 regimes, `H` is adjugate-like and `H0` may be empty.
+"""
+struct MappingObject
+    id::Int
+    nullity::Int
+    H::SparseMatrixCSC{Float64,Int}
+    H0::Vector{Float64}
+    M0::Vector{Float64}
+    singular_normal::Union{Nothing,SparseVector{Float64,Int}}
+end
+
+"""
+    QKAtom
+
+Canonical qK inequality/hyperplane atom with provenance back to the x-halfspace
+atom and mapping object.
+"""
+struct QKAtom
+    id::Int
+    x_halfspace_id::Int
+    orientation::Int8
+    mapping_id::Int
+    normal::SparseVector{Float64,Int}
+    intercept::Float64
+    nullity::Int
 end
 
 """
@@ -202,8 +251,11 @@ mutable struct VertexEdge{T}
     intersect_x::Float64
     change_dir_qK::Union{Nothing, SparseVector{Float64, T}}
     intersect_qK::Union{Nothing, Float64}
-    function VertexEdge(to::Int, diff_r::Int, change_dir_x::SparseVector{Int8, T}, intersect_x::Float64) where {T}
-        return new{T}(to, diff_r, change_dir_x, intersect_x,nothing,nothing)
+    x_halfspace_id::Int
+    qk_atom_id_from::Union{Nothing,Int}
+    qk_atom_id_to::Union{Nothing,Int}
+    function VertexEdge(to::Int, diff_r::Int, change_dir_x::SparseVector{Int8, T}, intersect_x::Float64; x_halfspace_id::Int=0) where {T}
+        return new{T}(to, diff_r, change_dir_x, intersect_x,nothing,nothing,x_halfspace_id,nothing,nothing)
     end
 end
 
@@ -276,6 +328,14 @@ mutable struct Bnc{T} <: AbstractBnc # T is the int type to save all the indices
     _vertices_is_initialized::BitVector
     _vertices_volume_is_calced::BitVector
     _vertices_Nρ_inv_dict::Dict{Vector{T}, Tuple{SparseMatrixCSC{Float64, Int},T}} # cache the N_inv for each vertex permutation
+
+    #-----canonical atom and mapping pools-----
+    x_halfspace_atoms::Vector{XHalfspaceAtom}
+    x_halfspace_key_to_id::Dict{Tuple{Int,Int,Int},Int}
+    mapping_pool::Vector{MappingObject}
+    mapping_key_to_id::Dict{Tuple{Int,Vector{T}},Int}
+    qk_atom_pool::Vector{QKAtom}
+    qk_atom_key_to_id::Dict{Tuple{Int,Int8,Int},Int}
 
     #------other helper parameters------
     direction::Int8 # direction of the binding reactions, determine the ray direction for invertible regime, calculated by sign of det[L;N]
@@ -374,6 +434,12 @@ mutable struct Bnc{T} <: AbstractBnc # T is the int type to save all the indices
             BitVector(),                     # _vertices_is_initialized
             BitVector(),                     # _R_idx_is_calced
             Dict{Vector{T}, Tuple{SparseMatrixCSC{Float64, Int},T}}(), # _vertices_perm_Ninv_dict
+            XHalfspaceAtom[],
+            Dict{Tuple{Int,Int,Int},Int}(),
+            MappingObject[],
+            Dict{Tuple{Int,Vector{T}},Int}(),
+            QKAtom[],
+            Dict{Tuple{Int,Int8,Int},Int}(),
             # Fields 13-28 (Calculated values)
             direction,
             _anchor_log_x, _anchor_log_qK,

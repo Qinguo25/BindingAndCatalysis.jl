@@ -171,6 +171,88 @@ function _calc_C_C0_qK_singular(Bnc::Bnc, vtx)
     return CqK, C0qK
 end
 
+
+
+"""
+    _get_or_create_x_halfspace_atom!(bnc, row, j1, j2) -> (id, orientation)
+
+Return canonical x-space halfspace atom id and orientation for inequality
+`x[j1] - x[j2] + log10(L[row,j1]/L[row,j2]) >= 0`.
+"""
+function _get_or_create_x_halfspace_atom!(Bnc::Bnc, row::Int, j1::Int, j2::Int)
+    j_lo, j_hi = minmax(j1, j2)
+    key = (row, j_lo, j_hi)
+    id = get!(Bnc.x_halfspace_key_to_id, key) do
+        dir = sparsevec([j_hi, j_lo], Int8[1, -1], Bnc.n)
+        c0 = log10(Bnc.L[row, j_hi] / Bnc.L[row, j_lo])
+        atom = XHalfspaceAtom(row, j_lo, j_hi, dir, c0)
+        push!(Bnc.x_halfspace_atoms, atom)
+        length(Bnc.x_halfspace_atoms)
+    end
+    orientation = j1 == j_hi ? Int8(1) : Int8(-1)
+    return id, orientation
+end
+
+function _materialize_x_constraints(Bnc::Bnc, refs::Vector{Tuple{Int,Int8}})
+    m = length(refs)
+    I = Int[]; J = Int[]; V = Int[]
+    c0 = Vector{Float64}(undef, m)
+    sizehint!(I, 2*m); sizehint!(J, 2*m); sizehint!(V, 2*m)
+    for (rowidx, (hid, sgn)) in enumerate(refs)
+        atom = Bnc.x_halfspace_atoms[hid]
+        Ii, _, Vi = findnz(atom.dir)
+        for (j, v) in zip(Ii, Vi)
+            push!(I, rowidx); push!(J, j); push!(V, Int(sgn) * Int(v))
+        end
+        c0[rowidx] = Float64(sgn) * atom.c0_signed
+    end
+    return sparse(I, J, V, m, Bnc.n), c0
+end
+
+function _collect_x_halfspace_refs(Bnc::Bnc{T}, perm::Vector{<:Integer}) where T
+    refs = Tuple{Int,Int8}[]
+    for i in 1:Bnc.d
+        rgm = perm[i]
+        for col in Bnc._valid_L_idx[i]
+            col == rgm && continue
+            push!(refs, _get_or_create_x_halfspace_atom!(Bnc, i, rgm, col))
+        end
+    end
+    return refs
+end
+
+function _get_or_create_mapping_id!(Bnc::Bnc{T}, vtx::Vertex) where T
+    key = (Int(vtx.nullity), vtx.perm)
+    return get!(Bnc.mapping_key_to_id, key) do
+        singular_normal = nothing
+        if vtx.nullity == 1
+            nz = findall(!iszero, Array(vtx.H[1,:]))
+            singular_normal = isempty(nz) ? nothing : sparsevec(nz, Array(vtx.H[1,nz]), Bnc.n)
+        end
+        obj = MappingObject(length(Bnc.mapping_pool)+1, Int(vtx.nullity), vtx.H, Float64.(vtx.H0), Float64.(vtx.M0), singular_normal)
+        push!(Bnc.mapping_pool, obj)
+        obj.id
+    end
+end
+
+function _get_or_create_qk_atom!(Bnc::Bnc, x_halfspace_id::Int, orientation::Int8, mapping::MappingObject)
+    key = (x_halfspace_id, orientation, mapping.id)
+    return get!(Bnc.qk_atom_key_to_id, key) do
+        atom = Bnc.x_halfspace_atoms[x_halfspace_id]
+        nrm = Float64(orientation) .* (transpose(atom.dir) * mapping.H)
+        normal = sparsevec(findall(!iszero, vec(nrm)), vec(nrm)[findall(!iszero, vec(nrm))], Bnc.n)
+        intercept = Float64(orientation) * atom.c0_signed
+        if !isempty(mapping.H0)
+            intercept += dot(Float64.(atom.dir), mapping.H0) * Float64(orientation)
+        else
+            intercept -= dot(Float64.(vec(nrm)), mapping.M0)
+        end
+        qka = QKAtom(length(Bnc.qk_atom_pool)+1, x_halfspace_id, orientation, mapping.id, normal, intercept, mapping.nullity)
+        push!(Bnc.qk_atom_pool, qka)
+        qka.id
+    end
+end
+
 #------------------Storage layer functions -----------------------------
 
 """
@@ -330,7 +412,8 @@ function _create_vertex(Bnc::Bnc, perm::Vector{<:Integer})::Vertex
     nullity = Bnc.vertices_nullity[idx] # Get the nullity of the vertex
     
     P, P0 = _calc_P_and_P0(Bnc, perm); 
-    C_x, C0_x = _calc_C_C0_x(Bnc, perm)
+    x_halfspace_refs = _collect_x_halfspace_refs(Bnc, perm)
+    C_x, C0_x = _materialize_x_constraints(Bnc, x_halfspace_refs)
 
     M = vcat(P, Bnc._N_sparse)
     M0 = vcat(P0, zeros(eltype(P0), Bnc.r))
@@ -342,7 +425,7 @@ function _create_vertex(Bnc::Bnc, perm::Vector{<:Integer})::Vertex
         perm = perm, 
         real = real,
         M = M, M0 = M0, P = P, P0 = P0, C_x = C_x, C0_x = C0_x
-    )
+    ) |> v -> (v.x_halfspace_refs = x_halfspace_refs; v)
 end
 """
     _fill_inv_info!(vtx::Vertex) -> nothing
@@ -350,31 +433,36 @@ end
 Ensure a `Vertex` has `H/H0` and qK constraints computed and cached.
 """
 function _fill_inv_info!(vtx::Vertex)
-    # Check if already calculated
     Bnc = vtx.bn
     if !isempty(vtx.H)
         return nothing
     end
     if vtx.nullity == 0
-        H = _calc_H(Bnc, vtx.perm) 
-        vtx.H = H # Calculate the inverse matrix from pre-computed LU decomposition of M H=M^-1
-        vtx.H0 = - H * vtx.M0  # H0 = -M^-1 * M0
-        vtx.C_qK = droptol!(sparse(vtx.C_x * H),1e-10) # C_qK = C_x * H
-        vtx.C0_qK = vtx.C0_x + vtx.C_x * vtx.H0 # C0_qK = C0_x + C_x * H0 
+        H = _calc_H(Bnc, vtx.perm)
+        vtx.H = H
+        vtx.H0 = - H * vtx.M0
+        vtx.C_qK = droptol!(sparse(vtx.C_x * H),1e-10)
+        vtx.C0_qK = vtx.C0_x + vtx.C_x * vtx.H0
     else
-        if vtx.nullity ==1
-            # we need to check where this nullity comes from.
-            if length(Set(vtx.perm)) == Bnc.d # the nullity comes from N
-                vtx.H = _calc_H(Bnc, vtx.perm).* Bnc.direction 
-            else # the nullity comes from P
+        if vtx.nullity == 1
+            if length(Set(vtx.perm)) == Bnc.d
+                vtx.H = _calc_H(Bnc, vtx.perm) .* Bnc.direction
+            else
                 H = _adj_singular_matrix(vtx.M)[1]
-                vtx.H = droptol!(sparse(H),1e-10).* Bnc.direction
+                vtx.H = droptol!(sparse(H),1e-10) .* Bnc.direction
             end
-        else # nullity>1 , H, HO is nolonger avaliable
-            vtx.H = spzeros(Bnc.n, Bnc.n) # fill value as a sign that this regime is fully computed
+        else
+            vtx.H = spzeros(Bnc.n, Bnc.n)
         end
         vtx.C_qK, vtx.C0_qK = _calc_C_C0_qK_singular(Bnc, vtx.perm)
     end
+
+    vtx.mapping_id = _get_or_create_mapping_id!(Bnc, vtx)
+    mapping = Bnc.mapping_pool[vtx.mapping_id]
+    vtx.qk_atom_ids = [
+        _get_or_create_qk_atom!(Bnc, hid, sgn, mapping)
+        for (hid, sgn) in vtx.x_halfspace_refs
+    ]
     return nothing
 end
 
@@ -768,6 +856,51 @@ get_C_x(args...) = get_C_C0_x(args...)[1]
 Return `C0_x` for a vertex.
 """
 get_C0_x(args...) = get_C_C0_x(args...)[2]
+
+"""
+    get_x_halfspace_refs(args...) -> Vector{Tuple{Int,Int8}}
+
+Return x-space halfspace atom references `(halfspace_id, orientation)` for a regime.
+"""
+get_x_halfspace_refs(args...) = copy(get_vertex(args...; inv_info=false).x_halfspace_refs)
+
+"""
+    get_mapping_object(args...) -> MappingObject
+
+Return the canonical mapping object for a regime.
+"""
+function get_mapping_object(args...)
+    vtx = get_vertex(args...; inv_info=true)
+    return get_binding_network(args...).mapping_pool[vtx.mapping_id]
+end
+
+"""
+    get_qk_atom_ids(args...) -> Vector{Int}
+
+Return canonical qK-atom ids for a regime with provenance preserved.
+"""
+get_qk_atom_ids(args...) = copy(get_vertex(args...; inv_info=true).qk_atom_ids)
+
+"""
+    get_qk_atoms(args...) -> Vector{QKAtom}
+
+Return qK atoms for a regime.
+"""
+function get_qk_atoms(args...)
+    bn = get_binding_network(args...)
+    ids = get_qk_atom_ids(args...)
+    return [bn.qk_atom_pool[i] for i in ids]
+end
+
+"""
+    get_x_halfspace_atom(bnc, id) -> XHalfspaceAtom
+"""
+get_x_halfspace_atom(Bnc::Bnc, id::Integer) = Bnc.x_halfspace_atoms[id]
+
+"""
+    get_qk_atom(bnc, id) -> QKAtom
+"""
+get_qk_atom(Bnc::Bnc, id::Integer) = Bnc.qk_atom_pool[id]
 
 
 """
