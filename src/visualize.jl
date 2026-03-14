@@ -940,7 +940,7 @@ function plot_polyhedron_slices(
     end
 
     axislegend(ax; position=:rb)
-    return fig, ax, sliced, samples, bounds
+    return fig, ax
 end
 
 
