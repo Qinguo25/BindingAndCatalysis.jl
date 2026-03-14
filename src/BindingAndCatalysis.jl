@@ -32,6 +32,10 @@ export get_M_M0, get_M, get_M0
 export get_H_H0,get_H,get_H0
 export get_C_C0_x,get_C_x, get_C0_x
 export get_C_C0_nullity_qK, get_C_C0_qK, get_C_qK, get_C0_qK
+
+export get_x_halfspace_refs, get_mapping_id, get_qk_atom_ids
+export get_x_halfspace_atoms, get_regular_mappings, get_singular_mappings, get_qk_hyperplane_atoms
+export get_edge_provenance
 export get_C_C0_nullity, get_C_C0, get_C, get_C0
 
 export check_feasibility_with_constraint, feasible_vertieces_with_constraint

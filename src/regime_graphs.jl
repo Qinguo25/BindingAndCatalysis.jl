@@ -59,8 +59,16 @@ function  _calc_vertices_graph(Bnc::Bnc{T}) where {T} # optimized by GPT-5, not 
 
                     ins_x = log10(L[i, j1]) - log10(L[i, j2]) # go from p2 to p1
 
-                    push!(local_edges, (p2, VertexEdge(p1, i, dx, ins_x))) # p2 to p1,
-                    push!(local_edges, (p1, VertexEdge(p2, i, -dx, -ins_x)))  # p1 to p2
+                    e12 = VertexEdge(p1, i, dx, ins_x)
+                    e21 = VertexEdge(p2, i, -dx, -ins_x)
+                    atom_id, sign12 = _get_or_create_x_halfspace_atom!(Bnc, i, j1, j2)
+                    e12.x_atom_id = atom_id
+                    e12.x_atom_sign = sign12
+                    e21.x_atom_id = atom_id
+                    e21.x_atom_sign = Int8(-sign12)
+
+                    push!(local_edges, (p2, e12)) # p2 to p1,
+                    push!(local_edges, (p1, e21))  # p1 to p2
                 end
             end
         end
@@ -135,6 +143,10 @@ function _fulfill_vertices_graph!(vtx_graph::VertexGraph)
             end
             # calculate their direction based on formula
             (e.change_dir_qK, e.intersect_qK) = _calc_change_dir_qK(Bnc, p1, p2, i, j1,j2, ins_x)
+            if !isnothing(e.change_dir_qK)
+                vtx = get_vertex(Bnc, p1; inv_info=true)
+                e.qk_atom_id = _get_or_create_qk_atom!(Bnc, e.change_dir_qK, e.intersect_qK, e.x_atom_id, vtx.mapping_id)
+            end
         end
     end
     return nothing

@@ -43,6 +43,57 @@ using ProgressMeter
 
 abstract type AbstractBnc end
 
+"""
+    XHalfspaceAtom
+
+Canonical x-space boundary atom for one conservation row `i` and an unordered
+species pair `(j_lo, j_hi)`. The geometric hyperplane is stored once;
+orientation is carried separately by `XHalfspaceRef`.
+"""
+struct XHalfspaceAtom
+    i::Int
+    j_lo::Int
+    j_hi::Int
+    a::SparseVector{Int8, Int}
+    b::Float64
+end
+
+"""
+    XHalfspaceRef
+
+Reference to a canonical x-space atom with orientation `sign ∈ {-1, +1}`.
+"""
+struct XHalfspaceRef
+    atom_id::Int
+    sign::Int8
+end
+
+"""Pooled regular mapping object for nullity-0 regimes."""
+struct RegularMapping
+    H::SparseMatrixCSC{Float64, Int}
+    H0::Vector{Float64}
+end
+
+"""
+    SingularMapping
+
+First-class singular mapping object (currently nullity-1 focused), retaining
+adjugate-like map plus left/right null vectors for geometric provenance.
+"""
+struct SingularMapping
+    nullity::Int
+    H_like::SparseMatrixCSC{Float64, Int}
+    right_null::Vector{Float64}
+    left_null::Vector{Float64}
+end
+
+"""Canonical qK-space hyperplane atom with provenance chain."""
+mutable struct QKHyperplaneAtom
+    a::SparseVector{Float64, Int}
+    b::Float64
+    provenance::Vector{Tuple{Int,Int}} # (x_atom_id, mapping_id)
+end
+
 
 """
     CatalysisData
@@ -164,6 +215,7 @@ mutable struct Vertex{F,T}
     M0::Vector{F} #
     C_x::SparseMatrixCSC{Int, Int}
     C0_x::Vector{F} 
+    x_halfspace_refs::Vector{XHalfspaceRef}
 
     # --- Expensive Calculated Properties ---
     nullity::T
@@ -171,20 +223,24 @@ mutable struct Vertex{F,T}
     H0::Vector{F} 
     C_qK::SparseMatrixCSC{Float64, Int}
     C0_qK::Vector{F} 
+    mapping_id::Int
+    qk_atom_ids::Vector{Int}
     
     #---Realizibility Index
     volume::Volume
 
     # The inner constructor also needs to be updated for the parametric type
-    function Vertex(;bn::Union{AbstractBnc,Nothing}=nothing, perm, P, P0::Vector{F}, M, M0, C_x, C0_x, idx,real,nullity::T) where {T<:Integer,F<:Real}
+    function Vertex(;bn::Union{AbstractBnc,Nothing}=nothing, perm, P, P0::Vector{F}, M, M0, C_x, C0_x, x_halfspace_refs::Vector{XHalfspaceRef}, idx,real,nullity::T) where {T<:Integer,F<:Real}
         # _M_lu = lu(M, check=false) # It's good practice to ensure M is Float64 for LU
         # Use new{T} to construct an instance of Vertex{T}
-        return new{F,T}(bn, perm, idx,real, P, P0, M, M0, C_x, C0_x,
+        return new{F,T}(bn, perm, idx,real, P, P0, M, M0, C_x, C0_x, x_halfspace_refs,
             nullity,
             SparseMatrixCSC{Float64, Int}(undef, 0, 0), # H
             Vector{F}(undef, 0),          # H0
             SparseMatrixCSC{Float64, Int}(undef, 0, 0), # C_qK
             Vector{F}(undef, 0),          # C0_qK
+            0,
+            Int[],
             Volume(0.0, 0.0) # volume
         )
     end
@@ -202,8 +258,11 @@ mutable struct VertexEdge{T}
     intersect_x::Float64
     change_dir_qK::Union{Nothing, SparseVector{Float64, T}}
     intersect_qK::Union{Nothing, Float64}
+    x_atom_id::Int
+    x_atom_sign::Int8
+    qk_atom_id::Union{Nothing, Int}
     function VertexEdge(to::Int, diff_r::Int, change_dir_x::SparseVector{Int8, T}, intersect_x::Float64) where {T}
-        return new{T}(to, diff_r, change_dir_x, intersect_x,nothing,nothing)
+        return new{T}(to, diff_r, change_dir_x, intersect_x,nothing,nothing,0,0,nothing)
     end
 end
 
@@ -276,6 +335,16 @@ mutable struct Bnc{T} <: AbstractBnc # T is the int type to save all the indices
     _vertices_is_initialized::BitVector
     _vertices_volume_is_calced::BitVector
     _vertices_Nρ_inv_dict::Dict{Vector{T}, Tuple{SparseMatrixCSC{Float64, Int},T}} # cache the N_inv for each vertex permutation
+
+    #----canonical atom/mapping pools preserving x -> mapping -> qK provenance----
+    x_halfspace_atoms::Vector{XHalfspaceAtom}
+    x_halfspace_atom_dict::Dict{NTuple{3,Int},Int}
+    regular_mappings::Vector{RegularMapping}
+    regular_mapping_dict::Dict{UInt64,Int}
+    singular_mappings::Vector{SingularMapping}
+    singular_mapping_dict::Dict{UInt64,Int}
+    qk_hyperplane_atoms::Vector{QKHyperplaneAtom}
+    qk_hyperplane_dict::Dict{UInt64,Int}
 
     #------other helper parameters------
     direction::Int8 # direction of the binding reactions, determine the ray direction for invertible regime, calculated by sign of det[L;N]
@@ -374,6 +443,15 @@ mutable struct Bnc{T} <: AbstractBnc # T is the int type to save all the indices
             BitVector(),                     # _vertices_is_initialized
             BitVector(),                     # _R_idx_is_calced
             Dict{Vector{T}, Tuple{SparseMatrixCSC{Float64, Int},T}}(), # _vertices_perm_Ninv_dict
+
+            XHalfspaceAtom[],
+            Dict{NTuple{3,Int},Int}(),
+            RegularMapping[],
+            Dict{UInt64,Int}(),
+            SingularMapping[],
+            Dict{UInt64,Int}(),
+            QKHyperplaneAtom[],
+            Dict{UInt64,Int}(),
             # Fields 13-28 (Calculated values)
             direction,
             _anchor_log_x, _anchor_log_qK,

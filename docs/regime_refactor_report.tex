@@ -1,0 +1,78 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{enumitem}
+\title{Regime Canonicalization and Provenance Refactor in \texttt{BindingAndCatalysis.jl}}
+\author{Internal Technical Report}
+\date{\today}
+\begin{document}
+\maketitle
+
+\section{Problem Statement}
+The prior implementation primarily stored per-regime dense/sparse matrices $(C_x,C_{0,x})$, $(H,H_0)$, and $(C_{qK},C_{0,qK})$ directly inside each vertex object. This duplicated geometric information and obscured causal provenance. In particular, the representation did not expose the chain
+\[
+\text{x-space boundary atom} \longrightarrow \text{mapping object} \longrightarrow \text{qK-space hyperplane atom}.
+\]
+
+\section{New Architecture}
+The refactor introduces factorized pools and reference-based ownership.
+\subsection*{A. Canonical x-space atoms}
+Each x-space boundary is stored once as an \texttt{XHalfspaceAtom} keyed by
+\((i,\min(j_1,j_2),\max(j_1,j_2))\).
+Orientation is represented via \texttt{XHalfspaceRef(atom\_id, sign)}.
+
+\subsection*{B. Mapping-object pools}
+Regular regimes pool \texttt{RegularMapping(H,H0)} objects.
+Singular regimes pool \texttt{SingularMapping(nullity, H\_like, right\_null, left\_null)}.
+This makes singular regimes first-class and preserves geometry-relevant null-space data.
+
+\subsection*{C. qK hyperplane atoms with provenance}
+A qK inequality/hyperplane is pooled as \texttt{QKHyperplaneAtom(a,b,provenance)}, where provenance is a set-like list of pairs \((x\_atom\_id, mapping\_id)\).
+Thus multiple causal sources may map to the same qK hyperplane atom without erasing lineage.
+
+\subsection*{D. Lightweight regime ownership}
+Each vertex now stores:
+\begin{itemize}[leftmargin=2em]
+\item \texttt{x\_halfspace\_refs}
+\item \texttt{mapping\_id}
+\item \texttt{qk\_atom\_ids}
+\end{itemize}
+and can still materialize $(C_x,C_{0,x})$ and $(C_{qK},C_{0,qK})$ for compatibility.
+
+\subsection*{E. Regime-graph edge provenance}
+Each \texttt{VertexEdge} now carries:
+\begin{itemize}[leftmargin=2em]
+\item \texttt{x\_atom\_id}, \texttt{x\_atom\_sign}
+\item optional \texttt{qk\_atom\_id}
+\end{itemize}
+so edge transitions are geometrically interpretable.
+
+\section{Design Rationale}
+\begin{enumerate}[leftmargin=2em]
+\item \textbf{Canonicalization before materialization}: removes structural duplication early.
+\item \textbf{Direction separate from hyperplane identity}: avoids atom duplication for sign flips.
+\item \textbf{Singular mapping as explicit type}: prevents opaque handling of nullity-1 regimes.
+\item \textbf{Provenance-preserving qK pooling}: supports interface interpretation and overlap/layering analysis.
+\item \textbf{Graph-edge metadata}: prepares for direct edge-based propagation algorithms.
+\end{enumerate}
+
+\section{Rank-1 Update Compatibility}
+The storage now decouples regime identity from fully materialized matrices. Neighboring regimes differing by one dominance choice can reuse edge metadata and mapping references, creating a natural insertion point for future Sherman--Morrison style updates for regular mappings and corresponding singular-branch transitions.
+
+\section{API Additions}
+New queries were added to inspect and debug the factorized model:
+\begin{itemize}[leftmargin=2em]
+\item regime-level: \texttt{get\_x\_halfspace\_refs}, \texttt{get\_mapping\_id}, \texttt{get\_qk\_atom\_ids}
+\item global pools: \texttt{get\_x\_halfspace\_atoms}, \texttt{get\_regular\_mappings}, \texttt{get\_singular\_mappings}, \texttt{get\_qk\_hyperplane\_atoms}
+\item edge-level: \texttt{get\_edge\_provenance}
+\end{itemize}
+
+\section{Limitations and Future Work}
+This pass establishes data-model support; it does not yet implement the full edge-walk incremental solver. A next phase should:
+\begin{itemize}[leftmargin=2em]
+\item implement rank-1 updates for \texttt{RegularMapping}
+\item derive nullity-1 transitions from previous inverse data directly
+\item define deterministic row correspondence for singular qK constraints where elimination reorders constraints.
+\end{itemize}
+
+\end{document}
