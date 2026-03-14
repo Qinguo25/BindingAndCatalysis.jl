@@ -33,6 +33,9 @@ end
     @test get_perm(model, first_idx) == first_perm
 
     vertex = get_vertex(model, first_idx)
+    @test !isempty(get_x_halfspace_refs(model, first_idx))
+    @test get_mapping_id(model, first_idx) >= 0
+    @test length(get_qk_atom_ids(model, first_idx)) == length(get_x_halfspace_refs(model, first_idx))
     C, C0, nullity = get_C_C0_nullity(vertex)
     @test size(C, 2) == model.n
     @test length(C0) == size(C, 1)

@@ -1,0 +1,62 @@
+\documentclass[11pt]{article}
+\usepackage{amsmath,amssymb,booktabs,geometry}
+\geometry{margin=1in}
+\title{Regime Deduplication, Canonicalization, and Causal Constraint Tracking Refactor}
+\author{BindingAndCatalysis.jl internal report}
+\date{\today}
+\begin{document}
+\maketitle
+
+\section{Problem Statement}
+The previous implementation attached dense/sparse regime-local matrices directly to each vertex, especially $(C_x,C_{0,x})$ and induced qK inequalities. This made deduplication weak (whole-matrix equality only) and obscured causal provenance from x-space boundaries to qK-space interfaces.
+
+\section{New Architecture}
+The refactor introduces explicit pooled layers:
+\begin{enumerate}
+  \item Canonical x-space halfspace atoms keyed by $(i,\min(j_1,j_2),\max(j_1,j_2))$.
+  \item Mapping-object pools for regular and singular regimes.
+  \item qK hyperplane atoms keyed by (x atom, orientation, mapping id).
+  \item Lightweight regime ownership through references.
+  \item Edge-level provenance fields in the regime graph.
+\end{enumerate}
+
+\section{Data Model Changes}
+\subsection{Vertex}
+A vertex now stores:
+\begin{itemize}
+  \item \texttt{x\_halfspaces}: a list of \((\texttt{halfspace\_id},\texttt{sign})\),
+  \item \texttt{mapping\_id}: pooled mapping identifier,
+  \item \texttt{qk\_ineq\_ids}: pooled qK inequality identifiers.
+\end{itemize}
+Materialized \texttt{C\_x,C0\_x} remains available as a derived cache.
+
+\subsection{Bnc global pools}
+The model now owns canonical pools and key maps for x-halfspaces, regular/singular mappings, and qK hyperplane atoms.
+
+\subsection{VertexGraph edges}
+Each edge now stores x-boundary provenance:\ \texttt{x\_halfspace\_id} and orientation sign. During qK fulfillment, edge metadata also records atom IDs from each endpoint mapping when available.
+
+\section{Causal Chain Preservation}
+The pipeline is now explicit:
+\[
+\text{x halfspace atom} + \text{orientation}
+\xrightarrow{\text{mapping id}}
+\text{qK hyperplane atom}.
+\]
+This relationship is inspectable through API calls:
+\texttt{get\_x\_halfspace\_refs}, \texttt{get\_mapping\_id}, \texttt{get\_qk\_atom\_ids}, and \texttt{get\_edge\_boundary\_provenance}.
+
+\section{Singular Regimes}
+Nullity-$1$ singular regimes are represented in a dedicated singular mapping pool (storing an $H$-like object with left/right null vectors). This makes singular regimes first-class rather than opaque fallbacks.
+
+\section{Rank-1 Update Compatibility}
+Although Sherman--Morrison graph walking is not fully implemented in this pass, the storage model now isolates mapping objects and edge transitions by boundary atoms, which is the required substrate for future rank-1 updates and singular branch handling.
+
+\section{Tradeoffs and Future Work}
+\begin{itemize}
+  \item Mapping canonicalization currently relies on exact sparse signatures for computed objects.
+  \item Singular qK atom pooling can be extended with a canonical row-order normalization strategy.
+  \item Add dedicated incremental update APIs that consume edge provenance directly.
+\end{itemize}
+
+\end{document}

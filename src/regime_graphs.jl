@@ -59,8 +59,12 @@ function  _calc_vertices_graph(Bnc::Bnc{T}) where {T} # optimized by GPT-5, not 
 
                     ins_x = log10(L[i, j1]) - log10(L[i, j2]) # go from p2 to p1
 
-                    push!(local_edges, (p2, VertexEdge(p1, i, dx, ins_x))) # p2 to p1,
-                    push!(local_edges, (p1, VertexEdge(p2, i, -dx, -ins_x)))  # p1 to p2
+                    hid = _get_or_create_x_halfspace_id!(Bnc, i, j1, j2)
+                    atom = Bnc.x_halfspace_atoms[hid]
+                    sign_p2_to_p1 = (j1 == atom.j_high) ? Int8(1) : Int8(-1)
+                    sign_p1_to_p2 = Int8(-sign_p2_to_p1)
+                    push!(local_edges, (p2, VertexEdge(p1, i, hid, sign_p2_to_p1, dx, ins_x))) # p2 to p1,
+                    push!(local_edges, (p1, VertexEdge(p2, i, hid, sign_p1_to_p2, -dx, -ins_x)))  # p1 to p2
                 end
             end
         end
@@ -135,6 +139,12 @@ function _fulfill_vertices_graph!(vtx_graph::VertexGraph)
             end
             # calculate their direction based on formula
             (e.change_dir_qK, e.intersect_qK) = _calc_change_dir_qK(Bnc, p1, p2, i, j1,j2, ins_x)
+            v1 = get_vertex(Bnc, p1; inv_info=true)
+            v2 = get_vertex(Bnc, p2; inv_info=true)
+            loc1 = findfirst(==( (e.x_halfspace_id, e.x_halfspace_sign) ), v1.x_halfspaces)
+            loc2 = findfirst(==( (e.x_halfspace_id, e.x_halfspace_sign) ), v2.x_halfspaces)
+            e.qk_interface_from = isnothing(loc1) ? nothing : v1.qk_ineq_ids[loc1]
+            e.qk_interface_to = isnothing(loc2) ? nothing : v2.qk_ineq_ids[loc2]
         end
     end
     return nothing

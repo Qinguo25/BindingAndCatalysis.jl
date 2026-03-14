@@ -33,10 +33,13 @@ export get_H_H0,get_H,get_H0
 export get_C_C0_x,get_C_x, get_C0_x
 export get_C_C0_nullity_qK, get_C_C0_qK, get_C_qK, get_C0_qK
 export get_C_C0_nullity, get_C_C0, get_C, get_C0
+export get_x_halfspace_refs, get_mapping_id, get_qk_atom_ids
+export get_x_halfspace_atoms, get_mapping_pool, get_singular_mapping_pool, get_qk_hyperplane_atoms
 
 export check_feasibility_with_constraint, feasible_vertieces_with_constraint
 export get_polyhedron, get_volume
 export is_neighbor, get_interface, get_change_dir
+export get_edge_boundary_provenance
 export get_function
 
 

@@ -162,6 +162,9 @@ mutable struct Vertex{F,T}
     P0::Vector{F} 
     M::SparseMatrixCSC{Int, Int}
     M0::Vector{F} #
+    x_halfspaces::Vector{Tuple{Int,Int8}}
+    mapping_id::Int
+    qk_ineq_ids::Vector{Int}
     C_x::SparseMatrixCSC{Int, Int}
     C0_x::Vector{F} 
 
@@ -176,10 +179,10 @@ mutable struct Vertex{F,T}
     volume::Volume
 
     # The inner constructor also needs to be updated for the parametric type
-    function Vertex(;bn::Union{AbstractBnc,Nothing}=nothing, perm, P, P0::Vector{F}, M, M0, C_x, C0_x, idx,real,nullity::T) where {T<:Integer,F<:Real}
+    function Vertex(;bn::Union{AbstractBnc,Nothing}=nothing, perm, P, P0::Vector{F}, M, M0, x_halfspaces, mapping_id::Int=0, qk_ineq_ids=Int[], C_x, C0_x, idx,real,nullity::T) where {T<:Integer,F<:Real}
         # _M_lu = lu(M, check=false) # It's good practice to ensure M is Float64 for LU
         # Use new{T} to construct an instance of Vertex{T}
-        return new{F,T}(bn, perm, idx,real, P, P0, M, M0, C_x, C0_x,
+        return new{F,T}(bn, perm, idx,real, P, P0, M, M0, x_halfspaces, mapping_id, qk_ineq_ids, C_x, C0_x,
             nullity,
             SparseMatrixCSC{Float64, Int}(undef, 0, 0), # H
             Vector{F}(undef, 0),          # H0
@@ -198,13 +201,46 @@ Edge metadata connecting neighboring vertices in a regime graph.
 mutable struct VertexEdge{T}
     to::Int
     diff_r::Int
+    x_halfspace_id::Int
+    x_halfspace_sign::Int8
     change_dir_x::SparseVector{Int8, T}
     intersect_x::Float64
+    qk_interface_from::Union{Nothing,Int}
+    qk_interface_to::Union{Nothing,Int}
     change_dir_qK::Union{Nothing, SparseVector{Float64, T}}
     intersect_qK::Union{Nothing, Float64}
-    function VertexEdge(to::Int, diff_r::Int, change_dir_x::SparseVector{Int8, T}, intersect_x::Float64) where {T}
-        return new{T}(to, diff_r, change_dir_x, intersect_x,nothing,nothing)
+    function VertexEdge(to::Int, diff_r::Int, x_halfspace_id::Int, x_halfspace_sign::Int8, change_dir_x::SparseVector{Int8, T}, intersect_x::Float64) where {T}
+        return new{T}(to, diff_r, x_halfspace_id, x_halfspace_sign, change_dir_x, intersect_x, nothing, nothing,nothing,nothing)
     end
+end
+
+struct XHalfspaceAtom
+    row::Int
+    j_low::Int
+    j_high::Int
+    normal::SparseVector{Int8,Int}
+    offset_low_to_high::Float64
+end
+
+struct MappingObject
+    nullity::Int
+    H::SparseMatrixCSC{Float64,Int}
+    H0::Vector{Float64}
+end
+
+struct SingularMappingObject
+    nullity::Int
+    H_like::SparseMatrixCSC{Float64,Int}
+    left_null::Vector{Float64}
+    right_null::Vector{Float64}
+end
+
+struct QKHyperplaneAtom
+    x_halfspace_id::Int
+    x_sign::Int8
+    mapping_id::Int
+    normal::SparseVector{Float64,Int}
+    offset::Float64
 end
 
 # Adjacency list + optional caches
@@ -276,6 +312,16 @@ mutable struct Bnc{T} <: AbstractBnc # T is the int type to save all the indices
     _vertices_is_initialized::BitVector
     _vertices_volume_is_calced::BitVector
     _vertices_Nρ_inv_dict::Dict{Vector{T}, Tuple{SparseMatrixCSC{Float64, Int},T}} # cache the N_inv for each vertex permutation
+
+    # Canonicalized geometry pools for regime provenance
+    x_halfspace_atoms::Vector{XHalfspaceAtom}
+    x_halfspace_key_to_id::Dict{NTuple{3,Int},Int}
+    mapping_objects::Vector{MappingObject}
+    mapping_key_to_id::Dict{String,Int}
+    singular_mapping_objects::Vector{SingularMappingObject}
+    singular_mapping_key_to_id::Dict{String,Int}
+    qk_hyperplane_atoms::Vector{QKHyperplaneAtom}
+    qk_hyperplane_key_to_id::Dict{NTuple{3,Int},Int}
 
     #------other helper parameters------
     direction::Int8 # direction of the binding reactions, determine the ray direction for invertible regime, calculated by sign of det[L;N]
@@ -374,6 +420,14 @@ mutable struct Bnc{T} <: AbstractBnc # T is the int type to save all the indices
             BitVector(),                     # _vertices_is_initialized
             BitVector(),                     # _R_idx_is_calced
             Dict{Vector{T}, Tuple{SparseMatrixCSC{Float64, Int},T}}(), # _vertices_perm_Ninv_dict
+            XHalfspaceAtom[],
+            Dict{NTuple{3,Int},Int}(),
+            MappingObject[],
+            Dict{String,Int}(),
+            SingularMappingObject[],
+            Dict{String,Int}(),
+            QKHyperplaneAtom[],
+            Dict{NTuple{3,Int},Int}(),
             # Fields 13-28 (Calculated values)
             direction,
             _anchor_log_x, _anchor_log_qK,

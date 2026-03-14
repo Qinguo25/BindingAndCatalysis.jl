@@ -150,6 +150,48 @@ function _calc_C_C0_x(Bnc::Bnc{T}, perm::Vector{<:Integer})::Tuple{SparseMatrixC
     c_mtx = SparseMatrixCSC(num_ineq, Bnc.n, colptr, rowval, nzval)
     return c_mtx, c0
 end
+
+_mapping_signature(H::SparseMatrixCSC{Float64,Int}, H0::Vector{Float64}) = string(size(H),"|",findnz(H),"|",H0)
+
+function _get_or_create_x_halfspace_id!(Bnc::Bnc, i::Int, j1::Int, j2::Int)
+    lo, hi = minmax(j1, j2)
+    key = (i, lo, hi)
+    return get!(Bnc.x_halfspace_key_to_id, key) do
+        normal = sparsevec([lo, hi], Int8[-1, 1], Bnc.n)
+        offset = log10(Bnc.L[i, hi] / Bnc.L[i, lo])
+        push!(Bnc.x_halfspace_atoms, XHalfspaceAtom(i, lo, hi, normal, offset))
+        length(Bnc.x_halfspace_atoms)
+    end
+end
+
+function _get_x_halfspaces(Bnc::Bnc, perm::Vector{<:Integer})
+    refs = Tuple{Int,Int8}[]
+    for i in 1:Bnc.d
+        rgm = perm[i]
+        for col in Bnc._valid_L_idx[i]
+            col == rgm && continue
+            id = _get_or_create_x_halfspace_id!(Bnc, i, rgm, col)
+            atom = Bnc.x_halfspace_atoms[id]
+            sign = (rgm == atom.j_high) ? Int8(1) : Int8(-1)
+            push!(refs, (id, sign))
+        end
+    end
+    refs
+end
+
+function _materialize_Cx_from_refs(Bnc::Bnc, refs::Vector{Tuple{Int,Int8}})
+    m = length(refs)
+    I = Int[]; J = Int[]; V = Int[]; C0 = Vector{Float64}(undef, m)
+    sizehint!(I, 2m); sizehint!(J, 2m); sizehint!(V, 2m)
+    for (row, (id, sign)) in enumerate(refs)
+        a = Bnc.x_halfspace_atoms[id]
+        lo, hi = a.j_low, a.j_high
+        push!(I, row); push!(J, lo); push!(V, -sign)
+        push!(I, row); push!(J, hi); push!(V, sign)
+        C0[row] = sign == 1 ? a.offset_low_to_high : -a.offset_low_to_high
+    end
+    return sparse(I, J, V, m, Bnc.n), C0
+end
 """
     _calc_C_C0_qK_singular(bnc::Bnc, vtx) -> (SparseMatrixCSC, Vector)
 
@@ -330,7 +372,9 @@ function _create_vertex(Bnc::Bnc, perm::Vector{<:Integer})::Vertex
     nullity = Bnc.vertices_nullity[idx] # Get the nullity of the vertex
     
     P, P0 = _calc_P_and_P0(Bnc, perm); 
-    C_x, C0_x = _calc_C_C0_x(Bnc, perm)
+    x_halfspaces = _get_x_halfspaces(Bnc, perm)
+    C_x = spzeros(Int, 0, 0)
+    C0_x = Float64[]
 
     M = vcat(P, Bnc._N_sparse)
     M0 = vcat(P0, zeros(eltype(P0), Bnc.r))
@@ -341,7 +385,7 @@ function _create_vertex(Bnc::Bnc, perm::Vector{<:Integer})::Vertex
         idx = idx,
         perm = perm, 
         real = real,
-        M = M, M0 = M0, P = P, P0 = P0, C_x = C_x, C0_x = C0_x
+        M = M, M0 = M0, P = P, P0 = P0, x_halfspaces = x_halfspaces, C_x = C_x, C0_x = C0_x
     )
 end
 """
@@ -355,12 +399,29 @@ function _fill_inv_info!(vtx::Vertex)
     if !isempty(vtx.H)
         return nothing
     end
+    if isempty(vtx.C0_x)
+        vtx.C_x, vtx.C0_x = _materialize_Cx_from_refs(Bnc, vtx.x_halfspaces)
+    end
     if vtx.nullity == 0
         H = _calc_H(Bnc, vtx.perm) 
         vtx.H = H # Calculate the inverse matrix from pre-computed LU decomposition of M H=M^-1
         vtx.H0 = - H * vtx.M0  # H0 = -M^-1 * M0
+        sig = _mapping_signature(vtx.H, vtx.H0)
+        vtx.mapping_id = get!(Bnc.mapping_key_to_id, sig) do
+            push!(Bnc.mapping_objects, MappingObject(0, vtx.H, vtx.H0))
+            length(Bnc.mapping_objects)
+        end
         vtx.C_qK = droptol!(sparse(vtx.C_x * H),1e-10) # C_qK = C_x * H
         vtx.C0_qK = vtx.C0_x + vtx.C_x * vtx.H0 # C0_qK = C0_x + C_x * H0 
+        vtx.qk_ineq_ids = Int[]
+        for (k, (xid, xsign)) in enumerate(vtx.x_halfspaces)
+            key = (xid, Int(xsign), vtx.mapping_id)
+            qid = get!(Bnc.qk_hyperplane_key_to_id, key) do
+                push!(Bnc.qk_hyperplane_atoms, QKHyperplaneAtom(xid, xsign, vtx.mapping_id, sparse(vtx.C_qK[k, :]), vtx.C0_qK[k]))
+                length(Bnc.qk_hyperplane_atoms)
+            end
+            push!(vtx.qk_ineq_ids, qid)
+        end
     else
         if vtx.nullity ==1
             # we need to check where this nullity comes from.
@@ -370,10 +431,21 @@ function _fill_inv_info!(vtx::Vertex)
                 H = _adj_singular_matrix(vtx.M)[1]
                 vtx.H = droptol!(sparse(H),1e-10).* Bnc.direction
             end
+            M = Matrix(vtx.M)
+            U,S,V = svd(M)
+            left_null = U[:, end]
+            right_null = V[:, end]
+            sig = _mapping_signature(vtx.H, vec(right_null))
+            vtx.mapping_id = get!(Bnc.singular_mapping_key_to_id, sig) do
+                push!(Bnc.singular_mapping_objects, SingularMappingObject(1, vtx.H, left_null, right_null))
+                length(Bnc.singular_mapping_objects)
+            end
         else # nullity>1 , H, HO is nolonger avaliable
             vtx.H = spzeros(Bnc.n, Bnc.n) # fill value as a sign that this regime is fully computed
+            vtx.mapping_id = 0
         end
         vtx.C_qK, vtx.C0_qK = _calc_C_C0_qK_singular(Bnc, vtx.perm)
+        vtx.qk_ineq_ids = Int[]
     end
     return nothing
 end
@@ -755,7 +827,13 @@ get_M0(args...) = get_M_M0(args...)[2]
 
 Return `(C_x, C0_x)` for a vertex.
 """
-get_C_C0_x(args...) = get_vertex(args...; inv_info=false) |> vtx -> (vtx.C_x, vtx.C0_x)
+function get_C_C0_x(args...)
+    vtx = get_vertex(args...; inv_info=false)
+    if isempty(vtx.C0_x)
+        vtx.C_x, vtx.C0_x = _materialize_Cx_from_refs(vtx.bn, vtx.x_halfspaces)
+    end
+    return (vtx.C_x, vtx.C0_x)
+end
 """
     get_C_x(args...) -> SparseMatrixCSC
 
@@ -910,6 +988,35 @@ Return the number of vertices in the model.
 n_vertices(Bnc::Bnc) = length(Bnc.vertices_perm)
 
 """
+    get_x_halfspace_refs(args...) -> Vector{Tuple{Int,Int8}}
+
+Return canonical x-space halfspace references `(halfspace_id, orientation)` for a regime.
+"""
+get_x_halfspace_refs(args...) = get_vertex(args...; inv_info=false).x_halfspaces
+
+"""
+    get_mapping_id(args...) -> Int
+
+Return pooled mapping object id for a regime.
+"""
+function get_mapping_id(args...)
+    vtx = get_vertex(args...; inv_info=true)
+    return vtx.mapping_id
+end
+
+"""
+    get_qk_atom_ids(args...) -> Vector{Int}
+
+Return qK-space inequality atom IDs induced by x-halfspaces under the regime mapping.
+"""
+get_qk_atom_ids(args...) = get_vertex(args...; inv_info=true).qk_ineq_ids
+
+get_x_halfspace_atoms(Bnc::Bnc) = Bnc.x_halfspace_atoms
+get_mapping_pool(Bnc::Bnc) = Bnc.mapping_objects
+get_singular_mapping_pool(Bnc::Bnc) = Bnc.singular_mapping_objects
+get_qk_hyperplane_atoms(Bnc::Bnc) = Bnc.qk_hyperplane_atoms
+
+"""
     get_volume(args...; kwargs...) -> Volume
 
 Return the volume for a single vertex.
@@ -1046,6 +1153,23 @@ function get_interface_x(Bnc::Bnc, from, to)
     else 
         return edge.change_dir_x, edge.intersect_x
     end
+end
+
+"""
+    get_edge_boundary_provenance(Bnc::Bnc, from, to)
+
+Return provenance for an edge boundary as named tuple containing x-halfspace id/sign
+and qK atom ids on each side (when available).
+"""
+function get_edge_boundary_provenance(Bnc::Bnc, from, to)
+    edge = get_edge(Bnc, from, to; full=true)
+    isnothing(edge) && return nothing
+    return (
+        x_halfspace_id = edge.x_halfspace_id,
+        x_halfspace_sign = edge.x_halfspace_sign,
+        qk_atom_from = edge.qk_interface_from,
+        qk_atom_to = edge.qk_interface_to,
+    )
 end
 
 """
