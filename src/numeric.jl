@@ -112,7 +112,7 @@ function get_reaction_order(Bnc::Bnc, x_mat::Matrix{<:Real}, q_mat::Union{Matrix
     Jt = copy(Bnc._LNt_sparse)
     Jt_lu = copy(Bnc._LNt_lu)
 
-    Jt_left = @view(Jt.nzval[1:length(Bnc._L_sparse.nzval)])
+    Jt_left = @view(Jt.nzval[1:length(Bnc.L.nzval)])
     
     function _update_Jt!(Jt_left, x::AbstractArray{<:Real}, q::AbstractArray{<:Real})
         x_view = @view(x[Bnc._I])
@@ -260,7 +260,6 @@ end
 
 
 # for now as the perm is not defined , we shall 
-
 
 
 

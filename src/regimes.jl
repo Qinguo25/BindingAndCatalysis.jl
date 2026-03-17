@@ -225,7 +225,7 @@ function _create_vertex(Bnc::Bnc, perm::Vector{<:Integer})::Vertex
     
     P, P0 = _calc_P_P0(perm,helper); 
     C_x, C0_x = _calc_C_C0(perm, helper)
-    M = vcat(P, Bnc._N_sparse)
+    M = vcat(P, Bnc.N)
     M0 = vcat(P0, zeros(eltype(P0), Bnc.r))
 
     # Initialize a partial vertex. "Full" properties are empty placeholders.

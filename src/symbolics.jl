@@ -276,7 +276,7 @@ end
 
 Return conservation equations `q = Lx`.
 """
-show_conservation(Bnc::Bnc)=Bnc.q_sym .~ Bnc._L_sparse * Bnc.x_sym
+show_conservation(Bnc::Bnc)=Bnc.q_sym .~ Bnc.L * Bnc.x_sym
 """
     show_equilibrium(bnc::Bnc; log_space=true) -> Vector{Equation}
 

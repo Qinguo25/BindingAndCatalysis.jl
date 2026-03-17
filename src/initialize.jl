@@ -52,36 +52,35 @@ reaction orders, and rate constants.
 """
 struct CatalysisData
     # Parameters for the catalysis networks
-    S::Matrix{Int} # catalysis change in qK space, each column is a reaction
-    aT::Matrix{Int} # catalysis index and coefficients, rate will be vⱼ=kⱼ∏xᵢ^aT_{j,i}, denote what species catalysis the reaction.
+    Γ::Matrix{Int} # catalysis change in qK space, each column is a reaction
+    Π::Matrix{Int} # catalysis index and coefficients, rate will be vⱼ=kⱼ∏xᵢ^Π_{j,i}, denote what species catalysis the reaction.
     k_sym::Vector{Num}
-    # cat_x_idx::Vector{Int} # index of the species that catalysis the reaction, if not provided, will be inferred from S
+    # cat_x_idx::Vector{Int} # index of the species that catalysis the reaction, if not provided, will be inferred from Γ
     r_cat::Int # number of catalysis reactions/species
 
-    _S_sparse::SparseMatrixCSC{Float64,Int} # sparse version of S, used for fast calculation
-    _aT_sparse::SparseMatrixCSC{Float64,Int}  # sparse version of aT, used for fast calculation
+    _Γ_sparse::SparseMatrixCSC{Float64,Int} # sparse version of Γ, used for fast calculation
+    _Π_sparse::SparseMatrixCSC{Float64,Int}  # sparse version of Π, used for fast calculation
 
-    function CatalysisData(S, aT, k_sym)
+    function CatalysisData(Γ, Π, k_sym)
         # Validation
-        @assert size(S,2) == size(aT,1) == length(k_sym) "S's column number have to meet with total flux number and k_sym"
-        r_cat = size(S,2)
+        @assert size(Γ,2) == size(Π,1) == length(k_sym) "Γ's column number have to meet with total flux number and k_sym"
+        r_cat = size(Γ,2)
         # Create sparse matrices
-        _S_sparse = sparse(Float64.(S))
-        _aT_sparse = sparse(Float64.(aT))
-        new(S, aT, k_sym, r_cat, _S_sparse, _aT_sparse)
+        _Γ_sparse = sparse(Float64.(Γ))
+        _Π_sparse = sparse(Float64.(Π))
+        new(Γ, Π, k_sym, r_cat, _Γ_sparse, _Π_sparse)
     end
 end
 
 
-function CatalysisData(;S=nothing, aT=nothing, k_sym = nothing)
-    
-    if isnothing(S) && isnothing(aT)
+function CatalysisData(; Γ=nothing, Π=nothing, k_sym=nothing)
+    if isnothing(Γ) && isnothing(Π)
         return nothing
     else 
-        @assert !isnothing(S) && !isnothing(aT) "You shall provide both S and aT"
+        @assert !isnothing(Γ) && !isnothing(Π) "You shall provide both Γ and Π"
     end
-    k_sym = isnothing(k_sym) ? Symbolics.variables(:k, 1:size(aT,1)) : name_converter(k_sym)
-    return CatalysisData(S, aT, k_sym)
+    k_sym = isnothing(k_sym) ? Symbolics.variables(:k, 1:size(Π,1)) : name_converter(k_sym)
+    return CatalysisData(Γ, Π, k_sym)
 end
 
 
@@ -233,8 +232,8 @@ end
 
 
 @inline function _ensure_catalysis_meet_with_bnc(d,n,Cat::CatalysisData)
-    @assert size(Cat.aT,2) == n "Catalysis S should have n rows"
-    @assert size(Cat.S, 1) == d "Catlysis S should have d rows"
+    @assert size(Cat.Π,2) == n "Catalysis Π should have n rows"
+    @assert size(Cat.Γ, 1) == d "Catlysis Γ should have d rows"
 end
 
 """
@@ -331,8 +330,8 @@ structures for regime analysis.
 """
 mutable struct Bnc{T} <: AbstractBnc # T is the int type to save all the indices
     # ----Parameters of the binding networks------
-    N::Matrix{Int} # binding reaction matrix
-    L::Matrix{Int} # conservation law matrix
+    N::SparseMatrixCSC{Int,Int} # binding reaction matrix
+    L::SparseMatrixCSC{Int,Int} # conservation law matrix
 
     r::Int # number of reactions
     n::Int # number of variables
@@ -369,16 +368,16 @@ mutable struct Bnc{T} <: AbstractBnc # T is the int type to save all the indices
     _L_helper::MatrixHelper
     
     # sparse matrix for speeding up the calculation
-    _L_sparse::SparseMatrixCSC{Int,Int} # sparse version of L, used for fast calculation
-    _N_sparse::SparseMatrixCSC{Int,Int} # sparse version of N transpose, used for fast calculation
     _LN_sparse::SparseMatrixCSC{Float64,Int} # sparse version of [L;N], used for fast calculation
     
 
     # Inner constructor 
     function Bnc{T}(N, L, x_sym, q_sym, K_sym, catalysis) where {T<:Integer}
+        N_dense = Matrix{Int}(N)
+        L_dense = Matrix{Int}(L)
         # get desired values
-        r, n = size(N)
-        d, n_L = size(L)
+        r, n = size(N_dense)
+        d, n_L = size(L_dense)
 
         isnothing(catalysis) || _ensure_catalysis_meet_with_bnc(d,n,catalysis)
         
@@ -393,20 +392,19 @@ mutable struct Bnc{T} <: AbstractBnc # T is the int type to save all the indices
         end
 
         #The direction
-        direction = sign(det([L;N])) # Ensure matrix is Float64 for det
+        direction = sign(det([L_dense;N_dense])) # Ensure matrix is Float64 for det
 
         #-------helper parameters-------------
         # paramters for default homotopcontinuous starting point.
         _anchor_log_x = zeros(n)
-        _anchor_log_qK = vcat(vec(log10.(sum(L; dims=2))), zeros(r))
+        _anchor_log_qK = vcat(vec(log10.(sum(L_dense; dims=2))), zeros(r))
 
         # pre-calculate the non-zero position for L
 
-        _L_helper = _build_matrix_helper(L)
-        _L_sparse = sparse(L) # sparse version of L
-
-        _N_sparse = sparse(N) # sparse version of N
-        _LN_sparse = Float64.([_L_sparse; _N_sparse])
+        _L_helper = _build_matrix_helper(L_dense)
+        L_sparse = sparse(L_dense)
+        N_sparse = sparse(N_dense)
+        _LN_sparse = Float64.([L_sparse; N_sparse])
         (_LN_top_rows, _LN_top_cols, _LN_top_idx) = rowmask_indices(_LN_sparse, 1,d) # record the position of non-zero elements in L within _LN_sparse
         (_LN_bottom_rows, _LN_bottom_cols, _LN_bottom_idx) = rowmask_indices(_LN_sparse, d+1,n) # record the position of non-zero elements in N within _LN_sparse
         _LN_top_diag_idx = diag_indices(_LN_sparse, d)
@@ -424,11 +422,9 @@ mutable struct Bnc{T} <: AbstractBnc # T is the int type to save all the indices
             _LN_top_diag_idx,
             _LN_lu,
         )
-        # _N_sparse = sparse(N) # sparse version of N, used for fast calculation
-
         new(
             # Fields 1-5
-            N, L, r, n, d,
+            N_sparse, L_sparse, r, n, d,
             # Fields 6-9
             x_sym, q_sym, K_sym, catalysis,
             # Fields 10-12 (Initialized empty)
@@ -450,8 +446,6 @@ mutable struct Bnc{T} <: AbstractBnc # T is the int type to save all the indices
             integration_helper,
 
             _L_helper,
-            _L_sparse,
-            _N_sparse,
             _LN_sparse,
         )
     end
@@ -495,11 +489,11 @@ end
 
 """
     Bnc(; N=nothing, L=nothing, x_sym=nothing, q_sym=nothing, K_sym=nothing,
-        S=nothing, aT=nothing, k=nothing, cat_x_idx=nothing) -> Bnc
+        Γ=nothing, Π=nothing, k=nothing, cat_x_idx=nothing) -> Bnc
 
 Construct a binding network model from stoichiometry (`N`) or conservation (`L`)
 matrices and optional symbol metadata. Catalysis data can be attached through
-`S`, `aT`, and `k`.
+`Γ`, `Π`, and `k`.
 
 # Keyword Arguments
 - `N`: Stoichiometry matrix (reactions × species).
@@ -507,8 +501,8 @@ matrices and optional symbol metadata. Catalysis data can be attached through
 - `x_sym`: Symbols for species concentrations.
 - `q_sym`: Symbols for total concentrations.
 - `K_sym`: Symbols for binding constants.
-- `S`: Catalysis change matrix in qK space.
-- `aT`: Catalysis index and coefficient matrix.
+- `Γ`: Catalysis change matrix in qK space.
+- `Π`: Catalysis index and coefficient matrix.
 - `k`: Catalysis rate constants.
 - `cat_x_idx`: Index of catalytic species.
 
@@ -560,7 +554,7 @@ end
 
 
 """
-    update_catalysis!(bnc::Bnc; S=nothing, aT=nothing, k=nothing, cat_x_idx=nothing) -> Bnc
+    update_catalysis!(bnc::Bnc; Γ=nothing, Π=nothing, k=nothing, cat_x_idx=nothing) -> Bnc
 
 Attach or update catalysis data on a `Bnc` model in-place.
 
@@ -568,8 +562,8 @@ Attach or update catalysis data on a `Bnc` model in-place.
 - `bnc`: Binding network model to update.
 
 # Keyword Arguments
-- `S`: Catalysis change matrix in qK space.
-- `aT`: Catalysis index and coefficient matrix.
+- `Γ`: Catalysis change matrix in qK space.
+- `Π`: Catalysis index and coefficient matrix.
 - `k`: Rate constants.
 - `cat_x_idx`: Index of catalytic species.
 
@@ -577,17 +571,17 @@ Attach or update catalysis data on a `Bnc` model in-place.
 - The updated `bnc`.
 """
 function update_catalysis!(bnc::Bnc;
-    S::Union{Matrix{Int},Nothing}=nothing,
-    aT::Union{Matrix{Int},Nothing}=nothing,
+    Γ::Union{Matrix{Int},Nothing}=nothing,
+    Π::Union{Matrix{Int},Nothing}=nothing,
     k_sym::Union{Num,Nothing}=nothing,
     )
     if isnothing(bnc.catalysis)
-        bnc.catalysis = CatalysisData(S=S, aT=aT, k_sym=k_sym)
+        bnc.catalysis = CatalysisData(Γ=Γ, Π=Π, k_sym=k_sym)
     else
-        S = isnothing(S) ? bnc.catalysis.S : S
-        aT = isnothing(aT) ? bnc.catalysis.aT : aT
+        Γ = isnothing(Γ) ? bnc.catalysis.Γ : Γ
+        Π = isnothing(Π) ? bnc.catalysis.Π : Π
         k_sym = isnothing(k_sym) ? bnc.catalysis.k_sym : k_sym
-        bnc.catalysis = CatalysisData(S=S, aT=aT, k_sym=k_sym)
+        bnc.catalysis = CatalysisData(Γ=Γ, Π=Π, k_sym=k_sym)
     end
     _ensure_catalysis_meet_with_bnc(bnc.d, bnc.n, bnc.catalysis)
     return nothing

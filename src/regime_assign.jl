@@ -12,7 +12,7 @@ function assign_vertex_x(Bnc::Bnc{T}, x::AbstractVector{<:Real};
     asymptotic_only::Bool=true,
     return_idx::Bool=false) where T
     # x = input_logspace ? exp10.(x) : x
-    L = Bnc._L_sparse
+    L = Bnc.L
     d = Bnc.d
     n = Bnc.n
     max_indices = zeros(T, d)
