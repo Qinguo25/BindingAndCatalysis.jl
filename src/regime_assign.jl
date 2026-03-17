@@ -3,11 +3,11 @@
 #-----------------------------------------------------------------
 
 """
-    assign_vertex_x(bnc::Bnc, x; input_logspace=false, asymptotic_only=true, return_idx=false)
+    assign_regime_x(bnc::Bnc, x; input_logspace=false, asymptotic_only=true, return_idx=false)
 
 Assign a regime given a point in x space.
 """
-function assign_vertex_x(Bnc::Bnc{T}, x::AbstractVector{<:Real};
+function assign_regime_x(Bnc::Bnc{T}, x::AbstractVector{<:Real};
     input_logspace::Bool=false,
     asymptotic_only::Bool=true,
     return_idx::Bool=false) where T
@@ -48,23 +48,23 @@ end
 # end
 
 """
-    assign_vertex_qK(bnc::Bnc; x, input_logspace=false, kwargs...) -> Vector
+    assign_regime_qK(bnc::Bnc; x, input_logspace=false, kwargs...) -> Vector
 
 Assign a regime given a point in x space by first mapping to qK.
 """
-function assign_vertex_qK(Bnc::Bnc ; x::AbstractVector{<:Real}, input_logspace::Bool=false, kwargs...) 
+function assign_regime_qK(Bnc::Bnc ; x::AbstractVector{<:Real}, input_logspace::Bool=false, kwargs...) 
     # @show all_vertice_idx
     logqK = x2qK(Bnc,x; input_logspace=input_logspace, output_logspace=true)
-    return assign_vertex_qK(Bnc, logqK; input_logspace=true, kwargs...)
+    return assign_regime_qK(Bnc, logqK; input_logspace=true, kwargs...)
 end
 """
-    assign_vertex_qK(bnc::Bnc, qK; input_logspace=false, asymptotic_only=false, eps=0, return_idx=false)
+    assign_regime_qK(bnc::Bnc, qK; input_logspace=false, asymptotic_only=false, eps=0, return_idx=false)
 
 Assign a regime given qK coordinates.
 """
-function assign_vertex_qK(Bnc::Bnc, qK::AbstractVector{<:Real}; input_logspace::Bool=false, asymptotic_only::Bool=false, eps=0, return_idx::Bool=false) 
+function assign_regime_qK(Bnc::Bnc, qK::AbstractVector{<:Real}; input_logspace::Bool=false, asymptotic_only::Bool=false, eps=0, return_idx::Bool=false) 
     real_only = asymptotic_only ? true : nothing
-    all_vertice_idx = get_vertices(Bnc, singular=false, asymptotic = real_only, return_idx = true)
+    all_vertice_idx = get_regimes(Bnc, singular=false, asymptotic = real_only, return_idx = true)
     # @show all_vertice_idx
     logqK = input_logspace ? qK : log10.(qK)
     
@@ -88,16 +88,16 @@ function assign_vertex_qK(Bnc::Bnc, qK::AbstractVector{<:Real}; input_logspace::
 end
 
 """
-    assign_vertex(args...; kwargs...) -> Vector
+    assign_regime(args...; kwargs...) -> Vector
 
-Alias for `assign_vertex_qK`.
+Alias for `assign_regime_qK`.
 """
-assign_vertex(args...;kwargs...)=assign_vertex_qK(args...;kwargs...)
+assign_regime(args...;kwargs...)=assign_regime_qK(args...;kwargs...)
 
 
 #-------------------------------------------------------------------------------------------------------------------------------------------------------
 
-# Trying speedup assign_vertex_qK, but not success yet.
+# Trying speedup assign_regime_qK, but not success yet.
 """
     get_i_j(model::Bnc, perm, t) -> (Int, Int, Int)
 
@@ -113,11 +113,11 @@ function get_i_j(model::Bnc,perm::Vector{<:Integer}, t::Integer)
 end
 
 """
-    assign_vertex_qK_test(bnc::Bnc, qK; input_logspace=false, asymptotic=true, eps=0)
+    assign_regime_qK_test(bnc::Bnc, qK; input_logspace=false, asymptotic=true, eps=0)
 
 Experimental qK regime assignment using constraint violation updates.
 """
-function assign_vertex_qK_test(Bnc::Bnc{T}, qK::AbstractVector{<:Real};
+function assign_regime_qK_test(Bnc::Bnc{T}, qK::AbstractVector{<:Real};
                                input_logspace::Bool=false,
                                asymptotic::Bool=true, eps=0) where T
     logqK = input_logspace ? qK : log10.(qK)

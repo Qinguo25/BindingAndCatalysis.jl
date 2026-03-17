@@ -19,14 +19,14 @@ export calc_volume
 export logder_x_qK, logder_qK_x, ∂logx_∂logqK, ∂logqK_∂logx
 
 # include("regime_enumerate.jl")
-export find_all_vertices
+export find_all_regimes, find_all_vertices
 
 # include("regimes.jl")
-export find_all_vertices!, get_vertices_perm_dict, get_nullities, get_volumes, have_perm
-export get_vertices, get_vertices_neighbor_mat
-export is_singular, is_asymptotic, n_vertices
+export find_all_regimes!, find_all_vertices!, get_regimes_perm_dict, get_vertices_perm_dict, get_nullities, get_volumes, have_perm
+export get_regimes, get_vertices, get_regimes_neighbor_mat, get_vertices_neighbor_mat
+export is_singular, is_asymptotic, n_regimes, n_vertices
 
-export get_idx, get_perm, get_vertex, get_neighbors, get_nullity, get_one_inner_point
+export get_idx, get_perm, get_regime, get_vertex, get_neighbors, get_nullity, get_one_inner_point
 export get_P_P0, get_P,get_P0
 export get_M_M0, get_M, get_M0
 export get_H_H0,get_H,get_H0
@@ -41,7 +41,7 @@ export get_function
 
 
 # include("regime_assign.jl")
-export assign_vertex, assign_vertex_qK, assign_vertex_x
+export assign_regime, assign_regime_qK, assign_regime_x, assign_vertex, assign_vertex_qK, assign_vertex_x
 # include("symbolics.jl")
 export x_sym, q_sym, K_sym, qK_sym, ∂logqK_∂logx_sym, ∂logx_∂logqK_sym, logder_qK_x_sym, logder_x_qK_sym
 export show_condition_poly, show_condition_x, show_condition_qK, show_condition
@@ -50,7 +50,7 @@ export show_dominant_condition, show_conservation, show_equilibrium, show_interf
 export sym_direction, print_path, print_paths, format_arrow
 
 # include("regime_graphs.jl")
-export get_vertices_graph!, SISOPaths,  get_polyhedra, get_polyhedron, get_SISO_graph
+export get_regimes_graph!, get_vertices_graph!, SISOPaths,  get_polyhedra, get_polyhedron, get_SISO_graph
 export get_path, get_edge, get_intersect
 export get_neighbor_graph_x, get_neighbor_graph_qK,get_neighbor_graph
 export get_sources, get_sinks, get_sources_sinks

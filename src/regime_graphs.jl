@@ -2,12 +2,12 @@
 #This is graph associated functions for Bnc models and archetyple behaviors associated code
 #-----------------------------------------------------------------------------------------------
 """
-    _calc_vertices_graph(bnc::Bnc) -> VertexGraph
+    _calc_regimes_graph(bnc::Bnc) -> VertexGraph
 
 Build a `VertexGraph` from vertex permutations, connecting vertices that differ
 in exactly one row.
 """
-function  _calc_vertices_graph(Bnc::Bnc{T}) where {T} # optimized by GPT-5, not fullly understood yet.
+function  _calc_regimes_graph(Bnc::Bnc{T}) where {T} # optimized by GPT-5, not fullly understood yet.
     perms = Bnc.vertices_perm
     n = Bnc.n    
     L = Bnc.L
@@ -77,11 +77,11 @@ end
 
 
 """
-    _fulfill_vertices_graph!(vtx_graph::VertexGraph) -> nothing
+    _fulfill_regimes_graph!(vtx_graph::VertexGraph) -> nothing
 
 Compute qK-space change directions for edges in the vertex graph.
 """
-function _fulfill_vertices_graph!(vtx_graph::VertexGraph)
+function _fulfill_regimes_graph!(vtx_graph::VertexGraph)
     Bnc = vtx_graph.bn
     """
     fill the qK space change dir matrix for all vertices in Bnc.
@@ -411,14 +411,14 @@ Polyhedra.intersect(p::Polyhedron)= p # a fix for above function for if only one
 
 
 """
-    _ensure_full_vertices_graph!(grh::VertexGraph) -> nothing
+    _ensure_full_regimes_graph!(grh::VertexGraph) -> nothing
 
 Ensure qK change directions are computed for a vertex graph.
 """
-function _ensure_full_vertices_graph!(grh::VertexGraph)
+function _ensure_full_regimes_graph!(grh::VertexGraph)
     if !grh.change_dir_qK_computed
         @info "Calculating vertices neighbor graph with qK change dir"
-        _fulfill_vertices_graph!(grh)
+        _fulfill_regimes_graph!(grh)
         grh.change_dir_qK_computed = true
     end
     return nothing
@@ -452,25 +452,25 @@ end
 #                  Getting the Graph of of regimes
 #----------------------------------------------------------------------------
 """
-    get_vertices_graph!(bnc::Bnc; full=false) -> VertexGraph
+    get_regimes_graph!(bnc::Bnc; full=false) -> VertexGraph
 
 Ensure the vertex graph is built; when `full=true`, also compute qK change directions.
 """
-function get_vertices_graph!(Bnc::Bnc; full::Bool=false)::VertexGraph
+function get_regimes_graph!(Bnc::Bnc; full::Bool=false)::VertexGraph
 
-    initalize_vertices_graph!(Bnc) = let
-        find_all_vertices!(Bnc)# Ensure vertices are calculated
+    initalize_regimes_graph!(Bnc) = let
+        find_all_regimes!(Bnc)# Ensure vertices are calculated
         @info "Start calculating vertices neighbor graph, It may takes a while."
-        Bnc.vertices_graph =  _calc_vertices_graph(Bnc)
+        Bnc.vertices_graph =  _calc_regimes_graph(Bnc)
         nothing
     end
 
     if full
-        vtx_graph = get_vertices_graph!(Bnc; full=false)
-        _ensure_full_vertices_graph!(vtx_graph)
+        vtx_graph = get_regimes_graph!(Bnc; full=false)
+        _ensure_full_regimes_graph!(vtx_graph)
     else
         if isnothing(Bnc.vertices_graph)
-            initalize_vertices_graph!(Bnc)
+            initalize_regimes_graph!(Bnc)
         end
     end
 
@@ -489,7 +489,7 @@ function get_edge(grh::VertexGraph, from, to; full=false)::Union{Nothing, Vertex
     to = get_idx(get_binding_network(grh), to)
     
     if full
-        _ensure_full_vertices_graph!(grh)
+        _ensure_full_regimes_graph!(grh)
     end
     pos = get(grh.edge_pos[from], to, nothing)
     return pos === nothing ? nothing : grh.neighbors[from][pos]
@@ -502,7 +502,7 @@ end
 Convenience wrapper to fetch an edge from a model.
 """
 get_edge(Bnc, from, to; kwargs...)= let
-    vtx_grh = get_vertices_graph!(Bnc; full=false)
+    vtx_grh = get_regimes_graph!(Bnc; full=false)
     bn = get_binding_network(Bnc)
     from = get_idx(Bnc, from)
     to = get_idx(Bnc, to)
@@ -515,7 +515,7 @@ end
 Return the model backing a vertex graph.
 """
 get_binding_network(grh::VertexGraph,args...) = grh.bn
-# get_vertices_graph!(grh::VertexGraph,args...; kwargs...) = grh
+# get_regimes_graph!(grh::VertexGraph,args...; kwargs...) = grh
 
 
 
@@ -534,7 +534,7 @@ get_neighbor_graph_x(grh::VertexGraph) = grh.x_grh
 
 Return the x-space neighbor graph for a model.
 """
-get_neighbor_graph_x(Bnc::Bnc) = get_neighbor_graph_x(get_vertices_graph!(Bnc; full=false))
+get_neighbor_graph_x(Bnc::Bnc) = get_neighbor_graph_x(get_regimes_graph!(Bnc; full=false))
 
 """
     get_neighbor_graph_qK(grh::VertexGraph; both_side=false) -> SimpleDiGraph
@@ -542,7 +542,7 @@ get_neighbor_graph_x(Bnc::Bnc) = get_neighbor_graph_x(get_vertices_graph!(Bnc; f
 Return the qK-space neighbor graph for a vertex graph.
 """
 get_neighbor_graph_qK(grh::VertexGraph; both_side::Bool=false)::SimpleDiGraph = let
-    _ensure_full_vertices_graph!(grh)
+    _ensure_full_regimes_graph!(grh)
 
     qK_grh = let # construct the qK_graph
         Bnc = get_binding_network(grh)
@@ -569,7 +569,7 @@ end
 
 Return the qK neighbor graph for a model.
 """
-get_neighbor_graph_qK(Bnc::Bnc; kwargs...) = get_neighbor_graph_qK(get_vertices_graph!(Bnc; full=true); kwargs...)
+get_neighbor_graph_qK(Bnc::Bnc; kwargs...) = get_neighbor_graph_qK(get_regimes_graph!(Bnc; full=true); kwargs...)
 """
     get_neighbor_graph_qK(grh::SISOPaths; kwargs...) -> SimpleDiGraph
 
@@ -597,7 +597,7 @@ get_SISO_graph(grh::SISOPaths) = grh.qK_grh
 
 Return a SISO graph for a chosen qK coordinate.
 """
-get_SISO_graph(model::Bnc, change_qK) = get_SISO_graph(get_vertices_graph!(model; full=true), change_qK)
+get_SISO_graph(model::Bnc, change_qK) = get_SISO_graph(get_regimes_graph!(model; full=true), change_qK)
 """
     get_SISO_graph(grh::VertexGraph, change_qK) -> SimpleDiGraph
 
@@ -606,7 +606,7 @@ Build a SISO graph from a vertex graph for a chosen qK coordinate.
 function get_SISO_graph(grh::VertexGraph, change_qK)::SimpleDiGraph
     bn = get_binding_network(grh)
     change_qK_idx = locate_sym_qK(bn, change_qK)
-    _ensure_full_vertices_graph!(grh)
+    _ensure_full_regimes_graph!(grh)
 
     n = length(grh.neighbors)
 

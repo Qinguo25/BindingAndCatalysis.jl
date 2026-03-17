@@ -188,11 +188,11 @@ function _get_Nρ_key(Bnc::Bnc{T}, perm)::Vector{T} where T
 end
 _get_Nρ_inv_from_perm!(Bnc, perm) = _get_Nρ_inv!(Bnc, _get_Nρ_key(Bnc, perm))
 """
-    _vertex_graph_to_sparse(g::VertexGraph; weight_fn=e->1) -> SparseMatrixCSC
+    _regime_graph_to_sparse(g::VertexGraph; weight_fn=e->1) -> SparseMatrixCSC
 
 Convert a `VertexGraph` to a sparse adjacency matrix.
 """
-function _vertex_graph_to_sparse(G::VertexGraph{T}; weight_fn = e -> 1) where T
+function _regime_graph_to_sparse(G::VertexGraph{T}; weight_fn = e -> 1) where T
     n = length(G.neighbors)
     Ty = eltype(weight_fn(first(G.neighbors[1]))) # infer the type of weights from the first edge
     # 预分配估计：平均度 × n
@@ -212,15 +212,15 @@ function _vertex_graph_to_sparse(G::VertexGraph{T}; weight_fn = e -> 1) where T
     return sparse(I,J,V, n, n) |> dropzeros!
 end
 """
-    _create_vertex(bnc::Bnc, perm) -> BindRegime
+    _create_regime(bnc::Bnc, perm) -> BindRegime
 
 Create a partially-filled `BindRegime` (P/P0, M/M0, C_x/C0_x are ready).
 """
-function _create_vertex(Bnc::Bnc, perm::Vector{<:Integer})::BindRegime
-    find_all_vertices!(Bnc)
+function _create_regime(Bnc::Bnc, perm::Vector{<:Integer})::BindRegime
+    find_all_regimes!(Bnc)
     helper = Bnc._L_helper
     idx = Bnc.vertices_perm_dict[perm] # Index of the vertex in the Bnc.vertices_perm list
-    real = Bnc.vertices_asymptotic_flag[idx] # Check if the vertex is real or fake
+    is_asymptotic = Bnc.vertices_asymptotic_flag[idx] # Check if the vertex is asymptotic or fake
     nullity = Bnc.vertices_nullity[idx] # Get the nullity of the vertex
     
     P, P0 = _calc_P_P0(perm,helper); 
@@ -234,7 +234,7 @@ function _create_vertex(Bnc::Bnc, perm::Vector{<:Integer})::BindRegime
         nullity = nullity,
         idx = idx,
         perm = perm, 
-        real = real,
+        is_asymptotic = is_asymptotic,
         M = M, M0 = M0, P = P, P0 = P0, C_x = C_x, C0_x = C0_x
     )
 end
@@ -279,7 +279,7 @@ end
 #     """
 #     Bnc = vtx.network
 #     if isempty(vtx.neighbors_idx)
-#         vtx_grh = get_vertices_graph!(Bnc;full=false)
+#         vtx_grh = get_regimes_graph!(Bnc;full=false)
 #         vtx.neighbors_idx = vtx_grh.neighbors[vtx.idx] .|> e -> e.to
 #     end
 #     return nothing
@@ -291,12 +291,12 @@ end
 # ------------------------------------------------------------------------------
 
 """
-    find_all_vertices!(bnc::Bnc) -> Vector{Vector{Int}}
+    find_all_regimes!(bnc::Bnc) -> Vector{Vector{Int}}
 
 Compute and cache all vertex permutations, asymptotic flags, Nρ inverse cache,
 and vertex nullities.
 """
-function find_all_vertices!(model::Bnc{T};) where T # cheap enough for now
+function find_all_regimes!(model::Bnc{T};) where T # cheap enough for now
     if isempty(model.vertices_perm) 
         @info "---------------------Start finding all vertices--------------------"
         # all vertices
@@ -334,12 +334,12 @@ end
 
 
 """
-    get_vertices_perm_dict(bnc::Bnc) -> Dict
+    get_regimes_perm_dict(bnc::Bnc) -> Dict
 
 Return a dictionary mapping permutation vectors to vertex indices.
 """
-function get_vertices_perm_dict(Bnc::Bnc)
-    find_all_vertices!(Bnc) # Ensure vertices are calculated
+function get_regimes_perm_dict(Bnc::Bnc)
+    find_all_regimes!(Bnc) # Ensure vertices are calculated
     return Bnc.vertices_perm_dict
 end
 """
@@ -351,7 +351,7 @@ function get_nullities(Bnc::Bnc, rgms::Union{AbstractVector,Nothing}=nothing)
     """
     Calculate the nullity of all vertices in Bnc.
     """
-    find_all_vertices!(Bnc)
+    find_all_regimes!(Bnc)
     if isnothing(rgms)
         return Bnc.vertices_nullity
     else
@@ -372,7 +372,7 @@ function get_volumes(Bnc::Bnc,vtxs::Union{AbstractVector,Nothing}=nothing;
     rebase_mat:: Union{AbstractMatrix{<:Real},Nothing} = nothing,
     kwargs...)
 
-    all_vtxs = isnothing(vtxs) ? get_vertices(Bnc;return_idx=true) : [get_idx(Bnc, vtx) for vtx in vtxs]
+    all_vtxs = isnothing(vtxs) ? get_regimes(Bnc;return_idx=true) : [get_idx(Bnc, vtx) for vtx in vtxs]
 
     vtxs_to_calc = 
         if recalculate
@@ -395,7 +395,7 @@ function get_volumes(Bnc::Bnc,vtxs::Union{AbstractVector,Nothing}=nothing;
         
         #ensure conditions for volume calculation are calced, may further replaced by other functions
         Threads.@threads for idx in vtxs_to_calc
-           get_vertex(Bnc,idx; inv_info=true)
+           get_regime(Bnc,idx; inv_info=true)
         end
         
         vtxs = @view Bnc.vertices_data[vtxs_to_calc]
@@ -404,7 +404,7 @@ function get_volumes(Bnc::Bnc,vtxs::Union{AbstractVector,Nothing}=nothing;
 
         rlts = calc_volume(vtxs; rebase_mat=rebase_mat, kwargs...)
         for (i,idx) in enumerate(vtxs_to_calc)
-            vtx = get_vertex(Bnc,idx; inv_info=false)
+            vtx = get_regime(Bnc,idx; inv_info=false)
             vtx.volume = rlts[i]
             Bnc._vertices_volume_is_calced[idx]=true
         end
@@ -416,29 +416,29 @@ end
 #   Functions involving vertices relationships, (neighbors finding and changedir finding)
 #---------------------------------------------------------------------------------------------
 """
-    get_vertices_neighbor_mat_x(bnc::Bnc) -> SparseMatrixCSC
+    get_regimes_neighbor_mat_x(bnc::Bnc) -> SparseMatrixCSC
 
 Return the x-space adjacency matrix of the vertex graph.
 """
-function get_vertices_neighbor_mat_x(Bnc::Bnc)
-    grh = get_vertices_graph!(Bnc;full=false)
-    spmat = _vertex_graph_to_sparse(grh; weight_fn = e -> 1)
+function get_regimes_neighbor_mat_x(Bnc::Bnc)
+    grh = get_regimes_graph!(Bnc;full=false)
+    spmat = _regime_graph_to_sparse(grh; weight_fn = e -> 1)
     return spmat
 end
 
 """
-    get_vertices_neighbor_mat_qK(bnc::Bnc) -> SparseMatrixCSC
+    get_regimes_neighbor_mat_qK(bnc::Bnc) -> SparseMatrixCSC
 
 Return the qK-space adjacency matrix of the vertex graph.
 """
-function get_vertices_neighbor_mat_qK(Bnc::Bnc)
-    grh = get_vertices_graph!(Bnc;full=true)
+function get_regimes_neighbor_mat_qK(Bnc::Bnc)
+    grh = get_regimes_graph!(Bnc;full=true)
     f(x::VertexEdge) = isnothing(x.change_dir_qK) ? 0 : 1
-    spmat = _vertex_graph_to_sparse(grh; weight_fn = f)
+    spmat = _regime_graph_to_sparse(grh; weight_fn = f)
     return spmat
 end
 
-get_vertices_neighbor_mat(args...;kwargs...) =  get_vertices_neighbor_mat_qK(args...;kwargs...)
+get_regimes_neighbor_mat(args...;kwargs...) =  get_regimes_neighbor_mat_qK(args...;kwargs...)
 
 
 #-------------------------------------------------------------------------------------
@@ -451,12 +451,12 @@ Return the vertex index, optionally validating it.
 """
 function get_idx(Bnc::Bnc, idx::T;check::Bool=false) where T<:Integer
     if check
-        find_all_vertices!(Bnc)
+        find_all_regimes!(Bnc)
         @assert idx ≥ 1 && idx ≤ length(Bnc.vertices_perm) "The given index is out of range."
     end
    return idx
 end
-get_idx(Bnc::Bnc,perm::AbstractVector;kwargs...)=(find_all_vertices!(Bnc);Bnc.vertices_perm_dict[get_perm(Bnc, perm)])
+get_idx(Bnc::Bnc,perm::AbstractVector;kwargs...)=(find_all_regimes!(Bnc);Bnc.vertices_perm_dict[get_perm(Bnc, perm)])
 get_idx(vtx::BindRegime) = vtx.idx
 get_idx(Bnc::Bnc, vtx::BindRegime;kwargs...)= get_idx(vtx)
 
@@ -468,24 +468,24 @@ Return the permutation vector, optionally validating it.
 """
 function get_perm(Bnc::Bnc,perm::Vector{<:Integer};check::Bool=false)
     if check
-        find_all_vertices!(Bnc)
+        find_all_regimes!(Bnc)
         @assert haskey(Bnc.vertices_perm_dict, perm) "The given perm is not in Bnc"
     end
     return perm
 end
 get_perm(Bnc::Bnc, perm::AbstractVector) = get_perm(Bnc, locate_sym_x.(Ref(Bnc), perm))
-get_perm(Bnc::Bnc, idx::Integer; kwargs...)=(find_all_vertices!(Bnc); Bnc.vertices_perm[idx])
+get_perm(Bnc::Bnc, idx::Integer; kwargs...)=(find_all_regimes!(Bnc); Bnc.vertices_perm[idx])
 get_perm(vtx::BindRegime) = vtx.perm
 get_perm(Bnc::Bnc, vtx::BindRegime;kwargs...)= get_perm(vtx)
 
 
 """
-    get_vertex(bnc::Bnc, perm; check=false, kwargs...) -> BindRegime
+    get_regime(bnc::Bnc, perm; check=false, kwargs...) -> BindRegime
 
 Retrieve a vertex from cache or create it if missing.
 """
-function get_vertex(Bnc::Bnc, perm; check::Bool=false, kwargs...)::BindRegime
-    find_all_vertices!(Bnc) #initialize perm_data
+function get_regime(Bnc::Bnc, perm; check::Bool=false, kwargs...)::BindRegime
+    find_all_regimes!(Bnc) #initialize perm_data
     
     vtx = begin
         idx = get_idx(Bnc, perm; check=check)          
@@ -493,20 +493,20 @@ function get_vertex(Bnc::Bnc, perm; check::Bool=false, kwargs...)::BindRegime
             vt = Bnc.vertices_data[idx]
         else
             perm = Bnc.vertices_perm[idx]
-            vt = _create_vertex(Bnc, perm)
+            vt = _create_regime(Bnc, perm)
             Bnc.vertices_data[idx] = vt
             Bnc._vertices_is_initialized[idx] = true
         end
         vt
     end
-    return get_vertex(vtx; kwargs...)
+    return get_regime(vtx; kwargs...)
 end
 """
-    get_vertex(vtx::BindRegime; inv_info=true, kwargs...) -> BindRegime
+    get_regime(vtx::BindRegime; inv_info=true, kwargs...) -> BindRegime
 
 Ensure a vertex has requested cached fields and return it.
 """
-function get_vertex(vtx::BindRegime; inv_info::Bool=true,kwargs...)::BindRegime
+function get_regime(vtx::BindRegime; inv_info::Bool=true,kwargs...)::BindRegime
     if inv_info
         _fill_inv_info!(vtx)
     end
@@ -528,8 +528,8 @@ get_binding_network(vtx::BindRegime,args...)=vtx.network
 
 Return `true` when a permutation or index exists in the model.
 """
-have_perm(Bnc::Bnc, perm::AbstractVector) = (find_all_vertices!(Bnc); haskey(Bnc.vertices_perm_dict, get_perm(Bnc, perm)))
-have_perm(Bnc::Bnc, idx::Integer) = (find_all_vertices!(Bnc); idx ≥ 1 && idx ≤ length(Bnc.vertices_perm))
+have_perm(Bnc::Bnc, perm::AbstractVector) = (find_all_regimes!(Bnc); haskey(Bnc.vertices_perm_dict, get_perm(Bnc, perm)))
+have_perm(Bnc::Bnc, idx::Integer) = (find_all_regimes!(Bnc); idx ≥ 1 && idx ≤ length(Bnc.vertices_perm))
 have_perm(Bnc::Bnc, vtx::BindRegime) = have_perm(Bnc, get_perm(vtx))
 
 
@@ -545,7 +545,7 @@ Return neighbors of a vertex filtered by singularity and asymptotic flags.
 """
 function get_neighbors(args...; singular::Union{Bool,Int,Nothing}=nothing, asymptotic::Union{Bool,Nothing}=nothing, return_idx::Bool=false)
     Bnc = get_binding_network(args...)
-    grh = get_vertices_graph!(Bnc;full=true)
+    grh = get_regimes_graph!(Bnc;full=true)
     rgm_idx = get_idx(args...)
 
     idx = keys(grh.edge_pos[rgm_idx]) |> collect
@@ -578,7 +578,7 @@ end
 # """
 # get_nullity(args...) = begin
 #     model = get_binding_network(args...)
-#     find_all_vertices!(model)
+#     find_all_regimes!(model)
 #     return model.vertices_nullity[get_idx(args...)]
 # end::Integer
 
@@ -597,10 +597,10 @@ Return `true` if the vertex is asymptotic (real).
 """
 is_asymptotic(args...) = begin
     model = get_binding_network(args...)
-    find_all_vertices!(model)
+    find_all_regimes!(model)
     return model.vertices_asymptotic_flag[get_idx(args...)]
 end::Bool
-is_asymptotic(vtx::BindRegime) = vtx.real
+is_asymptotic(vtx::BindRegime) = vtx.is_asymptotic
 
 
 
@@ -610,7 +610,7 @@ is_asymptotic(vtx::BindRegime) = vtx.real
 
 Return `(P, P0)` for a vertex, creating it if needed.
 """
-get_P_P0(args...) = get_vertex(args...; inv_info=false) |> vtx -> (vtx.P, vtx.P0)
+get_P_P0(args...) = get_regime(args...; inv_info=false) |> vtx -> (vtx.P, vtx.P0)
 """
     get_P(args...) -> SparseMatrixCSC
 
@@ -629,7 +629,7 @@ get_P0(args...) = get_P_P0(args...)[2]
 
 Return `(M, M0)` for a vertex, creating it if needed.
 """
-get_M_M0(args...) = get_vertex(args...; inv_info=false) |> vtx -> (vtx.M, vtx.M0)
+get_M_M0(args...) = get_regime(args...; inv_info=false) |> vtx -> (vtx.M, vtx.M0)
 """
     get_M(args...) -> SparseMatrixCSC
 
@@ -648,7 +648,7 @@ get_M0(args...) = get_M_M0(args...)[2]
 
 Return `(C_x, C0_x)` for a vertex.
 """
-get_C_C0_x(args...) = get_vertex(args...; inv_info=false) |> vtx -> (vtx.C_x, vtx.C0_x)
+get_C_C0_x(args...) = get_regime(args...; inv_info=false) |> vtx -> (vtx.C_x, vtx.C0_x)
 """
     get_C_x(args...) -> SparseMatrixCSC
 
@@ -668,7 +668,7 @@ get_C0_x(args...) = get_C_C0_x(args...)[2]
 
 Return `(C_qK, C0_qK, nullity)` for a vertex.
 """
-get_C_C0_nullity_qK(args...) = get_vertex(args...; inv_info=true) |> vtx -> (vtx.C_qK, vtx.C0_qK, vtx.nullity)
+get_C_C0_nullity_qK(args...) = get_regime(args...; inv_info=true) |> vtx -> (vtx.C_qK, vtx.C0_qK, vtx.nullity)
 """
     get_C_C0_qK(args...) -> (SparseMatrixCSC, Vector)
 
@@ -694,13 +694,13 @@ get_C0_qK(args...) = get_C_C0_nullity_qK(args...)[2]
 
 Return `(H, H0)` for a non-singular vertex.
 """
-get_H_H0(args...) = is_singular(args...) ? @error("BindRegime is singular, cannot get H0") : get_vertex(args...; inv_info=true) |> vtx -> (vtx.H, vtx.H0)
+get_H_H0(args...) = is_singular(args...) ? @error("BindRegime is singular, cannot get H0") : get_regime(args...; inv_info=true) |> vtx -> (vtx.H, vtx.H0)
 """
     get_H(args...) -> SparseMatrixCSC
 
 Return `H` for a vertex when nullity <= 1.
 """
-get_H(args...) = get_nullity(args...) > 1 ? @error("BindRegime's nullity is bigger than 1, cannot get H") : get_vertex(args...; inv_info=true).H
+get_H(args...) = get_nullity(args...) > 1 ? @error("BindRegime's nullity is bigger than 1, cannot get H") : get_regime(args...; inv_info=true).H
 """
     get_H0(args...) -> Vector
 
@@ -790,17 +790,17 @@ Return the nullity of a vertex.
 """
 get_nullity(args...) = begin
     model = get_binding_network(args...)
-    find_all_vertices!(model)
+    find_all_regimes!(model)
     return model.vertices_nullity[get_idx(args...)]
 end::Integer
 get_nullity(vtx::BindRegime) = vtx.nullity
 
 """
-    n_vertices(bnc::Bnc) -> Int
+    n_regimes(bnc::Bnc) -> Int
 
 Return the number of vertices in the model.
 """
-n_vertices(Bnc::Bnc) = length(Bnc.vertices_perm)
+n_regimes(Bnc::Bnc) = length(Bnc.vertices_perm)
 
 """
     get_volume(args...; kwargs...) -> Volume
@@ -819,11 +819,11 @@ end
 #----------------------------------------------------------------------------------------------------------------------------------------
 
 """
-    _is_vertex_graph_neighbor(bnc, vtx1, vtx2) -> Bool
+    _is_regime_graph_neighbor(bnc, vtx1, vtx2) -> Bool
 
 Return `true` if vertices are neighbors in the vertex graph.
 """
-function _is_vertex_graph_neighbor(Bnc, vtx1, vtx2)::Bool
+function _is_regime_graph_neighbor(Bnc, vtx1, vtx2)::Bool
     edge = get_edge(Bnc,vtx1,vtx2) 
     if edge === nothing || edge.change_dir_qK === nothing
         return false
@@ -953,12 +953,12 @@ get_change_dir_x(args...;kwargs...) = get_interface_x(args...;kwargs...)[1]
 #         functions of getting vertices with certain properties
 # -------------------------------------------------------------------------------------
 """
-    get_vertices(bnc::Bnc; singular=nothing, asymptotic=nothing, return_idx=false) -> Vector
+    get_regimes(bnc::Bnc; singular=nothing, asymptotic=nothing, return_idx=false) -> Vector
 
 Return vertices that satisfy singularity/asymptotic filters.
 """
-function get_vertices(Bnc::Bnc; return_idx::Bool=false, kwargs...)
-    find_all_vertices!(Bnc)
+function get_regimes(Bnc::Bnc; return_idx::Bool=false, kwargs...)
+    find_all_regimes!(Bnc)
     idx_all = eachindex(Bnc.vertices_data)
     masks = _get_mask(Bnc, idx_all; kwargs...)
     return return_idx ? findall(masks) : Bnc.vertices_perm[masks]
@@ -974,7 +974,7 @@ function _get_mask(model::Bnc,vtxs::AbstractVector{<:Integer};
      singular::Union{Bool,Integer,Nothing}=nothing, 
      asymptotic::Union{Bool,Nothing}=nothing)::Vector{Bool}
     # ensure nullity and asymptotic flags are calculated
-    find_all_vertices!(model)
+    find_all_regimes!(model)
 
     nlt = model.vertices_nullity
     flag_asym = model.vertices_asymptotic_flag
@@ -1007,6 +1007,8 @@ function _get_mask(rgms::AbstractVector{<:BindRegime};
         f(get_nullity(vtx)) && g(is_asymptotic(vtx))
     end
 end
+
+_get_regimes_mask(args...; kwargs...) = _get_mask(args...; kwargs...)
 
 
 
@@ -1086,7 +1088,7 @@ end
 Return vertices feasible under additional constraints.
 """
 function feasible_vertieces_with_constraint(Bnc::Bnc; C::AbstractMatrix{<:Real},C0::AbstractVector{<:Real},nullity::Int=0,kwargs...)
-    all_vtx = get_vertices(Bnc;kwargs...)
+    all_vtx = get_regimes(Bnc;kwargs...)
     feasible_vtx = Vector{eltype(all_vtx)}()
     for perm in all_vtx
         if check_feasibility_with_constraint(Bnc, perm; C=C, C0=C0, nullity=nullity)
@@ -1100,11 +1102,11 @@ end
 #Other higher lever functions
 #----------------------------------------------------------------
 """
-    summary_vertex(args...) -> nothing
+    summary_regime(args...) -> nothing
 
 Print a detailed summary for a single vertex.
 """
-function summary_vertex(args...)
+function summary_regime(args...)
     idx= get_idx(args...)
     perm = get_perm(args...)
     is_real = is_asymptotic(args...)
@@ -1128,20 +1130,20 @@ end
 """
     summary(bnc::Bnc, perm) -> nothing
 
-Alias for `summary_vertex`.
+Alias for `summary_regime`.
 """
-summary(Bnc::Bnc, perm)= summary_vertex(Bnc, perm)
+summary(Bnc::Bnc, perm)= summary_regime(Bnc, perm)
 """
     summary(vtx::BindRegime) -> nothing
 
-Alias for `summary_vertex`.
+Alias for `summary_regime`.
 """
-summary(vtx::BindRegime)= summary_vertex(vtx)
+summary(vtx::BindRegime)= summary_regime(vtx)
 
 
 # function summary_vertices(Bnc::Bnc;kwargs...)
-#     vtx = get_vertices(Bnc;kwargs...)
-#     vtx .|> x->summary_vertex(Bnc,x)
+#     vtx = get_regimes(Bnc;kwargs...)
+#     vtx .|> x->summary_regime(Bnc,x)
 #     return nothing
 # end
 

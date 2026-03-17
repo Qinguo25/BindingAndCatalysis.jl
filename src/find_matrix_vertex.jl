@@ -443,7 +443,7 @@ end
 # ============================================================
 
 """
-    find_all_vertices(L; eps=1e-9, dominance_ratio=Inf,
+    find_all_regimes(L; eps=1e-9, dominance_ratio=Inf,
                        enumerate_asymptotic_only=false)
 
 Compile all regime-related structures from a nonnegative integer matrix `L`.
@@ -466,7 +466,7 @@ Notes:
 - `dominance_ratio == Inf` means use `eps` directly
 - otherwise, feasible mode uses `eps_eff = log10(dominance_ratio)`
 """
-function find_all_vertices(
+function find_all_regimes(
     L::AbstractMatrix{Tv};
     eps::Real = eps(),
     dominance_ratio::Real = Inf,

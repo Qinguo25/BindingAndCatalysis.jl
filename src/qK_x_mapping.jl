@@ -107,7 +107,7 @@ function qK2x(Bnc::Bnc, qK::AbstractVector{<:Real};
     endlogqK = input_logspace ? qK : log10.(qK)
 
     logx = if use_vtx
-            perm = assign_vertex_qK(Bnc,endlogqK; input_logspace=true,asymptotic_only=false)
+            perm = assign_regime_qK(Bnc,endlogqK; input_logspace=true,asymptotic_only=false)
             H,H0 = get_H_H0(Bnc,perm)
             H* endlogqK .+ H0
         elseif ismissing(method) || method != :homotopy

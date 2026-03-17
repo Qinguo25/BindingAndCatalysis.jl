@@ -180,7 +180,7 @@ mutable struct BindRegime{F,T} <: AbstractRegime
     # --- Initial / Identifying Properties ---
     perm::Vector{T} # The regime vector
     idx::Int # Index of the vertex in the Bnc.vertices list
-    real::Bool # Whether the vertex is real or fake vertex.
+    is_asymptotic::Bool # Whether the vertex is asymptotic or not.
     
     # --- Basic Calculated Properties ---
     P::SparseMatrixCSC{Int, Int}
@@ -201,10 +201,10 @@ mutable struct BindRegime{F,T} <: AbstractRegime
     volume::Volume
 
     # The inner constructor also needs to be updated for the parametric type
-    function BindRegime(;network::Union{AbstractBnc,Nothing}=nothing, perm, P, P0::Vector{F}, M, M0, C_x, C0_x, idx,real,nullity::T) where {T<:Integer,F<:Real}
+    function BindRegime(;network::Union{AbstractBnc,Nothing}=nothing, perm, P, P0::Vector{F}, M, M0, C_x, C0_x, idx,is_asymptotic,nullity::T) where {T<:Integer,F<:Real}
         # _M_lu = lu(M, check=false) # It's good practice to ensure M is Float64 for LU
         # Use new{T} to construct an instance of BindRegime{T}
-        return new{F,T}(network, perm, idx,real, P, P0, M, M0, C_x, C0_x,
+        return new{F,T}(network, perm, idx,is_asymptotic, P, P0, M, M0, C_x, C0_x,
             nullity,
             SparseMatrixCSC{Float64, Int}(undef, 0, 0), # H
             Vector{F}(undef, 0),          # H0
@@ -263,7 +263,7 @@ end
 
 
 mutable struct CatalysisRegime <:AbstractRegime
-    bn::Union{AbstractBnc,Nothing} # Reference to the parent Bnc model
+    network::Union{AbstractBnc,Nothing} # Reference to the parent Bnc model
     perm::Vector{Int} # The regime vector
     idx::Int # Index of the vertex in the Catalysis.vertices list
 end
@@ -723,6 +723,7 @@ include(joinpath(@__DIR__,"regime_assign.jl"))
 include(joinpath(@__DIR__,"symbolics.jl"))
 include(joinpath(@__DIR__,"regime_graphs.jl"))
 include(joinpath(@__DIR__,"visualize.jl"))
+include(joinpath(@__DIR__,"old_api.jl"))
 
 
 """

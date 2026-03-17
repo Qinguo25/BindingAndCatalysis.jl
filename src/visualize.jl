@@ -55,7 +55,7 @@ function SISO_plot(model::Bnc, parameters, change_idx;
     
 
     #assign color
-    rgms = logx .|> x-> assign_vertex_x(model, x;input_logspace=true,asymptotic_only=asymptotic_only, return_idx=true)
+    rgms = logx .|> x-> assign_regime_x(model, x;input_logspace=true,asymptotic_only=asymptotic_only, return_idx=true)
     cmap = get_color_map(rgms; colormap=colormap)
     colors = getindex.(Ref(cmap), rgms)
 
@@ -199,7 +199,7 @@ end
 
 Return a color map for vertices in a model.
 """
-get_color_map(model::Bnc, args...;colormap=:rainbow, kwargs...) = get_color_map(get_vertices(model,args...;kwargs...), colormap=colormap)
+get_color_map(model::Bnc, args...;colormap=:rainbow, kwargs...) = get_color_map(get_regimes(model,args...;kwargs...), colormap=colormap)
 
 
 
@@ -220,7 +220,7 @@ get_color_map(model::Bnc, args...;colormap=:rainbow, kwargs...) = get_color_map(
 Return edges with weights for a specified qK change direction.
 """
 function get_edge_weight_vec(Bnc::Bnc,change_qK_idx)::Vector{Tuple{Edge,Dict{Symbol,Any}}}
-    vg = get_vertices_graph!(Bnc;full=true)
+    vg = get_regimes_graph!(Bnc;full=true)
     n = length(vg.neighbors)
     weight_vec = Vector{Tuple{Edge,Dict{Symbol,Any}}}()
     for (i, edges) in enumerate(vg.neighbors)
@@ -292,7 +292,7 @@ end
 Return edge labels for qK-space edges, optionally only one direction.
 """
 function get_edge_labels(Bnc::Bnc; half::Bool=false,f=nothing)::Dict{Edge,String}
-    vg = get_vertices_graph!(Bnc;full=true)
+    vg = get_regimes_graph!(Bnc;full=true)
     labels = Dict{Edge,String}()
     for (i, edges) in enumerate(vg.neighbors)
         if get_nullity(Bnc,i) >1 # skip higher nullity
@@ -349,7 +349,7 @@ Return node colors based on regime types.
 """
 function get_node_colors(model, regimes=nothing; singular_color="#CCCCFF", asymptotic_color="#FFCCCC", regular_color="#CCFFCC")::Vector{String}
     
-    all_regimes = isnothing(regimes) ? get_vertices(model;return_idx=true) : regimes
+    all_regimes = isnothing(regimes) ? get_regimes(model;return_idx=true) : regimes
     all_node_colors = let 
             node_colors = Vector{String}(undef, length(all_regimes))
             for (i,j) in enumerate(all_regimes)
@@ -392,11 +392,11 @@ function get_node_size(model::Bnc; default_node_size=50, asymptotic=true, kwargs
     vals = get_volumes(model; asymptotic=asymptotic, kwargs...) .|> x->x.mean
     
     zero_volume_idx = if asymptotic # both non-asymptotic and singular
-        non_asym_idx = get_vertices(model, singular=nothing, asymptotic=false, return_idx=true) # non-asymptotic
-        singular_asym_idx = get_vertices(model, singular=true, asymptotic=true, return_idx=true)# singular asymptotic
+        non_asym_idx = get_regimes(model, singular=nothing, asymptotic=false, return_idx=true) # non-asymptotic
+        singular_asym_idx = get_regimes(model, singular=true, asymptotic=true, return_idx=true)# singular asymptotic
         vcat(non_asym_idx, singular_asym_idx)
     else # only singular
-        get_vertices(model, singular=true, asymptotic=nothing, return_idx=true) # only care about singular
+        get_regimes(model, singular=true, asymptotic=nothing, return_idx=true) # only care about singular
     end
 
     n_data = length(vals)-length(zero_volume_idx)
@@ -591,7 +591,7 @@ function draw_ROP(model::Bnc, pairs::AbstractVector{<:Tuple{Any, Any}};
     #####################################################################################################################
 
     # all potential vertices, could be direction for singular regimes.
-    V = get_vertices(model, singular = 1,return_idx=true) # only regimes with maximum singularity 1.
+    V = get_regimes(model, singular = 1,return_idx=true) # only regimes with maximum singularity 1.
 
     # find all singular and non-singular regimes, and we assign singular to their neighbor regimes.
     V_non_singular = filter(V) do v 
@@ -602,7 +602,7 @@ function draw_ROP(model::Bnc, pairs::AbstractVector{<:Tuple{Any, Any}};
         is_singular(model, v)
     end
 
-    neighbor_mat = get_vertices_neighbor_mat(model)
+    neighbor_mat = get_regimes_neighbor_mat(model)
     singular_neighbor_mat = neighbor_mat[V_singular, V_singular]
     nonsingular_neighbor_mat = neighbor_mat[V_non_singular, V_non_singular]
 

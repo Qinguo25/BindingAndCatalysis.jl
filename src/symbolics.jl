@@ -614,7 +614,7 @@ Return symbolic expressions and interface locations along a regime path.
 function show_expression_path(model::Bnc, rgm_path, change_qK_idx, observe_x_idx;log_space::Bool=false)::Tuple{Vector,Vector}
     change_qK_idx = locate_sym([model.q_sym;model.K_sym],change_qK_idx)
     observe_x_idx = locate_sym(model.x_sym, observe_x_idx)
-    have_volume_mask = _get_vertices_mask(model, rgm_path; singular=false)
+    have_volume_mask = _get_regimes_mask(model, rgm_path; singular=false)
     idx = findall(have_volume_mask)
     exprs = map(idx) do id
         show_expression_x(model, rgm_path[id];log_space=log_space)[observe_x_idx].rhs
