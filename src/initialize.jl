@@ -141,8 +141,6 @@ Base.:*(v::Volume, c::Real) = c * v
 Base.:/(v::Volume, c::Real) = Volume(v.mean / c, v.var / c^2)
 
 
-
-
 """
     Vertex
 
@@ -240,6 +238,69 @@ end
 end
 
 """
+Canonical hyperplane
+
+Stored in canonical form with `u < v`:
+
+    z_u - z_v + log10(num/den) = 0
+
+where `(num, den)` is the reduced integer ratio.
+"""
+struct Hyperplane_perm{Tv<:Integer} 
+    u::Int # fast access 
+    v::Int # fast access
+    num::Tv # reduced positive integer
+    den::Tv # reduced positive integer
+    c0::Float64 # pre-logarithm log10(num/den)
+    crow::SparseVector{Int8,Int}      # +1 at u, -1 at v
+    crow_neg::SparseVector{Int8,Int}  # +1 at v, -1 at u
+end
+
+"""
+One oriented inequality induced by choosing p in row i.
+If `sign == +1`, use the canonical side:
+    crow * z + c0 > 0
+If `sign == -1`, use the opposite side:
+    crow_neg * z - c0 > 0
+`competitor` is the losing column k compared against the perm dominant p.
+`oriented_c0 = log10(L[i,p] / L[i,k])`
+so the actual inequality is:
+    z_p - z_k + oriented_c0 > 0
+"""
+struct ChoiceIneq
+    hid::Int  # index into global hyperplane pool
+    sign::Int8 # +1 for canonical side, -1 for opposite side
+
+    #Fast access
+    _competitor::Int # fast access
+    _oriented_c0::Float64 # fast access.
+end
+
+"""
+Helper struct for managing matrix operations.
+- `J[i]`: positive columns in row i
+- `choice_slot[i][p]`: local slot of column p inside J[i], or 0 if p ∉ J[i]
+- `choice_map[i][t]`: all oriented inequalities for choosing p = J[i][t]
+- `hyperplanes`: global deduplicated hyperplane pool
+- `asymptotic`: all asymptotic regimes
+- `feasible`: all regimes feasible under the weighted constraints
+"""
+struct MatrixHelper{Tv<:Integer}
+    n::Int # number of columns
+    J::Vector{Vector{Int}} # positive columns idx for each row
+
+    # Fast access from column index to "local slot" in J[i]/ choice_logcoeff[i]
+    choice_slot::Vector{Vector{Int}} # k = choice_slot[i][p] denotes p is the k th positive column in row i, or 0 if p ∉ J[i]
+    choice_logcoeff::Vector{Vector{Float64}} # choice_logcoeff[i] = [log10(L[i, j]) for j in Ji]
+
+    rowptr::Vector{Int} # rowptr[i] gives the starting index of constraints for row i in the global constraint list
+
+    total_constraints::Int # total number of constraints across all rows
+    choice_map::Vector{Vector{Vector{ChoiceIneq}}} # choice_map[i][t] gives the list of oriented inequalities for choosing p = J[i][t]
+    hyperplanes::Vector{Hyperplane_perm{Tv}} # global deduplicated hyperplane pool
+end
+
+"""
     Bnc
 
 Binding network model with stoichiometry, conservation laws, and derived
@@ -284,14 +345,10 @@ mutable struct Bnc{T} <: AbstractBnc # T is the int type to save all the indices
     _anchor_log_x::Vector{<:Real}
     _anchor_log_qK::Vector{<:Real}
 
-    
+    _L_helper::MatrixHelper
     
     # sparse matrix for speeding up the calculation
     _L_sparse::SparseMatrixCSC{Int,Int} # sparse version of L, used for fast calculation
-    _L_sparse_val_one::SparseMatrixCSC{Int,Int} # sparse version of L with only non-zero elements set to 1, used for fast calculation
-    _valid_L_idx::Vector{Vector{Int}} #record the non-zero column position for each row.
-    _C_partition_idx::Vector{Int}# record the row partition of C matrix of invertible regimes. L[i,:] will stands for C[_C_partition_idx[i]:C_partition_idx[i+1]-1,:]
-
     _N_sparse::SparseMatrixCSC{Int,Int} # sparse version of N transpose, used for fast calculation
     _LN_sparse::SparseMatrixCSC{Float64,Int} # sparse version of [L;N], used for fast calculation
 
@@ -337,15 +394,9 @@ mutable struct Bnc{T} <: AbstractBnc # T is the int type to save all the indices
 
         # pre-calculate the non-zero position for L
 
+        _L_helper = _build_matrix_helper(L)
         _L_sparse = sparse(L) # sparse version of L
-        _L_sparse_val_one = sparse(sign.(L)) # sparse version of L with only non-zero elements set to 1
-        _valid_L_idx = [findall(!iszero, @view L[i,:]) for i in 1:d]
-        _C_partition_idx = Vector{Int}(undef, d+1)
-        _C_partition_idx[1] = 1
-        for i in 1:d
-            _C_partition_idx[i+1] = _C_partition_idx[i] + length(_valid_L_idx[i])-1
-        end  
-        
+
         _N_sparse = sparse(N) # sparse version of N
         _LN_sparse = Float64.([_L_sparse; _N_sparse])
         (_LN_top_rows, _LN_top_cols, _LN_top_idx) = rowmask_indices(_LN_sparse, 1,d) # record the position of non-zero elements in L within _LN_sparse
@@ -378,11 +429,8 @@ mutable struct Bnc{T} <: AbstractBnc # T is the int type to save all the indices
             direction,
             _anchor_log_x, _anchor_log_qK,
 
+            _L_helper,
             _L_sparse,
-            _L_sparse_val_one,
-            _valid_L_idx,
-            _C_partition_idx,
-
             _N_sparse,
             _LN_sparse,
 
@@ -539,7 +587,7 @@ include(joinpath(@__DIR__,"helperfunctions.jl"))
 include(joinpath(@__DIR__,"qK_x_mapping.jl"))
 include(joinpath(@__DIR__,"volume_calc.jl"))
 include(joinpath(@__DIR__,"numeric.jl"))
-include(joinpath(@__DIR__,"regime_enumerate.jl")) # before regimes.jl
+include(joinpath(@__DIR__,"find_matrix_vertex.jl")) # before regimes.jl
 include(joinpath(@__DIR__,"regimes.jl"))
 include(joinpath(@__DIR__,"regime_assign.jl"))
 include(joinpath(@__DIR__,"symbolics.jl"))

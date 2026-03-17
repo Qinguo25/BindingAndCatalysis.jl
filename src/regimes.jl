@@ -58,98 +58,7 @@ function _calc_H(Bnc::Bnc,perm::Vector{<:Integer})::SparseMatrixCSC
     H = droptol!(sparse(H),1e-10)
     return H
 end
-"""
-    _calc_P_and_P0(bnc::Bnc, perm) -> (SparseMatrixCSC, Vector{Float64})
 
-Build the selection matrix `P` and offset `P0` for a permutation.
-"""
-function _calc_P_and_P0(Bnc::Bnc{T}, perm::Vector{<:Integer})::Tuple{SparseMatrixCSC{Int,Int}, Vector{Float64}} where T
-    d, n = Bnc.d, Bnc.n
-    
-    # The non-zero elements are at rows i and columns perm[i].
-    I = 1:d                # Row indices are 1, 2, 3, ...
-    J = perm               # Column indices are given by the permutation vector
-    V = ones(Int, d)       # The value at each location is 1
-    P = sparse(I, J, V, d, n)
-
-    # The calculation for P0 remains the same
-    P0 = Vector{Float64}(undef, d)
-    for i in 1:d
-        P0[i] = log10(Bnc.L[i, perm[i]])
-    end
-    
-    return P, P0
-end
-"""
-    _calc_C_C0_x(bnc::Bnc, perm) -> (SparseMatrixCSC, Vector{Float64})
-
-Construct x-space inequality matrices `(C_x, C0_x)` for a permutation.
-
-# Returns
-- Sparse constraint matrix `C_x` and offset vector `C0_x`.
-"""
-function _calc_C_C0_x(Bnc::Bnc{T}, perm::Vector{<:Integer})::Tuple{SparseMatrixCSC{Int,Int}, Vector{Float64}} where T # highly optimized version
-    # This fucntion is created by chatgpt with numeric verification from dense version.
-    # Is the lowest level, maximum-speed version.
-    num_ineq = length(Bnc._L_sparse.nzval) - Bnc.d
-    nnz = 2 * num_ineq  # exactly two entries per inequality
-
-    # Preallocate row indices + values
-    rowval = Vector{Int}(undef, nnz)
-    nzval  = Vector{Int}(undef, nnz)
-    c0     = Vector{Float64}(undef, num_ineq)
-
-    # Count nonzeros per column first
-    colcounts = zeros(Int, Bnc.n)
-    for i in 1:Bnc.d
-        valid_idx = Bnc._valid_L_idx[i]
-        rgm = perm[i]
-        for col in valid_idx
-            if col != rgm
-                colcounts[col] += 1
-                colcounts[rgm] += 1
-            end
-        end
-    end
-    # Build colptr from counts
-    colptr = Vector{Int}(undef, Bnc.n+1)
-    colptr[1] = 1
-    for j in 1:Bnc.n
-        colptr[j+1] = colptr[j] + colcounts[j]
-    end
-
-    # Position trackers for each column
-    nextpos = copy(colptr)
-
-    # Fill in rowval, nzval
-    row = 1
-    for i in 1:Bnc.d
-        valid_idx = Bnc._valid_L_idx[i]
-        rgm = perm[i]
-        for col in valid_idx
-            if col != rgm
-                # insert (-1) at (row,col)
-                pos = nextpos[col]
-                rowval[pos] = row
-                nzval[pos]  = -1
-                nextpos[col] += 1
-
-                # insert (+1) at (row,rgm)
-                pos = nextpos[rgm]
-                rowval[pos] = row
-                nzval[pos]  = 1
-                nextpos[rgm] += 1
-
-                # compute c0 entry
-                c0[row] = log10(Bnc.L[i, rgm] / Bnc.L[i, col])
-                row += 1
-            end
-        end
-    end
-
-    c_mtx = SparseMatrixCSC(num_ineq, Bnc.n, colptr, rowval, nzval)
-    return c_mtx, c0
-end
 """
     _calc_C_C0_qK_singular(bnc::Bnc, vtx) -> (SparseMatrixCSC, Vector)
 
@@ -210,22 +119,6 @@ function _get_Nρ_inv!(Bnc::Bnc{T}, key::AbstractVector{<:Integer}) where T
     end
 end
 
-
-# """
-#     _locate_C_row(Bnc, i ,j1, j2)
-# Locate the row index in C matrix for 1 move from L[i,j1] to L[i,j2].
-# (Warning, for CqK, works only for invertible regime as singular will change the row order)
-# """
-# function _locate_C_row(Bnc::Bnc, i ,j1, j2)
-#     cls_start = Bnc._C_partition_idx[i]
-#     i_j1= findfirst(x-> x == j1, Bnc._valid_L_idx[i])
-#     i_j2= findfirst(x-> x == j2, Bnc._valid_L_idx[i])
-#     if isnothing(i_j1) || isnothing(i_j2)
-#         error("Either j1 or j2 is not a valid change direction for regime $i")
-#     end
-#     i = i_j2 < i_j1 ? i_j2 : i_j2 - 1
-#     return cls_start + i-1
-# end
 
 """
     _calc_change_col(from, to) -> Tuple
@@ -325,15 +218,16 @@ Create a partially-filled `Vertex` (P/P0, M/M0, C_x/C0_x are ready).
 """
 function _create_vertex(Bnc::Bnc, perm::Vector{<:Integer})::Vertex
     find_all_vertices!(Bnc)
+    helper = Bnc._L_helper
     idx = Bnc.vertices_perm_dict[perm] # Index of the vertex in the Bnc.vertices_perm list
     real = Bnc.vertices_asymptotic_flag[idx] # Check if the vertex is real or fake
     nullity = Bnc.vertices_nullity[idx] # Get the nullity of the vertex
     
-    P, P0 = _calc_P_and_P0(Bnc, perm); 
-    C_x, C0_x = _calc_C_C0_x(Bnc, perm)
-
+    P, P0 = _calc_P_P0(perm,helper); 
+    C_x, C0_x = _calc_C_C0(perm, helper)
     M = vcat(P, Bnc._N_sparse)
     M0 = vcat(P0, zeros(eltype(P0), Bnc.r))
+
     # Initialize a partial vertex. "Full" properties are empty placeholders.
     return Vertex(
         bn = Bnc,
@@ -344,6 +238,7 @@ function _create_vertex(Bnc::Bnc, perm::Vector{<:Integer})::Vertex
         M = M, M0 = M0, P = P, P0 = P0, C_x = C_x, C0_x = C0_x
     )
 end
+
 """
     _fill_inv_info!(vtx::Vertex) -> nothing
 
@@ -401,42 +296,40 @@ end
 Compute and cache all vertex permutations, asymptotic flags, Nρ inverse cache,
 and vertex nullities.
 """
-function find_all_vertices!(Bnc::Bnc{T};) where T # cheap enough for now
-    if isempty(Bnc.vertices_perm) || isempty(Bnc.vertices_asymptotic_flag)
+function find_all_vertices!(model::Bnc{T};) where T # cheap enough for now
+    if isempty(model.vertices_perm) 
         @info "---------------------Start finding all vertices--------------------"
         # all vertices
-        # finding non-asymptotic vettices, which gives all vertices both real and fake, singular and non-singular
-        all_vertices = find_all_vertices(Bnc.L; asymptotic=false)
+        all_vertices, is_asymptotic =  _enumerate_all_regimes(model._L_helper)
+        all_vertices = [Vector{T}(v) for v in all_vertices]
+        
         n_vertices = length(all_vertices)
         # finding asymptotic vertices, which is the real vertices.
-        real_vtx = Set(find_all_vertices(Bnc.L; asymptotic=true))
-        n_real_vtx = length(real_vtx)
-
-        @info "Finished, with $(n_vertices) vertices found and $(n_real_vtx) asymptotic vertices."
+        n_asym_rgms = sum(is_asymptotic)
+        @info "Finished, with $(n_vertices) vertices found and $(n_asym_rgms) asymptotic vertices."
         @info "-------------Start calculating nullity for each vertex, it also takes a while.------------"
         
         @info "1.Building Nρ_inv cache in parallel..."
-        _build_Nρ_cache_parallel!(Bnc, all_vertices) # build Nρ_inv cache in parallel
+        _build_Nρ_cache_parallel!(model, all_vertices) # build Nρ_inv cache in parallel
         # Caltulate the nullity for each vertices
         nullity = Vector{T}(undef, length(all_vertices))
 
         @info "2.Calculating nullity for each vertex in parallel..."
         @showprogress Threads.@threads for i in  eachindex(all_vertices)
             perm_set = Set(all_vertices[i])
-            nullity_P =  Bnc.d -length(perm_set)
-            _ , nullity_N =  _get_Nρ_inv_from_perm!(Bnc,perm_set) 
+            nullity_P =  model.d -length(perm_set)
+            _ , nullity_N =  _get_Nρ_inv_from_perm!(model,perm_set) 
             nullity[i] = nullity_P + nullity_N # this is true as we can permute the matrix into diagnal block matrix.
         end
-
-        Bnc.vertices_perm = all_vertices
-        Bnc.vertices_asymptotic_flag = Bnc.vertices_perm .∈ Ref(real_vtx)
-        Bnc.vertices_perm_dict = Dict(a=>idx for (idx, a) in enumerate(Bnc.vertices_perm)) # Map from vertex to its index
-        Bnc.vertices_nullity = nullity
-        Bnc.vertices_data = Vector{Vertex}(undef, n_vertices)
-        Bnc._vertices_is_initialized = falses(n_vertices)
-        Bnc._vertices_volume_is_calced = falses(n_vertices)
+        model.vertices_perm = all_vertices
+        model.vertices_asymptotic_flag = is_asymptotic
+        model.vertices_perm_dict = Dict(a=>idx for (idx, a) in enumerate(model.vertices_perm)) # Map from vertex to its index
+        model.vertices_nullity = nullity
+        model.vertices_data = Vector{Vertex}(undef, n_vertices)
+        model._vertices_is_initialized = falses(n_vertices)
+        model._vertices_volume_is_calced = falses(n_vertices)
     end
-    return Bnc.vertices_perm
+    return model.vertices_perm
 end
 
 
