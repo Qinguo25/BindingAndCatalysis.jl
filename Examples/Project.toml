@@ -1,4 +1,5 @@
 [deps]
+AbstractAlgebra = "c3fe647b-3220-5bb0-a1ea-a7954cac585d"
 BenchmarkTools = "6e4b80f9-dd63-53aa-95a3-0cdb28fa8baf"
 BindingAndCatalysis = "b532a4b1-2c45-4c12-bcaf-8695372aa40c"
 CairoMakie = "13f3f980-e62b-5c42-98c6-ff1f3baf88f0"

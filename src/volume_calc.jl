@@ -433,7 +433,7 @@ end
 #------------------------------------------------------------------------------------------------
 
 """
-    calc_volume(rgms::Union{AbstractVector{<:Vertex}, AbstractVector{<:Polyhedron}}; asymptotic=true, kwargs...) -> Vector{Volume}
+    calc_volume(rgms::Union{AbstractVector{<:BindRegime}, AbstractVector{<:Polyhedron}}; asymptotic=true, kwargs...) -> Vector{Volume}
 
 Compute volumes for a collection of polyhedra or vertices.
 
@@ -441,7 +441,7 @@ Compute volumes for a collection of polyhedra or vertices.
 
 Compute volumes for selected regimes in a model.
 """
-function calc_volume(rgms::Union{AbstractVector{<:Vertex}, AbstractVector{<:Polyhedron}};
+function calc_volume(rgms::Union{AbstractVector{<:BindRegime}, AbstractVector{<:Polyhedron}};
     # model::Bnc, perms=nothing;
     asymptotic::Bool=true,
     kwargs...

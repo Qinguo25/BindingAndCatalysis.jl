@@ -1035,3 +1035,159 @@ function connected_components_sparse(A::SparseMatrixCSC)
 
     return Set.(groups), labels
 end
+
+
+#============================================================#
+# Helper functions to calculate a matrix's left nullspace
+#============================================================#
+
+
+# Row-reduced echelon form over an arbitrary exact scalar type,
+# e.g. Rational{Int}. Returns:
+#   M          : RREF(A)
+#   pivotcols  : pivot columns of A
+function rref_exact(A::AbstractMatrix{T}) where {T<:Number}
+    M = copy(A)
+    m, n = size(M)
+    pivotcols = Int[]
+    row = 1
+
+    @inbounds for col in 1:n
+        row > m && break
+
+        # find pivot row
+        pivot = 0
+        for r in row:m
+            if M[r, col] != 0
+                pivot = r
+                break
+            end
+        end
+        pivot == 0 && continue
+
+        # swap rows manually (avoids slice allocations)
+        if pivot != row
+            for j in 1:n
+                M[row, j], M[pivot, j] = M[pivot, j], M[row, j]
+            end
+        end
+
+        # normalize pivot row
+        piv = M[row, col]
+        if piv != one(T)
+            for j in col:n
+                M[row, j] /= piv
+            end
+        end
+
+        # eliminate other rows
+        for r in 1:m
+            r == row && continue
+            c = M[r, col]
+            c == 0 && continue
+            for j in col:n
+                M[r, j] -= c * M[row, j]
+            end
+        end
+
+        push!(pivotcols, col)
+        row += 1
+    end
+
+    return M, pivotcols
+end
+
+
+# Convert a rational vector to a primitive integer vector.
+# Optionally flips sign so the first nonzero entry is positive.
+function primitive_integer(v::AbstractVector{<:Rational})
+    dens = denominator.(v)
+    L = foldl(lcm, dens; init=1)
+
+    w = Int.(L .* v)
+
+    g = foldl(gcd, abs.(w); init=0)
+    g = g == 0 ? 1 : g
+    w = div.(w, g)
+
+    # canonical sign choice: first nonzero entry positive
+    for x in w
+        if x != 0
+            if x < 0
+                w = .-w
+            end
+            break
+        end
+    end
+
+    return w
+end
+
+
+# Left nullspace basis of S:
+# finds B such that B' * S = 0
+# Returns:
+#   B          : columns are primitive integer basis vectors for left nullspace
+#   pivotrows  : pivot row indices of S
+function left_nullspace_integer(S::AbstractMatrix{Int})
+    A = Rational{Int}.(transpose(S))   # nullspace of S'
+    M, pivotrows = rref_exact(A)
+
+    m, n = size(M)                     # n = number of rows of S
+    ispivot = falses(n)
+    for c in pivotrows
+        ispivot[c] = true
+    end
+    freecols = findall(!, ispivot)
+
+    B = Matrix{Int}(undef, n, length(freecols))
+
+    @inbounds for (j, fc) in enumerate(freecols)
+        x = zeros(Rational{Int}, n)
+        x[fc] = 1
+        for (i, pc) in enumerate(pivotrows)
+            x[pc] = -M[i, fc]
+        end
+        B[:, j] = primitive_integer(x)
+    end
+
+    return B, pivotrows
+end
+
+
+
+function S_to_S_pos_neg(S::SparseMatrixCSC{T,Ti}) where {T<:Real,Ti<:Integer}
+    m, n = size(S)
+    nnzS = nnz(S)
+
+    colptr = Vector{Ti}(undef, n + 1)
+    rowval = Vector{Ti}(undef, nnzS)
+    nzval  = Vector{T}(undef, nnzS)
+
+    pos = 1
+    colptr[1] = 1
+
+    @inbounds for j in 1:n
+        for p in S.colptr[j]:(S.colptr[j+1] - 1)
+            i = S.rowval[p]
+            v = S.nzval[p]
+
+            if v > zero(T)
+                rowval[pos] = i
+                nzval[pos]  = v
+                pos += 1
+            elseif v < zero(T)
+                rowval[pos] = i + m
+                nzval[pos]  = -v
+                pos += 1
+            end
+            # skip exact zeros if any are stored
+        end
+        colptr[j+1] = pos
+    end
+
+    resize!(rowval, pos - 1)
+    resize!(nzval,  pos - 1)
+
+    return SparseMatrixCSC(2m, n, colptr, rowval, nzval)
+end

@@ -43,6 +43,8 @@ using ProgressMeter
 
 abstract type AbstractBnc end
 
+abstract type AbstractRegime end
+
 
 """
     CatalysisData
@@ -50,40 +52,66 @@ abstract type AbstractBnc end
 Container for catalysis network metadata, including stoichiometric changes,
 reaction orders, and rate constants.
 """
-struct CatalysisData
+struct CatalysisData <:AbstractBnc
     # Parameters for the catalysis networks
-    Γ::Matrix{Int} # catalysis change in qK space, each column is a reaction
-    Π::Matrix{Int} # catalysis index and coefficients, rate will be vⱼ=kⱼ∏xᵢ^Π_{j,i}, denote what species catalysis the reaction.
+    bn::AbstractBnc # reference to the parent Bnc model, used for validation and consistency checks
+    Γ::SparseMatrixCSC{Int,Int} # catalysis change in qK space, each column is a reaction
+    S::SparseMatrixCSC{Int,Int} # the full row rank version of Γ
+    L_Γ::SparseMatrixCSC{Int,Int} # the left null space of Γ such that L_Γ^⊤ * Γ = 0
+    Π::SparseMatrixCSC{Int,Int} # catalysis index and coefficients, rate will be vⱼ=kⱼ∏xᵢ^Π_{j,i}, denote what species catalysis the reaction.
+
+    r_v::Int # number of independent catalysis reactions
+    n_v::Int # number of flux
+    d_w::Int # number of dependent conserved quantities.
+    d_para::Int # number of parameter total concentrations
+
+
+
     k_sym::Vector{Num}
     # cat_x_idx::Vector{Int} # index of the species that catalysis the reaction, if not provided, will be inferred from Γ
-    r_cat::Int # number of catalysis reactions/species
 
-    _Γ_sparse::SparseMatrixCSC{Float64,Int} # sparse version of Γ, used for fast calculation
+    _S_sparse::SparseMatrixCSC{Float64,Int} # sparse version of Γ, used for fast calculation
     _Π_sparse::SparseMatrixCSC{Float64,Int}  # sparse version of Π, used for fast calculation
 
-    function CatalysisData(Γ, Π, k_sym)
+    #Catalysis regimes
+    S_pos_neg::SparseMatrixCSC{Int,Int} # the vcat of positive and negative parts of S
+    _S_helper::MatrixHelper
+
+
+
+
+    function CatalysisData(bn,Γ, Π, k_sym)
+        d_wv, nv = size(Γ)
+        n = size(Π,2)
         # Validation
-        @assert size(Γ,2) == size(Π,1) == length(k_sym) "Γ's column number have to meet with total flux number and k_sym"
-        r_cat = size(Γ,2)
+        @assert size(Π,1) == length(k_sym) == nv "Γ's column number have to meet with total flux number and k_sym"
+        @assert n == bn.n "Π's column number have to meet with the number of species n in the binding network"
+        L_Γ, pivits = left_nullspace_integer(Γ)
+
+        r_v = length(pivits)
+        d_w = size(L_Γ,1)
+        d_para = bn.d - r_v
+
+        # reorder and fix the binding network
+        no_pivits = setdiff(1:d_wv, pivits)
+        S = Γ[pivits, :]
+        new_ord = vcat(pivits,no_pivits)
+        Γ = Γ[new_ord, :]
+        L_Γ = L_Γ[new_ord, :]
+        fix_bn_catalysis!(bn, new_ord, L_Γ)
+
         # Create sparse matrices
-        _Γ_sparse = sparse(Float64.(Γ))
+        _S_sparse = sparse(Float64.(S))
         _Π_sparse = sparse(Float64.(Π))
-        new(Γ, Π, k_sym, r_cat, _Γ_sparse, _Π_sparse)
+
+        S_pos_neg = S_to_S_pos_neg(S)
+        _S_helper = _build_matrix_helper(S)
+
+        new(bn, Γ,S, L_Γ, Π, 
+            r_v, nv, d_w, d_para,    
+            k_sym, _S_sparse, _Π_sparse, S_pos_neg)
     end
 end
-
-
-function CatalysisData(; Γ=nothing, Π=nothing, k_sym=nothing)
-    if isnothing(Γ) && isnothing(Π)
-        return nothing
-    else 
-        @assert !isnothing(Γ) && !isnothing(Π) "You shall provide both Γ and Π"
-    end
-    k_sym = isnothing(k_sym) ? Symbolics.variables(:k, 1:size(Π,1)) : name_converter(k_sym)
-    return CatalysisData(Γ, Π, k_sym)
-end
-
-
 
 
 
@@ -141,14 +169,14 @@ Base.:/(v::Volume, c::Real) = Volume(v.mean / c, v.var / c^2)
 
 
 """
-    Vertex
+    BindRegime
 
 Representation of a regime/vertex in a binding network, including cached
 linear maps and polyhedral conditions.
 """
-mutable struct Vertex{F,T}
+mutable struct BindRegime{F,T} <: AbstractRegime
     #--- Parent Bnc model reference ---
-    bn::Union{AbstractBnc,Nothing} # Reference to the parent Bnc model
+    network::Union{AbstractBnc,Nothing} # Reference to the parent Bnc model
     # --- Initial / Identifying Properties ---
     perm::Vector{T} # The regime vector
     idx::Int # Index of the vertex in the Bnc.vertices list
@@ -173,10 +201,10 @@ mutable struct Vertex{F,T}
     volume::Volume
 
     # The inner constructor also needs to be updated for the parametric type
-    function Vertex(;bn::Union{AbstractBnc,Nothing}=nothing, perm, P, P0::Vector{F}, M, M0, C_x, C0_x, idx,real,nullity::T) where {T<:Integer,F<:Real}
+    function BindRegime(;network::Union{AbstractBnc,Nothing}=nothing, perm, P, P0::Vector{F}, M, M0, C_x, C0_x, idx,real,nullity::T) where {T<:Integer,F<:Real}
         # _M_lu = lu(M, check=false) # It's good practice to ensure M is Float64 for LU
-        # Use new{T} to construct an instance of Vertex{T}
-        return new{F,T}(bn, perm, idx,real, P, P0, M, M0, C_x, C0_x,
+        # Use new{T} to construct an instance of BindRegime{T}
+        return new{F,T}(network, perm, idx,real, P, P0, M, M0, C_x, C0_x,
             nullity,
             SparseMatrixCSC{Float64, Int}(undef, 0, 0), # H
             Vector{F}(undef, 0),          # H0
@@ -231,10 +259,37 @@ mutable struct VertexGraph{T}
 end
 
 
-@inline function _ensure_catalysis_meet_with_bnc(d,n,Cat::CatalysisData)
-    @assert size(Cat.Π,2) == n "Catalysis Π should have n rows"
-    @assert size(Cat.Γ, 1) == d "Catlysis Γ should have d rows"
+
+
+
+mutable struct CatalysisRegime <:AbstractRegime
+    bn::Union{AbstractBnc,Nothing} # Reference to the parent Bnc model
+    perm::Vector{Int} # The regime vector
+    idx::Int # Index of the vertex in the Catalysis.vertices list
 end
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 """
 Canonical hyperplane
@@ -322,6 +377,38 @@ mutable struct IntegrationHelper
 end
 
 
+@inline function calc_integration_helper(L,N)
+    n = size(L,2)
+    d = size(L,1)
+    r = size(N,1)
+    _anchor_log_x = zeros(n)
+    _anchor_log_qK = vcat(vec(log10.(sum(L; dims=2))), zeros(r))
+    
+    _LN_sparse = Float64.(sparse([L; N]))
+    (_LN_top_rows, _LN_top_cols, _LN_top_idx) = rowmask_indices(_LN_sparse, 1,d) # record the position of non-zero elements in L within _LN_sparse
+    (_LN_bottom_rows, _LN_bottom_cols, _LN_bottom_idx) = rowmask_indices(_LN_sparse, d+1,n) # record the position of non-zero elements in N within _LN_sparse
+    _LN_top_diag_idx = diag_indices(_LN_sparse, d)
+    
+    _LN_lu = rank(_LN_sparse)== n ? lu(_LN_sparse) : nothing # LU decomposition of _LNt_sparse, used for fast calculation
+
+    IntegrationHelper(
+        _anchor_log_x,
+        _anchor_log_qK,
+        _LN_top_idx,
+        _LN_top_rows,
+        _LN_top_cols,
+        _LN_bottom_idx,
+        _LN_bottom_rows,
+        _LN_bottom_cols,
+        _LN_top_diag_idx,
+        _LN_lu,
+    )
+end
+
+
+
+
+
 """
     Bnc
 
@@ -355,33 +442,26 @@ mutable struct Bnc{T} <: AbstractBnc # T is the int type to save all the indices
     
     #The following are computed when building graphs.
     vertices_graph::Union{Any,Nothing} # Using Any for placeholder for VertexGraph
-    vertices_data::Vector{Vertex} # Using Any for placeholder for Vertex
+    vertices_data::Vector{BindRegime} # Using Any for placeholder for BindRegime
     _vertices_is_initialized::BitVector
     _vertices_volume_is_calced::BitVector
     _vertices_Nρ_inv_dict::Dict{Vector{T}, Tuple{SparseMatrixCSC{Float64, Int},T}} # cache the N_inv for each vertex permutation
 
     #------other helper parameters------
     direction::Int8 # direction of the binding reactions, determine the ray direction for invertible regime, calculated by sign of det[L;N]
-
     IntegrationHelper::IntegrationHelper
-
     _L_helper::MatrixHelper
-    
-    # sparse matrix for speeding up the calculation
-    _LN_sparse::SparseMatrixCSC{Float64,Int} # sparse version of [L;N], used for fast calculation
-    
 
     # Inner constructor 
     function Bnc{T}(N, L, x_sym, q_sym, K_sym, catalysis) where {T<:Integer}
+        N_sparse = sparse(N)
+        L_sparse = sparse(L)
         N_dense = Matrix{Int}(N)
         L_dense = Matrix{Int}(L)
+
         # get desired values
         r, n = size(N_dense)
         d, n_L = size(L_dense)
-
-        isnothing(catalysis) || _ensure_catalysis_meet_with_bnc(d,n,catalysis)
-        
-        
         # Validate dimensions for binding network, check if its legal.
         let 
             @assert n == d + r "d+r is not equal to n"
@@ -393,35 +473,10 @@ mutable struct Bnc{T} <: AbstractBnc # T is the int type to save all the indices
 
         #The direction
         direction = sign(det([L_dense;N_dense])) # Ensure matrix is Float64 for det
-
         #-------helper parameters-------------
         # paramters for default homotopcontinuous starting point.
-        _anchor_log_x = zeros(n)
-        _anchor_log_qK = vcat(vec(log10.(sum(L_dense; dims=2))), zeros(r))
-
-        # pre-calculate the non-zero position for L
-
-        _L_helper = _build_matrix_helper(L_dense)
-        L_sparse = sparse(L_dense)
-        N_sparse = sparse(N_dense)
-        _LN_sparse = Float64.([L_sparse; N_sparse])
-        (_LN_top_rows, _LN_top_cols, _LN_top_idx) = rowmask_indices(_LN_sparse, 1,d) # record the position of non-zero elements in L within _LN_sparse
-        (_LN_bottom_rows, _LN_bottom_cols, _LN_bottom_idx) = rowmask_indices(_LN_sparse, d+1,n) # record the position of non-zero elements in N within _LN_sparse
-        _LN_top_diag_idx = diag_indices(_LN_sparse, d)
-
-        _LN_lu = rank(_LN_sparse)== n ? lu(_LN_sparse) : nothing # LU decomposition of _LNt_sparse, used for fast calculation
-        integration_helper = IntegrationHelper(
-            _anchor_log_x,
-            _anchor_log_qK,
-            _LN_top_idx,
-            _LN_top_rows,
-            _LN_top_cols,
-            _LN_bottom_idx,
-            _LN_bottom_rows,
-            _LN_bottom_cols,
-            _LN_top_diag_idx,
-            _LN_lu,
-        )
+        integration_helper = calc_integration_helper(L, N)
+        _L_helper = _build_matrix_helper(L)
         new(
             # Fields 1-5
             N_sparse, L_sparse, r, n, d,
@@ -429,27 +484,25 @@ mutable struct Bnc{T} <: AbstractBnc # T is the int type to save all the indices
             x_sym, q_sym, K_sym, catalysis,
             # Fields 10-12 (Initialized empty)
             Vector{T}[],                # vertices_perm
-            Dict{Vector{T},Int}(),            # verices_idx
+            Dict{Vector{T},Int}(),            # vertices_perm_dict
             Bool[],                          # vertices_asymptotic_flag
             T[],                          # vertices_nullity
             nothing,                         # vertices_graph
-            # SparseMatrixCSC{Bool, Int}(undef, 0, 0),             # vertices_neighbor_mat
-            # SparseMatrixCSC{SparseVector{Int8,T}, Int}(undef, 0, 0),             # vertices_change_dir_x
-            # SparseMatrixCSC{SparseVector{Float64,T}, Int}(undef, 0, 0),             # vertices_change_dir_qK
-            # Int[],                           # _vertices_sym_invperm
-            Vector{Vertex}(),              # vertices_data
+            Vector{BindRegime}(),              # vertices_data
             BitVector(),                     # _vertices_is_initialized
             BitVector(),                     # _R_idx_is_calced
             Dict{Vector{T}, Tuple{SparseMatrixCSC{Float64, Int},T}}(), # _vertices_perm_Ninv_dict
             # Fields 13-28 (Calculated values)
             direction,
             integration_helper,
-
             _L_helper,
-            _LN_sparse,
         )
     end
 end
+
+
+
+
 
 struct SISOPaths{T} 
     bn::Bnc{T}   # binding Newtork
@@ -543,13 +596,10 @@ function Bnc(;N=nothing,L=nothing,
     q_sym = isnothing(q_sym) ? Symbolics.variables(:q, 1:d) : name_converter(q_sym) # convert q_sym to a vector of symbols
     K_sym = isnothing(K_sym) ? Symbolics.variables(:K, 1:r) : name_converter(K_sym) # convert K_sym to a vector of symbols
 
-    catalysis_data = CatalysisData(;kwargs...)
-
-    T = get_int_type(n) 
-    Bnc{T}(N, L, x_sym, q_sym, K_sym, catalysis_data)
+    model = Bnc{Int}(N, L, x_sym, q_sym, K_sym, nothing)
+    update_catalysis!(model; kwargs...)
+    return model
 end
-
-
 
 
 
@@ -570,23 +620,97 @@ Attach or update catalysis data on a `Bnc` model in-place.
 # Returns
 - The updated `bnc`.
 """
-function update_catalysis!(bnc::Bnc;
-    Γ::Union{Matrix{Int},Nothing}=nothing,
-    Π::Union{Matrix{Int},Nothing}=nothing,
-    k_sym::Union{Num,Nothing}=nothing,
+function update_catalysis!(model::Bnc;
+    Γ::Union{<:AbstractMatrix{Int},Nothing}=nothing,
+    Π::Union{<:AbstractMatrix{Int},Nothing}=nothing,
+    k_sym::Union{<:AbstractVector,Nothing}=nothing,
+    x_picked::Union{<:AbstractVector,Nothing}=nothing,
+    q_picked::Union{<:AbstractVector,Nothing}=nothing,
     )
-    if isnothing(bnc.catalysis)
-        bnc.catalysis = CatalysisData(Γ=Γ, Π=Π, k_sym=k_sym)
-    else
-        Γ = isnothing(Γ) ? bnc.catalysis.Γ : Γ
-        Π = isnothing(Π) ? bnc.catalysis.Π : Π
-        k_sym = isnothing(k_sym) ? bnc.catalysis.k_sym : k_sym
-        bnc.catalysis = CatalysisData(Γ=Γ, Π=Π, k_sym=k_sym)
+    if isnothing(Γ) && isnothing(Π)
+        return nothing
+    else 
+        @assert !isnothing(Γ) && !isnothing(Π) "You shall provide both Γ and Π"
     end
-    _ensure_catalysis_meet_with_bnc(bnc.d, bnc.n, bnc.catalysis)
+
+    Π = if isnothing(x_picked)
+            Π
+        else
+            x_idx = locate_sym_x.(Ref(model), x_picked)
+            Π2 = zeros(Int, (size(Π,1),model.n))
+            for (i,x) in enumerate(x_idx)
+                Π2[:,x] .= Π[:, i]
+            end
+            Π2
+        end
+
+    if !isnothing(q_picked)
+        q_idx = locate_sym_qK.(Ref(model), q_picked)
+        new_order = vcat(q_idx, setdiff(1:model.d, q_idx))
+        _change_q_L_order!(model, new_order) # reorder the q and L in the model to make the picked q first, since the catalysis will involve the first r_v q.
+        _remove_regime_data!(model) # remove the cached regime data, since the regimes will be changed after reordering q and L.
+    end
+
+    k_sym = isnothing(k_sym) ? Symbolics.variables(:k, 1:size(Π,1)) : name_converter(k_sym)
+    model.catalysis = CatalysisData(model,Γ,Π, k_sym)
     return nothing
 end
 
+function fix_bn_catalysis!(bn::Bnc, new_ord::Vector{Int},L_Γ::AbstractMatrix{Int})
+    if new_ord !== collect(1:length(new_ord)) # no reording should be made
+        _change_q_L_order!(bn, new_ord)
+
+        @info "q is reordered to make catalysis-involving species first"
+        d_dep = size(L_Γ,2)
+        d_cat_full = length(new_ord)
+        d_cat = d_cat_full - d_dep
+
+        if d_dep >0
+            @info "New conservation forms as catalysis involves"
+            #update the name of q_sym to make the first d_cat are q_cat, and the rest are q_dep
+            bn.q_sym[(d_cat+1):d_cat_full] = Symbolics.variables(:w, 1:d_dep)
+            # Calculate the L_w
+            L_w = L_Γ' * bn.L[1:d_cat_full,:]
+            @assert all(L_w .>=0) "L_w should be non-negative"
+            #update L_w to replace L_dep
+            bn.L[(d_cat+1):d_cat_full,:] = L_w
+        end
+
+        dropzeros!(bn.L)
+        _remove_regime_data!(bn) # remove the cached regime data, since the regimes will be changed.
+        #other initializing
+    end
+
+    _rebuild_helper!(bn) # rebuild the helper parameters since L has been changed.
+    return nothing
+end
+
+
+@inline function _change_q_L_order!(bn::Bnc, new_ord::Vector{Int})
+    bn.q_sym[1:length(new_ord)] = bn.q_sym[new_ord]
+    bn.L[1:length(new_ord),:] = bn.L[new_ord, :]
+end
+
+@inline function _rebuild_helper!(bn::Bnc)
+    bn.direction = sign(det([bn.L;bn.N])) # recalculate the direction, since L has been changed.
+    bn.IntegrationHelper = calc_integration_helper(bn.L, bn.N) # recalculate the integration helper, since L has been changed.
+    bn._L_helper = _build_matrix_helper(bn.L)
+    return nothing
+end
+
+@inline function _remove_regime_data!(bn::Bnc{T}) where T 
+    bn.vertices_perm = T[]
+    bn.vertices_perm_dict = Dict{Vector{T},Int}() # reset the vertices_perm_dict since the vertices_perm will be reset.
+    bn.vertices_asymptotic_flag = Bool[]
+    bn.vertices_nullity = T[]
+    bn.vertices_graph = nothing
+    bn.vertices_data = BindRegime[]
+    bn._vertices_is_initialized = BitVector()
+    bn._vertices_volume_is_calced = BitVector()
+    # questionable whether to delete the following cache.
+    bn._vertices_Nρ_inv_dict = Dict{Vector{T}, Tuple{SparseMatrixCSC{Float64, Int},T}}() # reset the Nρ_inv_dict since the vertices will be reset.
+    return nothing
+end
 
 
 include(joinpath(@__DIR__,"helperfunctions.jl"))

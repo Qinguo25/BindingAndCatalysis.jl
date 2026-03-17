@@ -536,21 +536,6 @@ end
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 #--------------------------------------------------------------------------
 #   Below are most AI generated code, which is more experimental and less tested, especially for the catalysis part. Use with caution and report any issues.
 #--------------------------------------------------------------------------
