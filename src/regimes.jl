@@ -1,65 +1,6 @@
 #--------------Core computation functions-------------------------
 
 """
-    _calc_Nρ_inverse(Nρ) -> (SparseMatrixCSC, Int)
-
-Compute a sparse inverse-like matrix for `Nρ` and its nullity.
-
-# Arguments
-- `Nρ`: Square or rectangular submatrix of `N`.
-
-# Returns
-- Tuple `(Nρ_inv, nullity)` where `Nρ_inv` is sparse and `nullity` is the
-  inferred nullity.
-"""
-function _calc_Nρ_inverse(Nρ)::Tuple{SparseMatrixCSC,Int}
-
-    r, r_ncol = size(Nρ)
-    if r != r_ncol
-        return spzeros(0,0), r - rank(Nρ)
-    end
-    Nρ_lu = lu(Nρ; check=false)
-    if issuccess(Nρ_lu)
-        return sparse(inv(Array(Nρ))), 0
-    else
-        return _adj_singular_matrix(Nρ)
-    end
-end
-
-"""
-    _calc_H(bnc::Bnc, perm) -> SparseMatrixCSC
-
-Compute the `H` mapping for a vertex permutation using cached `Nρ_inv`.
-
-# Arguments
-- `bnc`: Binding network model.
-- `perm`: Regime permutation vector.
-
-# Returns
-- Sparse matrix `H` mapping log(qK) to log(x).
-"""
-function _calc_H(Bnc::Bnc,perm::Vector{<:Integer})::SparseMatrixCSC
-    key = _get_Nρ_key(Bnc, perm)
-    Nρ_inv,Nρ_nullity = _get_Nρ_inv!(Bnc,key) # get Nρ_inv from cache or calculate it. # sparse matrix
-    Nc = @view Bnc.N[:,perm] # dense matrix
-    Nρ_inv_Nc_neg = - Nρ_inv * Nc 
-    
-    H_un_perm = if Nρ_nullity == 0 
-         [[I(Bnc.d) zeros(Bnc.d,Bnc.r)];
-         [Nρ_inv_Nc_neg Nρ_inv]]
-    elseif Nρ_nullity == 1
-        [zeros(Bnc.d,Bnc.n);
-        [Nρ_inv_Nc_neg Nρ_inv]] 
-    else
-        error("Nullity greater than 1 not supported")
-    end
-    perm_inv = invperm([perm;key]) # get the inverse permutation to reorder H
-    H = H_un_perm[perm_inv, :]
-    H = droptol!(sparse(H),1e-10)
-    return H
-end
-
-"""
     _calc_C_C0_qK_singular(bnc::Bnc, vtx) -> (SparseMatrixCSC, Vector)
 
 Build qK-space constraints `(C_qK, C0_qK)` for singular vertices via affine mapping.
@@ -79,46 +20,6 @@ function _calc_C_C0_qK_singular(Bnc::Bnc, vtx)
     C0qK = (b+A*M0)
     return CqK, C0qK
 end
-
-#------------------Storage layer functions -----------------------------
-
-"""
-    _build_Nρ_cache_parallel!(bnc::Bnc, perms) -> nothing
-
-Precompute and cache `Nρ` inverse information for all unique permutations.
-"""
-function _build_Nρ_cache_parallel!(Bnc::Bnc{T},perms::Vector{Vector{T}}) where T
-    perm_set = Set(Set(perm) for perm in perms) # Unique sets of permutations
-    keys = [_get_Nρ_key(Bnc, perm) for perm in perm_set]
-
-    nk = length(keys)
-    inv_list = Vector{SparseMatrixCSC{Float64,Int}}(undef, nk)
-    nullity_list = Vector{T}(undef, nk)
-
-    @showprogress Threads.@threads for i in eachindex(keys)
-        key = keys[i]
-        Nρ = @view Bnc.N[:, key]
-        inv_list[i], nullity_list[i] = _calc_Nρ_inverse(Nρ)
-    end
-
-    for i in eachindex(keys)
-        Bnc._vertices_Nρ_inv_dict[keys[i]] = (inv_list[i], nullity_list[i])
-    end
-    return nothing
-end
-
-"""
-    _get_Nρ_inv!(bnc::Bnc, key) -> (SparseMatrixCSC, Int)
-
-Get `(Nρ_inv, nullity)` from cache or compute and store it.
-"""
-function _get_Nρ_inv!(Bnc::Bnc{T}, key::AbstractVector{<:Integer}) where T
-    get!(Bnc._vertices_Nρ_inv_dict, key) do
-        Nρ = @view Bnc.N[:, key]
-        _calc_Nρ_inverse(Nρ)
-    end
-end
-
 
 """
     _calc_change_col(from, to) -> Tuple
@@ -178,15 +79,6 @@ function _get_i_j_perms(from::Vector{T},to::Vector{T}) where T<:Integer
     return i1,i2,j1,j2
 end
 #------------------Helper functions -------------------------------------------
-"""
-    _get_Nρ_key(bnc::Bnc, perm) -> Vector
-
-Indices of columns not in `perm` (the complement) used to form `Nρ`.
-"""
-function _get_Nρ_key(Bnc::Bnc{T}, perm)::Vector{T} where T 
-   return [i for i in 1:Bnc.n if i ∉ perm]
-end
-_get_Nρ_inv_from_perm!(Bnc, perm) = _get_Nρ_inv!(Bnc, _get_Nρ_key(Bnc, perm))
 """
     _regime_graph_to_sparse(g::VertexGraph; weight_fn=e->1) -> SparseMatrixCSC
 

@@ -109,7 +109,8 @@ struct CatalysisData <:AbstractBnc
 
         new(bn, Γ,S, L_Γ, Π, 
             r_v, nv, d_w, d_para,    
-            k_sym, _S_sparse, _Π_sparse, S_pos_neg)
+            k_sym, _S_sparse, _Π_sparse,
+            S_pos_neg, _S_helper)
     end
 end
 
@@ -182,13 +183,15 @@ mutable struct BindRegime{F,T} <: AbstractRegime
     idx::Int # Index of the vertex in the Bnc.vertices list
     is_asymptotic::Bool # Whether the vertex is asymptotic or not.
     
-    # --- Basic Calculated Properties ---
+    # --- Basic Properties ---
     P::SparseMatrixCSC{Int, Int}
     P0::Vector{F} 
     M::SparseMatrixCSC{Int, Int}
     M0::Vector{F} #
     C_x::SparseMatrixCSC{Int, Int}
     C0_x::Vector{F} 
+
+
 
     # --- Expensive Calculated Properties ---
     nullity::T
@@ -266,19 +269,14 @@ mutable struct CatalysisRegime <:AbstractRegime
     network::Union{AbstractBnc,Nothing} # Reference to the parent Bnc model
     perm::Vector{Int} # The regime vector
     idx::Int # Index of the vertex in the Catalysis.vertices list
+    is_asymptotic::Bool # Whether the vertex is asymptotic or not.
+
+    #--- Basic Properties ---
+    P_pos_neg::SparseMatrixCSC{Int, Int} # the vcat of P_pos and P_neg
+    Pθ:: SparseMatrixCSC{Int, Int} # P_pos - P_neg
+    Cθ::SparseMatrixCSC{Int, Int} # the vcat of C_pos and C_neg
+    CΠ:: SparseMatrixCSC{Int, Int} # the vcat of C_pos*Π and C_neg*Π
 end
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
@@ -714,6 +712,7 @@ end
 
 
 include(joinpath(@__DIR__,"helperfunctions.jl"))
+include(joinpath(@__DIR__,"matrix_inverse.jl"))
 include(joinpath(@__DIR__,"qK_x_mapping.jl"))
 include(joinpath(@__DIR__,"volume_calc.jl"))
 include(joinpath(@__DIR__,"numeric.jl"))

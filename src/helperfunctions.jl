@@ -146,55 +146,6 @@ function log_sum_exp10!(logq::AbstractVector, L::SparseMatrixCSC, logx::Abstract
 end
 =#
 
-# helper funtions to taking inverse when the matrix is singular.
-"""
-    _adj_singular_matrix(A::AbstractMatrix; atol=1e-12) -> (SparseMatrixCSC, Int)
-
-Compute a sparse adjugate-like matrix for a near-singular square matrix using
-its smallest singular vector, and return the inferred nullity.
-
-# Arguments
-- `A`: Square matrix to analyze.
-
-# Keyword Arguments
-- `atol`: Absolute tolerance for identifying zero singular values.
-
-# Returns
-- Tuple `(adj_A, nullity)`.
-"""
-function  _adj_singular_matrix(A::AbstractMatrix; atol=1e-12)::Tuple{SparseMatrixCSC,Int}
-    n, m = size(A)
-    @assert n == m "A must be square"
-    F = svd(Array(A))
-    S = F.S
-    thresh = atol * maximum(S)
-    zero_ids = findall(σ -> σ ≤ thresh, S)
-    nullity = length(zero_ids)
-    if nullity == 1
-        k = zero_ids[1]
-        logσprod = sum(log, S[setdiff(1:n,[k])])
-        σprod = exp(logσprod)
-        sign_correction = det(F.U) * det(F.V) # to ensure the sign is right!!!!!!
-        u = F.U[:, k]   # 左奇异向量
-        v = F.V[:, k]   # 右奇异向量
-        adj_A = (sign_correction *σprod) * (sparsevec(v) * sparsevec(u)') 
-        return droptol!(adj_A,1e-10), 1  # rank-1 矩阵
-        # return σprod * (v * u'), 1  # rank-1 矩阵
-    else
-        return spzeros(0,0), nullity
-    end
-end
-
-# function inv_singularity_matrix(M::Matrix{<:Real})
-#     M_lu = lu(M,check=false)
-#     if issuccess(M_lu) # Lu successfully.
-#         return inv(M_lu),0  # singularity is 0, not singular
-#     else
-#         return _adj_singular_matrix(M)  # calculate the adj matrix, singularity is calculated and returned,
-#     end
-# end
-
-
 """
     randomize(n::Int, size; kwargs...) -> Array{Vector{Float64}}
 
