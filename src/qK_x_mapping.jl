@@ -113,7 +113,7 @@ function qK2x(Bnc::Bnc, qK::AbstractVector{<:Real};
         elseif ismissing(method) || method != :homotopy
             _logqK2logx_nlsolve(Bnc,
                 endlogqK;
-                startlogx = isnothing(startlogx) ? copy(Bnc._anchor_log_x) : Float64.(startlogx),
+                startlogx = isnothing(startlogx) ? copy(Bnc.IntegrationHelper._anchor_log_x) : Float64.(startlogx),
                 method=method,
                 reltol=reltol,
                 abstol=abstol,
@@ -123,8 +123,8 @@ function qK2x(Bnc::Bnc, qK::AbstractVector{<:Real};
             if isnothing(startlogqK) || isnothing(startlogx)
                 # If no starting point is provided, use the default
                 # Make deep copies to avoid shared state in threaded environment
-                startlogx = copy(Bnc._anchor_log_x)
-                startlogqK = copy(Bnc._anchor_log_qK)
+                startlogx = copy(Bnc.IntegrationHelper._anchor_log_x)
+                startlogqK = copy(Bnc.IntegrationHelper._anchor_log_qK)
             end
             sol = _logx_traj_with_logqK_change(Bnc,
                 startlogqK,
@@ -202,7 +202,7 @@ function _logqK2logx_nlsolve(Bnc::Bnc, logqK::AbstractArray{<:Real,1};
     d = Bnc.d
     #---Solve the nonlinear equation to find x from qK.---
 
-    startlogx = isnothing(startlogx) ? copy(Bnc._anchor_log_x) : startlogx
+    startlogx = isnothing(startlogx) ? copy(Bnc.IntegrationHelper._anchor_log_x) : startlogx
 
     resid = Vector{Float64}(undef, n)
 
@@ -212,10 +212,10 @@ function _logqK2logx_nlsolve(Bnc::Bnc, logqK::AbstractArray{<:Real,1};
     J = deepcopy(Bnc._LN_sparse)# Make deep copies of sparse matrices to avoid shared state
     x = Vector{Float64}(undef, n)
     q = Vector{Float64}(undef, d)
-    x_M_view = @view x[Bnc._LN_top_cols] # view for faster updating J
-    q_M_view = @view q[Bnc._LN_top_rows] # view for faster updating J
-    M_top = @view J.nzval[Bnc._LN_top_idx] # view for faster updating J
-    L_nzval = copy(Bnc._LN_sparse.nzval[Bnc._LN_top_idx])
+    x_M_view = @view x[Bnc.IntegrationHelper._LN_top_cols] # view for faster updating J
+    q_M_view = @view q[Bnc.IntegrationHelper._LN_top_rows] # view for faster updating J
+    M_top = @view J.nzval[Bnc.IntegrationHelper._LN_top_idx] # view for faster updating J
+    L_nzval = copy(Bnc._LN_sparse.nzval[Bnc.IntegrationHelper._LN_top_idx])
 
     params = (; x, q, logq, logK, J, x_M_view, q_M_view, M_top)
 
@@ -362,12 +362,12 @@ function get_homotopy_param(Bnc::Bnc, startlogqK::Vector{<:Real}, endlogqK::Vect
     logq = @view logqK[1:d]
     logK = @view logqK[d+1:end]
     M= deepcopy(Bnc._LN_sparse)# Make deep copies of sparse matrices to avoid shared state
-    M_lu = deepcopy(Bnc._LN_lu)
+    M_lu = deepcopy(Bnc.IntegrationHelper._LN_lu)
 
-    logx_M_view = @view logx[Bnc._LN_top_cols] # view for faster updating J
-    logq_M_view = @view logqK[Bnc._LN_top_rows] # view for faster updating J
-    M_top = @view M.nzval[Bnc._LN_top_idx] # view for faster updating J
-    M_top_diag = @view M.nzval[Bnc._LN_top_diag_idx] # view for perturb when J is singular
+    logx_M_view = @view logx[Bnc.IntegrationHelper._LN_top_cols] # view for faster updating J
+    logq_M_view = @view logqK[Bnc.IntegrationHelper._LN_top_rows] # view for faster updating J
+    M_top = @view M.nzval[Bnc.IntegrationHelper._LN_top_idx] # view for faster updating J
+    M_top_diag = @view M.nzval[Bnc.IntegrationHelper._LN_top_diag_idx] # view for perturb when J is singular
 
     p = HomotopyParams(startlogqK, ΔlogqK, logx, logqK,logq,logK, logqK_max, M, M_lu, 
         logx_M_view, logq_M_view, M_top, M_top_diag
@@ -379,7 +379,7 @@ end
 
 function get_homotopy_ode(Bnc::Bnc)
     # Constants helps for updating mutable datas
-    L_nzval = log10.(Bnc._LN_sparse.nzval[Bnc._LN_top_idx]) # copy the nzval to avoid shared access
+    L_nzval = log10.(Bnc._LN_sparse.nzval[Bnc.IntegrationHelper._LN_top_idx]) # copy the nzval to avoid shared access
 
     @inline function update_M_lu(M_lu,M,max_try=100)
         lu!(M_lu, M,check=false) # recalculate the LU decomposition of J
@@ -598,7 +598,7 @@ function get_catalysis_param(model::Bnc, k)
     v = Vector{Float64}(undef, length(logk))  # Catalysis flux buffer (log scale)
     f = zeros(model.n)  # Catalysis rate vector
     M = deepcopy(model._LN_sparse)  # Sparse [L; N]
-    M_lu = deepcopy(model._LN_lu)  # LU decomp
+    M_lu = deepcopy(model.IntegrationHelper._LN_lu)  # LU decomp
     TimecurveParam(logk, x, q, v, f, M, M_lu)
 end
 
@@ -616,7 +616,7 @@ function get_catalysis_ode(model::Bnc)
             # Clamp to prevent extreme values (though less needed now)
             # clamp!(M.nzval, 1e-100, 1e100)
             # Perturb diagonal elements slightly
-            @. M.nzval[model._LN_top_diag_idx] += 1e-10 * rand()  # Random small perturbation
+            @. M.nzval[model.IntegrationHelper._LN_top_diag_idx] += 1e-10 * rand()  # Random small perturbation
             lu!(M_lu, M, check=false)
             try_count += 1
         end
@@ -646,7 +646,7 @@ function get_catalysis_ode(model::Bnc)
         # We scale L copy in-place for efficiency
         M_top = @view M[1:model.d, :]  # View of top block (L part)
         # Reset M_top to original L_sparse values (assuming M was initialized with [L; N] as Float64)
-        M.nzval[model._LN_top_idx] .= model._L_sparse.nzval  # Reset to L values
+        M.nzval[model.IntegrationHelper._LN_top_idx] .= model._L_sparse.nzval  # Reset to L values
         # Scale columns by x_scaled
         for j = 1:model.n
             for p = M.colptr[j]:(M.colptr[j+1]-1)

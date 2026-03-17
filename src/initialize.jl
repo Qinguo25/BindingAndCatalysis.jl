@@ -301,6 +301,29 @@ struct MatrixHelper{Tv<:Integer}
 end
 
 """
+    IntegrationHelper
+
+Container for cached integration starting points and sparse matrix index helpers.
+Used for Integration during homotopy continuation.
+"""
+mutable struct IntegrationHelper
+    _anchor_log_x::Vector{<:Real}
+    _anchor_log_qK::Vector{<:Real}
+
+    _LN_top_idx::Vector{Int} # first d row index of _LN_sparse
+    _LN_top_rows::Vector{Int} # the corresponding row number in L for _LN_top_idx
+    _LN_top_cols::Vector{Int} # the corresponding column number in L for _LN_top_idx
+
+    _LN_bottom_idx::Vector{Int} # last r row index of _LN_sparse
+    _LN_bottom_rows::Vector{Int} # the corresponding row number in N for _LN_bottom_idx
+    _LN_bottom_cols::Vector{Int} # the corresponding column number in N for _LN_bottom_idx
+    _LN_top_diag_idx::Vector{Int} # the diagonal index of the top d rows of _LN_sparse, used for fast calculation
+
+    _LN_lu::Union{SparseArrays.UMFPACK.UmfpackLU{Float64,Int}, Nothing} # LU decomposition of _LNt_sparse, used for fast calculation
+end
+
+
+"""
     Bnc
 
 Binding network model with stoichiometry, conservation laws, and derived
@@ -341,9 +364,7 @@ mutable struct Bnc{T} <: AbstractBnc # T is the int type to save all the indices
     #------other helper parameters------
     direction::Int8 # direction of the binding reactions, determine the ray direction for invertible regime, calculated by sign of det[L;N]
 
-    # Parameters act as the starting points used for qk mapping
-    _anchor_log_x::Vector{<:Real}
-    _anchor_log_qK::Vector{<:Real}
+    IntegrationHelper::IntegrationHelper
 
     _L_helper::MatrixHelper
     
@@ -351,19 +372,6 @@ mutable struct Bnc{T} <: AbstractBnc # T is the int type to save all the indices
     _L_sparse::SparseMatrixCSC{Int,Int} # sparse version of L, used for fast calculation
     _N_sparse::SparseMatrixCSC{Int,Int} # sparse version of N transpose, used for fast calculation
     _LN_sparse::SparseMatrixCSC{Float64,Int} # sparse version of [L;N], used for fast calculation
-
-    #------------below are helper parameters for fast updating  value of matrix of the form [L;N] ------------------
-    _LN_top_idx::Vector{Int} # first d row index of _LN_sparse
-    _LN_top_rows::Vector{Int} # the corresponding row number in L for _LN_top_idx
-    _LN_top_cols::Vector{Int} # the corresponding column number in L for _LN_top_idx
-
-    _LN_bottom_idx::Vector{Int} # last r row index of _LN_sparse
-    _LN_bottom_rows::Vector{Int} # the corresponding row number in N for _LN_bottom_idx
-    _LN_bottom_cols::Vector{Int} # the corresponding column number in N for _LN_bottom_idx
-    _LN_top_diag_idx::Vector{Int} # the diagonal index of the top d rows of _LN_sparse, used for fast calculation
-
-    _LN_lu::Union{SparseArrays.UMFPACK.UmfpackLU{Float64,Int}, Nothing} # LU decomposition of _LNt_sparse, used for fast calculation
-    # _val_num_L::Int # number of non-zero elements in the sparse matrix L
     
 
     # Inner constructor 
@@ -404,6 +412,18 @@ mutable struct Bnc{T} <: AbstractBnc # T is the int type to save all the indices
         _LN_top_diag_idx = diag_indices(_LN_sparse, d)
 
         _LN_lu = rank(_LN_sparse)== n ? lu(_LN_sparse) : nothing # LU decomposition of _LNt_sparse, used for fast calculation
+        integration_helper = IntegrationHelper(
+            _anchor_log_x,
+            _anchor_log_qK,
+            _LN_top_idx,
+            _LN_top_rows,
+            _LN_top_cols,
+            _LN_bottom_idx,
+            _LN_bottom_rows,
+            _LN_bottom_cols,
+            _LN_top_diag_idx,
+            _LN_lu,
+        )
         # _N_sparse = sparse(N) # sparse version of N, used for fast calculation
 
         new(
@@ -427,23 +447,15 @@ mutable struct Bnc{T} <: AbstractBnc # T is the int type to save all the indices
             Dict{Vector{T}, Tuple{SparseMatrixCSC{Float64, Int},T}}(), # _vertices_perm_Ninv_dict
             # Fields 13-28 (Calculated values)
             direction,
-            _anchor_log_x, _anchor_log_qK,
+            integration_helper,
 
             _L_helper,
             _L_sparse,
             _N_sparse,
             _LN_sparse,
-
-            _LN_top_idx,_LN_top_rows,_LN_top_cols,
-            _LN_bottom_idx,_LN_bottom_rows,_LN_bottom_cols,
-            _LN_top_diag_idx,
-
-            _LN_lu,
         )
     end
 end
-
-
 
 struct SISOPaths{T} 
     bn::Bnc{T}   # binding Newtork
