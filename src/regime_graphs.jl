@@ -8,7 +8,8 @@ Build a `VertexGraph` from vertex permutations, connecting vertices that differ
 in exactly one row.
 """
 function  _calc_regimes_graph(Bnc::Bnc{T}) where {T} # optimized by GPT-5, not fullly understood yet.
-    perms = Bnc.vertices_perm
+    vertices = Bnc.vertices_data
+    perms = getfield.(vertices, :perm)
     n = Bnc.n    
     L = Bnc.L
 
@@ -83,6 +84,7 @@ Compute qK-space change directions for edges in the vertex graph.
 """
 function _fulfill_regimes_graph!(vtx_graph::VertexGraph)
     Bnc = vtx_graph.bn
+    vertices = Bnc.vertices_data
     """
     fill the qK space change dir matrix for all vertices in Bnc.
     """
@@ -111,14 +113,14 @@ function _fulfill_regimes_graph!(vtx_graph::VertexGraph)
 
     # pre compute H for all vertices with nullity 0 or 1
     Threads.@threads for idx in eachindex(vtx_graph.neighbors)
-        if Bnc.vertices_nullity[idx] <= 1
+        if vertices[idx].nullity <= 1
             get_H(Bnc, idx)
         end
     end
 
     @showprogress Threads.@threads for p1 in eachindex(vtx_graph.neighbors)
         edges = vtx_graph.neighbors[p1]
-        if Bnc.vertices_nullity[p1] > 1 # jump off those regimes with nullity >1
+        if vertices[p1].nullity > 1 # jump off those regimes with nullity >1
             continue
         end
         for e in edges
@@ -654,7 +656,7 @@ function SISOPaths(model::Bnc{T}, change_qK; rgm_paths=nothing) where {T}
         sources, sinks = get_sources_sinks(model, qK_grh)
         rgm_paths = _enumerate_paths(qK_grh; sources, sinks)
     else
-        qK_grh = graph_from_paths(rgm_paths, length(model.vertices_perm))
+        qK_grh = graph_from_paths(rgm_paths, n_regimes(model))
         sources, sinks = get_sources_sinks(qK_grh)
     end
 

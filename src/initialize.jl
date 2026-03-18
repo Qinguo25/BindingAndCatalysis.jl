@@ -55,21 +55,26 @@ reaction orders, and rate constants.
 struct CatalysisData <:AbstractBnc
     # Parameters for the catalysis networks
     bn::AbstractBnc # reference to the parent Bnc model, used for validation and consistency checks
+
+    # Catalysis determining Matrix
     Γ::SparseMatrixCSC{Int,Int} # catalysis change in qK space, each column is a reaction
-    S::SparseMatrixCSC{Int,Int} # the full row rank version of Γ
-    L_Γ::SparseMatrixCSC{Int,Int} # the left null space of Γ such that L_Γ^⊤ * Γ = 0
     Π::SparseMatrixCSC{Int,Int} # catalysis index and coefficients, rate will be vⱼ=kⱼ∏xᵢ^Π_{j,i}, denote what species catalysis the reaction.
 
+    # Derived matrices 
+    S::SparseMatrixCSC{Int,Int} # the full row rank version of Γ
+    L_Γ::SparseMatrixCSC{Int,Int} # the left null space of Γ such that L_Γ^⊤ * Γ = 0
+
+    # Derived parameters
     r_v::Int # number of independent catalysis reactions
     n_v::Int # number of flux
     d_w::Int # number of dependent conserved quantities.
     d_para::Int # number of parameter total concentrations
 
-
-
+    # symbols of k
     k_sym::Vector{Num}
-    # cat_x_idx::Vector{Int} # index of the species that catalysis the reaction, if not provided, will be inferred from Γ
 
+
+    # helper parameters for fast calculation, used for fast calculation of H and C_qK
     _S_sparse::SparseMatrixCSC{Float64,Int} # sparse version of Γ, used for fast calculation
     _Π_sparse::SparseMatrixCSC{Float64,Int}  # sparse version of Π, used for fast calculation
 
@@ -107,7 +112,7 @@ struct CatalysisData <:AbstractBnc
         S_pos_neg = S_to_S_pos_neg(S)
         _S_helper = _build_matrix_helper(S)
 
-        new(bn, Γ,S, L_Γ, Π, 
+        new(bn, Γ, Π, S, L_Γ,
             r_v, nv, d_w, d_para,    
             k_sym, _S_sparse, _Π_sparse,
             S_pos_neg, _S_helper)
@@ -178,45 +183,43 @@ linear maps and polyhedral conditions.
 mutable struct BindRegime{F,T} <: AbstractRegime
     #--- Parent Bnc model reference ---
     network::Union{AbstractBnc,Nothing} # Reference to the parent Bnc model
+
     # --- Initial / Identifying Properties ---
     perm::Vector{T} # The regime vector
     idx::Int # Index of the vertex in the Bnc.vertices list
     is_asymptotic::Bool # Whether the vertex is asymptotic or not.
-    
+
+
+
     # --- Basic Properties ---
-    P::SparseMatrixCSC{Int, Int}
-    P0::Vector{F} 
-    M::SparseMatrixCSC{Int, Int}
-    M0::Vector{F} #
-    C_x::SparseMatrixCSC{Int, Int}
-    C0_x::Vector{F} 
-
-
+    P::Union{SparseMatrixCSC{Int, Int}, Nothing}
+    P0::Union{Vector{F}, Nothing}
+    M::Union{SparseMatrixCSC{Int, Int}, Nothing}
+    M0::Union{Vector{F}, Nothing}
+    C_x::Union{SparseMatrixCSC{Int, Int}, Nothing}
+    C0_x::Union{Vector{F}, Nothing}
 
     # --- Expensive Calculated Properties ---
     nullity::T
-    H::SparseMatrixCSC{Float64, Int} # Taking inverse, can have Float.
-    H0::Vector{F} 
-    C_qK::SparseMatrixCSC{Float64, Int}
-    C0_qK::Vector{F} 
+    H::Union{SparseMatrixCSC{Float64, Int}, Nothing} # Taking inverse, can have Float.
+    H0::Union{Vector{F}, Nothing} 
+    C_qK::Union{SparseMatrixCSC{Float64, Int}, Nothing}
+    C0_qK::Union{Vector{F}, Nothing} 
     
-    #---Realizibility Index
-    volume::Volume
+    volume::Union{Volume, Nothing}
 
-    # The inner constructor also needs to be updated for the parametric type
-    function BindRegime(;network::Union{AbstractBnc,Nothing}=nothing, perm, P, P0::Vector{F}, M, M0, C_x, C0_x, idx,is_asymptotic,nullity::T) where {T<:Integer,F<:Real}
-        # _M_lu = lu(M, check=false) # It's good practice to ensure M is Float64 for LU
-        # Use new{T} to construct an instance of BindRegime{T}
-        return new{F,T}(network, perm, idx,is_asymptotic, P, P0, M, M0, C_x, C0_x,
+    function BindRegime(; network=nothing, perm, idx, is_asymptotic, nullity::T) where {T<:Integer}
+        return new{Float64,T}(network, perm, idx, is_asymptotic,
+            nothing, nothing, nothing, nothing, nothing, nothing, # P, P0, M, M0, C_x, C0_x
             nullity,
-            SparseMatrixCSC{Float64, Int}(undef, 0, 0), # H
-            Vector{F}(undef, 0),          # H0
-            SparseMatrixCSC{Float64, Int}(undef, 0, 0), # C_qK
-            Vector{F}(undef, 0),          # C0_qK
-            Volume(0.0, 0.0) # volume
+            nothing, nothing, # H, H0
+            nothing, nothing, # C_qK,C0_qK
+            nothing
         )
     end
 end
+
+
 
 """
     VertexEdge
@@ -405,6 +408,12 @@ end
 
 
 
+struct BindRegimes{T} 
+    vertices_perm_dict::Dict{Vector{T},Int}
+    vertices_data::Vector{BindRegime}
+end
+
+
 
 
 """
@@ -433,16 +442,19 @@ mutable struct Bnc{T} <: AbstractBnc # T is the int type to save all the indices
     #--------Vertex data--------
 
     #The following four are computed when finding regimes.
-    vertices_perm::Vector{Vector{T}} # all feasible regimes.
-    vertices_perm_dict::Dict{Vector{T},Int} # map from permutation vector to its idx in the vertices list
-    vertices_asymptotic_flag::Vector{Bool} # While this vertice is real
-    vertices_nullity::Vector{T} # nullity of one vertex.
-    
+    # vertices_perm::Vector{Vector{T}} # all feasible regimes.
+    # vertices_perm_dict::Dict{Vector{T},Int} # map from permutation vector to its idx in the vertices list
+    # vertices_asymptotic_flag::Vector{Bool} # While this vertice is real
+    # vertices_nullity::Vector{T} # nullity of one vertex.
+    BindRegimes::Union{BindRegimes, Nothing}
+
     #The following are computed when building graphs.
     vertices_graph::Union{Any,Nothing} # Using Any for placeholder for VertexGraph
-    vertices_data::Vector{BindRegime} # Using Any for placeholder for BindRegime
-    _vertices_is_initialized::BitVector
-    _vertices_volume_is_calced::BitVector
+    # vertices_data::Vector{BindRegime} # Using Any for placeholder for BindRegime
+    # _vertices_is_initialized::BitVector
+    # _vertices_volume_is_calced::BitVector
+
+
     _vertices_Nρ_inv_dict::Dict{Vector{T}, Tuple{SparseMatrixCSC{Float64, Int},T}} # cache the N_inv for each vertex permutation
 
     #------other helper parameters------
@@ -481,14 +493,8 @@ mutable struct Bnc{T} <: AbstractBnc # T is the int type to save all the indices
             # Fields 6-9
             x_sym, q_sym, K_sym, catalysis,
             # Fields 10-12 (Initialized empty)
-            Vector{T}[],                # vertices_perm
-            Dict{Vector{T},Int}(),            # vertices_perm_dict
-            Bool[],                          # vertices_asymptotic_flag
-            T[],                          # vertices_nullity
+            nothing,                         # BindRegimes
             nothing,                         # vertices_graph
-            Vector{BindRegime}(),              # vertices_data
-            BitVector(),                     # _vertices_is_initialized
-            BitVector(),                     # _R_idx_is_calced
             Dict{Vector{T}, Tuple{SparseMatrixCSC{Float64, Int},T}}(), # _vertices_perm_Ninv_dict
             # Fields 13-28 (Calculated values)
             direction,
@@ -496,6 +502,57 @@ mutable struct Bnc{T} <: AbstractBnc # T is the int type to save all the indices
             _L_helper,
         )
     end
+end
+
+@inline _bind_regimes(model::Bnc) = getfield(model, :BindRegimes)
+@inline _bind_regimes_built(model::Bnc) = !isnothing(_bind_regimes(model))
+
+@inline function _bind_regimes_data(model::Bnc)
+    regimes = _bind_regimes(model)
+    return isnothing(regimes) ? BindRegime[] : regimes.vertices_data
+end
+
+@inline function _bind_regimes_perm_dict(model::Bnc{T}) where T
+    regimes = _bind_regimes(model)
+    return isnothing(regimes) ? Dict{Vector{T},Int}() : regimes.vertices_perm_dict
+end
+
+@inline _bind_regimes_perm(model::Bnc) = getfield.(_bind_regimes_data(model), :perm)
+@inline _bind_regimes_nullity(model::Bnc) = getfield.(_bind_regimes_data(model), :nullity)
+@inline _bind_regimes_asymptotic_flag(model::Bnc) = getfield.(_bind_regimes_data(model), :is_asymptotic)
+@inline _bind_regimes_initialized(model::Bnc) = BitVector(.!isnothing.(getfield.(_bind_regimes_data(model), :P)))
+@inline _bind_regimes_volume_calced(model::Bnc) = BitVector(.!isnothing.(getfield.(_bind_regimes_data(model), :volume)))
+
+function Base.getproperty(model::Bnc{T}, sym::Symbol) where T
+    if sym === :vertices_perm
+        return _bind_regimes_perm(model)
+    elseif sym === :vertices_perm_dict
+        return _bind_regimes_perm_dict(model)
+    elseif sym === :vertices_asymptotic_flag
+        return _bind_regimes_asymptotic_flag(model)
+    elseif sym === :vertices_nullity
+        return _bind_regimes_nullity(model)
+    elseif sym === :vertices_data
+        return _bind_regimes_data(model)
+    elseif sym === :_vertices_is_initialized
+        return _bind_regimes_initialized(model)
+    elseif sym === :_vertices_volume_is_calced
+        return _bind_regimes_volume_calced(model)
+    end
+    return getfield(model, sym)
+end
+
+function Base.propertynames(model::Bnc, private::Bool=false)
+    names = Symbol[fieldnames(typeof(model))...,
+        :vertices_perm,
+        :vertices_perm_dict,
+        :vertices_asymptotic_flag,
+        :vertices_nullity,
+        :vertices_data,
+        :_vertices_is_initialized,
+        :_vertices_volume_is_calced,
+    ]
+    return private ? Tuple(unique(names)) : Tuple(sym for sym in unique(names) if !startswith(String(sym), "_"))
 end
 
 
@@ -697,16 +754,9 @@ end
 end
 
 @inline function _remove_regime_data!(bn::Bnc{T}) where T 
-    bn.vertices_perm = T[]
-    bn.vertices_perm_dict = Dict{Vector{T},Int}() # reset the vertices_perm_dict since the vertices_perm will be reset.
-    bn.vertices_asymptotic_flag = Bool[]
-    bn.vertices_nullity = T[]
+    bn.BindRegimes = nothing
     bn.vertices_graph = nothing
-    bn.vertices_data = BindRegime[]
-    bn._vertices_is_initialized = BitVector()
-    bn._vertices_volume_is_calced = BitVector()
-    # questionable whether to delete the following cache.
-    bn._vertices_Nρ_inv_dict = Dict{Vector{T}, Tuple{SparseMatrixCSC{Float64, Int},T}}() # reset the Nρ_inv_dict since the vertices will be reset.
+    bn._vertices_Nρ_inv_dict = Dict{Vector{T}, Tuple{SparseMatrixCSC{Float64, Int},T}}()
     return nothing
 end
 
@@ -740,11 +790,12 @@ function summary(Bnc::Bnc)
     println("Direction of binding reactions: ", Bnc.direction > 0 ? "forward" : "backward")
     catalysis_str = isnothing(Bnc.catalysis) ? "No" : "Yes"
     println("Catalysis involved: ", catalysis_str)
-    is_regimes_built = isempty(Bnc.vertices_perm) ? "No" : "Yes"
+    is_regimes_built = _bind_regimes_built(Bnc) ? "Yes" : "No"
     println("Regimes constructed: ", is_regimes_built)
-    if !isempty(Bnc.vertices_perm)
-        map = zip(Bnc.vertices_asymptotic_flag, Bnc.vertices_nullity .> 0) |> countmap
-        println("Number of regimes: ", length(Bnc.vertices_perm))
+    if _bind_regimes_built(Bnc)
+        vertices = _bind_regimes_data(Bnc)
+        map = countmap((vtx.is_asymptotic, vtx.nullity > 0) for vtx in vertices)
+        println("Number of regimes: ", length(vertices))
         println("  - Invertible + Asymptotic: ", get(map, (true, false), 0))
         println("  - Singular +  Asymptotic: ", get(map, (true, true), 0))
         println("  - Invertible +  Non-Asymptotic: ", get(map, (false, false), 0))
@@ -768,11 +819,12 @@ function show(io::IO, ::MIME"text/plain", bnc::Bnc)
     println(io, "Direction of binding reactions: ", bnc.direction > 0 ? "forward" : "backward")
     catalysis_str = isnothing(bnc.catalysis) ? "No" : "Yes"
     println(io, "Catalysis involved: ", catalysis_str)
-    is_regimes_built = isempty(bnc.vertices_perm) ? "No" : "Yes"
+    is_regimes_built = _bind_regimes_built(bnc) ? "Yes" : "No"
     println(io, "Regimes constructed: ", is_regimes_built)
-    if !isempty(bnc.vertices_perm)
-        map = zip(bnc.vertices_asymptotic_flag, bnc.vertices_nullity .> 0) |> countmap
-        println(io, "Number of regimes: ", length(bnc.vertices_perm))
+    if _bind_regimes_built(bnc)
+        vertices = _bind_regimes_data(bnc)
+        map = countmap((vtx.is_asymptotic, vtx.nullity > 0) for vtx in vertices)
+        println(io, "Number of regimes: ", length(vertices))
         println(io, "  - Invertible + Asymptotic: ", get(map, (true, false), 0))
         println(io, "  - Singular +  Asymptotic: ", get(map, (true, true), 0))
         println(io, "  - Invertible +  Non-Asymptotic: ", get(map, (false, false), 0))

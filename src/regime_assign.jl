@@ -143,7 +143,7 @@ function assign_regime_qK_test(Bnc::Bnc{T}, qK::AbstractVector{<:Real};
         for t in ts
             i, j1, j2 = get_i_j(Bnc, perm1, t)
             perm1[i] = j2
-            if !haskey(Bnc.vertices_perm_dict, perm1) 
+            if !haskey(_bind_regimes_perm_dict(Bnc), perm1) 
                 perm1[i] = j1  # 恢复原值
             end
             try_perm!(perm1)

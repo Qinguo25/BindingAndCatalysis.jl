@@ -104,31 +104,28 @@ function _regime_graph_to_sparse(G::VertexGraph{T}; weight_fn = e -> 1) where T
     return sparse(I,J,V, n, n) |> dropzeros!
 end
 """
-    _create_regime(bnc::Bnc, perm) -> BindRegime
+    _initialize_regime!(vtx::BindRegime) -> BindRegime
 
-Create a partially-filled `BindRegime` (P/P0, M/M0, C_x/C0_x are ready).
+Fill the basic linear-algebra fields of a lazily-created `BindRegime`.
 """
-function _create_regime(Bnc::Bnc, perm::Vector{<:Integer})::BindRegime
-    find_all_regimes!(Bnc)
+function _initialize_regime!(vtx::BindRegime)::BindRegime
+    if !isnothing(vtx.P)
+        return vtx
+    end
+    Bnc = vtx.network
     helper = Bnc._L_helper
-    idx = Bnc.vertices_perm_dict[perm] # Index of the vertex in the Bnc.vertices_perm list
-    is_asymptotic = Bnc.vertices_asymptotic_flag[idx] # Check if the vertex is asymptotic or fake
-    nullity = Bnc.vertices_nullity[idx] # Get the nullity of the vertex
-    
-    P, P0 = _calc_P_P0(perm,helper); 
-    C_x, C0_x = _calc_C_C0(perm, helper)
-    M = vcat(P, Bnc.N)
-    M0 = vcat(P0, zeros(eltype(P0), Bnc.r))
+    perm = vtx.perm
 
-    # Initialize a partial vertex. "Full" properties are empty placeholders.
-    return BindRegime(
-        network = Bnc,
-        nullity = nullity,
-        idx = idx,
-        perm = perm, 
-        is_asymptotic = is_asymptotic,
-        M = M, M0 = M0, P = P, P0 = P0, C_x = C_x, C0_x = C0_x
-    )
+    P, P0 = _calc_P_P0(perm, helper)
+    C_x, C0_x = _calc_C_C0(perm, helper)
+
+    vtx.P = P
+    vtx.P0 = P0
+    vtx.C_x = C_x
+    vtx.C0_x = C0_x
+    vtx.M = vcat(P, Bnc.N)
+    vtx.M0 = vcat(P0, zeros(eltype(P0), Bnc.r))
+    return vtx
 end
 
 """
@@ -137,9 +134,9 @@ end
 Ensure a `BindRegime` has `H/H0` and qK constraints computed and cached.
 """
 function _fill_inv_info!(vtx::BindRegime)
-    # Check if already calculated
+    _initialize_regime!(vtx)
     Bnc = vtx.network
-    if !isempty(vtx.H)
+    if !isnothing(vtx.H)
         return nothing
     end
     if vtx.nullity == 0
@@ -188,41 +185,106 @@ end
 Compute and cache all vertex permutations, asymptotic flags, Nρ inverse cache,
 and vertex nullities.
 """
-function find_all_regimes!(model::Bnc{T};) where T # cheap enough for now
-    if isempty(model.vertices_perm) 
-        @info "---------------------Start finding all vertices--------------------"
-        # all vertices
-        all_vertices, is_asymptotic =  _enumerate_all_regimes(model._L_helper)
-        all_vertices = [Vector{T}(v) for v in all_vertices]
-        
-        n_vertices = length(all_vertices)
-        # finding asymptotic vertices, which is the real vertices.
-        n_asym_rgms = sum(is_asymptotic)
-        @info "Finished, with $(n_vertices) vertices found and $(n_asym_rgms) asymptotic vertices."
-        @info "-------------Start calculating nullity for each vertex, it also takes a while.------------"
-        
-        @info "1.Building Nρ_inv cache in parallel..."
-        _build_Nρ_cache_parallel!(model, all_vertices) # build Nρ_inv cache in parallel
-        # Caltulate the nullity for each vertices
-        nullity = Vector{T}(undef, length(all_vertices))
 
-        @info "2.Calculating nullity for each vertex in parallel..."
-        @showprogress Threads.@threads for i in  eachindex(all_vertices)
-            perm_set = Set(all_vertices[i])
-            nullity_P =  model.d -length(perm_set)
-            _ , nullity_N =  _get_Nρ_inv_from_perm!(model,perm_set) 
-            nullity[i] = nullity_P + nullity_N # this is true as we can permute the matrix into diagnal block matrix.
-        end
-        model.vertices_perm = all_vertices
-        model.vertices_asymptotic_flag = is_asymptotic
-        model.vertices_perm_dict = Dict(a=>idx for (idx, a) in enumerate(model.vertices_perm)) # Map from vertex to its index
-        model.vertices_nullity = nullity
-        model.vertices_data = Vector{BindRegime}(undef, n_vertices)
-        model._vertices_is_initialized = falses(n_vertices)
-        model._vertices_volume_is_calced = falses(n_vertices)
+function find_all_regimes!(model::Bnc{T};) where T
+    if _bind_regimes_built(model)
+        return _bind_regimes_perm(model)
     end
-    return model.vertices_perm
+
+    @info "---------------------Start finding all vertices--------------------"
+    all_vertices, is_asymptotic =  _enumerate_all_regimes(model._L_helper)
+    all_vertices = [Vector{T}(v) for v in all_vertices]
+
+    n_vertices = length(all_vertices)
+    n_asym_rgms = sum(is_asymptotic)
+    @info "Finished, with $(n_vertices) vertices found and $(n_asym_rgms) asymptotic vertices."
+    
+    @info "2.Calculating nullity for each vertex..."
+    nullity = _calc_nullity(all_vertices, model)
+    @info "3.Building Regimes..."
+    regimes = _build_regimes(model, all_vertices, is_asymptotic, nullity)
+    vertices_perm_dict = Dict(perm => idx for (idx, perm) in enumerate(all_vertices))
+    model.BindRegimes = BindRegimes(vertices_perm_dict, regimes)
+
+    return all_vertices
 end
+
+
+@inline function _calc_perm_nullity(perm, n::Integer)
+    perm_nullity = 0
+    seen = falses(n)
+    @inbounds for p in perm
+        if seen[p]
+            perm_nullity += 1
+        else
+            seen[p] = true
+        end
+    end
+    return perm_nullity
+end
+
+
+
+@inline function _calc_nullity(all_vertices, model::Bnc{T}) where T
+    _build_Nρ_cache_parallel!(model, all_vertices) # build Nρ_inv cache in parallel
+    nullity = Vector{T}(undef, length(all_vertices))
+    
+    Threads.@threads for i in  eachindex(all_vertices)
+        perm = all_vertices[i]
+        nullity_P = _calc_perm_nullity(perm, model.n)
+        _, nullity_N = _get_Nρ_inv_from_perm!(model, perm)
+        nullity[i] = nullity_P + nullity_N # this is true as we can permute the matrix into diagnal block matrix.
+    end
+    return nullity
+end
+
+
+@inline function _build_regimes(model::Bnc{T}, all_vertices, is_asymptotic, nullity) where T
+    n_vertices = length(all_vertices)
+    regimes = Vector{BindRegime}(undef, n_vertices)
+    for i in 1:n_vertices
+        regimes[i] = BindRegime(
+            network = model,
+            perm = all_vertices[i],
+            idx = i,
+            is_asymptotic = is_asymptotic[i],
+            nullity = nullity[i]
+        )
+    end
+    return regimes
+end
+
+
+
+# function find_all_regimes!(model::Bnc{T};) where T # cheap enough for now
+#     if isempty(model.vertices_perm) 
+#         @info "---------------------Start finding all vertices--------------------"
+#         # all vertices
+#         all_vertices, is_asymptotic =  _enumerate_all_regimes(model._L_helper)
+
+#         all_vertices = [Vector{T}(v) for v in all_vertices]
+        
+#         n_vertices = length(all_vertices)
+#         # finding asymptotic vertices, which is the real vertices.
+#         n_asym_rgms = sum(is_asymptotic)
+#         @info "Finished, with $(n_vertices) vertices found and $(n_asym_rgms) asymptotic vertices."
+#         @info "-------------Start calculating nullity for each vertex, it also takes a while.------------"
+        
+#         @info "1.Building Nρ_inv cache in parallel..."
+        
+#         # Caltulate the nullity for each vertices
+#         nullity = Vector{T}(undef, length(all_vertices))
+
+#         model.vertices_perm = all_vertices
+#         model.vertices_asymptotic_flag = is_asymptotic
+#         model.vertices_perm_dict = Dict(a=>idx for (idx, a) in enumerate(model.vertices_perm)) # Map from vertex to its index
+#         model.vertices_nullity = nullity
+#         model.vertices_data = Vector{BindRegime}(undef, n_vertices)
+#         model._vertices_is_initialized = falses(n_vertices)
+#         model._vertices_volume_is_calced = falses(n_vertices)
+#     end
+#     return model.vertices_perm
+# end
 
 
 """
@@ -232,7 +294,7 @@ Return a dictionary mapping permutation vectors to vertex indices.
 """
 function get_regimes_perm_dict(Bnc::Bnc)
     find_all_regimes!(Bnc) # Ensure vertices are calculated
-    return Bnc.vertices_perm_dict
+    return _bind_regimes_perm_dict(Bnc)
 end
 """
     get_nullities(bnc::Bnc, rgms=nothing) -> Vector
@@ -245,10 +307,10 @@ function get_nullities(Bnc::Bnc, rgms::Union{AbstractVector,Nothing}=nothing)
     """
     find_all_regimes!(Bnc)
     if isnothing(rgms)
-        return Bnc.vertices_nullity
+        return getfield.(Bnc.vertices_data, :nullity)
     else
         idxs = get_idx.(Ref(Bnc), rgms)
-        return Bnc.vertices_nullity[idxs]
+        return getfield.(Bnc.vertices_data[idxs], :nullity)
     end
 
 end
@@ -270,7 +332,7 @@ function get_volumes(Bnc::Bnc,vtxs::Union{AbstractVector,Nothing}=nothing;
         if recalculate
             all_vtxs
         else
-            filter(i -> !Bnc._vertices_volume_is_calced[i], all_vtxs)
+            filter(i -> isnothing(Bnc.vertices_data[i].volume), all_vtxs)
         end
     
     if !isempty(vtxs_to_calc)
@@ -290,15 +352,11 @@ function get_volumes(Bnc::Bnc,vtxs::Union{AbstractVector,Nothing}=nothing;
            get_regime(Bnc,idx; inv_info=true)
         end
         
-        vtxs = @view Bnc.vertices_data[vtxs_to_calc]
-
-
-
-        rlts = calc_volume(vtxs; rebase_mat=rebase_mat, kwargs...)
+        vtx_data = @view Bnc.vertices_data[vtxs_to_calc]
+        rlts = calc_volume(vtx_data; rebase_mat=rebase_mat, kwargs...)
         for (i,idx) in enumerate(vtxs_to_calc)
             vtx = get_regime(Bnc,idx; inv_info=false)
             vtx.volume = rlts[i]
-            Bnc._vertices_volume_is_calced[idx]=true
         end
     end
     return [vtx.volume for vtx in Bnc.vertices_data[all_vtxs]]
@@ -344,7 +402,7 @@ Return the vertex index, optionally validating it.
 function get_idx(Bnc::Bnc, idx::T;check::Bool=false) where T<:Integer
     if check
         find_all_regimes!(Bnc)
-        @assert idx ≥ 1 && idx ≤ length(Bnc.vertices_perm) "The given index is out of range."
+        @assert idx ≥ 1 && idx ≤ n_regimes(Bnc) "The given index is out of range."
     end
    return idx
 end
@@ -366,7 +424,7 @@ function get_perm(Bnc::Bnc,perm::Vector{<:Integer};check::Bool=false)
     return perm
 end
 get_perm(Bnc::Bnc, perm::AbstractVector) = get_perm(Bnc, locate_sym_x.(Ref(Bnc), perm))
-get_perm(Bnc::Bnc, idx::Integer; kwargs...)=(find_all_regimes!(Bnc); Bnc.vertices_perm[idx])
+get_perm(Bnc::Bnc, idx::Integer; kwargs...)=(find_all_regimes!(Bnc); Bnc.vertices_data[idx].perm)
 get_perm(vtx::BindRegime) = vtx.perm
 get_perm(Bnc::Bnc, vtx::BindRegime;kwargs...)= get_perm(vtx)
 
@@ -380,16 +438,8 @@ function get_regime(Bnc::Bnc, perm; check::Bool=false, kwargs...)::BindRegime
     find_all_regimes!(Bnc) #initialize perm_data
     
     vtx = begin
-        idx = get_idx(Bnc, perm; check=check)          
-        if Bnc._vertices_is_initialized[idx]
-            vt = Bnc.vertices_data[idx]
-        else
-            perm = Bnc.vertices_perm[idx]
-            vt = _create_regime(Bnc, perm)
-            Bnc.vertices_data[idx] = vt
-            Bnc._vertices_is_initialized[idx] = true
-        end
-        vt
+        idx = get_idx(Bnc, perm; check=check)
+        _initialize_regime!(Bnc.vertices_data[idx])
     end
     return get_regime(vtx; kwargs...)
 end
@@ -399,6 +449,7 @@ end
 Ensure a vertex has requested cached fields and return it.
 """
 function get_regime(vtx::BindRegime; inv_info::Bool=true,kwargs...)::BindRegime
+    _initialize_regime!(vtx)
     if inv_info
         _fill_inv_info!(vtx)
     end
@@ -421,7 +472,7 @@ get_binding_network(vtx::BindRegime,args...)=vtx.network
 Return `true` when a permutation or index exists in the model.
 """
 have_perm(Bnc::Bnc, perm::AbstractVector) = (find_all_regimes!(Bnc); haskey(Bnc.vertices_perm_dict, get_perm(Bnc, perm)))
-have_perm(Bnc::Bnc, idx::Integer) = (find_all_regimes!(Bnc); idx ≥ 1 && idx ≤ length(Bnc.vertices_perm))
+have_perm(Bnc::Bnc, idx::Integer) = (find_all_regimes!(Bnc); idx ≥ 1 && idx ≤ n_regimes(Bnc))
 have_perm(Bnc::Bnc, vtx::BindRegime) = have_perm(Bnc, get_perm(vtx))
 
 
@@ -442,9 +493,11 @@ function get_neighbors(args...; singular::Union{Bool,Int,Nothing}=nothing, asymp
 
     idx = keys(grh.edge_pos[rgm_idx]) |> collect
     
+    vertices = Bnc.vertices_data
     idx = filter(idx) do i
-        nlt = Bnc.vertices_nullity[i]
-        flag_asym = Bnc.vertices_asymptotic_flag[i]
+        vtx = vertices[i]
+        nlt = vtx.nullity
+        flag_asym = vtx.is_asymptotic
 
         ok_singular = isnothing(singular) || (
             (singular === true  && nlt > 0) ||
@@ -458,7 +511,7 @@ function get_neighbors(args...; singular::Union{Bool,Int,Nothing}=nothing, asymp
 
     sort!(idx)
 
-    return return_idx ? idx : Bnc.vertices_perm[idx]
+    return return_idx ? idx : getfield.(vertices[idx], :perm)
 end
 
 
@@ -490,7 +543,7 @@ Return `true` if the vertex is asymptotic (real).
 is_asymptotic(args...) = begin
     model = get_binding_network(args...)
     find_all_regimes!(model)
-    return model.vertices_asymptotic_flag[get_idx(args...)]
+    return model.vertices_data[get_idx(args...)].is_asymptotic
 end::Bool
 is_asymptotic(vtx::BindRegime) = vtx.is_asymptotic
 
@@ -683,7 +736,7 @@ Return the nullity of a vertex.
 get_nullity(args...) = begin
     model = get_binding_network(args...)
     find_all_regimes!(model)
-    return model.vertices_nullity[get_idx(args...)]
+    return model.vertices_data[get_idx(args...)].nullity
 end::Integer
 get_nullity(vtx::BindRegime) = vtx.nullity
 
@@ -692,7 +745,7 @@ get_nullity(vtx::BindRegime) = vtx.nullity
 
 Return the number of vertices in the model.
 """
-n_regimes(Bnc::Bnc) = length(Bnc.vertices_perm)
+n_regimes(Bnc::Bnc) = (find_all_regimes!(Bnc); length(Bnc.vertices_data))
 
 """
     get_volume(args...; kwargs...) -> Volume
@@ -853,7 +906,7 @@ function get_regimes(Bnc::Bnc; return_idx::Bool=false, kwargs...)
     find_all_regimes!(Bnc)
     idx_all = eachindex(Bnc.vertices_data)
     masks = _get_mask(Bnc, idx_all; kwargs...)
-    return return_idx ? findall(masks) : Bnc.vertices_perm[masks]
+    return return_idx ? findall(masks) : getfield.(Bnc.vertices_data[masks], :perm)
 end
 
 
@@ -865,11 +918,8 @@ Return a boolean mask for vertices matching filter criteria.
 function _get_mask(model::Bnc,vtxs::AbstractVector{<:Integer};
      singular::Union{Bool,Integer,Nothing}=nothing, 
      asymptotic::Union{Bool,Nothing}=nothing)::Vector{Bool}
-    # ensure nullity and asymptotic flags are calculated
     find_all_regimes!(model)
-
-    nlt = model.vertices_nullity
-    flag_asym = model.vertices_asymptotic_flag
+    vertices = model.vertices_data
 
     @inline f(nlt) = isnothing(singular) || (
         (singular === true  && nlt > 0) ||
@@ -880,7 +930,8 @@ function _get_mask(model::Bnc,vtxs::AbstractVector{<:Integer};
     @inline g(flag_asym) = isnothing(asymptotic) || (asymptotic == flag_asym)
     
     return map(vtxs) do i
-        f(nlt[i]) && g(flag_asym[i])
+        vtx = vertices[i]
+        f(vtx.nullity) && g(vtx.is_asymptotic)
     end
 end
 function _get_mask(rgms::AbstractVector{<:BindRegime};
