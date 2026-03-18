@@ -184,7 +184,7 @@ end
 
 function _enumerate_all_regimes(
     helper::MatrixHelper,
-    eps::Float64 = 0.0,
+    eps::Float64 = 1e-9,
 )
     d = length(helper.J)
     n = helper.n
@@ -459,7 +459,7 @@ Notes:
 """
 function find_all_regimes(
     L::AbstractMatrix{Tv};
-    eps::Real = eps(),
+    eps::Real = 1e-9,
     dominance_ratio::Real = Inf,
     enumerate_asymptotic_only::Bool = false,
 ) where {Tv<:Integer}

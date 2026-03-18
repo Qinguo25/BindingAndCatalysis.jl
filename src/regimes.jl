@@ -148,10 +148,11 @@ function find_all_regimes!(model::Bnc{T};) where T
     
     @info "3.Building Regimes..."
     model.BindRegimes = let
-        regimes = _build_regimes(model, all_vertices, is_asymptotic, nullity)    
+        regimes = _build_bind_regimes(model, all_vertices, is_asymptotic, nullity)    
         vertices_perm_dict = Dict(perm => idx for (idx, perm) in enumerate(all_vertices))
         BindRegimes(vertices_perm_dict, regimes)
     end
+    @info "Finished."
     return nothing
 end
 
@@ -171,21 +172,21 @@ end
 
 
 
-@inline function _calc_nullity(all_vertices, model::Bnc{T}) where T
-    _build_Nρ_cache_parallel!(model, all_vertices) # build Nρ_inv cache in parallel
-    nullity = Vector{T}(undef, length(all_vertices))
+# @inline function _calc_nullity(perms, model::Bnc{T}) where T
+#     _build_Nρ_cache_parallel!(model, perms) # build Nρ_inv cache in parallel
+#     nullity = Vector{T}(undef, length(perms))
     
-    Threads.@threads for i in  eachindex(all_vertices)
-        perm = all_vertices[i]
-        nullity_P = _calc_perm_nullity(perm, model.n)
-        _, nullity_N = _get_Nρ_inv_from_perm!(model, perm)
-        nullity[i] = nullity_P + nullity_N # this is true as we can permute the matrix into diagnal block matrix.
-    end
-    return nullity
-end
+#     Threads.@threads for i in  eachindex(perms)
+#         perm = perms[i]
+#         nullity_P = _calc_perm_nullity(perm, model.n)
+#         _, nullity_N = _get_Nρ_inv_from_perm!(model, perm)
+#         nullity[i] = nullity_P + nullity_N # this is true as we can permute the matrix into diagnal block matrix.
+#     end
+#     return nullity
+# end
 
 
-@inline function _build_regimes(model::Bnc{T}, all_vertices, is_asymptotic, nullity) where T
+@inline function _build_bind_regimes(model::Bnc{T}, all_vertices, is_asymptotic, nullity) where T
     n_vertices = length(all_vertices)
     regimes = Vector{BindRegime}(undef, n_vertices)
     for i in 1:n_vertices
@@ -245,9 +246,9 @@ function _fill_inv_info!(vtx::BindRegime)
         vtx.C0_qK = vtx.C0_x + vtx.C_x * vtx.H0 # C0_qK = C0_x + C_x * H0 
     else
         if vtx.nullity ==1
-            # we need to check where this nullity comes from.
+            # # we need to check where this nullity comes from.
             if length(Set(vtx.perm)) == Bnc.d # the nullity comes from N
-                vtx.H = _calc_H(Bnc, vtx.perm).* Bnc.direction 
+                vtx.H = _calc_H(Bnc, vtx.perm) 
             else # the nullity comes from P
                 H = _adj_singular_matrix(vtx.M)[1]
                 vtx.H = droptol!(sparse(H),1e-10).* Bnc.direction
@@ -267,10 +268,11 @@ end
 
 Return a dictionary mapping permutation vectors to vertex indices.
 """
-get_bind_regimes_dict(model::BindRegimes) = model.vertices_perm_dict
+get_regimes_dict(model::BindRegimes) = model.vertices_perm_dict
+
 get_bind_regimes_dict(Bnc::Bnc) = let 
     find_all_regimes!(Bnc)
-    get_bind_regimes_dict(Bnc.BindRegimes)
+    get_regimes_dict(Bnc.BindRegimes)
 end
 
 

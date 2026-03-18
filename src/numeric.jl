@@ -15,7 +15,7 @@ Compute the Jacobian of `log(q,K)` with respect to `log(x)` at a given point.
 function ∂logqK_∂logx(Bnc::Bnc;
     x::Union{AbstractVector{<:Real},Nothing}=nothing,
     qK::Union{AbstractVector{<:Real},Nothing}=nothing,
-    input_logspace::Bool=false)::Matrix{<:Real}
+    input_logspace::Bool=false)::Matrix{Float64}
 
     x = if isnothing(x)
             if isnothing(qK)
@@ -38,8 +38,8 @@ function ∂logqK_∂logx(Bnc::Bnc;
         end
 
     return vcat(
-        x' .* Bnc.L ./ q,
-        Bnc.N
+        x' .* Matrix{Float64}(Bnc.L) ./ q,
+        Matrix{Float64}(Bnc.N)
     )
 end
 """

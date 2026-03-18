@@ -45,253 +45,6 @@ abstract type AbstractBnc end
 
 abstract type AbstractRegime end
 
-
-"""
-    CatalysisData
-
-Container for catalysis network metadata, including stoichiometric changes,
-reaction orders, and rate constants.
-"""
-struct CatalysisData <:AbstractBnc
-    # Parameters for the catalysis networks
-    bn::AbstractBnc # reference to the parent Bnc model, used for validation and consistency checks
-
-    # Catalysis determining Matrix
-    Γ::SparseMatrixCSC{Int,Int} # catalysis change in qK space, each column is a reaction
-    Π::SparseMatrixCSC{Int,Int} # catalysis index and coefficients, rate will be vⱼ=kⱼ∏xᵢ^Π_{j,i}, denote what species catalysis the reaction.
-
-    # Derived matrices 
-    S::SparseMatrixCSC{Int,Int} # the full row rank version of Γ
-    L_Γ::SparseMatrixCSC{Int,Int} # the left null space of Γ such that L_Γ^⊤ * Γ = 0
-
-    # Derived parameters
-    r_v::Int # number of independent catalysis reactions
-    n_v::Int # number of flux
-    d_w::Int # number of dependent conserved quantities.
-    d_para::Int # number of parameter total concentrations
-
-    # symbols of k
-    k_sym::Vector{Num}
-
-
-    # helper parameters for fast calculation, used for fast calculation of H and C_qK
-    _S_sparse::SparseMatrixCSC{Float64,Int} # sparse version of Γ, used for fast calculation
-    _Π_sparse::SparseMatrixCSC{Float64,Int}  # sparse version of Π, used for fast calculation
-
-    #Catalysis regimes
-    S_pos_neg::SparseMatrixCSC{Int,Int} # the vcat of positive and negative parts of S
-    _S_helper::MatrixHelper
-
-
-
-
-    function CatalysisData(bn,Γ, Π, k_sym)
-        d_wv, nv = size(Γ)
-        n = size(Π,2)
-        # Validation
-        @assert size(Π,1) == length(k_sym) == nv "Γ's column number have to meet with total flux number and k_sym"
-        @assert n == bn.n "Π's column number have to meet with the number of species n in the binding network"
-        L_Γ, pivits = left_nullspace_integer(Γ)
-
-        r_v = length(pivits)
-        d_w = size(L_Γ,1)
-        d_para = bn.d - r_v
-
-        # reorder and fix the binding network
-        no_pivits = setdiff(1:d_wv, pivits)
-        S = Γ[pivits, :]
-        new_ord = vcat(pivits,no_pivits)
-        Γ = Γ[new_ord, :]
-        L_Γ = L_Γ[new_ord, :]
-        fix_bn_catalysis!(bn, new_ord, L_Γ)
-
-        # Create sparse matrices
-        _S_sparse = sparse(Float64.(S))
-        _Π_sparse = sparse(Float64.(Π))
-
-        S_pos_neg = S_to_S_pos_neg(S)
-        _S_helper = _build_matrix_helper(S)
-
-        new(bn, Γ, Π, S, L_Γ,
-            r_v, nv, d_w, d_para,    
-            k_sym, _S_sparse, _Π_sparse,
-            S_pos_neg, _S_helper)
-    end
-end
-
-
-
-struct Volume
-    mean::Float64
-    var::Float64
-end
-"""
-    fetch_mean_re(V::Volume) -> (Float64, Float64)
-
-Return the mean and relative error (standard deviation / mean) for a `Volume`.
-"""
-fetch_mean_re(V::Volume) = (V.mean, sqrt(V.var)/V.mean)
-"""
-    Base.display(V::Volume)
-
-Display a compact summary of a `Volume`.
-"""
-Base.display(V::Volume) = Printf.@sprintf("Volume(Mean=%.3e, STD=%.3e, RelError=%.2f%%)", V.mean, sqrt(V.var), (sqrt(V.var)/V.mean)*100)
-Base.show(io::IO, V::Volume) = print(io, Printf.@sprintf("Volume(Mean=%.3e, STD=%.3e, RelError=%.2f%%)", V.mean, sqrt(V.var), (sqrt(V.var)/V.mean)*100))
-"""
-    Base.:+(v1::Volume, v2::Volume) -> Volume
-
-Add two `Volume` values by summing means and variances.
-"""
-Base.:+(v1::Volume, v2::Volume) = Volume(v1.mean + v2.mean, v1.var + v2.var)
-"""
-    Base.:-(v1::Volume, v2::Volume) -> Volume
-
-Add two `Volume` values by summing means and variances.
-"""
-Base.:-(v1::Volume, v2::Volume) = Volume(v1.mean - v2.mean, v1.var + v2.var)
-"""
-    Base.isless(a::Volume, b::Volume) -> Bool
-
-Compare `Volume` objects by mean value.
-"""
-Base.isless(a::Volume, b::Volume) = a.mean < b.mean
-"""
-    Base.:(==)(a::Volume, b::Volume) -> Bool
-
-Return `true` when two `Volume` objects have identical means.
-"""
-Base.:(==)(a::Volume, b::Volume) = a.mean == b.mean 
-"""
-    Base.zero(::Volume) -> Volume
-
-Return a zero `Volume` with zero mean and variance.
-"""
-Base.zero(::Volume) = Volume(0.0, 0.0)
-
-Base.:*(c::Real, v::Volume) = Volume(c * v.mean, c^2 * v.var)
-Base.:*(v::Volume, c::Real) = c * v
-Base.:/(v::Volume, c::Real) = Volume(v.mean / c, v.var / c^2)
-
-
-"""
-    BindRegime
-
-Representation of a regime/vertex in a binding network, including cached
-linear maps and polyhedral conditions.
-"""
-mutable struct BindRegime{F,T} <: AbstractRegime
-    #--- Parent Bnc model reference ---
-    network::Union{AbstractBnc,Nothing} # Reference to the parent Bnc model
-
-    # --- Initial / Identifying Properties ---
-    perm::Vector{T} # The regime vector
-    idx::Int # Index of the vertex in the Bnc.vertices list
-    is_asymptotic::Bool # Whether the vertex is asymptotic or not.
-
-
-
-    # --- Basic Properties ---
-    P::Union{SparseMatrixCSC{Int, Int}, Nothing}
-    P0::Union{Vector{F}, Nothing}
-    M::Union{SparseMatrixCSC{Int, Int}, Nothing}
-    M0::Union{Vector{F}, Nothing}
-    C_x::Union{SparseMatrixCSC{Int, Int}, Nothing}
-    C0_x::Union{Vector{F}, Nothing}
-
-    # --- Expensive Calculated Properties ---
-    nullity::T
-    H::Union{SparseMatrixCSC{Float64, Int}, Nothing} # Taking inverse, can have Float.
-    H0::Union{Vector{F}, Nothing} 
-    C_qK::Union{SparseMatrixCSC{Float64, Int}, Nothing}
-    C0_qK::Union{Vector{F}, Nothing} 
-    
-    volume::Union{Volume, Nothing}
-
-    function BindRegime(; network=nothing, perm, idx, is_asymptotic, nullity::T) where {T<:Integer}
-        return new{Float64,T}(network, perm, idx, is_asymptotic,
-            nothing, nothing, nothing, nothing, nothing, nothing, # P, P0, M, M0, C_x, C0_x
-            nullity,
-            nothing, nothing, # H, H0
-            nothing, nothing, # C_qK,C0_qK
-            nothing
-        )
-    end
-end
-
-
-
-"""
-    VertexEdge
-
-Edge metadata connecting neighboring vertices in a regime graph.
-"""
-mutable struct VertexEdge{T}
-    to::Int
-    diff_r::Int
-    change_dir_x::SparseVector{Int8, T}
-    intersect_x::Float64
-    change_dir_qK::Union{Nothing, SparseVector{Float64, T}}
-    intersect_qK::Union{Nothing, Float64}
-    function VertexEdge(to::Int, diff_r::Int, change_dir_x::SparseVector{Int8, T}, intersect_x::Float64) where {T}
-        return new{T}(to, diff_r, change_dir_x, intersect_x,nothing,nothing)
-    end
-end
-
-# Adjacency list + optional caches
-"""
-    VertexGraph
-
-Adjacency structure for vertices with optional caches for change directions.
-"""
-mutable struct VertexGraph{T}
-    bn::AbstractBnc
-    x_grh::SimpleGraph 
-    neighbors::Vector{Vector{VertexEdge{T}}}
-    change_dir_qK_computed::Bool
-    edge_pos::Vector{Dict{Int, Int}}  # (u,v) -> (u,edge_pos[u][v]) to locate the VertexEdge.
-    function VertexGraph(bn::AbstractBnc, neighbors::Vector{Vector{VertexEdge{T}}}) where {T}
-        edge_pos = [Dict{Int, Int}() for _ in 1:length(neighbors)]
-        g = SimpleGraph(length(neighbors))
-        for i in 1:length(neighbors)
-            edges = neighbors[i]
-            for (k, e) in enumerate(edges)
-                edge_pos[i][e.to] = k
-                add_edge!(g, i, e.to)
-            end
-        end
-        return new{T}(bn, g, neighbors, false, edge_pos)
-    end
-end
-
-
-
-
-
-mutable struct CatalysisRegime <:AbstractRegime
-    network::Union{AbstractBnc,Nothing} # Reference to the parent Bnc model
-    perm::Vector{Int} # The regime vector
-    idx::Int # Index of the vertex in the Catalysis.vertices list
-    is_asymptotic::Bool # Whether the vertex is asymptotic or not.
-
-    #--- Basic Properties ---
-    P_pos_neg::SparseMatrixCSC{Int, Int} # the vcat of P_pos and P_neg
-    Pθ:: SparseMatrixCSC{Int, Int} # P_pos - P_neg
-    Cθ::SparseMatrixCSC{Int, Int} # the vcat of C_pos and C_neg
-    CΠ:: SparseMatrixCSC{Int, Int} # the vcat of C_pos*Π and C_neg*Π
-end
-
-
-
-
-
-
-
-
-
-
-
-
 """
 Canonical hyperplane
 
@@ -354,6 +107,276 @@ struct MatrixHelper{Tv<:Integer}
     choice_map::Vector{Vector{Vector{ChoiceIneq}}} # choice_map[i][t] gives the list of oriented inequalities for choosing p = J[i][t]
     hyperplanes::Vector{Hyperplane_perm{Tv}} # global deduplicated hyperplane pool
 end
+"""
+    CatalysisData
+
+Container for catalysis network metadata, including stoichiometric changes,
+reaction orders, and rate constants.
+"""
+struct CatalysisData <:AbstractBnc
+    # Parameters for the catalysis networks
+    bn::AbstractBnc # reference to the parent Bnc model, used for validation and consistency checks
+
+    # Catalysis determining Matrix
+    Γ::SparseMatrixCSC{Int,Int} # catalysis change in qK space, each column is a reaction
+    Π::SparseMatrixCSC{Int,Int} # catalysis index and coefficients, rate will be vⱼ=kⱼ∏xᵢ^Π_{j,i}, denote what species catalysis the reaction.
+
+    # Derived matrices 
+    S::SparseMatrixCSC{Int,Int} # the full row rank version of Γ
+    L_Γ::SparseMatrixCSC{Int,Int} # the left null space of Γ such that L_Γ^⊤ * Γ = 0
+
+    # Derived parameters
+    r_v::Int # number of independent catalysis reactions
+    n_v::Int # number of flux
+    d_w::Int # number of dependent conserved quantities.
+    d_para::Int # number of parameter total concentrations
+
+    # symbols of k
+    k_sym::Vector{Num}
+
+
+    # helper parameters for fast calculation, used for fast calculation of H and C_qK
+    _S_sparse::SparseMatrixCSC{Float64,Int} # sparse version of Γ, used for fast calculation
+    _Π_sparse::SparseMatrixCSC{Float64,Int}  # sparse version of Π, used for fast calculation
+
+    #Catalysis regimes
+    S_pos_neg::SparseMatrixCSC{Int,Int} # the vcat of positive and negative parts of S
+    _S_helper::MatrixHelper
+
+    CatalysisRegimes::Union{AbstractRegime,Nothing} # Using Any for placeholder for CatalysisRegimes
+
+    function CatalysisData(bn,Γ, Π, k_sym)
+        d_wv, nv = size(Γ)
+        n = size(Π,2)
+        # Validation
+        @assert size(Π,1) == length(k_sym) == nv "Γ's column number have to meet with total flux number and k_sym"
+        @assert n == bn.n "Π's column number have to meet with the number of species n in the binding network"
+        L_Γ, pivits = left_nullspace_integer(Γ)
+
+        r_v = length(pivits)
+        d_w = size(L_Γ,1)
+        d_para = bn.d - r_v
+
+        # reorder and fix the binding network
+        no_pivits = setdiff(1:d_wv, pivits)
+        S = Γ[pivits, :]
+        new_ord = vcat(pivits,no_pivits)
+        Γ = Γ[new_ord, :]
+        L_Γ = L_Γ[new_ord, :]
+        fix_bn_catalysis!(bn, new_ord, L_Γ)
+
+        # Create sparse matrices
+        _S_sparse = sparse(Float64.(S))
+        _Π_sparse = sparse(Float64.(Π))
+
+        S_pos_neg = S_to_S_pos_neg(S)
+        _S_helper = _build_matrix_helper(S)
+
+        new(bn, Γ, Π, S, L_Γ,
+            r_v, nv, d_w, d_para,    
+            k_sym, _S_sparse, _Π_sparse,
+            S_pos_neg, _S_helper, nothing)
+    end
+end
+
+
+
+struct Volume
+    mean::Float64
+    var::Float64
+end
+"""
+    fetch_mean_re(V::Volume) -> (Float64, Float64)
+
+Return the mean and relative error (standard deviation / mean) for a `Volume`.
+"""
+fetch_mean_re(V::Volume) = (V.mean, sqrt(V.var)/V.mean)
+"""
+    Base.display(V::Volume)
+
+Display a compact summary of a `Volume`.
+"""
+Base.display(V::Volume) = Printf.@sprintf("Volume(Mean=%.3e, STD=%.3e, RelError=%.2f%%)", V.mean, sqrt(V.var), (sqrt(V.var)/V.mean)*100)
+Base.show(io::IO, V::Volume) = print(io, Printf.@sprintf("Volume(Mean=%.3e, STD=%.3e, RelError=%.2f%%)", V.mean, sqrt(V.var), (sqrt(V.var)/V.mean)*100))
+"""
+    Base.:+(v1::Volume, v2::Volume) -> Volume
+
+Add two `Volume` values by summing means and variances.
+"""
+Base.:+(v1::Volume, v2::Volume) = Volume(v1.mean + v2.mean, v1.var + v2.var)
+"""
+    Base.:-(v1::Volume, v2::Volume) -> Volume
+
+Add two `Volume` values by summing means and variances.
+"""
+Base.:-(v1::Volume, v2::Volume) = Volume(v1.mean - v2.mean, v1.var + v2.var)
+"""
+    Base.isless(a::Volume, b::Volume) -> Bool
+
+Compare `Volume` objects by mean value.
+"""
+Base.isless(a::Volume, b::Volume) = a.mean < b.mean
+"""
+    Base.:(==)(a::Volume, b::Volume) -> Bool
+
+Return `true` when two `Volume` objects have identical means.
+"""
+Base.:(==)(a::Volume, b::Volume) = a.mean == b.mean 
+"""
+    Base.zero(::Volume) -> Volume
+
+Return a zero `Volume` with zero mean and variance.
+"""
+Base.zero(::Volume) = Volume(0.0, 0.0)
+
+Base.:*(c::Real, v::Volume) = Volume(c * v.mean, c^2 * v.var)
+Base.:*(v::Volume, c::Real) = c * v
+Base.:/(v::Volume, c::Real) = Volume(v.mean / c, v.var / c^2)
+
+
+
+"""
+    BindRegime
+
+Representation of a regime/vertex in a binding network, including cached
+linear maps and polyhedral conditions.
+"""
+mutable struct BindRegime{F,T} <: AbstractRegime
+    #--- Parent Bnc model reference ---
+    network::Union{AbstractBnc,Nothing} # Reference to the parent Bnc model
+
+    # --- Initial / Identifying Properties ---
+    perm::Vector{T} # The regime vector
+    idx::Int # Index of the vertex in the Bnc.vertices list
+    is_asymptotic::Bool # Whether the vertex is asymptotic or not.
+
+    # --- Basic Properties ---
+    P::Union{SparseMatrixCSC{Int, Int}, Nothing}
+    P0::Union{Vector{F}, Nothing}
+    M::Union{SparseMatrixCSC{Int, Int}, Nothing}
+    M0::Union{Vector{F}, Nothing}
+    C_x::Union{SparseMatrixCSC{Int, Int}, Nothing}
+    C0_x::Union{Vector{F}, Nothing}
+
+    # --- Expensive Calculated Properties ---
+    nullity::T
+    H::Union{SparseMatrixCSC{Float64, Int}, Nothing} # Taking inverse, can have Float.
+    H0::Union{Vector{F}, Nothing} 
+    C_qK::Union{SparseMatrixCSC{Float64, Int}, Nothing}
+    C0_qK::Union{Vector{F}, Nothing} 
+    
+    volume::Union{Volume, Nothing}
+
+    function BindRegime(; network=nothing, perm, idx, is_asymptotic, nullity::T) where {T<:Integer}
+        return new{Float64,T}(network, perm, idx, is_asymptotic,
+            nothing, nothing, nothing, nothing, nothing, nothing, # P, P0, M, M0, C_x, C0_x
+            nullity,
+            nothing, nothing, # H, H0
+            nothing, nothing, # C_qK,C0_qK
+            nothing
+        )
+    end
+end
+
+
+
+
+mutable struct CatalysisRegime <:AbstractRegime
+    network::Union{AbstractBnc,Nothing} # Reference to the parent Bnc model
+    perm::Vector{Int} # The regime vector
+    idx::Int # Index of the vertex in the Catalysis.vertices list
+    is_asymptotic::Bool # Whether the vertex is asymptotic or not.
+
+    #--- Basic Properties ---
+    P_pos_neg::Union{SparseMatrixCSC{Int, Int}, Nothing} # the vcat of P_pos and P_neg
+    
+    P:: Union{SparseMatrixCSC{Int, Int}, Nothing} # P_pos - P_neg
+    C::Union{SparseMatrixCSC{Int, Int}, Nothing} # the vcat of C_pos and C_neg
+
+    CΠ:: Union{SparseMatrixCSC{Int, Int}, Nothing} # the vcat of C_pos*Π and C_neg*Π
+    PΠ:: Union{SparseMatrixCSC{Int, Int}, Nothing} # the vcat of (P_pos - P_neg)*Π
+    function CatalysisRegime(; network=nothing, perm, idx, is_asymptotic) 
+        return new(network, perm, idx, is_asymptotic,
+            nothing, # P_pos_neg
+            nothing, # P
+            nothing, # C
+            nothing, # CΠ
+            nothing  # PΠ
+        )
+    end
+end
+
+
+mutable struct BncRegime <:AbstractRegime
+    bind_rgm::BindRegime
+    catalysis_rgm::CatalysisRegime
+
+    H_bd::SparseMatrixCSC{Float64, Int} 
+    is_stable::Int8 # 1 for stable, 0 for unstable, -1 for unknown
+
+end
+
+"""
+    VertexEdge
+
+Edge metadata connecting neighboring vertices in a regime graph.
+"""
+mutable struct VertexEdge{T}
+    to::Int
+    diff_r::Int
+    change_dir_x::SparseVector{Int8, T}
+    intersect_x::Float64
+    change_dir_qK::Union{Nothing, SparseVector{Float64, T}}
+    intersect_qK::Union{Nothing, Float64}
+    function VertexEdge(to::Int, diff_r::Int, change_dir_x::SparseVector{Int8, T}, intersect_x::Float64) where {T}
+        return new{T}(to, diff_r, change_dir_x, intersect_x,nothing,nothing)
+    end
+end
+
+# Adjacency list + optional caches
+"""
+    VertexGraph
+
+Adjacency structure for vertices with optional caches for change directions.
+"""
+mutable struct VertexGraph{T}
+    bn::AbstractBnc
+    x_grh::SimpleGraph 
+    neighbors::Vector{Vector{VertexEdge{T}}}
+    change_dir_qK_computed::Bool
+    edge_pos::Vector{Dict{Int, Int}}  # (u,v) -> (u,edge_pos[u][v]) to locate the VertexEdge.
+    function VertexGraph(bn::AbstractBnc, neighbors::Vector{Vector{VertexEdge{T}}}) where {T}
+        edge_pos = [Dict{Int, Int}() for _ in 1:length(neighbors)]
+        g = SimpleGraph(length(neighbors))
+        for i in 1:length(neighbors)
+            edges = neighbors[i]
+            for (k, e) in enumerate(edges)
+                edge_pos[i][e.to] = k
+                add_edge!(g, i, e.to)
+            end
+        end
+        return new{T}(bn, g, neighbors, false, edge_pos)
+    end
+end
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 """
     IntegrationHelper
@@ -410,11 +433,17 @@ end
 
 struct BindRegimes{T} 
     vertices_perm_dict::Dict{Vector{T},Int}
-    vertices_data::Vector{BindRegime}
+    vertices_data::Vector{<:AbstractRegime}
 end
 
-
-
+struct NρCacheEntry
+    deficiency::Int                    # row-rank deficiency of Nρ; for square Nρ this is nullity(Nρ)
+    kind::UInt8                        # 0x00 = deficiency only, 0x01 = explicit inverse, 0x02 = rank-1 adjugate factors
+    inv::SparseMatrixCSC{Float64,Int}  # valid iff kind == 0x01
+    α::Float64                         # valid iff kind == 0x02
+    u::Vector{Float64}                 # left null vector  (length r)
+    v::Vector{Float64}                 # right null vector (length r)
+end
 
 """
     Bnc
@@ -445,7 +474,8 @@ mutable struct Bnc{T} <: AbstractBnc # T is the int type to save all the indices
 
     #The following are computed when building graphs.
     vertices_graph::Union{Any,Nothing} # Using Any for placeholder for VertexGraph
-    _vertices_Nρ_inv_dict::Dict{Vector{T}, Tuple{SparseMatrixCSC{Float64, Int},T}} # cache the N_inv for each vertex permutation
+    # _vertices_Nρ_inv_dict::Dict{Vector{T}, Tuple{SparseMatrixCSC{Float64, Int},T}} # cache the N_inv for each vertex permutation
+    _vertices_Nρ_inv_dict :: Union{Any,Nothing}
 
     #------other helper parameters------
     direction::Int8 # direction of the binding reactions, determine the ray direction for invertible regime, calculated by sign of det[L;N]
@@ -485,7 +515,7 @@ mutable struct Bnc{T} <: AbstractBnc # T is the int type to save all the indices
             # Fields 10-12 (Initialized empty)
             nothing,                         # BindRegimes
             nothing,                         # vertices_graph
-            Dict{Vector{T}, Tuple{SparseMatrixCSC{Float64, Int},T}}(), # _vertices_perm_Ninv_dict
+            nothing,                         # _vertices_perm_Ninv_dict
             # Fields 13-28 (Calculated values)
             direction,
             integration_helper,
@@ -493,6 +523,8 @@ mutable struct Bnc{T} <: AbstractBnc # T is the int type to save all the indices
         )
     end
 end
+
+
 
 
 @inline _bind_regimes(model::Bnc) = getfield(model, :BindRegimes)
