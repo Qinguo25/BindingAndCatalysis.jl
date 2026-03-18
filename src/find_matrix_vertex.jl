@@ -357,17 +357,8 @@ function _perm_process(
             hyperplane_id_signs[block_start + s - 1] = (refs[s].hid, refs[s].sign)
         end
     end
-    perm_nullity = 0
-    seen = falses(n)
-    @inbounds for p in perm
-        if seen[p]
-            perm_nullity += 1
-        else
-            seen[p] = true
-        end
-    end
 
-    return P0, hyperplane_id_signs, perm_nullity
+    return P0, hyperplane_id_signs
 end
 
 

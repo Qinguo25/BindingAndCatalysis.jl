@@ -21,63 +21,63 @@ function _calc_C_C0_qK_singular(Bnc::Bnc, vtx)
     return CqK, C0qK
 end
 
-"""
-    _calc_change_col(from, to) -> Tuple
+# """
+#     _calc_change_col(from, to) -> Tuple
 
-Compute the change direction between two permutations.
-"""
-function _calc_change_col(from::Vector{T},to::Vector{T}) where T<:Integer
-    j1 = 0
-    j2 = 0
-    inconsis = Int[]
-    for (i , (val_a,val_b)) in enumerate(zip(from,to))
-        if val_a == val_b
-            continue
-        else
-            push!(inconsis, i)
-        end
-    end
-    target_inconsis = Set(to[inconsis])
-    if target_inconsis |> length == 1
-        j1,j2 = from[inconsis[1]], to[inconsis[1]]
-        return j1,j2    
-    end
-    for (val1,i1) in zip(from[inconsis], inconsis)
-        if val1 ∈ target_inconsis
-            j2 = to[i1]
-            i2 = inconsis[findfirst(x -> x == val1, to[inconsis])]
-            j1 = from[i2]
-            return j1,j2
-        end
-    end
-end
+# Compute the change direction between two permutations.
+# """
+# function _calc_change_col(from::Vector{T},to::Vector{T}) where T<:Integer
+#     j1 = 0
+#     j2 = 0
+#     inconsis = Int[]
+#     for (i , (val_a,val_b)) in enumerate(zip(from,to))
+#         if val_a == val_b
+#             continue
+#         else
+#             push!(inconsis, i)
+#         end
+#     end
+#     target_inconsis = Set(to[inconsis])
+#     if target_inconsis |> length == 1
+#         j1,j2 = from[inconsis[1]], to[inconsis[1]]
+#         return j1,j2    
+#     end
+#     for (val1,i1) in zip(from[inconsis], inconsis)
+#         if val1 ∈ target_inconsis
+#             j2 = to[i1]
+#             i2 = inconsis[findfirst(x -> x == val1, to[inconsis])]
+#             j1 = from[i2]
+#             return j1,j2
+#         end
+#     end
+# end
 
-"""
-    _get_i_j_perms(from, to) -> (Int, Int, Int, Int)
+# """
+#     _get_i_j_perms(from, to) -> (Int, Int, Int, Int)
 
-Return indices and column selections that differ between two permutations.
-"""
-function _get_i_j_perms(from::Vector{T},to::Vector{T}) where T<:Integer
-    inconsis_idx = findall(from .!= to)
-    if length(inconsis_idx) == 1
-        i1 = inconsis_idx[1]
-        i2 = i1
-    else
-        intersect_val = Set(from[inconsis_idx]) ∩ Set(to[inconsis_idx])
-        @assert length(intersect_val) == 1 "More than one intersected value found in inconsistent positions."
-        for i in inconsis_idx
-            if from[i] ∈ intersect_val
-                i2 = i
-            end
-            if to[i] ∈ intersect_val
-                i1 = i
-            end
-        end
-    end
-    j1 = from[i1]
-    j2 = to[i2]
-    return i1,i2,j1,j2
-end
+# Return indices and column selections that differ between two permutations.
+# """
+# function _get_i_j_perms(from::Vector{T},to::Vector{T}) where T<:Integer
+#     inconsis_idx = findall(from .!= to)
+#     if length(inconsis_idx) == 1
+#         i1 = inconsis_idx[1]
+#         i2 = i1
+#     else
+#         intersect_val = Set(from[inconsis_idx]) ∩ Set(to[inconsis_idx])
+#         @assert length(intersect_val) == 1 "More than one intersected value found in inconsistent positions."
+#         for i in inconsis_idx
+#             if from[i] ∈ intersect_val
+#                 i2 = i
+#             end
+#             if to[i] ∈ intersect_val
+#                 i1 = i
+#             end
+#         end
+#     end
+#     j1 = from[i1]
+#     j2 = to[i2]
+#     return i1,i2,j1,j2
+# end
 #------------------Helper functions -------------------------------------------
 """
     _regime_graph_to_sparse(g::VertexGraph; weight_fn=e->1) -> SparseMatrixCSC
@@ -103,6 +103,104 @@ function _regime_graph_to_sparse(G::VertexGraph{T}; weight_fn = e -> 1) where T
     end
     return sparse(I,J,V, n, n) |> dropzeros!
 end
+
+
+# function _fill_neighbor_info!(vtx::BindRegime)
+#     """
+#     Fill the neighbor info for a given vertex.
+#     """
+#     Bnc = vtx.network
+#     if isempty(vtx.neighbors_idx)
+#         vtx_grh = get_regimes_graph!(Bnc;full=false)
+#         vtx.neighbors_idx = vtx_grh.neighbors[vtx.idx] .|> e -> e.to
+#     end
+#     return nothing
+# end
+
+
+@inline is_bind_regimes_built(model::Bnc) = !isnothing(model.BindRegimes)
+
+#------------------------------------------------------------------------------
+#             1. Functions find all regimes and return properties
+# ------------------------------------------------------------------------------
+
+"""
+    find_all_regimes!(bnc::Bnc) -> Vector{Vector{Int}}
+
+Compute and cache all vertex permutations, asymptotic flags, Nρ inverse cache,
+and vertex nullities.
+"""
+function find_all_regimes!(model::Bnc{T};) where T
+    if is_bind_regimes_built(model)
+        return nothing
+    end
+
+    @info "---------------------Start finding all vertices--------------------"
+    all_vertices, is_asymptotic =  _enumerate_all_regimes(model._L_helper)
+    all_vertices = [Vector{T}(v) for v in all_vertices]
+
+    n_vertices = length(all_vertices)
+    n_asym_rgms = sum(is_asymptotic)
+    @info "Finished, with $(n_vertices) vertices found and $(n_asym_rgms) asymptotic vertices."
+    
+    @info "2.Calculating nullity for each vertex..."
+    nullity = _calc_nullity(all_vertices, model)
+    
+    @info "3.Building Regimes..."
+    model.BindRegimes = let
+        regimes = _build_regimes(model, all_vertices, is_asymptotic, nullity)    
+        vertices_perm_dict = Dict(perm => idx for (idx, perm) in enumerate(all_vertices))
+        BindRegimes(vertices_perm_dict, regimes)
+    end
+    return nothing
+end
+
+
+@inline function _calc_perm_nullity(perm, n::Integer)
+    perm_nullity = 0
+    seen = falses(n)
+    @inbounds for p in perm
+        if seen[p]
+            perm_nullity += 1
+        else
+            seen[p] = true
+        end
+    end
+    return perm_nullity
+end
+
+
+
+@inline function _calc_nullity(all_vertices, model::Bnc{T}) where T
+    _build_Nρ_cache_parallel!(model, all_vertices) # build Nρ_inv cache in parallel
+    nullity = Vector{T}(undef, length(all_vertices))
+    
+    Threads.@threads for i in  eachindex(all_vertices)
+        perm = all_vertices[i]
+        nullity_P = _calc_perm_nullity(perm, model.n)
+        _, nullity_N = _get_Nρ_inv_from_perm!(model, perm)
+        nullity[i] = nullity_P + nullity_N # this is true as we can permute the matrix into diagnal block matrix.
+    end
+    return nullity
+end
+
+
+@inline function _build_regimes(model::Bnc{T}, all_vertices, is_asymptotic, nullity) where T
+    n_vertices = length(all_vertices)
+    regimes = Vector{BindRegime}(undef, n_vertices)
+    for i in 1:n_vertices
+        regimes[i] = BindRegime(
+            network = model,
+            perm = all_vertices[i],
+            idx = i,
+            is_asymptotic = is_asymptotic[i],
+            nullity = nullity[i]
+        )
+    end
+    return regimes
+end
+
+
 """
     _initialize_regime!(vtx::BindRegime) -> BindRegime
 
@@ -162,129 +260,6 @@ function _fill_inv_info!(vtx::BindRegime)
     return nothing
 end
 
-# function _fill_neighbor_info!(vtx::BindRegime)
-#     """
-#     Fill the neighbor info for a given vertex.
-#     """
-#     Bnc = vtx.network
-#     if isempty(vtx.neighbors_idx)
-#         vtx_grh = get_regimes_graph!(Bnc;full=false)
-#         vtx.neighbors_idx = vtx_grh.neighbors[vtx.idx] .|> e -> e.to
-#     end
-#     return nothing
-# end
-
-
-#------------------------------------------------------------------------------
-#             1. Functions find all regimes and return properties
-# ------------------------------------------------------------------------------
-
-"""
-    find_all_regimes!(bnc::Bnc) -> Vector{Vector{Int}}
-
-Compute and cache all vertex permutations, asymptotic flags, Nρ inverse cache,
-and vertex nullities.
-"""
-
-function find_all_regimes!(model::Bnc{T};) where T
-    if _bind_regimes_built(model)
-        return _bind_regimes_perm(model)
-    end
-
-    @info "---------------------Start finding all vertices--------------------"
-    all_vertices, is_asymptotic =  _enumerate_all_regimes(model._L_helper)
-    all_vertices = [Vector{T}(v) for v in all_vertices]
-
-    n_vertices = length(all_vertices)
-    n_asym_rgms = sum(is_asymptotic)
-    @info "Finished, with $(n_vertices) vertices found and $(n_asym_rgms) asymptotic vertices."
-    
-    @info "2.Calculating nullity for each vertex..."
-    nullity = _calc_nullity(all_vertices, model)
-    @info "3.Building Regimes..."
-    regimes = _build_regimes(model, all_vertices, is_asymptotic, nullity)
-    vertices_perm_dict = Dict(perm => idx for (idx, perm) in enumerate(all_vertices))
-    model.BindRegimes = BindRegimes(vertices_perm_dict, regimes)
-
-    return all_vertices
-end
-
-
-@inline function _calc_perm_nullity(perm, n::Integer)
-    perm_nullity = 0
-    seen = falses(n)
-    @inbounds for p in perm
-        if seen[p]
-            perm_nullity += 1
-        else
-            seen[p] = true
-        end
-    end
-    return perm_nullity
-end
-
-
-
-@inline function _calc_nullity(all_vertices, model::Bnc{T}) where T
-    _build_Nρ_cache_parallel!(model, all_vertices) # build Nρ_inv cache in parallel
-    nullity = Vector{T}(undef, length(all_vertices))
-    
-    Threads.@threads for i in  eachindex(all_vertices)
-        perm = all_vertices[i]
-        nullity_P = _calc_perm_nullity(perm, model.n)
-        _, nullity_N = _get_Nρ_inv_from_perm!(model, perm)
-        nullity[i] = nullity_P + nullity_N # this is true as we can permute the matrix into diagnal block matrix.
-    end
-    return nullity
-end
-
-
-@inline function _build_regimes(model::Bnc{T}, all_vertices, is_asymptotic, nullity) where T
-    n_vertices = length(all_vertices)
-    regimes = Vector{BindRegime}(undef, n_vertices)
-    for i in 1:n_vertices
-        regimes[i] = BindRegime(
-            network = model,
-            perm = all_vertices[i],
-            idx = i,
-            is_asymptotic = is_asymptotic[i],
-            nullity = nullity[i]
-        )
-    end
-    return regimes
-end
-
-
-
-# function find_all_regimes!(model::Bnc{T};) where T # cheap enough for now
-#     if isempty(model.vertices_perm) 
-#         @info "---------------------Start finding all vertices--------------------"
-#         # all vertices
-#         all_vertices, is_asymptotic =  _enumerate_all_regimes(model._L_helper)
-
-#         all_vertices = [Vector{T}(v) for v in all_vertices]
-        
-#         n_vertices = length(all_vertices)
-#         # finding asymptotic vertices, which is the real vertices.
-#         n_asym_rgms = sum(is_asymptotic)
-#         @info "Finished, with $(n_vertices) vertices found and $(n_asym_rgms) asymptotic vertices."
-#         @info "-------------Start calculating nullity for each vertex, it also takes a while.------------"
-        
-#         @info "1.Building Nρ_inv cache in parallel..."
-        
-#         # Caltulate the nullity for each vertices
-#         nullity = Vector{T}(undef, length(all_vertices))
-
-#         model.vertices_perm = all_vertices
-#         model.vertices_asymptotic_flag = is_asymptotic
-#         model.vertices_perm_dict = Dict(a=>idx for (idx, a) in enumerate(model.vertices_perm)) # Map from vertex to its index
-#         model.vertices_nullity = nullity
-#         model.vertices_data = Vector{BindRegime}(undef, n_vertices)
-#         model._vertices_is_initialized = falses(n_vertices)
-#         model._vertices_volume_is_calced = falses(n_vertices)
-#     end
-#     return model.vertices_perm
-# end
 
 
 """
@@ -292,10 +267,13 @@ end
 
 Return a dictionary mapping permutation vectors to vertex indices.
 """
-function get_regimes_perm_dict(Bnc::Bnc)
-    find_all_regimes!(Bnc) # Ensure vertices are calculated
-    return _bind_regimes_perm_dict(Bnc)
+get_bind_regimes_dict(model::BindRegimes) = model.vertices_perm_dict
+get_bind_regimes_dict(Bnc::Bnc) = let 
+    find_all_regimes!(Bnc)
+    get_bind_regimes_dict(Bnc.BindRegimes)
 end
+
+
 """
     get_nullities(bnc::Bnc, rgms=nothing) -> Vector
 
@@ -406,7 +384,7 @@ function get_idx(Bnc::Bnc, idx::T;check::Bool=false) where T<:Integer
     end
    return idx
 end
-get_idx(Bnc::Bnc,perm::AbstractVector;kwargs...)=(find_all_regimes!(Bnc);Bnc.vertices_perm_dict[get_perm(Bnc, perm)])
+get_idx(Bnc::Bnc,perm::AbstractVector;kwargs...)=(get_bind_regimes_dict(Bnc)[get_perm(Bnc, perm)])
 get_idx(vtx::BindRegime) = vtx.idx
 get_idx(Bnc::Bnc, vtx::BindRegime;kwargs...)= get_idx(vtx)
 
@@ -418,8 +396,7 @@ Return the permutation vector, optionally validating it.
 """
 function get_perm(Bnc::Bnc,perm::Vector{<:Integer};check::Bool=false)
     if check
-        find_all_regimes!(Bnc)
-        @assert haskey(Bnc.vertices_perm_dict, perm) "The given perm is not in Bnc"
+        @assert haskey(get_bind_regimes_dict(Bnc), perm) "The given perm is not in Bnc"
     end
     return perm
 end
@@ -438,7 +415,7 @@ function get_regime(Bnc::Bnc, perm; check::Bool=false, kwargs...)::BindRegime
     find_all_regimes!(Bnc) #initialize perm_data
     
     vtx = begin
-        idx = get_idx(Bnc, perm; check=check)
+        idx = get_idx(Bnc, perm; check=check)          
         _initialize_regime!(Bnc.vertices_data[idx])
     end
     return get_regime(vtx; kwargs...)
@@ -471,7 +448,7 @@ get_binding_network(vtx::BindRegime,args...)=vtx.network
 
 Return `true` when a permutation or index exists in the model.
 """
-have_perm(Bnc::Bnc, perm::AbstractVector) = (find_all_regimes!(Bnc); haskey(Bnc.vertices_perm_dict, get_perm(Bnc, perm)))
+have_perm(Bnc::Bnc, perm::AbstractVector) = haskey(get_bind_regimes_dict(Bnc), get_perm(Bnc, perm))
 have_perm(Bnc::Bnc, idx::Integer) = (find_all_regimes!(Bnc); idx ≥ 1 && idx ≤ n_regimes(Bnc))
 have_perm(Bnc::Bnc, vtx::BindRegime) = have_perm(Bnc, get_perm(vtx))
 

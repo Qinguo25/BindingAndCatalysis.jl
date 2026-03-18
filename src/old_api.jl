@@ -29,10 +29,11 @@ get_vertices(args...; kwargs...) = get_regimes(args...; kwargs...)
 
 n_vertices(args...; kwargs...) = n_regimes(args...; kwargs...)
 summary_vertex(args...; kwargs...) = summary_regime(args...; kwargs...)
-
+get_regimes_perm_dict(args...; kwargs...) = get_bind_regimes_dict(args...; kwargs...)
 
 export find_all_vertices, find_all_vertices!, get_vertices_perm_dict
 export assign_vertex_x, assign_vertex_qK, assign_vertex
 export get_vertices_graph!, get_vertices_neighbor_mat_x, get_vertices_neighbor_mat_qK, get_vertices_neighbor_mat
 export get_vertex, get_vertices
 export n_vertices, summary_vertex
+export get_regimes_perm_dict

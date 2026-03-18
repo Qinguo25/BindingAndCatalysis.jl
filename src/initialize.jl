@@ -439,22 +439,12 @@ mutable struct Bnc{T} <: AbstractBnc # T is the int type to save all the indices
     #-------Parameters of the catalysis networks------
     catalysis::Union{Any,Nothing} # Using Any for placeholder for CatalysisData
 
-    #--------Vertex data--------
-
-    #The following four are computed when finding regimes.
-    # vertices_perm::Vector{Vector{T}} # all feasible regimes.
-    # vertices_perm_dict::Dict{Vector{T},Int} # map from permutation vector to its idx in the vertices list
-    # vertices_asymptotic_flag::Vector{Bool} # While this vertice is real
-    # vertices_nullity::Vector{T} # nullity of one vertex.
+    #--------Binding regimes data--------
     BindRegimes::Union{BindRegimes, Nothing}
+
 
     #The following are computed when building graphs.
     vertices_graph::Union{Any,Nothing} # Using Any for placeholder for VertexGraph
-    # vertices_data::Vector{BindRegime} # Using Any for placeholder for BindRegime
-    # _vertices_is_initialized::BitVector
-    # _vertices_volume_is_calced::BitVector
-
-
     _vertices_Nρ_inv_dict::Dict{Vector{T}, Tuple{SparseMatrixCSC{Float64, Int},T}} # cache the N_inv for each vertex permutation
 
     #------other helper parameters------
@@ -503,6 +493,7 @@ mutable struct Bnc{T} <: AbstractBnc # T is the int type to save all the indices
         )
     end
 end
+
 
 @inline _bind_regimes(model::Bnc) = getfield(model, :BindRegimes)
 @inline _bind_regimes_built(model::Bnc) = !isnothing(_bind_regimes(model))
@@ -554,6 +545,8 @@ function Base.propertynames(model::Bnc, private::Bool=false)
     ]
     return private ? Tuple(unique(names)) : Tuple(sym for sym in unique(names) if !startswith(String(sym), "_"))
 end
+
+
 
 
 

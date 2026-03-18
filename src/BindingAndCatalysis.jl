@@ -22,8 +22,8 @@ export logder_x_qK, logder_qK_x, ∂logx_∂logqK, ∂logqK_∂logx
 export find_all_regimes, find_all_vertices
 
 # include("regimes.jl")
-export find_all_regimes!, find_all_vertices!, get_regimes_perm_dict, get_vertices_perm_dict, get_nullities, get_volumes, have_perm
-export get_regimes, get_vertices, get_regimes_neighbor_mat, get_vertices_neighbor_mat
+export find_all_regimes!, find_all_vertices!, get_bind_regimes_dict, get_vertices_perm_dict, get_nullities, get_volumes, have_perm
+export get_regimes, get_regimes_neighbor_mat, get_vertices_neighbor_mat
 export is_singular, is_asymptotic, n_regimes, n_vertices
 
 export get_idx, get_perm, get_regime, get_vertex, get_neighbors, get_nullity, get_one_inner_point
