@@ -65,4 +65,7 @@ export draw_qK_neighbor_grh, find_bounds, add_rgm_colorbar!, get_color_map
 export draw_ROP
 export plot_polyhedron_slices
 
+# include("d_stable.jl")
+export judge_dstable
+
 end # module

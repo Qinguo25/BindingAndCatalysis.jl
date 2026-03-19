@@ -70,7 +70,6 @@ function _initialize_regime!(vtx::CatalysisRegime)
 
     model = vtx.network
     perm = vtx.perm
-    idx = vtx.idx
 
     P_pos_neg, C = _calc_P_P0(perm, model._S_helper)
     P = P_pos_neg[1:model.r_v, :] - P_pos_neg[model.r_v+1:end, :]
@@ -91,26 +90,6 @@ get_catalysis_regimes_dict(model::CatalysisData) = let
     find_catalysis_regimes!(model)
     get_regimes_dict(model.CatalysisRegimes)
 end
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 

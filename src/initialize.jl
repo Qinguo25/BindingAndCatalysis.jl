@@ -798,6 +798,7 @@ include(joinpath(@__DIR__,"symbolics.jl"))
 include(joinpath(@__DIR__,"regime_graphs.jl"))
 include(joinpath(@__DIR__,"visualize.jl"))
 include(joinpath(@__DIR__,"old_api.jl"))
+include(joinpath(@__DIR__,"d_stable.jl"))
 
 
 """
