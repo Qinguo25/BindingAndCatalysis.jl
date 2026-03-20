@@ -163,7 +163,7 @@ mutable struct CatalysisData <:AbstractBnc
         L_Γ, pivits = left_nullspace_integer(Γ)
 
         r_v = length(pivits)
-        d_w = size(L_Γ,1)
+        d_w = size(L_Γ,2)
         d_para = bn.d - r_v
 
         # reorder and fix the binding network
@@ -354,9 +354,8 @@ mutable struct BncRegime <:AbstractRegime
         H = get_H(bind_rgm)
         r_v = size(PΠ,1)
         H_bd = PΠ * H[:,1:r_v]
-        is_stable = judge_dstable(H_bd)
         return new(bind_rgm, catalysis_rgm, 
-            H_bd, is_stable,
+            H_bd, Int8(-1),
             -1,nothing, nothing,
             nothing,nothing, -1,  
             nothing, nothing)
@@ -820,6 +819,7 @@ end
 
 @inline function _remove_regime_data!(bn::Bnc{T}) where T 
     bn.BindRegimes = nothing
+    bn.BncRegimes = nothing
     bn.vertices_graph = nothing
     bn._vertices_Nρ_inv_dict = Dict{Vector{T}, Tuple{SparseMatrixCSC{Float64, Int},T}}()
     return nothing
@@ -834,7 +834,7 @@ include(joinpath(@__DIR__,"numeric.jl"))
 include(joinpath(@__DIR__,"find_matrix_vertex.jl")) # before regimes.jl
 include(joinpath(@__DIR__,"regimes.jl"))
 include(joinpath(@__DIR__,"Catalysis_regime.jl"))
-include(joinpath(@__DIR__,"bnc_regime.jl"))
+include(joinpath(@__DIR__,"Bnc_regime.jl"))
 
 include(joinpath(@__DIR__,"regime_assign.jl"))
 include(joinpath(@__DIR__,"symbolics.jl"))

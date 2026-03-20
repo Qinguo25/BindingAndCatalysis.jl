@@ -18,12 +18,72 @@ q_sym(args...)=get_binding_network(args...).q_sym
 Return binding constant symbols for a binding network.
 """
 K_sym(args...)=get_binding_network(args...).K_sym
+
+"""
+    k_sym(args...) -> Vector{Num}
+
+Return catalysis rate-constant symbols.
+"""
+k_sym(args...) = _require_catalysis_network(args...).k_sym
 """
     qK_sym(args...) -> Vector{Num}
 
 Return concatenated `[q; K]` symbols for a binding network.
 """
 qK_sym(args...)= [q_sym(args...); K_sym(args...)]
+
+"""
+    q_cat_sym(args...) -> Vector{Num}
+
+Return the catalysis-active total concentration symbols.
+"""
+function q_cat_sym(args...)
+    bn = get_binding_network(args...)
+    cn = _require_catalysis_network(args...)
+    return bn.q_sym[1:cn.r_v]
+end
+
+"""
+    w_sym(args...) -> Vector{Num}
+
+Return the catalysis-dependent conserved symbols `w`.
+"""
+function w_sym(args...)
+    bn = get_binding_network(args...)
+    cn = _require_catalysis_network(args...)
+    return bn.q_sym[cn.r_v+1:cn.r_v+cn.d_w]
+end
+
+"""
+    q_para_sym(args...) -> Vector{Num}
+
+Return the catalysis-parameter total concentration symbols.
+"""
+function q_para_sym(args...)
+    bn = get_binding_network(args...)
+    cn = _require_catalysis_network(args...)
+    return bn.q_sym[cn.r_v+cn.d_w+1:bn.d]
+end
+
+"""
+    q_ss_sym(args...) -> Vector{Num}
+
+Return the steady-state reduced symbols `(w, q_para)`.
+"""
+q_ss_sym(args...) = [w_sym(args...); q_para_sym(args...)]
+
+@inline xk_sym(args...) = [x_sym(args...); k_sym(args...)]
+@inline qKk_sym(args...) = [q_sym(args...); K_sym(args...); k_sym(args...)]
+@inline qssKk_sym(args...) = [q_ss_sym(args...); K_sym(args...); k_sym(args...)]
+
+@inline _time_sym() = Symbolics.variable(:t)
+@inline _d_dt(syms) = Symbolics.Differential(_time_sym()).(syms)
+
+function _flux_sym(args...)
+    cn = _require_catalysis_network(args...)
+    flux_monomials = handle_log_weighted_sum(cn.Π, x_sym(args...))
+    return k_sym(args...) .* flux_monomials
+end
 
 """
     q_sym(grh::SISOPaths, args...) -> Vector{Num}
@@ -246,6 +306,8 @@ show_expression_x(args...;kwargs...)= begin
     x = qK_sym(bn)
     show_expression_mapping(get_H_H0(args...)..., y,x; kwargs...)
 end
+show_expression_x(rgm::BncRegime; kwargs...) = show_expression_mapping(get_H_H0(rgm)..., x_sym(rgm), qssKk_sym(rgm); kwargs...)
+show_expression_x(model::Bnc, bind, cat; kwargs...) = show_expression_x(get_bnc_regime(model, bind, cat; check=true); kwargs...)
 
 """
     show_expression_qK(args...; kwargs...) -> Vector{Equation}
@@ -258,6 +320,15 @@ show_expression_qK(args...;kwargs...)= begin
     x = x_sym(bn)
     show_expression_mapping(get_M_M0(args...)..., y,x; kwargs...)
 end
+
+"""
+    show_expression_qcat(args...; kwargs...) -> Vector{Equation}
+
+Show the affine expression of `q_cat` in the `(q_ss, K, k)` variables for a
+regular `BncRegime`.
+"""
+show_expression_qcat(rgm::BncRegime; kwargs...) = show_expression_mapping(get_qcat_F_F0(rgm)..., q_cat_sym(rgm), qssKk_sym(rgm); kwargs...)
+show_expression_qcat(model::Bnc, bind, cat; kwargs...) = show_expression_qcat(get_bnc_regime(model, bind, cat; check=true); kwargs...)
 
 
 """
@@ -283,6 +354,92 @@ show_conservation(Bnc::Bnc)=Bnc.q_sym .~ Bnc.L * Bnc.x_sym
 Return equilibrium equations relating `K` and `x`.
 """
 show_equilibrium(Bnc::Bnc;log_space::Bool=true) = show_expression_mapping(Bnc.N, zeros(Int,Bnc.r), Bnc.K_sym, Bnc.x_sym; log_space=log_space)
+
+
+"""
+    show_catalysis_dynamics(args...) -> Vector{Equation}
+
+Render the unreduced catalysis dynamics
+`d(q_cat,w)/dt = Γ * Diag(k) * x^Π`, `dq_para/dt = 0`.
+"""
+function show_catalysis_dynamics(args...)
+    cn = _require_catalysis_network(args...)
+    q_cat_w = [q_cat_sym(args...); w_sym(args...)]
+    q_para = q_para_sym(args...)
+    v = _flux_sym(args...)
+
+    eqs = Any[]
+    append!(eqs, _d_dt(q_cat_w) .~ (cn.Γ * v))
+    append!(eqs, _d_dt(q_para) .~ 0)
+    return eqs
+end
+
+"""
+    show_reduced_catalysis_dynamics(args...) -> Vector{Equation}
+
+Render the reduced catalysis dynamics
+`dq_cat/dt = S * Diag(k) * x^Π`, `dw/dt = 0`, `dq_para/dt = 0`.
+"""
+function show_reduced_catalysis_dynamics(args...)
+    cn = _require_catalysis_network(args...)
+    v = _flux_sym(args...)
+
+    eqs = Any[]
+    append!(eqs, _d_dt(q_cat_sym(args...)) .~ (cn.S * v))
+    append!(eqs, _d_dt(w_sym(args...)) .~ 0)
+    append!(eqs, _d_dt(q_para_sym(args...)) .~ 0)
+    return eqs
+end
+
+
+"""
+    show_condition_xk(args...; kwargs...) -> Vector
+
+Show conditions in the `(x, k)` variables.
+"""
+function show_condition_xk(rgm::CatalysisRegime; kind::Symbol=:all, kwargs...)
+    syms = xk_sym(rgm)
+    if kind === :steady_state
+        P = get_P_xk(rgm)
+        C0 = zeros(Float64, size(P, 1))
+        return show_condition_poly(P, C0, size(P, 1); syms=syms, kwargs...)
+    elseif kind === :dominance
+        C = get_C_xk(rgm)
+        return show_condition_poly(C, zeros(Float64, size(C, 1)); syms=syms, kwargs...)
+    elseif kind === :all || kind === :combined
+        return show_condition_poly(get_C_C0_nullity_xk(rgm)...; syms=syms, kwargs...)
+    else
+        error("Unsupported kind=$kind. Use :steady_state, :dominance, or :all.")
+    end
+end
+show_condition_xk(model::CatalysisData, perm_or_idx; kwargs...) = show_condition_xk(get_catalysis_regime(model, perm_or_idx; check=true); kwargs...)
+show_condition_xk(model::AbstractBnc, perm_or_idx; kwargs...) = show_condition_xk(get_catalysis_regime(model, perm_or_idx; check=true); kwargs...)
+
+function show_condition_xk(rgm::BncRegime; kind::Symbol=:combined, kwargs...)
+    return show_condition_poly(get_C_C0_nullity_xk(rgm, kind)...; syms=xk_sym(rgm), kwargs...)
+end
+show_condition_xk(model::Bnc, bind, cat; kwargs...) = show_condition_xk(get_bnc_regime(model, bind, cat; check=true); kwargs...)
+
+"""
+    show_condition_qKk(args...; kwargs...) -> Vector
+
+Show conditions in the `(q_cat, w, q_para, K, k)` variables.
+"""
+function show_condition_qKk(rgm::BncRegime; kind::Symbol=:combined, kwargs...)
+    return show_condition_poly(get_C_C0_nullity_qKk(rgm, kind)...; syms=qKk_sym(rgm), kwargs...)
+end
+show_condition_qKk(model::Bnc, bind, cat; kwargs...) = show_condition_qKk(get_bnc_regime(model, bind, cat; check=true); kwargs...)
+
+"""
+    show_condition_qssKk(args...; kwargs...) -> Vector
+
+Show the steady-state consistency conditions in the `(w, q_para, K, k)` variables.
+"""
+function show_condition_qssKk(rgm::BncRegime; kwargs...)
+    return show_condition_poly(get_C_C0_nullity_qssKk(rgm)...; syms=qssKk_sym(rgm), kwargs...)
+end
+show_condition_qssKk(model::Bnc, bind, cat; kwargs...) = show_condition_qssKk(get_bnc_regime(model, bind, cat; check=true); kwargs...)
+show_consistency_condition(args...; kwargs...) = show_condition_qssKk(args...; kwargs...)
 
 
 

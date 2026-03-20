@@ -1,9 +1,16 @@
 #============================================================================================#
-#                            Fucntions related to BncRegime
+#                            Functions related to BncRegime
 #
 #============================================================================================#
 
 @inline _spI(T, n) = spdiagm(0 => ones(T, n))
+
+
+get_binding_regime(rgm::BncRegime) = rgm.bind_rgm
+get_catalysis_regime(rgm::BncRegime) = rgm.catalysis_rgm
+
+get_binding_perm(rgm::BncRegime) = get_perm(rgm.bind_rgm)
+get_catalysis_perm(rgm::BncRegime) = get_perm(rgm.catalysis_rgm)
 
 """
     get_perm(rgm::BncRegime)
@@ -13,12 +20,237 @@ q_ss = (w, q_para), i.e. drop the first r_v catalysis-active rows.
 """
 function get_perm(rgm::BncRegime)
     r_v = size(rgm.catalysis_rgm.P, 1)
-    perm = rgm.bind_rgm.perm[r_v+1:end]
-    return perm
+    return rgm.bind_rgm.perm[r_v+1:end]
+end
+get_steady_state_perm(rgm::BncRegime) = get_perm(rgm)
+
+get_idx(rgm::BncRegime) = CartesianIndex(get_idx(rgm.catalysis_rgm), get_idx(rgm.bind_rgm))
+
+
+@inline is_bnc_regimes_built(model::Bnc) = !isnothing(model.BncRegimes)
+
+function _build_BncRegime(cat_rgms::Regimes, bind_rgms::Regimes)
+    n_cat_rgms = length(cat_rgms.vertices_data)
+    n_bind_rgms = length(bind_rgms.vertices_data)
+    bncrgms = Matrix{Union{BncRegime,Nothing}}(undef, n_cat_rgms, n_bind_rgms)
+
+    @info "Matching Catalysis Regimes and Binding Regimes to build BncRegimes..."
+    Threads.@threads for i in 1:n_cat_rgms
+        cat_rgm = cat_rgms.vertices_data[i]
+        for j in 1:n_bind_rgms
+            bind_rgm = bind_rgms.vertices_data[j]
+            bncrgms[i, j] = bind_rgm.nullity > 1 ? nothing : BncRegime(bind_rgm, cat_rgm)
+        end
+    end
+    @info "Finished matching BncRegimes."
+    return bncrgms
 end
 
 
+function get_idx(model::Bnc, bind, cat; check::Bool=false)
+    cat_idx = get_idx(_require_catalysis_network(model), cat; check=check)
+    bind_idx = get_idx(model, bind; check=check)
+    return CartesianIndex(cat_idx, bind_idx)
+end
 
+function have_perm(model::Bnc, bind, cat)
+    if !have_perm(model, bind)
+        return false
+    end
+    cn = get_catalysis_network(model)
+    if isnothing(cn) || !have_perm(cn, cat)
+        return false
+    end
+    match_regimes!(model)
+    return !isnothing(model.BncRegimes[get_idx(model, bind, cat)])
+end
+
+function get_bnc_regime(model::Bnc, bind, cat; check::Bool=false)
+    match_regimes!(model)
+    idx = get_idx(model, bind, cat; check=check)
+    rgm = model.BncRegimes[idx]
+    if isnothing(rgm)
+        check && error("No BncRegime is stored for the requested binding/catalysis pair.")
+        return nothing
+    end
+    return rgm
+end
+get_regime(model::Bnc, bind, cat; kwargs...) = get_bnc_regime(model, bind, cat; kwargs...)
+get_regime(rgm::BncRegime; kwargs...) = rgm
+
+function get_bnc_regimes(model::Bnc; return_idx::Bool=false, singular::Union{Bool,Integer,Nothing}=nothing)
+    match_regimes!(model)
+    idxs = CartesianIndex[]
+    rgms = BncRegime[]
+
+    for I in CartesianIndices(model.BncRegimes)
+        rgm = model.BncRegimes[I]
+        isnothing(rgm) && continue
+
+        nlt = rgm.nlt
+        keep = isnothing(singular) || (
+            (singular === true  && nlt > 0) ||
+            (singular === false && nlt == 0) ||
+            (singular isa Int   && nlt <= singular)
+        )
+        keep || continue
+
+        push!(idxs, I)
+        push!(rgms, rgm)
+    end
+
+    return return_idx ? idxs : rgms
+end
+
+n_bnc_regimes(model::Bnc; kwargs...) = length(get_bnc_regimes(model; kwargs...))
+
+
+function get_H_H0(rgm::BncRegime)
+    rgm.nlt == 0 || error("BncRegime is singular, cannot get H0.")
+    return rgm.H, rgm.H0
+end
+get_H(rgm::BncRegime) = rgm.H
+get_H0(rgm::BncRegime) = get_H_H0(rgm)[2]
+get_H_bd(rgm::BncRegime) = rgm.H_bd
+
+function judge_stability!(rgm::BncRegime; kwargs...)
+    rgm.is_stable = Int8(judge_dstable(rgm.H_bd; kwargs...))
+    return rgm.is_stable
+end
+
+function is_stable(rgm::BncRegime; recalculate::Bool=false, return_code::Bool=false, kwargs...)
+    code = (recalculate || rgm.is_stable < 0) ? judge_stability!(rgm; kwargs...) : rgm.is_stable
+    return return_code ? code : (code == 1 ? true : code == 0 ? false : missing)
+end
+is_stable(model::Bnc, bind, cat; kwargs...) = is_stable(get_bnc_regime(model, bind, cat; check=true); kwargs...)
+
+
+function _binding_C_qKk(bind_rgm::BindRegime, n_v::Int)
+    C_qK, C0_qK, nlt = get_C_C0_nullity_qK(bind_rgm)
+    C = hcat(C_qK, spzeros(Float64, size(C_qK, 1), n_v))
+    return C, Float64.(C0_qK), nlt
+end
+
+function _calc_C_qKk_catalysis_only_regular(bind_rgm::BindRegime, cat_rgm::CatalysisRegime)
+    H, H0 = get_H_H0(bind_rgm)
+    CΠ = get_CΠ(cat_rgm)
+    Cθ = get_C_k(cat_rgm)
+    C = hcat(CΠ * H, Cθ)
+    C0 = CΠ * H0
+    return C, Vector{Float64}(C0), 0
+end
+
+function _calc_C_qKk_catalysis_only_singular(bind_rgm::BindRegime, cat_rgm::CatalysisRegime)
+    CΠ = get_CΠ(cat_rgm)
+    Cθ = get_C_k(cat_rgm)
+    M, M0 = get_M_M0(bind_rgm)
+
+    n_qK = size(M, 1)
+    n_x = size(M, 2)
+    n_v = size(Cθ, 2)
+    d_cat = size(CΠ, 1)
+
+    Eq = hcat(-_spI(Int, n_qK), spzeros(n_qK, n_v), M)
+    In_cat = hcat(spzeros(d_cat, n_qK), Cθ, CΠ)
+
+    C = vcat(Eq, In_cat)
+    C0 = vcat(M0, zeros(eltype(M0), d_cat))
+
+    p = get_polyhedron(C, C0, n_qK)
+    delset = BitSet((n_qK + n_v + 1):(n_qK + n_v + n_x))
+    p2 = eliminate(p, delset)
+
+    return get_C_C0_nullity(p2)
+end
+
+function _calc_C_qKk_catalysis_only(bind_rgm::BindRegime, cat_rgm::CatalysisRegime)
+    if is_singular(bind_rgm)
+        return _calc_C_qKk_catalysis_only_singular(bind_rgm, cat_rgm)
+    else
+        return _calc_C_qKk_catalysis_only_regular(bind_rgm, cat_rgm)
+    end
+end
+
+
+function get_C_C0_nullity_xk(rgm::BncRegime, kind::Symbol=:combined)
+    bind_rgm = rgm.bind_rgm
+    cat_rgm = rgm.catalysis_rgm
+    n_v = size(cat_rgm.P, 2)
+
+    if kind === :binding
+        C_x, C0_x = get_C_C0_x(bind_rgm)
+        C = hcat(C_x, spzeros(Float64, size(C_x, 1), n_v))
+        return C, Float64.(C0_x), 0
+    elseif kind === :catalysis
+        return get_C_C0_nullity_xk(cat_rgm)
+    elseif kind === :combined
+        Ceq = get_P_xk(cat_rgm)
+        Ccat = get_C_xk(cat_rgm)
+        Cbind_x, C0bind_x = get_C_C0_x(bind_rgm)
+        Cbind = hcat(Cbind_x, spzeros(Float64, size(Cbind_x, 1), n_v))
+        C = vcat(Ceq, Cbind, Ccat)
+        C0 = vcat(
+            zeros(Float64, size(Ceq, 1)),
+            Float64.(C0bind_x),
+            zeros(Float64, size(Ccat, 1)),
+        )
+        return C, C0, size(Ceq, 1)
+    else
+        error("Unsupported kind=$kind. Use :binding, :catalysis, or :combined.")
+    end
+end
+
+function get_C_C0_xk(rgm::BncRegime, kind::Symbol=:combined)
+    C, C0, _ = get_C_C0_nullity_xk(rgm, kind)
+    return C, C0
+end
+get_C_xk(rgm::BncRegime, kind::Symbol=:combined) = get_C_C0_nullity_xk(rgm, kind)[1]
+get_C0_xk(rgm::BncRegime, kind::Symbol=:combined) = get_C_C0_nullity_xk(rgm, kind)[2]
+
+
+function get_C_C0_nullity_qKk(rgm::BncRegime, kind::Symbol=:combined)
+    n_v = size(rgm.catalysis_rgm.P, 2)
+
+    if kind === :binding
+        return _binding_C_qKk(rgm.bind_rgm, n_v)
+    elseif kind === :catalysis
+        return _calc_C_qKk_catalysis_only(rgm.bind_rgm, rgm.catalysis_rgm)
+    elseif kind === :combined
+        return rgm.C_qKk_cat, rgm.C0_qKk_cat, rgm.nlt_qKk_cat
+    else
+        error("Unsupported kind=$kind. Use :binding, :catalysis, or :combined.")
+    end
+end
+
+function get_C_C0_qKk(rgm::BncRegime, kind::Symbol=:combined)
+    C, C0, _ = get_C_C0_nullity_qKk(rgm, kind)
+    return C, C0
+end
+get_C_qKk(rgm::BncRegime, kind::Symbol=:combined) = get_C_C0_nullity_qKk(rgm, kind)[1]
+get_C0_qKk(rgm::BncRegime, kind::Symbol=:combined) = get_C_C0_nullity_qKk(rgm, kind)[2]
+
+
+function get_C_C0_nullity_qssKk(rgm::BncRegime)
+    return rgm.C_qKk_ss, rgm.C0_qKk_ss, rgm.nlt
+end
+
+function get_C_C0_qssKk(rgm::BncRegime)
+    C, C0, _ = get_C_C0_nullity_qssKk(rgm)
+    return C, C0
+end
+get_C_qssKk(rgm::BncRegime) = get_C_C0_nullity_qssKk(rgm)[1]
+get_C0_qssKk(rgm::BncRegime) = get_C_C0_nullity_qssKk(rgm)[2]
+
+
+function get_qcat_F_F0(rgm::BncRegime)
+    rgm.nlt == 0 || error("The reduced steady-state system is singular, so q_cat has no affine expression in (q_ss, K, k).")
+    r_v = size(rgm.catalysis_rgm.P, 1)
+    P_cat = rgm.bind_rgm.P[1:r_v, :]
+    P0_cat = rgm.bind_rgm.P0[1:r_v]
+    F = P_cat * rgm.H
+    F0 = P0_cat + P_cat * rgm.H0
+    return F, Vector{Float64}(F0)
+end
 
 
 """
@@ -32,6 +264,7 @@ function _first_nonempty_regime(rgms::AbstractMatrix{<:Union{BncRegime,Nothing}}
     pos === nothing && return nothing
     return rgms[pos]::BncRegime
 end
+
 """
     _row_valid_columns(rgms, i)
 
@@ -80,7 +313,6 @@ function _build_row_context(rgms::AbstractMatrix{<:Union{BncRegime,Nothing}}, i:
 end
 
 
-
 """
     _steady_state_offsets(vtx, r_v, N_ss)
 
@@ -96,7 +328,6 @@ function _steady_state_offsets(vtx::BncRegime, r_v::Int, N_ss)
 end
 
 
-
 """
     _expand_Hss_to_qssKk(H_ss, Pθ)
 
@@ -110,11 +341,10 @@ into
 function _expand_Hss_to_qssKk(H_ss, Pθ)
     r_v = size(Pθ, 1)
     split = size(H_ss, 2) - r_v
-    @views H_left = H_ss[:, 1:split]
-    @views H_right = H_ss[:, split+1:end]
+    H_left = H_ss[:, 1:split]
+    H_right = H_ss[:, split+1:end]
     return hcat(H_left, -(H_right * Pθ))
 end
-
 
 
 # ------------------------------------------------
@@ -137,7 +367,8 @@ Output variables are ordered as (q, K, k).
 function _calc_C_qKk_cat_regular(bind_rgm::BindRegime, cat_rgm::CatalysisRegime)
     H, H0 = get_H_H0(bind_rgm)
     C_qK, C0_qK = get_C_C0_qK(bind_rgm)
-    CΠ, Cθ = get_C_xk(cat_rgm)
+    CΠ = get_CΠ(cat_rgm)
+    Cθ = get_C_k(cat_rgm)
 
     n_v = size(Cθ, 2)
 
@@ -149,7 +380,6 @@ function _calc_C_qKk_cat_regular(bind_rgm::BindRegime, cat_rgm::CatalysisRegime)
 
     return C, C0, 0
 end
-
 
 
 """
@@ -168,7 +398,8 @@ Output variables are ordered as (q, K, k).
 """
 function _calc_C_qKk_cat_singular(bind_rgm::BindRegime, cat_rgm::CatalysisRegime)
     C_x, C0_x = get_C_C0_x(bind_rgm)
-    CΠ, Cθ = get_C_xk(cat_rgm)
+    CΠ = get_CΠ(cat_rgm)
+    Cθ = get_C_k(cat_rgm)
     M, M0 = get_M_M0(bind_rgm)
 
     n_qK = size(M, 1)
@@ -190,7 +421,6 @@ function _calc_C_qKk_cat_singular(bind_rgm::BindRegime, cat_rgm::CatalysisRegime
 
     return get_C_C0_nullity(p2)
 end
-
 
 
 """
@@ -229,15 +459,14 @@ function _calc_C_qKk_ss_regular(
     H0_ss,
 )
     C_x_bind, C0_x_bind = get_C_C0_x(bind_rgm)
-    CΠ, Cθ = get_C_xk(cat_rgm)
+    CΠ = get_CΠ(cat_rgm)
+    Cθ = get_C_k(cat_rgm)
 
     n_v = size(Cθ, 2)
 
-    # Binding dominance: C_x * x + C0_x >= 0
     C_bind = C_x_bind * H_ssk
     C0_bind = C0_x_bind + C_x_bind * H0_ss
 
-    # Catalytic dominance: CΠ * x + Cθ * k >= 0
     C_cat = copy(CΠ * H_ssk)
     @views C_cat[:, end-n_v+1:end] .+= Cθ
     C0_cat = CΠ * H0_ss
@@ -272,7 +501,8 @@ function _calc_C_qKk_ss_singular(bind_rgm::BindRegime, cat_rgm::CatalysisRegime)
     PΠ = cat_rgm.PΠ
 
     C_x_bind, C0_x_bind = get_C_C0_x(bind_rgm)
-    CΠ, Cθ = get_C_xk(cat_rgm)
+    CΠ = get_CΠ(cat_rgm)
+    Cθ = get_C_k(cat_rgm)
 
     d_ss = size(P_ss, 1)
     r = size(N, 1)
@@ -325,17 +555,12 @@ function _init_regular_bnc_regime!(vtx::BncRegime, perm, rowctx)
     Pθ = vtx.catalysis_rgm.P
     _, M0_ss = _steady_state_offsets(vtx, r_v, N_ss)
 
-    # 1) Catalysis consistency on (q, K, k)
     C_qKk_cat, C0_qKk_cat, nlt_qKk_cat = _calc_C_qKk_cat(vtx.bind_rgm, vtx.catalysis_rgm)
 
-    # 2) Steady-state reduced affine inverse on (q_ss, K_ss)
     H_ss = _calc_H(N_ss, rowctx.cache, perm)
     H0_ss = -(H_ss * M0_ss)
 
-    # 3) Replace K_ss by (K, k)
     H_ssk = _expand_Hss_to_qssKk(H_ss, Pθ)
-
-    # 4) Steady-state consistency on (q_ss, K, k)
     C_qKk_ss, C0_qKk_ss = _calc_C_qKk_ss_regular(vtx.bind_rgm, vtx.catalysis_rgm, H_ssk, H0_ss)
 
     vtx.H = H_ssk
@@ -348,7 +573,6 @@ function _init_regular_bnc_regime!(vtx::BncRegime, perm, rowctx)
 
     return nothing
 end
-
 
 
 """
@@ -372,8 +596,6 @@ function _calc_singular_H_ss(bind_rgm::BindRegime, cat_rgm::CatalysisRegime, per
 end
 
 
-
-
 """
     _init_singular_bnc_regime!(vtx, perm, rowctx)
 
@@ -386,14 +608,11 @@ This computes:
                            obtained by explicit elimination of x
 """
 function _init_singular_bnc_regime!(vtx::BncRegime, perm, rowctx)
-    # 1) Catalysis consistency on (q, K, k)
     C_qKk_cat, C0_qKk_cat, nlt_qKk_cat = _calc_C_qKk_cat(vtx.bind_rgm, vtx.catalysis_rgm)
 
-    # 2) Ray / adjugate-like H for the reduced steady-state system
     _, H_ray = _calc_singular_H_ss(vtx.bind_rgm, vtx.catalysis_rgm, perm, rowctx)
     H_ssk = _expand_Hss_to_qssKk(H_ray, vtx.catalysis_rgm.P)
 
-    # 3) Steady-state consistency on (q_ss, K, k) by elimination
     C_qKk_ss, C0_qKk_ss, _ = _calc_C_qKk_ss_singular(vtx.bind_rgm, vtx.catalysis_rgm)
 
     vtx.H = H_ssk
@@ -406,8 +625,6 @@ function _init_singular_bnc_regime!(vtx::BncRegime, perm, rowctx)
 
     return nothing
 end
-
-
 
 
 # ------------------------------------------------
@@ -440,10 +657,6 @@ function _initialize_regime!(rgms::AbstractMatrix{<:Union{BncRegime,Nothing}})
         perms = rowctx.perms
         nlt_valid = rowctx.nlt_valid
 
-        # NOTE:
-        # This threading assumes the helpers called below are thread-safe and that
-        # rowctx.cache is read-only in _calc_H / _calc_nullity. If not, remove the
-        # Threads.@threads here.
         Threads.@threads for k in eachindex(valid_js)
             j = valid_js[k]
             vtx = rgms[i, j]::BncRegime
@@ -465,11 +678,32 @@ function _initialize_regime!(rgms::AbstractMatrix{<:Union{BncRegime,Nothing}})
     return nothing
 end
 
+
+function summary_regime(rgm::BncRegime)
+    rgm = get_regime(rgm)
+    println("bind_idx=$(get_idx(rgm.bind_rgm)), cat_idx=$(get_idx(rgm.catalysis_rgm)), nlt=$(rgm.nlt), stable=$(is_stable(rgm))")
+    println("Binding / catalysis conditions in (x, k):")
+    display.(show_condition_xk(rgm; kind=:binding, log_space=false))
+    display.(show_condition_xk(rgm; kind=:catalysis, log_space=false))
+    println("Combined consistency in (q_ss, K, k):")
+    display.(show_condition_qssKk(rgm; log_space=false))
+    return nothing
+end
+
+summary(rgm::BncRegime) = summary_regime(rgm)
+summary_regime(model::Bnc, bind, cat) = summary_regime(get_bnc_regime(model, bind, cat; check=true))
+summary(model::Bnc, bind, cat) = summary_regime(model, bind, cat)
+
+
 # ------------------------------------------------
 # Top-level entry
 # ------------------------------------------------
 
 function match_regimes!(model::Bnc)
+    if is_bnc_regimes_built(model)
+        return model.BncRegimes
+    end
+
     find_all_regimes!(model)
     find_catalysis_regimes!(model)
 
@@ -479,5 +713,5 @@ function match_regimes!(model::Bnc)
     )
     _initialize_regime!(model.BncRegimes)
 
-    return nothing
+    return model.BncRegimes
 end

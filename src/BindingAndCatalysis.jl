@@ -33,6 +33,12 @@ export get_H_H0,get_H,get_H0
 export get_C_C0_x,get_C_x, get_C0_x
 export get_C_C0_nullity_qK, get_C_C0_qK, get_C_qK, get_C0_qK
 export get_C_C0_nullity, get_C_C0, get_C, get_C0
+export get_C_C0_xk, get_C0_xk, get_C_xk, get_C_k
+export get_C_C0_nullity_xk
+export get_C_C0_qKk, get_C0_qKk, get_C_qKk, get_C_C0_nullity_qKk
+export get_C_C0_qssKk, get_C0_qssKk, get_C_qssKk, get_C_C0_nullity_qssKk
+export get_PΠ, get_CΠ, get_P_pos_neg
+export get_H_bd, get_qcat_F_F0
 
 export check_feasibility_with_constraint, feasible_vertieces_with_constraint
 export get_polyhedron, get_volume
@@ -43,10 +49,14 @@ export get_function
 # include("regime_assign.jl")
 export assign_regime, assign_regime_qK, assign_regime_x, assign_vertex, assign_vertex_qK, assign_vertex_x
 # include("symbolics.jl")
-export x_sym, q_sym, K_sym, qK_sym, ∂logqK_∂logx_sym, ∂logx_∂logqK_sym, logder_qK_x_sym, logder_x_qK_sym
+export x_sym, q_sym, K_sym, k_sym, qK_sym, q_cat_sym, w_sym, q_para_sym, q_ss_sym
+export ∂logqK_∂logx_sym, ∂logx_∂logqK_sym, logder_qK_x_sym, logder_x_qK_sym
 export show_condition_poly, show_condition_x, show_condition_qK, show_condition
+export show_condition_xk, show_condition_qKk, show_condition_qssKk, show_consistency_condition
 export show_expression_mapping, show_expression_x, show_expression_qK, show_expression_path
+export show_expression_qcat
 export show_dominant_condition, show_conservation, show_equilibrium, show_interface
+export show_catalysis_dynamics, show_reduced_catalysis_dynamics
 export sym_direction, print_path, print_paths, format_arrow
 
 # include("regime_graphs.jl")
@@ -69,6 +79,9 @@ export plot_polyhedron_slices
 export judge_dstable
 
 #include("catalysis_regime.jl")
-export find_catalysis_regimes!, match_regimes!
+export find_catalysis_regimes!, get_catalysis_network, get_catalysis_regime, get_catalysis_regimes, get_catalysis_regimes_dict
+export match_regimes!, get_bnc_regime, get_bnc_regimes, n_bnc_regimes
+export get_binding_regime, get_binding_perm, get_catalysis_perm, get_steady_state_perm
+export judge_stability!, is_stable
 
 end # module

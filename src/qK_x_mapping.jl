@@ -209,13 +209,13 @@ function _logqK2logx_nlsolve(Bnc::Bnc, logqK::AbstractArray{<:Real,1};
     logq = @view logqK[1:d]
     logK = @view logqK[d+1:end]
 
-    J = deepcopy(Bnc._LN_sparse)# Make deep copies of sparse matrices to avoid shared state
+    J = Float64.(sparse([Bnc.L; Bnc.N]))
     x = Vector{Float64}(undef, n)
     q = Vector{Float64}(undef, d)
     x_M_view = @view x[Bnc.IntegrationHelper._LN_top_cols] # view for faster updating J
     q_M_view = @view q[Bnc.IntegrationHelper._LN_top_rows] # view for faster updating J
     M_top = @view J.nzval[Bnc.IntegrationHelper._LN_top_idx] # view for faster updating J
-    L_nzval = copy(Bnc._LN_sparse.nzval[Bnc.IntegrationHelper._LN_top_idx])
+    L_nzval = copy(J.nzval[Bnc.IntegrationHelper._LN_top_idx])
 
     params = (; x, q, logq, logK, J, x_M_view, q_M_view, M_top)
 
@@ -361,7 +361,7 @@ function get_homotopy_param(Bnc::Bnc, startlogqK::Vector{<:Real}, endlogqK::Vect
     logqK = Vector{Float64}(undef, n)
     logq = @view logqK[1:d]
     logK = @view logqK[d+1:end]
-    M= deepcopy(Bnc._LN_sparse)# Make deep copies of sparse matrices to avoid shared state
+    M = Float64.(sparse([Bnc.L; Bnc.N]))
     M_lu = deepcopy(Bnc.IntegrationHelper._LN_lu)
 
     logx_M_view = @view logx[Bnc.IntegrationHelper._LN_top_cols] # view for faster updating J
@@ -379,7 +379,8 @@ end
 
 function get_homotopy_ode(Bnc::Bnc)
     # Constants helps for updating mutable datas
-    L_nzval = log10.(Bnc._LN_sparse.nzval[Bnc.IntegrationHelper._LN_top_idx]) # copy the nzval to avoid shared access
+    LN_sparse = Float64.(sparse([Bnc.L; Bnc.N]))
+    L_nzval = log10.(LN_sparse.nzval[Bnc.IntegrationHelper._LN_top_idx]) # copy the nzval to avoid shared access
 
     @inline function update_M_lu(M_lu,M,max_try=100)
         lu!(M_lu, M,check=false) # recalculate the LU decomposition of J
@@ -582,7 +583,7 @@ function get_catalysis_param(model::Bnc, k)
     q = Vector{Float64}(undef, model.d)  # Buffer
     v = Vector{Float64}(undef, length(logk))  # Catalysis flux buffer (log scale)
     f = zeros(model.n)  # Catalysis rate vector
-    M = deepcopy(model._LN_sparse)  # Sparse [L; N]
+    M = Float64.(sparse([model.L; model.N]))  # Sparse [L; N]
     M_lu = deepcopy(model.IntegrationHelper._LN_lu)  # LU decomp
     TimecurveParam(logk, x, q, v, f, M, M_lu)
 end
