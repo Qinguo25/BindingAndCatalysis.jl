@@ -68,4 +68,7 @@ export plot_polyhedron_slices
 # include("d_stable.jl")
 export judge_dstable
 
+#include("catalysis_regime.jl")
+export find_catalysis_regimes!, match_regimes!
+
 end # module

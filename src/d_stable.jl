@@ -141,13 +141,13 @@ function _signed_diag_lyap_margin(
 
     model = _build_model(optimizer_factory)
 
-    @variable(model, x[1:n] >= p_floor)
-    @variable(model, t >= 0.0)
-    @constraint(model, sum(x) == 1.0)
+    JuMP.@variable(model, x[1:n] >= p_floor)
+    JuMP.@variable(model, t >= 0.0)
+    JuMP.@constraint(model, sum(x) == 1.0)
 
     tri = _neg_lyap_triangle(A, x, t; signs = signs)
-    @constraint(model, tri in MOI.PositiveSemidefiniteConeTriangle(n))
-    @objective(model, Max, t)
+    JuMP.@constraint(model, tri in MOI.PositiveSemidefiniteConeTriangle(n))
+    JuMP.@objective(model, Max, t)
 
     optimize!(model)
 

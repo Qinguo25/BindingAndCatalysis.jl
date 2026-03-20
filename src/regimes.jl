@@ -8,6 +8,10 @@ Build qK-space constraints `(C_qK, C0_qK)` for singular vertices via affine mapp
 function _calc_C_C0_qK_singular(Bnc::Bnc, vtx)
     M,M0 = get_M_M0(Bnc,vtx)
     C,C0 = get_C_C0_x(Bnc,vtx)
+    _calc_C_C0_qK_singular(C,C0,M,M0)
+end
+
+function _calc_C_C0_qK_singular(C,C0,M,M0)
     # n = Bnc.n
     poly_x = hrep(-C,C0) |> x->polyhedron(x,CDDLib.Library())
     poly_elim = M * poly_x  # If for convenience, one can write `translate(M * poly_x, M0)`, and then C0qK = b
@@ -150,7 +154,7 @@ function find_all_regimes!(model::Bnc{T};) where T
     model.BindRegimes = let
         regimes = _build_bind_regimes(model, all_vertices, is_asymptotic, nullity)    
         vertices_perm_dict = Dict(perm => idx for (idx, perm) in enumerate(all_vertices))
-        BindRegimes(vertices_perm_dict, regimes)
+        Regimes(vertices_perm_dict, regimes)
     end
     @info "Finished."
     return nothing
@@ -268,7 +272,7 @@ end
 
 Return a dictionary mapping permutation vectors to vertex indices.
 """
-get_regimes_dict(model::BindRegimes) = model.vertices_perm_dict
+get_regimes_dict(model::Regimes) = model.vertices_perm_dict
 
 get_bind_regimes_dict(Bnc::Bnc) = let 
     find_all_regimes!(Bnc)

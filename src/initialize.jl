@@ -45,6 +45,12 @@ abstract type AbstractBnc end
 
 abstract type AbstractRegime end
 
+struct Regimes{T,R<:AbstractRegime,A<:AbstractArray{R}}
+    vertices_perm_dict::Dict{Vector{T},Int}
+    vertices_data::A
+end
+
+
 """
 Canonical hyperplane
 
@@ -107,13 +113,14 @@ struct MatrixHelper{Tv<:Integer}
     choice_map::Vector{Vector{Vector{ChoiceIneq}}} # choice_map[i][t] gives the list of oriented inequalities for choosing p = J[i][t]
     hyperplanes::Vector{Hyperplane_perm{Tv}} # global deduplicated hyperplane pool
 end
+
 """
     CatalysisData
 
 Container for catalysis network metadata, including stoichiometric changes,
 reaction orders, and rate constants.
 """
-struct CatalysisData <:AbstractBnc
+mutable struct CatalysisData <:AbstractBnc
     # Parameters for the catalysis networks
     bn::AbstractBnc # reference to the parent Bnc model, used for validation and consistency checks
 
@@ -143,9 +150,11 @@ struct CatalysisData <:AbstractBnc
     S_pos_neg::SparseMatrixCSC{Int,Int} # the vcat of positive and negative parts of S
     _S_helper::MatrixHelper
 
-    CatalysisRegimes::Union{AbstractRegime,Nothing} # Using Any for placeholder for CatalysisRegimes
+    CatalysisRegimes::Union{Regimes,Nothing} # Using Any for placeholder for CatalysisRegimes
 
     function CatalysisData(bn,Γ, Π, k_sym)
+        Γ = sparse(Γ)
+        Π = sparse(Π)
         d_wv, nv = size(Γ)
         n = size(Π,2)
         # Validation
@@ -170,7 +179,7 @@ struct CatalysisData <:AbstractBnc
         _Π_sparse = sparse(Float64.(Π))
 
         S_pos_neg = S_to_S_pos_neg(S)
-        _S_helper = _build_matrix_helper(S)
+        _S_helper = _build_matrix_helper(S_pos_neg)
 
         new(bn, Γ, Π, S, L_Γ,
             r_v, nv, d_w, d_para,    
@@ -306,15 +315,57 @@ mutable struct CatalysisRegime <:AbstractRegime
     end
 end
 
+# for BncRegime, the x /xk conditions are already within bind_rgm or catalysis_rgm, 
+# H_ss, H_0ss, C_qKk_ss, C_0qKk_ss
+# C_qKk_cat, C_0qKk_cat, 
+# C_xk_ss
+
 
 mutable struct BncRegime <:AbstractRegime
     bind_rgm::BindRegime
     catalysis_rgm::CatalysisRegime
 
     H_bd::SparseMatrixCSC{Float64, Int} 
-    is_stable::Int8 # 1 for stable, 0 for unstable, -1 for unknown
+    is_stable::Int8 # 1 for stable, 0 for unstable, -1 for unknown # judge from d_stable
 
+    #
+    nlt::Int  
+    H::Union{SparseMatrixCSC{Float64, Int}, Nothing}
+    H0::Union{Vector{Float64}, Nothing}
+
+
+    # Conditions
+    ## x, k base
+    # Directly extract from bind_rgm and catalysis_rgm, no need to calculate separately.
+    
+    ## q_cat, K, k base
+    # Binding could directly extract from bind_rgm, catalysis needs to calculate seperately
+    # If binding is singular, we need to Combine with M,M0 to do the elimination again
+    
+    C_qKk_cat::Union{SparseMatrixCSC{Float64, Int}, Nothing}
+    C0_qKk_cat::Union{Vector{Float64}, Nothing}
+    nlt_qKk_cat::Int
+
+    ## q_ss, K, k base
+    C_qKk_ss::Union{SparseMatrixCSC{Float64, Int}, Nothing}
+    C0_qKk_ss::Union{Vector{Float64}, Nothing}
+    function BncRegime(bind_rgm, catalysis_rgm)
+        PΠ = get_PΠ(catalysis_rgm)
+        H = get_H(bind_rgm)
+        r_v = size(PΠ,1)
+        H_bd = PΠ * H[:,1:r_v]
+        is_stable = judge_dstable(H_bd)
+        return new(bind_rgm, catalysis_rgm, 
+            H_bd, is_stable,
+            -1,nothing, nothing,
+            nothing,nothing, -1,  
+            nothing, nothing)
+    end
 end
+
+
+
+
 
 """
     VertexEdge
@@ -358,16 +409,6 @@ mutable struct VertexGraph{T}
         return new{T}(bn, g, neighbors, false, edge_pos)
     end
 end
-
-
-
-
-
-
-
-
-
-
 
 
 
@@ -431,10 +472,6 @@ end
 
 
 
-struct BindRegimes{T} 
-    vertices_perm_dict::Dict{Vector{T},Int}
-    vertices_data::Vector{<:AbstractRegime}
-end
 
 struct NρCacheEntry
     deficiency::Int                    # row-rank deficiency of Nρ; for square Nρ this is nullity(Nρ)
@@ -469,8 +506,10 @@ mutable struct Bnc{T} <: AbstractBnc # T is the int type to save all the indices
     catalysis::Union{Any,Nothing} # Using Any for placeholder for CatalysisData
 
     #--------Binding regimes data--------
-    BindRegimes::Union{BindRegimes, Nothing}
+    BindRegimes::Union{Regimes, Nothing}
 
+    #-------Mixed regimes data--------
+    BncRegimes::Union{Any, Nothing}
 
     #The following are computed when building graphs.
     vertices_graph::Union{Any,Nothing} # Using Any for placeholder for VertexGraph
@@ -514,6 +553,7 @@ mutable struct Bnc{T} <: AbstractBnc # T is the int type to save all the indices
             x_sym, q_sym, K_sym, catalysis,
             # Fields 10-12 (Initialized empty)
             nothing,                         # BindRegimes
+            nothing,                         # BncRegimes
             nothing,                         # vertices_graph
             nothing,                         # _vertices_perm_Ninv_dict
             # Fields 13-28 (Calculated values)
@@ -793,6 +833,9 @@ include(joinpath(@__DIR__,"volume_calc.jl"))
 include(joinpath(@__DIR__,"numeric.jl"))
 include(joinpath(@__DIR__,"find_matrix_vertex.jl")) # before regimes.jl
 include(joinpath(@__DIR__,"regimes.jl"))
+include(joinpath(@__DIR__,"Catalysis_regime.jl"))
+include(joinpath(@__DIR__,"bnc_regime.jl"))
+
 include(joinpath(@__DIR__,"regime_assign.jl"))
 include(joinpath(@__DIR__,"symbolics.jl"))
 include(joinpath(@__DIR__,"regime_graphs.jl"))
