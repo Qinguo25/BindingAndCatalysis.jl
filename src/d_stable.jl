@@ -1,6 +1,6 @@
-using SparseArrays
-using LinearAlgebra
-using JuMP
+# using SparseArrays
+# using LinearAlgebra
+import JuMP
 import MathOptInterface as MOI
 import Arpack
 import Clarabel
@@ -151,7 +151,7 @@ function _signed_diag_lyap_margin(
 
     optimize!(model)
 
-    st = termination_status(model)
+    st = JuMP.termination_status(model)
     if st == MOI.OPTIMAL || st == MOI.ALMOST_OPTIMAL
         return value(t)
     end

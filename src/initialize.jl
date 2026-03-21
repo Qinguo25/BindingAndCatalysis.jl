@@ -40,16 +40,136 @@ using ProgressMeter
 
 # ---------------------Define the struct of binding and catalysis networks----------------------------------
 
+#===============================================================================================#
+# Volume struct and associated operations for uncertainty quantification in regime volumes.
+#===============================================================================================#
+struct Volume
+    mean::Float64
+    var::Float64
+end
+"""
+    fetch_mean_re(V::Volume) -> (Float64, Float64)
 
-abstract type AbstractBnc end
+Return the mean and relative error (standard deviation / mean) for a `Volume`.
+"""
+fetch_mean_re(V::Volume) = (V.mean, sqrt(V.var)/V.mean)
+"""
+    Base.display(V::Volume)
 
-abstract type AbstractRegime end
+Display a compact summary of a `Volume`.
+"""
+Base.display(V::Volume) = Printf.@sprintf("Volume(Mean=%.3e, STD=%.3e, RelError=%.2f%%)", V.mean, sqrt(V.var), (sqrt(V.var)/V.mean)*100)
+Base.show(io::IO, V::Volume) = print(io, Printf.@sprintf("Volume(Mean=%.3e, STD=%.3e, RelError=%.2f%%)", V.mean, sqrt(V.var), (sqrt(V.var)/V.mean)*100))
+"""
+    Base.:+(v1::Volume, v2::Volume) -> Volume
 
-struct Regimes{T,R<:AbstractRegime,A<:AbstractArray{R}}
-    vertices_perm_dict::Dict{Vector{T},Int}
-    vertices_data::A
+Add two `Volume` values by summing means and variances.
+"""
+Base.:+(v1::Volume, v2::Volume) = Volume(v1.mean + v2.mean, v1.var + v2.var)
+"""
+    Base.:-(v1::Volume, v2::Volume) -> Volume
+
+Add two `Volume` values by summing means and variances.
+"""
+Base.:-(v1::Volume, v2::Volume) = Volume(v1.mean - v2.mean, v1.var + v2.var)
+"""
+    Base.isless(a::Volume, b::Volume) -> Bool
+
+Compare `Volume` objects by mean value.
+"""
+Base.isless(a::Volume, b::Volume) = a.mean < b.mean
+"""
+    Base.:(==)(a::Volume, b::Volume) -> Bool
+
+Return `true` when two `Volume` objects have identical means.
+"""
+Base.:(==)(a::Volume, b::Volume) = a.mean == b.mean 
+"""
+    Base.zero(::Volume) -> Volume
+
+Return a zero `Volume` with zero mean and variance.
+"""
+Base.zero(::Volume) = Volume(0.0, 0.0)
+
+Base.:*(c::Real, v::Volume) = Volume(c * v.mean, c^2 * v.var)
+Base.:*(v::Volume, c::Real) = c * v
+Base.:/(v::Volume, c::Real) = Volume(v.mean / c, v.var / c^2)
+
+
+#===============================================================================================#
+# Integration Helper struct
+#===============================================================================================#
+
+"""
+    IntegrationHelper
+
+Container for cached integration starting points and sparse matrix index helpers.
+Used for Integration during homotopy continuation.
+"""
+mutable struct IntegrationHelper
+    _anchor_log_x::Vector{<:Real}
+    _anchor_log_qK::Vector{<:Real}
+
+    _LN_top_idx::Vector{Int} # first d row index of _LN_sparse
+    _LN_top_rows::Vector{Int} # the corresponding row number in L for _LN_top_idx
+    _LN_top_cols::Vector{Int} # the corresponding column number in L for _LN_top_idx
+
+    _LN_bottom_idx::Vector{Int} # last r row index of _LN_sparse
+    _LN_bottom_rows::Vector{Int} # the corresponding row number in N for _LN_bottom_idx
+    _LN_bottom_cols::Vector{Int} # the corresponding column number in N for _LN_bottom_idx
+    _LN_top_diag_idx::Vector{Int} # the diagonal index of the top d rows of _LN_sparse, used for fast calculation
+
+    _LN_lu::Union{SparseArrays.UMFPACK.UmfpackLU{Float64,Int}, Nothing} # LU decomposition of _LNt_sparse, used for fast calculation
 end
 
+
+@inline function calc_integration_helper(L,N)
+    n = size(L,2)
+    d = size(L,1)
+    r = size(N,1)
+    _anchor_log_x = zeros(n)
+    _anchor_log_qK = vcat(vec(log10.(sum(L; dims=2))), zeros(r))
+    
+    _LN_sparse = Float64.(sparse([L; N]))
+    (_LN_top_rows, _LN_top_cols, _LN_top_idx) = rowmask_indices(_LN_sparse, 1,d) # record the position of non-zero elements in L within _LN_sparse
+    (_LN_bottom_rows, _LN_bottom_cols, _LN_bottom_idx) = rowmask_indices(_LN_sparse, d+1,n) # record the position of non-zero elements in N within _LN_sparse
+    _LN_top_diag_idx = diag_indices(_LN_sparse, d)
+    
+    _LN_lu = rank(_LN_sparse)== n ? lu(_LN_sparse) : nothing # LU decomposition of _LNt_sparse, used for fast calculation
+
+    IntegrationHelper(
+        _anchor_log_x,
+        _anchor_log_qK,
+        _LN_top_idx,
+        _LN_top_rows,
+        _LN_top_cols,
+        _LN_bottom_idx,
+        _LN_bottom_rows,
+        _LN_bottom_cols,
+        _LN_top_diag_idx,
+        _LN_lu,
+    )
+end
+
+
+struct NρCacheEntry
+    deficiency::Int                    # row-rank deficiency of Nρ; for square Nρ this is nullity(Nρ)
+    kind::UInt8                        # 0x00 = deficiency only, 0x01 = explicit inverse, 0x02 = rank-1 adjugate factors
+    inv::SparseMatrixCSC{Float64,Int}  # valid iff kind == 0x01
+    α::Float64                         # valid iff kind == 0x02
+    u::Vector{Float64}                 # left null vector  (length r)
+    v::Vector{Float64}                 # right null vector (length r)
+end
+
+
+
+
+
+abstract type AbstractBnc end
+abstract type AbstractRegime end
+#=================================================================================#
+# f(L) -> {P,P0,C,C0} associated structs and helpers
+#=================================================================================#
 
 """
 Canonical hyperplane
@@ -114,133 +234,17 @@ struct MatrixHelper{Tv<:Integer}
     hyperplanes::Vector{Hyperplane_perm{Tv}} # global deduplicated hyperplane pool
 end
 
-"""
-    CatalysisData
-
-Container for catalysis network metadata, including stoichiometric changes,
-reaction orders, and rate constants.
-"""
-mutable struct CatalysisData <:AbstractBnc
-    # Parameters for the catalysis networks
-    bn::AbstractBnc # reference to the parent Bnc model, used for validation and consistency checks
-
-    # Catalysis determining Matrix
-    Γ::SparseMatrixCSC{Int,Int} # catalysis change in qK space, each column is a reaction
-    Π::SparseMatrixCSC{Int,Int} # catalysis index and coefficients, rate will be vⱼ=kⱼ∏xᵢ^Π_{j,i}, denote what species catalysis the reaction.
-
-    # Derived matrices 
-    S::SparseMatrixCSC{Int,Int} # the full row rank version of Γ
-    L_Γ::SparseMatrixCSC{Int,Int} # the left null space of Γ such that L_Γ^⊤ * Γ = 0
-
-    # Derived parameters
-    r_v::Int # number of independent catalysis reactions
-    n_v::Int # number of flux
-    d_w::Int # number of dependent conserved quantities.
-    d_para::Int # number of parameter total concentrations
-
-    # symbols of k
-    k_sym::Vector{Num}
 
 
-    # helper parameters for fast calculation, used for fast calculation of H and C_qK
-    _S_sparse::SparseMatrixCSC{Float64,Int} # sparse version of Γ, used for fast calculation
-    _Π_sparse::SparseMatrixCSC{Float64,Int}  # sparse version of Π, used for fast calculation
+#=================================================================================#
+# Regimes associated structs, including regimes for binding, catalysis and the combined Bnc regimes, 
+#=================================================================================#
 
-    #Catalysis regimes
-    S_pos_neg::SparseMatrixCSC{Int,Int} # the vcat of positive and negative parts of S
-    _S_helper::MatrixHelper
 
-    CatalysisRegimes::Union{Regimes,Nothing} # Using Any for placeholder for CatalysisRegimes
-
-    function CatalysisData(bn,Γ, Π, k_sym)
-        Γ = sparse(Γ)
-        Π = sparse(Π)
-        d_wv, nv = size(Γ)
-        n = size(Π,2)
-        # Validation
-        @assert size(Π,1) == length(k_sym) == nv "Γ's column number have to meet with total flux number and k_sym"
-        @assert n == bn.n "Π's column number have to meet with the number of species n in the binding network"
-        L_Γ, pivits = left_nullspace_integer(Γ)
-
-        r_v = length(pivits)
-        d_w = size(L_Γ,2)
-        d_para = bn.d - r_v
-
-        # reorder and fix the binding network
-        no_pivits = setdiff(1:d_wv, pivits)
-        S = Γ[pivits, :]
-        new_ord = vcat(pivits,no_pivits)
-        Γ = Γ[new_ord, :]
-        L_Γ = L_Γ[new_ord, :]
-        fix_bn_catalysis!(bn, new_ord, L_Γ)
-
-        # Create sparse matrices
-        _S_sparse = sparse(Float64.(S))
-        _Π_sparse = sparse(Float64.(Π))
-
-        S_pos_neg = S_to_S_pos_neg(S)
-        _S_helper = _build_matrix_helper(S_pos_neg)
-
-        new(bn, Γ, Π, S, L_Γ,
-            r_v, nv, d_w, d_para,    
-            k_sym, _S_sparse, _Π_sparse,
-            S_pos_neg, _S_helper, nothing)
-    end
+struct Regimes{T,R<:AbstractRegime,A<:AbstractArray{R}}
+    vertices_perm_dict::Dict{Vector{T},Int}
+    vertices_data::A
 end
-
-
-
-struct Volume
-    mean::Float64
-    var::Float64
-end
-"""
-    fetch_mean_re(V::Volume) -> (Float64, Float64)
-
-Return the mean and relative error (standard deviation / mean) for a `Volume`.
-"""
-fetch_mean_re(V::Volume) = (V.mean, sqrt(V.var)/V.mean)
-"""
-    Base.display(V::Volume)
-
-Display a compact summary of a `Volume`.
-"""
-Base.display(V::Volume) = Printf.@sprintf("Volume(Mean=%.3e, STD=%.3e, RelError=%.2f%%)", V.mean, sqrt(V.var), (sqrt(V.var)/V.mean)*100)
-Base.show(io::IO, V::Volume) = print(io, Printf.@sprintf("Volume(Mean=%.3e, STD=%.3e, RelError=%.2f%%)", V.mean, sqrt(V.var), (sqrt(V.var)/V.mean)*100))
-"""
-    Base.:+(v1::Volume, v2::Volume) -> Volume
-
-Add two `Volume` values by summing means and variances.
-"""
-Base.:+(v1::Volume, v2::Volume) = Volume(v1.mean + v2.mean, v1.var + v2.var)
-"""
-    Base.:-(v1::Volume, v2::Volume) -> Volume
-
-Add two `Volume` values by summing means and variances.
-"""
-Base.:-(v1::Volume, v2::Volume) = Volume(v1.mean - v2.mean, v1.var + v2.var)
-"""
-    Base.isless(a::Volume, b::Volume) -> Bool
-
-Compare `Volume` objects by mean value.
-"""
-Base.isless(a::Volume, b::Volume) = a.mean < b.mean
-"""
-    Base.:(==)(a::Volume, b::Volume) -> Bool
-
-Return `true` when two `Volume` objects have identical means.
-"""
-Base.:(==)(a::Volume, b::Volume) = a.mean == b.mean 
-"""
-    Base.zero(::Volume) -> Volume
-
-Return a zero `Volume` with zero mean and variance.
-"""
-Base.zero(::Volume) = Volume(0.0, 0.0)
-
-Base.:*(c::Real, v::Volume) = Volume(c * v.mean, c^2 * v.var)
-Base.:*(v::Volume, c::Real) = c * v
-Base.:/(v::Volume, c::Real) = Volume(v.mean / c, v.var / c^2)
 
 
 
@@ -365,7 +369,6 @@ end
 
 
 
-
 """
     VertexEdge
 
@@ -412,74 +415,84 @@ end
 
 
 
-
-
-
-
-
-
 """
-    IntegrationHelper
+    CatalysisData
 
-Container for cached integration starting points and sparse matrix index helpers.
-Used for Integration during homotopy continuation.
+Container for catalysis network metadata, including stoichiometric changes,
+reaction orders, and rate constants.
 """
-mutable struct IntegrationHelper
-    _anchor_log_x::Vector{<:Real}
-    _anchor_log_qK::Vector{<:Real}
+mutable struct CatalysisData <:AbstractBnc
+    # Parameters for the catalysis networks
+    bn::AbstractBnc # reference to the parent Bnc model, used for validation and consistency checks
 
-    _LN_top_idx::Vector{Int} # first d row index of _LN_sparse
-    _LN_top_rows::Vector{Int} # the corresponding row number in L for _LN_top_idx
-    _LN_top_cols::Vector{Int} # the corresponding column number in L for _LN_top_idx
+    # Catalysis determining Matrix
+    Γ::SparseMatrixCSC{Int,Int} # catalysis change in qK space, each column is a reaction
+    Π::SparseMatrixCSC{Int,Int} # catalysis index and coefficients, rate will be vⱼ=kⱼ∏xᵢ^Π_{j,i}, denote what species catalysis the reaction.
 
-    _LN_bottom_idx::Vector{Int} # last r row index of _LN_sparse
-    _LN_bottom_rows::Vector{Int} # the corresponding row number in N for _LN_bottom_idx
-    _LN_bottom_cols::Vector{Int} # the corresponding column number in N for _LN_bottom_idx
-    _LN_top_diag_idx::Vector{Int} # the diagonal index of the top d rows of _LN_sparse, used for fast calculation
+    # Derived matrices 
+    S::SparseMatrixCSC{Int,Int} # the full row rank version of Γ
+    L_Γ::SparseMatrixCSC{Int,Int} # the left null space of Γ such that L_Γ^⊤ * Γ = 0
 
-    _LN_lu::Union{SparseArrays.UMFPACK.UmfpackLU{Float64,Int}, Nothing} # LU decomposition of _LNt_sparse, used for fast calculation
+    # Derived parameters
+    r_v::Int # number of independent catalysis reactions
+    n_v::Int # number of flux
+    d_w::Int # number of dependent conserved quantities.
+    d_para::Int # number of parameter total concentrations
+
+    # symbols of k
+    k_sym::Vector{Num}
+
+
+    # helper parameters for fast calculation, used for fast calculation of H and C_qK
+    _S_sparse::SparseMatrixCSC{Float64,Int} # sparse version of Γ, used for fast calculation
+    _Π_sparse::SparseMatrixCSC{Float64,Int}  # sparse version of Π, used for fast calculation
+
+    #Catalysis regimes
+    S_pos_neg::SparseMatrixCSC{Int,Int} # the vcat of positive and negative parts of S
+    _S_helper::MatrixHelper
+
+    CatalysisRegimes::Union{Regimes,Nothing} # Using Any for placeholder for CatalysisRegimes
+
+    function CatalysisData(bn,Γ, Π, k_sym)
+        Γ = sparse(Γ)
+        Π = sparse(Π)
+        d_wv, nv = size(Γ)
+        n = size(Π,2)
+        # Validation
+        @assert size(Π,1) == length(k_sym) == nv "Γ's column number have to meet with total flux number and k_sym"
+        @assert n == bn.n "Π's column number have to meet with the number of species n in the binding network"
+        L_Γ, pivits = left_nullspace_integer(Γ)
+
+        r_v = length(pivits)
+        d_w = size(L_Γ,2)
+        d_para = bn.d - r_v
+
+        # reorder and fix the binding network
+        no_pivits = setdiff(1:d_wv, pivits)
+        S = Γ[pivits, :]
+        new_ord = vcat(pivits,no_pivits)
+        Γ = Γ[new_ord, :]
+        L_Γ = L_Γ[new_ord, :]
+        fix_bn_catalysis!(bn, new_ord, L_Γ)
+
+        # Create sparse matrices
+        _S_sparse = sparse(Float64.(S))
+        _Π_sparse = sparse(Float64.(Π))
+
+        S_pos_neg = S_to_S_pos_neg(S)
+        _S_helper = _build_matrix_helper(S_pos_neg)
+
+        new(bn, Γ, Π, S, L_Γ,
+            r_v, nv, d_w, d_para,    
+            k_sym, _S_sparse, _Π_sparse,
+            S_pos_neg, _S_helper, nothing)
+    end
 end
 
 
-@inline function calc_integration_helper(L,N)
-    n = size(L,2)
-    d = size(L,1)
-    r = size(N,1)
-    _anchor_log_x = zeros(n)
-    _anchor_log_qK = vcat(vec(log10.(sum(L; dims=2))), zeros(r))
-    
-    _LN_sparse = Float64.(sparse([L; N]))
-    (_LN_top_rows, _LN_top_cols, _LN_top_idx) = rowmask_indices(_LN_sparse, 1,d) # record the position of non-zero elements in L within _LN_sparse
-    (_LN_bottom_rows, _LN_bottom_cols, _LN_bottom_idx) = rowmask_indices(_LN_sparse, d+1,n) # record the position of non-zero elements in N within _LN_sparse
-    _LN_top_diag_idx = diag_indices(_LN_sparse, d)
-    
-    _LN_lu = rank(_LN_sparse)== n ? lu(_LN_sparse) : nothing # LU decomposition of _LNt_sparse, used for fast calculation
-
-    IntegrationHelper(
-        _anchor_log_x,
-        _anchor_log_qK,
-        _LN_top_idx,
-        _LN_top_rows,
-        _LN_top_cols,
-        _LN_bottom_idx,
-        _LN_bottom_rows,
-        _LN_bottom_cols,
-        _LN_top_diag_idx,
-        _LN_lu,
-    )
-end
 
 
 
-
-struct NρCacheEntry
-    deficiency::Int                    # row-rank deficiency of Nρ; for square Nρ this is nullity(Nρ)
-    kind::UInt8                        # 0x00 = deficiency only, 0x01 = explicit inverse, 0x02 = rank-1 adjugate factors
-    inv::SparseMatrixCSC{Float64,Int}  # valid iff kind == 0x01
-    α::Float64                         # valid iff kind == 0x02
-    u::Vector{Float64}                 # left null vector  (length r)
-    v::Vector{Float64}                 # right null vector (length r)
-end
 
 """
     Bnc

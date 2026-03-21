@@ -368,7 +368,7 @@ function show_catalysis_dynamics(args...)
     q_para = q_para_sym(args...)
     v = _flux_sym(args...)
 
-    eqs = Any[]
+    eqs = Symbolics.Equation[]
     append!(eqs, _d_dt(q_cat_w) .~ (cn.Γ * v))
     append!(eqs, _d_dt(q_para) .~ 0)
     return eqs
@@ -384,12 +384,15 @@ function show_reduced_catalysis_dynamics(args...)
     cn = _require_catalysis_network(args...)
     v = _flux_sym(args...)
 
-    eqs = Any[]
+    eqs = Symbolics.Equation[]
     append!(eqs, _d_dt(q_cat_sym(args...)) .~ (cn.S * v))
     append!(eqs, _d_dt(w_sym(args...)) .~ 0)
     append!(eqs, _d_dt(q_para_sym(args...)) .~ 0)
     return eqs
 end
+
+
+
 
 
 """
@@ -420,6 +423,10 @@ function show_condition_xk(rgm::BncRegime; kind::Symbol=:combined, kwargs...)
 end
 show_condition_xk(model::Bnc, bind, cat; kwargs...) = show_condition_xk(get_bnc_regime(model, bind, cat; check=true); kwargs...)
 
+
+
+
+
 """
     show_condition_qKk(args...; kwargs...) -> Vector
 
@@ -429,6 +436,9 @@ function show_condition_qKk(rgm::BncRegime; kind::Symbol=:combined, kwargs...)
     return show_condition_poly(get_C_C0_nullity_qKk(rgm, kind)...; syms=qKk_sym(rgm), kwargs...)
 end
 show_condition_qKk(model::Bnc, bind, cat; kwargs...) = show_condition_qKk(get_bnc_regime(model, bind, cat; check=true); kwargs...)
+
+
+
 
 """
     show_condition_qssKk(args...; kwargs...) -> Vector
@@ -465,6 +475,48 @@ function handle_log_weighted_sum(A::AbstractMatrix{<:Real}, x , b::Union{Nothing
     return rst
 end
 
+
+
+"""
+    solve_sym_expr(a, b, x, idx; log_space=true) -> Equation
+
+Solve `a'x + b = 0` for the variable at `idx` symbolically.
+"""
+function solve_sym_expr(a::AbstractVector{<:Real}, b::Real, x, idx; log_space::Bool=true)
+    a = copy(collect(a))
+    x = copy(x)
+    ai = popat!(a, idx)
+    target_x = popat!(x, idx)
+    @assert abs(ai) > 1e-10 "Cannot solve for the variable at index $idx since its coefficient is zero." 
+    a ./= -ai
+    b /= -ai
+
+    target = log_space ? log10(target_x) : target_x
+    expr = log_space ? a' * log10.(x) .+ b : handle_log_weighted_sum(a', x, [b])[1]
+    return target ~ expr
+end
+
+"""
+    show_interface(bnc::Bnc, from, to; lhs_idx=nothing, kwargs...) -> Any
+
+Display the interface expression between two regimes.
+"""
+function show_interface(Bnc::Bnc, from,to;  lhs_idx::Union{Nothing,Integer}=nothing, kwargs...)
+    C, C0 = get_interface(Bnc,from,to) # C' log qK + C0 =0
+    if isnothing(lhs_idx)
+        return show_condition_poly(C, C0, 1 ;syms =  qK_sym(Bnc) ,kwargs...)
+    else
+        return solve_sym_expr(C,C0, qK_sym(Bnc), lhs_idx;kwargs...)
+    end
+end
+
+
+
+
+
+#===============================================================================================================#
+# Regime Path associated symbolic functions
+#===============================================================================================================#
 
 """
     sym_direction(bnc::Bnc, dir) -> String
@@ -639,45 +691,6 @@ print_path(path::AbstractVector; id = nothing, volume = nothing, kwargs...) =
             ids = id === nothing ? nothing : [id], 
             volumes = volume === nothing ? nothing : [volume]
         ); kwargs...)
-
-
-
-
-"""
-    solve_sym_expr(a, b, x, idx; log_space=true) -> Equation
-
-Solve `a'x + b = 0` for the variable at `idx` symbolically.
-"""
-function solve_sym_expr(a::AbstractVector{<:Real}, b::Real, x, idx; log_space::Bool=true)
-    a = copy(collect(a))
-    x = copy(x)
-    ai = popat!(a, idx)
-    target_x = popat!(x, idx)
-    @assert abs(ai) > 1e-10 "Cannot solve for the variable at index $idx since its coefficient is zero." 
-    a ./= -ai
-    b /= -ai
-
-    target = log_space ? log10(target_x) : target_x
-    expr = log_space ? a' * log10.(x) .+ b : handle_log_weighted_sum(a', x, [b])[1]
-    return target ~ expr
-end
-
-"""
-    show_interface(bnc::Bnc, from, to; lhs_idx=nothing, kwargs...) -> Any
-
-Display the interface expression between two regimes.
-"""
-function show_interface(Bnc::Bnc, from,to;  lhs_idx::Union{Nothing,Integer}=nothing, kwargs...)
-    C, C0 = get_interface(Bnc,from,to) # C' log qK + C0 =0
-    if isnothing(lhs_idx)
-        return show_condition_poly(C, C0, 1 ;syms =  qK_sym(Bnc) ,kwargs...)
-    else
-        return solve_sym_expr(C,C0, qK_sym(Bnc), lhs_idx;kwargs...)
-    end
-end
-
-
-
 
 
 """
