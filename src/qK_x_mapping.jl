@@ -209,7 +209,7 @@ function _logqK2logx_nlsolve(Bnc::Bnc, logqK::AbstractArray{<:Real,1};
     logq = @view logqK[1:d]
     logK = @view logqK[d+1:end]
 
-    J = Float64.(sparse([Bnc.L; Bnc.N]))
+    J = deepcopy(Bnc.IntegrationHelper._LN_sparse)
     x = Vector{Float64}(undef, n)
     q = Vector{Float64}(undef, d)
     x_M_view = @view x[Bnc.IntegrationHelper._LN_top_cols] # view for faster updating J
@@ -379,7 +379,7 @@ end
 
 function get_homotopy_ode(Bnc::Bnc)
     # Constants helps for updating mutable datas
-    LN_sparse = Float64.(sparse([Bnc.L; Bnc.N]))
+    LN_sparse = deepcopy(Bnc.IntegrationHelper._LN_sparse)
     L_nzval = log10.(LN_sparse.nzval[Bnc.IntegrationHelper._LN_top_idx]) # copy the nzval to avoid shared access
 
     @inline function update_M_lu(M_lu,M,max_try=100)
@@ -630,7 +630,7 @@ function get_catalysis_ode(model::Bnc)
         # This is equivalent to (L * exp10(u)) ./ q but scaled: since exp10(u) = 10^{max_u} x_scaled, q = 10^{max_u} q_scaled
         # So (L exp10(u)) ./ q = (L * 10^{max_u} x_scaled) ./ (10^{max_u} q_scaled) = (L x_scaled) ./ q_scaled
         # We scale L copy in-place for efficiency
-        M_top = @view M[1:model.d, :]  # View of top block (L part)
+        # M_top = @view M[1:model.d, :]  # View of top block (L part)
         # Reset M_top to original L values (assuming M was initialized with [L; N] as Float64)
         M.nzval[model.IntegrationHelper._LN_top_idx] .= model.L.nzval  # Reset to L values
         # Scale columns by x_scaled
