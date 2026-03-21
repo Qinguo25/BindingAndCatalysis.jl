@@ -1055,6 +1055,31 @@ function group_sum(keys::AbstractVector{I}, vals::AbstractVector{J};
     return result
 end
 
+function group_sum(
+    keys::AbstractVector{I},
+    vals::AbstractVector{Nothing};
+    sort_values::Bool=true,
+)::Vector{Tuple{Vector{Int}, I, Nothing}} where {I}
+
+    @assert length(keys) == length(vals)
+
+    index_dict = Dict{I, Vector{Int}}()
+    order = I[]
+
+    @inbounds for (i, k) in enumerate(keys)
+        if !haskey(index_dict, k)
+            push!(order, k)
+        end
+        push!(get!(index_dict, k, Int[]), i)
+    end
+
+    if sort_values
+        sort!(order, by = k -> length(index_dict[k]), rev = true)
+    end
+
+    return [(index_dict[k], k, nothing) for k in order]
+end
+
 
 
 """

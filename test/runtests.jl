@@ -22,6 +22,15 @@ function minimal_catalysis_model()
     return model
 end
 
+function notebook_model2()
+    N = [
+        1 1 -1 0 0
+        1 0 1 -1 0
+        0 1 0 1 -1
+    ]
+    return Bnc(N = N)
+end
+
 @testset "BindingAndCatalysis.jl" begin
     model = minimal_model()
 
@@ -61,6 +70,170 @@ end
     logx = qK2x(model, logqK; input_logspace = true, output_logspace = true)
     logqK_back = x2qK(model, logx; input_logspace = true, output_logspace = true)
     @test isapprox(logqK_back, logqK; atol = 1e-6, rtol = 1e-6)
+end
+
+@testset "Minimal Notebook Workflow" begin
+    model = minimal_model()
+
+    @test begin
+        summary(model)
+        true
+    end
+
+    find_all_regimes!(model)
+    perms = get_regimes(model)
+    idxs = get_regimes(model; return_idx = true)
+    perm_dict = get_bind_regimes_dict(model)
+
+    @test length(perms) == n_regimes(model) == length(idxs) == length(perm_dict)
+    @test idxs == collect(1:n_regimes(model))
+
+    r1_perm = perms[1]
+    r2_perm = perms[2]
+    r3_perm = perms[3]
+
+    r1 = get_regime(model, r1_perm)
+    @test r1 === get_regime(model, 1)
+    @test begin
+        summary(r1)
+        true
+    end
+
+    C1, C01, nlt1 = get_C_C0_nullity(r1)
+    C2, C02, nlt2 = get_C_C0_nullity(model, 1)
+    C3, C03, nlt3 = get_C_C0_nullity(model, r1_perm)
+    @test C1 == C2 == C3
+    @test C01 == C02 == C03
+    @test nlt1 == nlt2 == nlt3
+
+    @test get_perm(r1) == r1_perm
+    @test get_idx(model, r1_perm) == 1
+    @test get_nullity(model, 1) == get_nullity(r1)
+    @test is_singular(r1) == (get_nullity(r1) > 0)
+    @test is_asymptotic(model, 1)
+
+    P, P0 = get_P_P0(model, r1_perm)
+    H, H0 = get_H_H0(model, 1)
+    Cx, C0x = get_C_C0_x(model, 1)
+    CqK, C0qK, nltqK = get_C_C0_nullity_qK(model, r1_perm)
+
+    @test get_P(model, 1) == P
+    @test get_P0(r1) == P0
+    @test get_H(r1) == H
+    @test get_H0(model, r1_perm) == H0
+    @test get_C_x(model, r1_perm) == Cx
+    @test get_C0_x(r1) == C0x
+    @test get_C_C0(model, 1) == (CqK, C0qK)
+    @test get_C(model, 1) == CqK
+    @test get_C0(r1) == C0qK
+    @test nltqK == get_nullity(r1)
+
+    @test !isempty(show_condition_x(r1))
+    @test !isempty(show_condition_qK(model, 1; log_space = false))
+    @test !isempty(show_dominant_condition(r1; log_space = false))
+
+    poly = get_polyhedron(model, r1_perm)
+    Cpoly, C0poly, nltpoly = get_C_C0_nullity(poly)
+    @test Cpoly == CqK
+    @test C0poly == C0qK
+    @test nltpoly == nltqK
+
+    inner = get_one_inner_point(model, 2)
+    @test assign_regime(model, inner; input_logspace = true, asymptotic_only = false, return_idx = true) == 2
+
+    vol1 = get_volume(model, 1)
+    vols = get_volumes(model)
+    @test vol1.mean >= 0
+    @test length(vols) == n_regimes(model)
+    @test all(v -> v isa BindingAndCatalysis.Volume, vols)
+
+    C_add = [1 -1 0]
+    C0_add = [-log10(2)]
+    feas = check_feasibility_with_constraint(model, 4; C = C_add, C0 = C0_add)
+    feas_list = feasible_vertieces_with_constraint(model; C = C_add, C0 = C0_add, return_idx = true)
+    @test feas isa Bool
+    @test all(i -> i in idxs, feas_list)
+
+    vg = get_regimes_graph!(model; full = true)
+    @test length(vg.neighbors) == n_regimes(model)
+    @test size(get_regimes_neighbor_mat(model), 1) == n_regimes(model)
+    @test BindingAndCatalysis.Graphs.nv(get_neighbor_graph_x(model)) == n_regimes(model)
+
+    @test get_edge(vg, r2_perm, r1_perm) !== nothing
+    @test get_edge(vg, r2_perm, r3_perm) === nothing
+    @test is_neighbor(model, r2_perm, r1_perm)
+
+    inter = get_intersect(model, r2_perm, r1_perm)
+    dir, ins = get_interface(model, r2_perm, r1_perm)
+    @test get_nullity(inter) >= 0
+    @test length(dir) == model.n
+    @test ins isa Real
+    @test sym_direction(model, dir) isa String
+    @test show_interface(model, r2_perm, r1_perm) !== nothing
+    @test get_interface(model, r2_perm, r3_perm) isa Tuple
+
+    siso = SISOPaths(model, :tS)
+    @test !isempty(siso.rgm_paths)
+    @test begin
+        summary(siso; show_volume = false)
+        true
+    end
+
+    p1_idx = 1
+    p1 = get_path(siso, p1_idx)
+    p1_idx_path = get_path(siso, p1_idx; return_idx = true)
+    @test get_idx(siso, p1) == p1_idx
+    @test get_idx(siso, p1_idx_path) == p1_idx
+    @test get_path(siso, p1; return_idx = true) == p1_idx_path
+
+    path_poly = get_polyhedron(siso, p1_idx)
+    path_vol = get_volume(siso, p1_idx)
+    @test get_nullity(path_poly) >= 0
+    @test path_vol.mean >= 0
+    @test !isempty(show_condition(siso, p1_idx; log_space = false))
+
+    ro_path = get_RO_path(siso, p1_idx; observe_x = :E)
+    @test !isempty(ro_path)
+    @test format_arrow(ro_path) isa String
+
+    Random.seed!(42)
+    logqK_vec = randomize(model, 4; log_lower = -3, log_upper = 3)
+    logx_vec = logqK_vec .|> qK -> qK2x(model, qK; input_logspace = true, output_logspace = true)
+    logqK_vec_back = logx_vec .|> x -> x2qK(model, x; input_logspace = true, output_logspace = true)
+    @test all(isapprox.(logqK_vec_back, logqK_vec; atol = 1e-6, rtol = 1e-6))
+
+    assigned_qK = logqK_vec .|> qK -> assign_regime(model, qK; input_logspace = true, asymptotic_only = false, return_idx = true)
+    assigned_from_x_qK = logx_vec .|> x -> assign_regime_qK(model; x = x, input_logspace = true, asymptotic_only = false, return_idx = true)
+    assigned_from_x_x = logx_vec .|> x -> assign_regime_x(model, x; input_logspace = true, asymptotic_only = true, return_idx = true)
+    @test assigned_qK == assigned_from_x_qK
+    @test assigned_from_x_qK == assigned_from_x_x
+end
+
+@testset "Larger RO Path Workflow" begin
+    model = notebook_model2()
+    pths = SISOPaths(model, 1)
+
+    grouped = group_sum([[1, 2], [1, 2], [2, 3]], fill(nothing, 3))
+    @test length(grouped) == 2
+    @test grouped[1][3] === nothing
+
+    @test !isempty(pths.rgm_paths)
+    @test get_path(pths, 1; return_idx = true) == pths.rgm_paths[1]
+    @test get_idx(pths, get_path(pths, 1)) == 1
+
+    ro1 = get_RO_path(pths, 1; observe_x = 1)
+    ro_paths_1 = get_RO_paths(pths; observe_x = 1)
+    ro_paths_2 = get_RO_paths(pths; observe_x = 2, deduplicate = true)
+    ro_paths_2_filtered = get_RO_paths(pths; observe_x = 2, deduplicate = true, keep_nonasymptotic = false, keep_singular = false)
+
+    @test !isempty(ro1)
+    @test length(ro_paths_1) == length(pths.rgm_paths)
+    @test length(ro_paths_2) == length(pths.rgm_paths)
+    @test length(ro_paths_2_filtered) == length(pths.rgm_paths)
+    @test begin
+        summary_RO_path(pths; observe_x = 5, show_volume = false, deduplicate = true, keep_nonasymptotic = false, keep_singular = false)
+        true
+    end
 end
 
 @testset "Catalysis And Mixed Regimes" begin
