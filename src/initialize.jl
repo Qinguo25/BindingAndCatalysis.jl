@@ -381,9 +381,16 @@ mutable struct VertexEdge{T}
     intersect_x::Float64
     change_dir_qK::Union{Nothing, SparseVector{Float64, T}}
     intersect_qK::Union{Nothing, Float64}
+    qK_interface_idx::Int
+    qK_interface_sign::Int8
     function VertexEdge(to::Int, diff_r::Int, change_dir_x::SparseVector{Int8, T}, intersect_x::Float64) where {T}
-        return new{T}(to, diff_r, change_dir_x, intersect_x,nothing,nothing)
+        return new{T}(to, diff_r, change_dir_x, intersect_x, nothing, nothing, 0, 0)
     end
+end
+
+struct RegimeHyperplane{T}
+    change_dir_qK::SparseVector{Float64, T}
+    intersect_qK::Float64
 end
 
 # Adjacency list + optional caches
@@ -398,6 +405,7 @@ mutable struct VertexGraph{T}
     neighbors::Vector{Vector{VertexEdge{T}}}
     change_dir_qK_computed::Bool
     edge_pos::Vector{Dict{Int, Int}}  # (u,v) -> (u,edge_pos[u][v]) to locate the VertexEdge.
+    qK_interface_pool::Vector{RegimeHyperplane{T}}
     function VertexGraph(bn::AbstractBnc, neighbors::Vector{Vector{VertexEdge{T}}}) where {T}
         edge_pos = [Dict{Int, Int}() for _ in 1:length(neighbors)]
         g = SimpleGraph(length(neighbors))
@@ -408,7 +416,7 @@ mutable struct VertexGraph{T}
                 add_edge!(g, i, e.to)
             end
         end
-        return new{T}(bn, g, neighbors, false, edge_pos)
+        return new{T}(bn, g, neighbors, false, edge_pos, RegimeHyperplane{T}[])
     end
 end
 
@@ -527,6 +535,8 @@ mutable struct Bnc{T} <: AbstractBnc # T is the int type to save all the indices
     vertices_graph::Union{Any,Nothing} # Using Any for placeholder for VertexGraph
     # _vertices_Nρ_inv_dict::Dict{Vector{T}, Tuple{SparseMatrixCSC{Float64, Int},T}} # cache the N_inv for each vertex permutation
     _vertices_Nρ_inv_dict :: Union{Any,Nothing}
+    _regimes_affine_ready::Bool
+    _regimes_affine_lock::ReentrantLock
 
     #------other helper parameters------
     direction::Int8 # direction of the binding reactions, determine the ray direction for invertible regime, calculated by sign of det[L;N]
@@ -568,6 +578,8 @@ mutable struct Bnc{T} <: AbstractBnc # T is the int type to save all the indices
             nothing,                         # BncRegimes
             nothing,                         # vertices_graph
             nothing,                         # _vertices_perm_Ninv_dict
+            false,                           # _regimes_affine_ready
+            ReentrantLock(),                 # _regimes_affine_lock
             # Fields 13-28 (Calculated values)
             direction,
             integration_helper,
@@ -835,6 +847,7 @@ end
     bn.BncRegimes = nothing
     bn.vertices_graph = nothing
     bn._vertices_Nρ_inv_dict = Dict{Vector{T}, Tuple{SparseMatrixCSC{Float64, Int},T}}()
+    bn._regimes_affine_ready = false
     return nothing
 end
 

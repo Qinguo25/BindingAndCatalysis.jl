@@ -163,6 +163,11 @@ end
     @test get_edge(vg, r2_perm, r3_perm) === nothing
     @test is_neighbor(model, r2_perm, r1_perm)
 
+    edge_21 = get_edge(vg, r2_perm, r1_perm; full = true)
+    edge_12 = get_edge(vg, r1_perm, r2_perm; full = true)
+    @test edge_21.qK_interface_idx == edge_12.qK_interface_idx != 0
+    @test edge_21.qK_interface_sign == -edge_12.qK_interface_sign
+
     inter = get_intersect(model, r2_perm, r1_perm)
     dir, ins = get_interface(model, r2_perm, r1_perm)
     @test get_nullity(inter) >= 0
@@ -207,6 +212,11 @@ end
     assigned_from_x_x = logx_vec .|> x -> assign_regime_x(model, x; input_logspace = true, asymptotic_only = true, return_idx = true)
     @test assigned_qK == assigned_from_x_qK
     @test assigned_from_x_qK == assigned_from_x_x
+
+    singular_bind_idx = only(filter(i -> get_nullity(model, i) == 1, get_regimes(model; return_idx = true)))
+    Hs, H0s = get_H_H0(model, singular_bind_idx)
+    @test size(Hs, 1) == model.n
+    @test length(H0s) == model.n
 end
 
 @testset "Larger RO Path Workflow" begin
@@ -307,4 +317,11 @@ end
     stable_code = is_stable(regular; return_code = true)
     @test stable_flag === true || stable_flag === false || ismissing(stable_flag)
     @test stable_code in (-1, 0, 1)
+
+    singular_mixed = filter(r -> r.nlt == 1, get_bnc_regimes(model))
+    if !isempty(singular_mixed)
+        Hs, H0s = get_H_H0(first(singular_mixed))
+        @test size(Hs, 1) == model.n
+        @test length(H0s) == model.n
+    end
 end

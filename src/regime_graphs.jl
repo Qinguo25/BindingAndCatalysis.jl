@@ -8,8 +8,8 @@ Build a `VertexGraph` from vertex permutations, connecting vertices that differ
 in exactly one row.
 """
 function  _calc_regimes_graph(Bnc::Bnc{T}) where {T} # optimized by GPT-5, not fullly understood yet.
-    vertices = Bnc.vertices_data
-    perms = getfield.(vertices, :perm)
+    regimes = Bnc.vertices_data
+    perms = getfield.(regimes, :perm)
     n = Bnc.n    
     L = Bnc.L
 
@@ -76,6 +76,52 @@ function  _calc_regimes_graph(Bnc::Bnc{T}) where {T} # optimized by GPT-5, not f
     return VertexGraph(Bnc, neighbors)
 end
 
+@inline _edge_has_qK_interface(edge::VertexEdge) =
+    edge.qK_interface_idx != 0 || !isnothing(edge.change_dir_qK)
+
+function _set_edge_qK_interface_pair!(
+    grh::VertexGraph{T},
+    from::Int,
+    to::Int,
+    change_dir_qK::SparseVector{Float64,T},
+    intersect_qK::Float64,
+) where {T}
+    push!(grh.qK_interface_pool, RegimeHyperplane(change_dir_qK, intersect_qK))
+    hp_idx = length(grh.qK_interface_pool)
+
+    edge_fwd = grh.neighbors[from][grh.edge_pos[from][to]]
+    edge_rev = grh.neighbors[to][grh.edge_pos[to][from]]
+
+    edge_fwd.qK_interface_idx = hp_idx
+    edge_fwd.qK_interface_sign = Int8(1)
+    edge_rev.qK_interface_idx = hp_idx
+    edge_rev.qK_interface_sign = Int8(-1)
+
+    return nothing
+end
+
+function _edge_qK_interface(grh::VertexGraph{T}, edge::VertexEdge{T}) where {T}
+    if !isnothing(edge.change_dir_qK)
+        return edge.change_dir_qK, edge.intersect_qK
+    end
+    edge.qK_interface_idx == 0 && return nothing
+
+    hp = grh.qK_interface_pool[edge.qK_interface_idx]
+    if edge.qK_interface_sign >= 0
+        return hp.change_dir_qK, hp.intersect_qK
+    else
+        return -hp.change_dir_qK, -hp.intersect_qK
+    end
+end
+
+function _materialize_edge_qK_interface!(grh::VertexGraph{T}, edge::VertexEdge{T}) where {T}
+    !isnothing(edge.change_dir_qK) && return edge
+    iface = _edge_qK_interface(grh, edge)
+    iface === nothing && return edge
+    edge.change_dir_qK, edge.intersect_qK = iface
+    return edge
+end
+
 
 """
     _fulfill_regimes_graph!(vtx_graph::VertexGraph) -> nothing
@@ -84,7 +130,7 @@ Compute qK-space change directions for edges in the vertex graph.
 """
 function _fulfill_regimes_graph!(vtx_graph::VertexGraph)
     Bnc = vtx_graph.bn
-    vertices = Bnc.vertices_data
+    regimes = Bnc.vertices_data
     """
     fill the qK space change dir matrix for all vertices in Bnc.
     """
@@ -101,42 +147,44 @@ function _fulfill_regimes_graph!(vtx_graph::VertexGraph)
             dir = H[j2, :] .- H[j1, :]
             ins_qK = H0[j2] - H0[j1] + ins_x
         else
-            H  = get_H(Bnc, p1)
-            M0 = get_M0(Bnc, p1)
+            H, H0 = get_H_H0(Bnc, p1)
             dir = H[j2, :] .- H[j1, :]
-            ins_qK = -dot(dir, M0)
+            ins_qK = H0[j2] - H0[j1]
         end
 
         droptol!(dir, 1e-10)
         return nnz(dir) == 0 ? (nothing, nothing) : (dir, ins_qK)
     end
 
-    # pre compute H for all vertices with nullity 0 or 1
+    empty!(vtx_graph.qK_interface_pool)
+
+    # pre compute H/H0 for all regimes with nullity 0 or 1
     Threads.@threads for idx in eachindex(vtx_graph.neighbors)
-        if vertices[idx].nullity <= 1
-            get_H(Bnc, idx)
+        if regimes[idx].nullity <= 1
+            get_regime(Bnc, idx; inv_info=true)
         end
     end
 
-    @showprogress Threads.@threads for p1 in eachindex(vtx_graph.neighbors)
+    @showprogress for p1 in eachindex(vtx_graph.neighbors)
         edges = vtx_graph.neighbors[p1]
-        if vertices[p1].nullity > 1 # jump off those regimes with nullity >1
+        if regimes[p1].nullity > 1
             continue
         end
         for e in edges
-            if !isnothing(e.change_dir_qK) # pass if have been computed
+            p2 = e.to
+            p1 < p2 || continue
+            if _edge_has_qK_interface(e)
                 continue
             end
-            # from p1 to p2, and change happens on ith row that "1" goes from j1 position to j2 position.
-            p2 = e.to # target 
             ins_x = e.intersect_x
             i = e.diff_r # different row
             (j1,j2) = let 
                 I,V = findnz(e.change_dir_x) # should be two elements
                 V[1] > V[2] ? (I[2], I[1]) : (I[1], I[2])
             end
-            # calculate their direction based on formula
-            (e.change_dir_qK, e.intersect_qK) = _calc_change_dir_qK(Bnc, p1, p2, i, j1,j2, ins_x)
+            change_dir_qK, intersect_qK = _calc_change_dir_qK(Bnc, p1, p2, i, j1, j2, ins_x)
+            isnothing(change_dir_qK) && continue
+            _set_edge_qK_interface_pair!(vtx_graph, p1, p2, change_dir_qK, intersect_qK)
         end
     end
     return nothing
@@ -494,7 +542,12 @@ function get_edge(grh::VertexGraph, from, to; full=false)::Union{Nothing, Vertex
         _ensure_full_regimes_graph!(grh)
     end
     pos = get(grh.edge_pos[from], to, nothing)
-    return pos === nothing ? nothing : grh.neighbors[from][pos]
+    if pos === nothing
+        return nothing
+    end
+    edge = grh.neighbors[from][pos]
+    full && _materialize_edge_qK_interface!(grh, edge)
+    return edge
 end
 
 
@@ -555,7 +608,7 @@ get_neighbor_graph_qK(grh::VertexGraph; both_side::Bool=false)::SimpleDiGraph = 
                 continue
             end
             for e in edges
-                if isnothing(e.change_dir_qK) || (!both_side && e.to < i)
+                if !_edge_has_qK_interface(e) || (!both_side && e.to < i)
                     continue
                 end
                 add_edge!(g, i, e.to)
@@ -620,10 +673,10 @@ function get_SISO_graph(grh::VertexGraph, change_qK)::SimpleDiGraph
                 continue
             end
             for e in edges
-                if isnothing(e.change_dir_qK) || e.to < i
+                if !_edge_has_qK_interface(e) || e.to < i
                     continue
-                end 
-                val = e.change_dir_qK[change_qK_idx]
+                end
+                val = _edge_qK_interface(grh, e)[1][change_qK_idx]
                 if val > 1e-6
                     add_edge!(g, i, e.to)
                 elseif val < -1e-6

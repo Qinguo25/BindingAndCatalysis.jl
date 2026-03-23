@@ -128,8 +128,8 @@ function ∂logqK_∂logx_sym(Bnc::Bnc; show_x_space::Bool=false)::Matrix{Num}
     end
 
     return [
-        transpose(Bnc.x_sym) .* Bnc.L ./ q
-        Bnc.N
+        transpose(Bnc.x_sym) .* Matrix(Bnc.L) ./ q
+        Matrix(Bnc.N)
     ]
 end
 """

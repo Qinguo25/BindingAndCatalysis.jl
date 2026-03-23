@@ -106,7 +106,7 @@ n_bnc_regimes(model::Bnc; kwargs...) = length(get_bnc_regimes(model; kwargs...))
 
 
 function get_H_H0(rgm::BncRegime)
-    rgm.nlt == 0 || error("BncRegime is singular, cannot get H0.")
+    rgm.nlt <= 1 || error("BncRegime nullity is bigger than 1, cannot get H0.")
     return rgm.H, rgm.H0
 end
 get_H(rgm::BncRegime) = rgm.H
@@ -275,6 +275,69 @@ function _row_valid_columns(rgms::AbstractMatrix{<:Union{BncRegime,Nothing}}, i:
     return [j for j in axes(rgms, 2) if !isnothing(rgms[i, j])]
 end
 
+function _row_unique_perm_data(perms)
+    perm_keys = Vector{Tuple{Vararg{Int}}}(undef, length(perms))
+    unique_keys = Tuple{Vararg{Int}}[]
+    first_pos = Int[]
+    key_to_pos = Dict{Tuple{Vararg{Int}},Int}()
+
+    for (k, perm) in enumerate(perms)
+        key = Tuple(Int.(perm))
+        perm_keys[k] = key
+        if !haskey(key_to_pos, key)
+            key_to_pos[key] = length(unique_keys) + 1
+            push!(unique_keys, key)
+            push!(first_pos, k)
+        end
+    end
+
+    return perm_keys, unique_keys, first_pos
+end
+
+function _build_row_affine_cache(rgms, i, valid_js, perms, nlt_valid, N_ss, r_v, direction, cache)
+    perm_keys, unique_keys, first_pos = _row_unique_perm_data(perms)
+    Hs = Vector{Union{Nothing,SparseMatrixCSC{Float64,Int}}}(undef, length(unique_keys))
+    H0s = Vector{Union{Nothing,Vector{Float64}}}(undef, length(unique_keys))
+
+    Threads.@threads for t in eachindex(unique_keys)
+        k = first_pos[t]
+        nlt = nlt_valid[k]
+        if nlt > 1
+            Hs[t] = nothing
+            H0s[t] = nothing
+            continue
+        end
+
+        rgm = rgms[i, valid_js[k]]::BncRegime
+        _initialize_regime!(rgm.bind_rgm)
+        perm = perms[k]
+        _, M0_ss = _steady_state_offsets(rgm, r_v, N_ss)
+
+        H_ss = if nlt == 0
+            _calc_H(N_ss, cache, perm)
+        else
+            M_ss = vcat(rgm.bind_rgm.P[r_v+1:end, :], N_ss)
+            if allunique(perm)
+                _calc_H(N_ss, cache, perm; scale = direction)
+            else
+                H_tmp = _adj_singular_matrix(M_ss)[1]
+                droptol!(sparse(H_tmp), 1e-10) .* direction
+            end
+        end
+
+        Hs[t] = H_ss
+        H0s[t] = vec(-(H_ss * M0_ss))
+    end
+
+    affine_by_perm = Dict{Tuple{Vararg{Int}},Tuple{SparseMatrixCSC{Float64,Int},Vector{Float64}}}()
+    for t in eachindex(unique_keys)
+        Hs[t] === nothing && continue
+        affine_by_perm[unique_keys[t]] = (Hs[t], H0s[t])
+    end
+
+    return perm_keys, affine_by_perm
+end
+
 
 """
     _build_row_context(rgms, i, r_v)
@@ -298,6 +361,7 @@ function _build_row_context(rgms::AbstractMatrix{<:Union{BncRegime,Nothing}}, i:
 
     perms = [get_perm(rgms[i, j]::BncRegime) for j in valid_js]
     nlt_valid, cache = _calc_nullity(perms, N_ss)
+    perm_keys, affine_by_perm = _build_row_affine_cache(rgms, i, valid_js, perms, nlt_valid, N_ss, r_v, direction, cache)
 
     return (
         bn = bn,
@@ -307,8 +371,10 @@ function _build_row_context(rgms::AbstractMatrix{<:Union{BncRegime,Nothing}}, i:
         direction = direction,
         valid_js = valid_js,
         perms = perms,
+        perm_keys = perm_keys,
         nlt_valid = nlt_valid,
         cache = cache,
+        affine_by_perm = affine_by_perm,
     )
 end
 
@@ -549,17 +615,10 @@ This computes:
 - C_qKk_ss  / C0_qKk_ss  : steady-state consistency in (q_ss, K, k)
 """
 function _init_regular_bnc_regime!(vtx::BncRegime, perm, rowctx)
-    r_v = rowctx.r_v
-    N_ss = rowctx.N_ss
-
-    Pθ = vtx.catalysis_rgm.P
-    _, M0_ss = _steady_state_offsets(vtx, r_v, N_ss)
-
     C_qKk_cat, C0_qKk_cat, nlt_qKk_cat = _calc_C_qKk_cat(vtx.bind_rgm, vtx.catalysis_rgm)
 
-    H_ss = _calc_H(N_ss, rowctx.cache, perm)
-    H0_ss = -(H_ss * M0_ss)
-
+    H_ss, H0_ss = rowctx.affine_by_perm[Tuple(Int.(perm))]
+    Pθ = vtx.catalysis_rgm.P
     H_ssk = _expand_Hss_to_qssKk(H_ss, Pθ)
     C_qKk_ss, C0_qKk_ss = _calc_C_qKk_ss_regular(vtx.bind_rgm, vtx.catalysis_rgm, H_ssk, H0_ss)
 
@@ -584,6 +643,8 @@ This does NOT return an affine offset H0.
 function _calc_singular_H_ss(bind_rgm::BindRegime, cat_rgm::CatalysisRegime, perm, rowctx)
     r_v = rowctx.r_v
     M_ss = vcat(bind_rgm.P[r_v+1:end, :], rowctx.N_ss)
+    P0_ss = bind_rgm.P0[r_v+1:end]
+    M0_ss = vcat(P0_ss, zeros(eltype(P0_ss), size(rowctx.N_ss, 1)))
 
     H_ray = if allunique(perm)
         _calc_H(rowctx.N_ss, rowctx.cache, perm; scale = rowctx.direction)
@@ -592,7 +653,9 @@ function _calc_singular_H_ss(bind_rgm::BindRegime, cat_rgm::CatalysisRegime, per
         droptol!(sparse(H_tmp), 1e-10) .* rowctx.direction
     end
 
-    return M_ss, H_ray
+    H0_ray = vec(-(H_ray * M0_ss))
+
+    return M_ss, H_ray, H0_ray
 end
 
 
@@ -602,7 +665,7 @@ end
 Initialize one mixed regime whose steady-state reduced matrix M_ss has nullity 1.
 This computes:
 - H  : a ray/adjugate-like matrix, not an affine inverse
-- H0 : nothing
+- H0 : `-H * M0_ss`, useful for interface reconstruction
 - C_qKk_cat / C0_qKk_cat : catalysis consistency in (q, K, k)
 - C_qKk_ss  / C0_qKk_ss  : steady-state consistency in (q_ss, K, k),
                            obtained by explicit elimination of x
@@ -610,13 +673,13 @@ This computes:
 function _init_singular_bnc_regime!(vtx::BncRegime, perm, rowctx)
     C_qKk_cat, C0_qKk_cat, nlt_qKk_cat = _calc_C_qKk_cat(vtx.bind_rgm, vtx.catalysis_rgm)
 
-    _, H_ray = _calc_singular_H_ss(vtx.bind_rgm, vtx.catalysis_rgm, perm, rowctx)
+    H_ray, H0_ss = rowctx.affine_by_perm[Tuple(Int.(perm))]
     H_ssk = _expand_Hss_to_qssKk(H_ray, vtx.catalysis_rgm.P)
 
     C_qKk_ss, C0_qKk_ss, _ = _calc_C_qKk_ss_singular(vtx.bind_rgm, vtx.catalysis_rgm)
 
     vtx.H = H_ssk
-    vtx.H0 = nothing
+    vtx.H0 = H0_ss
     vtx.C_qKk_cat = C_qKk_cat
     vtx.C0_qKk_cat = C0_qKk_cat
     vtx.nlt_qKk_cat = nlt_qKk_cat

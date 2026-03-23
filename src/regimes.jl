@@ -231,6 +231,159 @@ function _initialize_regime!(vtx::BindRegime)::BindRegime
     return vtx
 end
 
+@inline _affine_info_ready(rgm::BindRegime) = !isnothing(rgm.H) && !isnothing(rgm.H0)
+
+function _masked_components(grh::SimpleGraph, mask::BitVector)
+    n = nv(grh)
+    seen = falses(n)
+    comps = Vector{Vector{Int}}()
+
+    for src in 1:n
+        (!mask[src] || seen[src]) && continue
+        comp = Int[]
+        stack = [src]
+        seen[src] = true
+        while !isempty(stack)
+            v = pop!(stack)
+            push!(comp, v)
+            for nb in neighbors(grh, v)
+                if mask[nb] && !seen[nb]
+                    seen[nb] = true
+                    push!(stack, nb)
+                end
+            end
+        end
+        push!(comps, comp)
+    end
+
+    return comps
+end
+
+function _edge_rank1_data(model::Bnc, from_idx::Int, to_idx::Int, edge::VertexEdge)
+    i = edge.diff_r
+    perm_from = get_perm(model, from_idx)
+    perm_to = get_perm(model, to_idx)
+    j_from = perm_from[i]
+    j_to = perm_to[i]
+    δ0 = log10(Float64(model.L[i, j_to])) - log10(Float64(model.L[i, j_from]))
+    return i, j_from, j_to, δ0
+end
+
+function _propagate_regular_component!(model::Bnc, grh::VertexGraph, comp::Vector{Int})
+    isempty(comp) && return nothing
+
+    regimes = model.vertices_data
+    seed = comp[1]
+    seed_rgm = _initialize_regime!(regimes[seed])
+    H_seed = _calc_H(model, seed_rgm.perm)
+    H0_seed = vec(-(H_seed * seed_rgm.M0))
+    seed_rgm.H = H_seed
+    seed_rgm.H0 = H0_seed
+
+    in_comp = falses(length(regimes))
+    in_comp[comp] .= true
+    seen = falses(length(regimes))
+    seen[seed] = true
+    queue = [seed]
+
+    while !isempty(queue)
+        from_idx = popfirst!(queue)
+        from_rgm = regimes[from_idx]
+        H_from = from_rgm.H
+        H0_from = from_rgm.H0
+
+        for edge in grh.neighbors[from_idx]
+            to_idx = edge.to
+            (!in_comp[to_idx] || seen[to_idx]) && continue
+
+            to_rgm = _initialize_regime!(regimes[to_idx])
+            i, j_from, j_to, δ0 = _edge_rank1_data(model, from_idx, to_idx, edge)
+            H_to, H0_to, δ = _rank1_update_H_H0(H_from, H0_from, i, j_from, j_to, δ0)
+
+            if isnothing(H_to)
+                # Numerical fallback: the graph update should stay in the regular class,
+                # but direct construction is safer than failing hard here.
+                H_to = _calc_H(model, to_rgm.perm)
+                H0_to = vec(-(H_to * to_rgm.M0))
+            end
+
+            to_rgm.H = H_to
+            to_rgm.H0 = H0_to
+            seen[to_idx] = true
+            push!(queue, to_idx)
+        end
+    end
+
+    return nothing
+end
+
+function _ensure_regular_affine_cache!(model::Bnc)
+    find_all_regimes!(model)
+    model._regimes_affine_ready && return nothing
+
+    lock(model._regimes_affine_lock)
+    try
+        model._regimes_affine_ready && return nothing
+
+        regimes = model.vertices_data
+        grh = get_regimes_graph!(model; full=false)
+        regular_mask = falses(length(regimes))
+        @inbounds for i in eachindex(regimes)
+            regular_mask[i] = regimes[i].nullity == 0
+        end
+
+        comps = _masked_components(grh.x_grh, regular_mask)
+        Threads.@threads for cid in eachindex(comps)
+            _propagate_regular_component!(model, grh, comps[cid])
+        end
+
+        model._regimes_affine_ready = true
+    finally
+        unlock(model._regimes_affine_lock)
+    end
+
+    return nothing
+end
+
+function _fill_affine_info!(rgm::BindRegime)
+    _initialize_regime!(rgm)
+    _affine_info_ready(rgm) && return nothing
+
+    model = rgm.network
+    if rgm.nullity == 0
+        _ensure_regular_affine_cache!(model)
+        return nothing
+    end
+
+    if rgm.nullity == 1
+        H = if allunique(rgm.perm)
+            _calc_H(model, rgm.perm)
+        else
+            H_tmp = _adj_singular_matrix(rgm.M)[1]
+            droptol!(sparse(H_tmp), 1e-10) .* model.direction
+        end
+        rgm.H = H
+        rgm.H0 = vec(-(H * rgm.M0))
+    end
+
+    return nothing
+end
+
+function _materialize_qK_conditions!(rgm::BindRegime)
+    _initialize_regime!(rgm)
+    (!isnothing(rgm.C_qK) && !isnothing(rgm.C0_qK)) && return nothing
+
+    if rgm.nullity == 0
+        _fill_affine_info!(rgm)
+        rgm.C_qK = droptol!(sparse(rgm.C_x * rgm.H), 1e-10)
+        rgm.C0_qK = rgm.C0_x + rgm.C_x * rgm.H0
+    else
+        rgm.C_qK, rgm.C0_qK = _calc_C_C0_qK_singular(rgm.network, rgm.perm)
+    end
+
+    return nothing
+end
+
 """
     _fill_inv_info!(vtx::BindRegime) -> nothing
 
@@ -238,30 +391,8 @@ Ensure a `BindRegime` has `H/H0` and qK constraints computed and cached.
 """
 function _fill_inv_info!(vtx::BindRegime)
     _initialize_regime!(vtx)
-    Bnc = vtx.network
-    if !isnothing(vtx.H)
-        return nothing
-    end
-    if vtx.nullity == 0
-        H = _calc_H(Bnc, vtx.perm) 
-        vtx.H = H # Calculate the inverse matrix from pre-computed LU decomposition of M H=M^-1
-        vtx.H0 = - H * vtx.M0  # H0 = -M^-1 * M0
-        vtx.C_qK = droptol!(sparse(vtx.C_x * H),1e-10) # C_qK = C_x * H
-        vtx.C0_qK = vtx.C0_x + vtx.C_x * vtx.H0 # C0_qK = C0_x + C_x * H0 
-    else
-        if vtx.nullity ==1
-            # # we need to check where this nullity comes from.
-            if length(Set(vtx.perm)) == Bnc.d # the nullity comes from N
-                vtx.H = _calc_H(Bnc, vtx.perm) 
-            else # the nullity comes from P
-                H = _adj_singular_matrix(vtx.M)[1]
-                vtx.H = droptol!(sparse(H),1e-10).* Bnc.direction
-            end
-        else # nullity>1 , H, HO is nolonger avaliable
-            vtx.H = spzeros(Bnc.n, Bnc.n) # fill value as a sign that this regime is fully computed
-        end
-        vtx.C_qK, vtx.C0_qK = _calc_C_C0_qK_singular(Bnc, vtx.perm)
-    end
+    _fill_affine_info!(vtx)
+    _materialize_qK_conditions!(vtx)
     return nothing
 end
 
@@ -367,7 +498,7 @@ Return the qK-space adjacency matrix of the vertex graph.
 """
 function get_regimes_neighbor_mat_qK(Bnc::Bnc)
     grh = get_regimes_graph!(Bnc;full=true)
-    f(x::VertexEdge) = isnothing(x.change_dir_qK) ? 0 : 1
+    f(x::VertexEdge) = _edge_has_qK_interface(x) ? 1 : 0
     spmat = _regime_graph_to_sparse(grh; weight_fn = f)
     return spmat
 end
@@ -620,9 +751,9 @@ get_C0_qK(args...) = get_C_C0_nullity_qK(args...)[2]
 """
     get_H_H0(args...) -> (SparseMatrixCSC, Vector)
 
-Return `(H, H0)` for a non-singular vertex.
+Return `(H, H0)` for a regime with nullity at most 1.
 """
-get_H_H0(args...) = is_singular(args...) ? @error("BindRegime is singular, cannot get H0") : get_regime(args...; inv_info=true) |> vtx -> (vtx.H, vtx.H0)
+get_H_H0(args...) = get_nullity(args...) > 1 ? @error("BindRegime's nullity is bigger than 1, cannot get H0") : get_regime(args...; inv_info=true) |> rgm -> (rgm.H, rgm.H0)
 """
     get_H(args...) -> SparseMatrixCSC
 
@@ -752,8 +883,9 @@ end
 Return `true` if vertices are neighbors in the vertex graph.
 """
 function _is_regime_graph_neighbor(Bnc, vtx1, vtx2)::Bool
-    edge = get_edge(Bnc,vtx1,vtx2) 
-    if edge === nothing || edge.change_dir_qK === nothing
+    grh = get_regimes_graph!(Bnc; full=true)
+    edge = get_edge(grh, vtx1, vtx2; full=true)
+    if edge === nothing || !_edge_has_qK_interface(edge)
         return false
     else
         return true
@@ -802,16 +934,15 @@ end
 Return the interface hyperplane between two vertices in qK space.
 """
 function get_interface_qK(Bnc, from, to)::Tuple{SparseVector{Float64,Int}, Float64}
-    edge = get_edge(Bnc, from, to)
+    grh = get_regimes_graph!(Bnc; full=true)
+    edge = get_edge(grh, from, to; full=true)
     if edge === nothing
         @info "no directly edge found, judge using Polyhedra.jl, could be problematic if you concerning changing direction"
         return get_interface_direct(Bnc, from, to)
-    elseif edge.change_dir_qK === nothing
+    elseif !_edge_has_qK_interface(edge)
         @error("Vertices $get_perm(Bnc, from) and $get_perm(Bnc, to) are neighbors in x space but not in qK space")
     else
-        a = edge.change_dir_qK
-        b = edge.intersect_qK
-        return a, b
+        return _edge_qK_interface(grh, edge)
     end   
 end
 

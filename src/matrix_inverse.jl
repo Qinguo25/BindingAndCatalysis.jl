@@ -432,6 +432,129 @@ end
 
 
 # -----------------------------------------------------------------------------
+# Rank-k / rank-1 affine update helpers
+# -----------------------------------------------------------------------------
+
+function _sparse_outer(
+    c::SparseVector{Float64,Int},
+    s::SparseVector{Float64,Int},
+    scale::Float64,
+    nrow::Int,
+    ncol::Int,
+)
+    Ic, Vc = findnz(c)
+    Js, Vs = findnz(s)
+
+    if isempty(Ic) || isempty(Js)
+        return spzeros(Float64, nrow, ncol)
+    end
+
+    nnzA = length(Ic) * length(Js)
+    I = Vector{Int}(undef, nnzA)
+    J = Vector{Int}(undef, nnzA)
+    V = Vector{Float64}(undef, nnzA)
+
+    p = 0
+    @inbounds for a in eachindex(Ic)
+        ia = Ic[a]
+        va = scale * Vc[a]
+        for b in eachindex(Js)
+            p += 1
+            I[p] = ia
+            J[p] = Js[b]
+            V[p] = va * Vs[b]
+        end
+    end
+
+    return sparse(I, J, V, nrow, ncol)
+end
+
+"""
+    _rank1_update_H_H0(H, H0, i, j_from, j_to, δ0; atol=1e-12, drop_tol=1e-10)
+
+Apply the rank-1 affine update
+
+    M'  = M  + e_i (e_{j_to} - e_{j_from})'
+    M0' = M0 + δ0 e_i
+
+to an existing affine inverse
+
+    log x = H log y + H0.
+
+Returns `(H′, H0′, δ)`. If `δ ≈ 0`, `H′` and `H0′` are returned as `nothing`.
+"""
+function _rank1_update_H_H0(
+    H::SparseMatrixCSC{Float64,Int},
+    H0::AbstractVector{<:Real},
+    i::Int,
+    j_from::Int,
+    j_to::Int,
+    δ0::Real;
+    atol::Float64=1e-12,
+    drop_tol::Float64=1e-10,
+)
+    c = H[:, i]
+    s = H[j_to, :] - H[j_from, :]
+    δ = 1.0 + H[j_to, i] - H[j_from, i]
+
+    if !isfinite(δ) || abs(δ) <= atol
+        return nothing, nothing, δ
+    end
+
+    update = _sparse_outer(c, s, 1 / δ, size(H, 1), size(H, 2))
+    H_new = sparse(H - update)
+    drop_tol > 0 && droptol!(H_new, drop_tol)
+
+    shift = (Float64(H0[j_to]) - Float64(H0[j_from]) + Float64(δ0)) / δ
+    H0_new = Float64.(copy(H0))
+    Ic, Vc = findnz(c)
+    @inbounds for t in eachindex(Ic)
+        H0_new[Ic[t]] -= Vc[t] * shift
+    end
+
+    return H_new, H0_new, δ
+end
+
+"""
+    _lowrank_update_H_H0(H, H0, U, V, δ0; kwargs...)
+
+Woodbury-style affine update for
+
+    M'  = M  + U V'
+    M0' = M0 + U δ0
+
+with
+
+    H'  = H - H U (I + V' H U)^(-1) V' H
+    H0' = H0 - H U (I + V' H U)^(-1) (V' H0 + δ0).
+
+This helper is mainly here to centralize the formula used by the rank-1 edge
+update and future row-replacement updates.
+"""
+function _lowrank_update_H_H0(
+    H::SparseMatrixCSC{Float64,Int},
+    H0::AbstractVector{<:Real},
+    U::SparseMatrixCSC{Float64,Int},
+    V::SparseMatrixCSC{Float64,Int},
+    δ0::AbstractVector{<:Real};
+    atol::Float64=1e-12,
+)
+    HU = Matrix(H * U)
+    VtH = Matrix(transpose(V) * H)
+    K = Matrix{Float64}(I, size(U, 2), size(U, 2)) + Matrix(transpose(V) * sparse(HU))
+    abs(det(K)) <= atol && return nothing, nothing, K
+
+    KVtH = K \ VtH
+    H_new = sparse(Matrix(H) - HU * KVtH)
+
+    rhs0 = Vector{Float64}(transpose(V) * Float64.(H0)) + Float64.(δ0)
+    H0_new = Float64.(H0) - HU * (K \ rhs0)
+
+    return H_new, vec(H0_new), K
+end
+
+
+# -----------------------------------------------------------------------------
 # Main H interface
 # -----------------------------------------------------------------------------
 
@@ -539,5 +662,3 @@ function _adj_singular_matrix(A::AbstractMatrix; atol=1e-12)::Tuple{SparseMatrix
         return spzeros(0, 0), nullity
     end
 end
-
-

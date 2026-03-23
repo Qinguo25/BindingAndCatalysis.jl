@@ -209,7 +209,7 @@ function _logqK2logx_nlsolve(Bnc::Bnc, logqK::AbstractArray{<:Real,1};
     logq = @view logqK[1:d]
     logK = @view logqK[d+1:end]
 
-    J = deepcopy(Bnc.IntegrationHelper._LN_sparse)
+    J = Float64.(sparse([Bnc.L; Bnc.N]))
     x = Vector{Float64}(undef, n)
     q = Vector{Float64}(undef, d)
     x_M_view = @view x[Bnc.IntegrationHelper._LN_top_cols] # view for faster updating J
@@ -379,7 +379,7 @@ end
 
 function get_homotopy_ode(Bnc::Bnc)
     # Constants helps for updating mutable datas
-    LN_sparse = deepcopy(Bnc.IntegrationHelper._LN_sparse)
+    LN_sparse = Float64.(sparse([Bnc.L; Bnc.N]))
     L_nzval = log10.(LN_sparse.nzval[Bnc.IntegrationHelper._LN_top_idx]) # copy the nzval to avoid shared access
 
     @inline function update_M_lu(M_lu,M,max_try=100)
