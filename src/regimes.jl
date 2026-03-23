@@ -25,63 +25,6 @@ function _calc_C_C0_qK_singular(C,C0,M,M0)
     return CqK, C0qK
 end
 
-# """
-#     _calc_change_col(from, to) -> Tuple
-
-# Compute the change direction between two permutations.
-# """
-# function _calc_change_col(from::Vector{T},to::Vector{T}) where T<:Integer
-#     j1 = 0
-#     j2 = 0
-#     inconsis = Int[]
-#     for (i , (val_a,val_b)) in enumerate(zip(from,to))
-#         if val_a == val_b
-#             continue
-#         else
-#             push!(inconsis, i)
-#         end
-#     end
-#     target_inconsis = Set(to[inconsis])
-#     if target_inconsis |> length == 1
-#         j1,j2 = from[inconsis[1]], to[inconsis[1]]
-#         return j1,j2    
-#     end
-#     for (val1,i1) in zip(from[inconsis], inconsis)
-#         if val1 ∈ target_inconsis
-#             j2 = to[i1]
-#             i2 = inconsis[findfirst(x -> x == val1, to[inconsis])]
-#             j1 = from[i2]
-#             return j1,j2
-#         end
-#     end
-# end
-
-# """
-#     _get_i_j_perms(from, to) -> (Int, Int, Int, Int)
-
-# Return indices and column selections that differ between two permutations.
-# """
-# function _get_i_j_perms(from::Vector{T},to::Vector{T}) where T<:Integer
-#     inconsis_idx = findall(from .!= to)
-#     if length(inconsis_idx) == 1
-#         i1 = inconsis_idx[1]
-#         i2 = i1
-#     else
-#         intersect_val = Set(from[inconsis_idx]) ∩ Set(to[inconsis_idx])
-#         @assert length(intersect_val) == 1 "More than one intersected value found in inconsistent positions."
-#         for i in inconsis_idx
-#             if from[i] ∈ intersect_val
-#                 i2 = i
-#             end
-#             if to[i] ∈ intersect_val
-#                 i1 = i
-#             end
-#         end
-#     end
-#     j1 = from[i1]
-#     j2 = to[i2]
-#     return i1,i2,j1,j2
-# end
 #------------------Helper functions -------------------------------------------
 """
     _regime_graph_to_sparse(g::VertexGraph; weight_fn=e->1) -> SparseMatrixCSC
