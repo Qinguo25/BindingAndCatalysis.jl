@@ -39,7 +39,7 @@ function  _calc_regimes_graph(Bnc::Bnc{T}) where {T} # optimized by GPT-5, not f
         groups = collect(values(buckets))
 
         # 并行生成边：同桶内所有不同取值的顶点两两相连
-        Threads.@threads for gi in 1:length(groups)
+        Threads.@threads for gi in eachindex(groups)
             tid = Threads.threadid()
             local_edges = thread_edges[tid]
             group = groups[gi]  # ::Vector{Tuple{Int,T}}

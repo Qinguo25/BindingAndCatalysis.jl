@@ -135,14 +135,16 @@ function _calc_C_qKk_catalysis_only_regular(bind_rgm::BindRegime, cat_rgm::Catal
     H, H0 = get_H_H0(bind_rgm)
     CΠ = get_CΠ(cat_rgm)
     Cθ = get_C_k(cat_rgm)
+    C0θ = get_C0(cat_rgm)
     C = hcat(CΠ * H, Cθ)
-    C0 = CΠ * H0
+    C0 = CΠ * H0 + C0θ
     return C, Vector{Float64}(C0), 0
 end
 
 function _calc_C_qKk_catalysis_only_singular(bind_rgm::BindRegime, cat_rgm::CatalysisRegime)
     CΠ = get_CΠ(cat_rgm)
     Cθ = get_C_k(cat_rgm)
+    C0θ = get_C0(cat_rgm)
     M, M0 = get_M_M0(bind_rgm)
 
     n_qK = size(M, 1)
@@ -154,7 +156,7 @@ function _calc_C_qKk_catalysis_only_singular(bind_rgm::BindRegime, cat_rgm::Cata
     In_cat = hcat(spzeros(d_cat, n_qK), Cθ, CΠ)
 
     C = vcat(Eq, In_cat)
-    C0 = vcat(M0, zeros(eltype(M0), d_cat))
+    C0 = vcat(M0, C0θ)
 
     p = get_polyhedron(C, C0, n_qK)
     delset = BitSet((n_qK + n_v + 1):(n_qK + n_v + n_x))
@@ -190,9 +192,9 @@ function get_C_C0_nullity_xk(rgm::BncRegime, kind::Symbol=:combined)
         Cbind = hcat(Cbind_x, spzeros(Float64, size(Cbind_x, 1), n_v))
         C = vcat(Ceq, Cbind, Ccat)
         C0 = vcat(
-            zeros(Float64, size(Ceq, 1)),
+            Float64.(get_P0(cat_rgm)),
             Float64.(C0bind_x),
-            zeros(Float64, size(Ccat, 1)),
+            Float64.(get_C0(cat_rgm)),
         )
         return C, C0, size(Ceq, 1)
     else
@@ -395,21 +397,23 @@ end
 
 
 """
-    _expand_Hss_to_qssKk(H_ss, Pθ)
+    _expand_Hss_to_qssKk(H_ss, H0_ss, Pθ, P0θ)
 
 Convert
     log x = H_ss * log(q_ss, K_ss) + H0_ss
 with
-    log K_ss = [log K; -Pθ * log k]
+    log K_ss = [log K; -(Pθ * log k + P0θ)]
 into
-    log x = H_ssk * log(q_ss, K, k) + H0_ss.
+    log x = H_ssk * log(q_ss, K, k) + H0_ssk.
 """
-function _expand_Hss_to_qssKk(H_ss, Pθ)
+function _expand_Hss_to_qssKk(H_ss, H0_ss, Pθ, P0θ)
     r_v = size(Pθ, 1)
     split = size(H_ss, 2) - r_v
     H_left = H_ss[:, 1:split]
     H_right = H_ss[:, split+1:end]
-    return hcat(H_left, -(H_right * Pθ))
+    H_ssk = hcat(H_left, -(H_right * Pθ))
+    H0_ssk = H0_ss - H_right * P0θ
+    return H_ssk, vec(H0_ssk)
 end
 
 
@@ -435,6 +439,7 @@ function _calc_C_qKk_cat_regular(bind_rgm::BindRegime, cat_rgm::CatalysisRegime)
     C_qK, C0_qK = get_C_C0_qK(bind_rgm)
     CΠ = get_CΠ(cat_rgm)
     Cθ = get_C_k(cat_rgm)
+    C0θ = get_C0(cat_rgm)
 
     n_v = size(Cθ, 2)
 
@@ -442,7 +447,7 @@ function _calc_C_qKk_cat_regular(bind_rgm::BindRegime, cat_rgm::CatalysisRegime)
     C2 = hcat(CΠ * H, Cθ)
 
     C = vcat(C1, C2)
-    C0 = vcat(C0_qK, CΠ * H0)
+    C0 = vcat(C0_qK, CΠ * H0 + C0θ)
 
     return C, C0, 0
 end
@@ -466,6 +471,7 @@ function _calc_C_qKk_cat_singular(bind_rgm::BindRegime, cat_rgm::CatalysisRegime
     C_x, C0_x = get_C_C0_x(bind_rgm)
     CΠ = get_CΠ(cat_rgm)
     Cθ = get_C_k(cat_rgm)
+    C0θ = get_C0(cat_rgm)
     M, M0 = get_M_M0(bind_rgm)
 
     n_qK = size(M, 1)
@@ -479,7 +485,7 @@ function _calc_C_qKk_cat_singular(bind_rgm::BindRegime, cat_rgm::CatalysisRegime
     In_cat = hcat(spzeros(d_cat, n_qK), Cθ, CΠ)
 
     C = vcat(Eq, In_bind, In_cat)
-    C0 = vcat(M0, C0_x, zeros(eltype(M0), d_cat))
+    C0 = vcat(M0, C0_x, C0θ)
 
     p = get_polyhedron(C, C0, n_qK)
     delset = BitSet((n_qK + n_v + 1):(n_qK + n_v + n_x))
@@ -522,20 +528,21 @@ function _calc_C_qKk_ss_regular(
     bind_rgm::BindRegime,
     cat_rgm::CatalysisRegime,
     H_ssk,
-    H0_ss,
+    H0_ssk,
 )
     C_x_bind, C0_x_bind = get_C_C0_x(bind_rgm)
     CΠ = get_CΠ(cat_rgm)
     Cθ = get_C_k(cat_rgm)
+    C0θ = get_C0(cat_rgm)
 
     n_v = size(Cθ, 2)
 
     C_bind = C_x_bind * H_ssk
-    C0_bind = C0_x_bind + C_x_bind * H0_ss
+    C0_bind = C0_x_bind + C_x_bind * H0_ssk
 
     C_cat = copy(CΠ * H_ssk)
     @views C_cat[:, end-n_v+1:end] .+= Cθ
-    C0_cat = CΠ * H0_ss
+    C0_cat = CΠ * H0_ssk + C0θ
 
     return vcat(C_bind, C_cat), vcat(C0_bind, C0_cat)
 end
@@ -549,9 +556,9 @@ we work in the extended variables
 and encode
     -I * log q_ss + P_ss * log x + P0_ss = 0
     -I * log K    + N    * log x        = 0
-     Pθ * log k   + PΠ   * log x        = 0
+     Pθ * log k   + PΠ   * log x + P0θ  = 0
     C_x * log x + C0_x >= 0
-    CΠ * log x + Cθ * log k >= 0
+    CΠ * log x + Cθ * log k + C0θ >= 0
 then eliminate log x.
 
 Output variables are ordered as (q_ss, K, k).
@@ -564,11 +571,13 @@ function _calc_C_qKk_ss_singular(bind_rgm::BindRegime, cat_rgm::CatalysisRegime)
     P0_ss = bind_rgm.P0[r_v+1:end]
     N = bn.N
     Pθ = cat_rgm.P
+    P0θ = get_P0(cat_rgm)
     PΠ = cat_rgm.PΠ
 
     C_x_bind, C0_x_bind = get_C_C0_x(bind_rgm)
     CΠ = get_CΠ(cat_rgm)
     Cθ = get_C_k(cat_rgm)
+    C0θ = get_C0(cat_rgm)
 
     d_ss = size(P_ss, 1)
     r = size(N, 1)
@@ -586,9 +595,10 @@ function _calc_C_qKk_ss_singular(bind_rgm::BindRegime, cat_rgm::CatalysisRegime)
     C = vcat(Eq_qss, Eq_K, Eq_cat, In_bind, In_cat)
     C0 = vcat(
         P0_ss,
-        zeros(eltype(P0_ss), r + r_cat),
+        zeros(eltype(P0_ss), r),
+        P0θ,
         C0_x_bind,
-        zeros(eltype(P0_ss), size(CΠ, 1)),
+        C0θ,
     )
 
     n_eq = d_ss + r + r_cat
@@ -619,11 +629,12 @@ function _init_regular_bnc_regime!(vtx::BncRegime, perm, rowctx)
 
     H_ss, H0_ss = rowctx.affine_by_perm[Tuple(Int.(perm))]
     Pθ = vtx.catalysis_rgm.P
-    H_ssk = _expand_Hss_to_qssKk(H_ss, Pθ)
-    C_qKk_ss, C0_qKk_ss = _calc_C_qKk_ss_regular(vtx.bind_rgm, vtx.catalysis_rgm, H_ssk, H0_ss)
+    P0θ = get_P0(vtx.catalysis_rgm)
+    H_ssk, H0_ssk = _expand_Hss_to_qssKk(H_ss, H0_ss, Pθ, P0θ)
+    C_qKk_ss, C0_qKk_ss = _calc_C_qKk_ss_regular(vtx.bind_rgm, vtx.catalysis_rgm, H_ssk, H0_ssk)
 
     vtx.H = H_ssk
-    vtx.H0 = H0_ss
+    vtx.H0 = H0_ssk
     vtx.C_qKk_cat = C_qKk_cat
     vtx.C0_qKk_cat = C0_qKk_cat
     vtx.nlt_qKk_cat = nlt_qKk_cat
@@ -674,12 +685,14 @@ function _init_singular_bnc_regime!(vtx::BncRegime, perm, rowctx)
     C_qKk_cat, C0_qKk_cat, nlt_qKk_cat = _calc_C_qKk_cat(vtx.bind_rgm, vtx.catalysis_rgm)
 
     H_ray, H0_ss = rowctx.affine_by_perm[Tuple(Int.(perm))]
-    H_ssk = _expand_Hss_to_qssKk(H_ray, vtx.catalysis_rgm.P)
+    Pθ = get_P(vtx.catalysis_rgm)
+    P0θ = get_P0(vtx.catalysis_rgm)
+    H_ssk, H0_ssk = _expand_Hss_to_qssKk(H_ray, H0_ss, Pθ, P0θ)
 
     C_qKk_ss, C0_qKk_ss, _ = _calc_C_qKk_ss_singular(vtx.bind_rgm, vtx.catalysis_rgm)
 
     vtx.H = H_ssk
-    vtx.H0 = H0_ss
+    vtx.H0 = H0_ssk
     vtx.C_qKk_cat = C_qKk_cat
     vtx.C0_qKk_cat = C0_qKk_cat
     vtx.nlt_qKk_cat = nlt_qKk_cat

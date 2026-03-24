@@ -37,7 +37,7 @@ export get_C_C0_xk, get_C0_xk, get_C_xk, get_C_k
 export get_C_C0_nullity_xk
 export get_C_C0_qKk, get_C0_qKk, get_C_qKk, get_C_C0_nullity_qKk
 export get_C_C0_qssKk, get_C0_qssKk, get_C_qssKk, get_C_C0_nullity_qssKk
-export get_PΠ, get_CΠ, get_P_pos_neg
+export get_PΠ, get_CΠ, get_P_pos_neg, get_P0_pos_neg
 export get_H_bd, get_qcat_F_F0
 
 export check_feasibility_with_constraint, feasible_vertieces_with_constraint

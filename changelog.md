@@ -1,5 +1,164 @@
 # Changelog
 
+## 2026-03-24
+
+这次改动修正了一个重要的 catalysis 侧数学假设错误：以前代码默认 `S` 的 regime 只是从 `v` 里“选项”，于是把 catalysis regime 的常数截距全部当成了 0。现在已经改成支持一般正线性映射 `S^+ v` / `S^- v`。
+
+### 1. `CatalysisRegime` 现在保留 catalysis offset
+
+新增并贯通了这些字段：
+
+- `P0_pos_neg`
+- `P0`
+- `C0`
+
+对应数学上：
+
+```math
+f\!\left(\begin{bmatrix}S^+\\S^-\end{bmatrix}\right)
+=
+\left(
+\begin{bmatrix}P_0^+\\P_0^-\end{bmatrix},
+\begin{bmatrix}P^+\\P^-\end{bmatrix},
+\begin{bmatrix}C_0^+\\C_0^-\end{bmatrix},
+\begin{bmatrix}C^+\\C^-\end{bmatrix}
+\right).
+```
+
+所以现在代码里的 catalysis steady-state / dominance 是：
+
+```math
+P^\theta \Pi \log x + P^\theta \log k + P_0^\theta = 0,
+```
+
+```math
+C^\theta \Pi \log x + C^\theta \log k + C_0^\theta \ge 0.
+```
+
+相关文件：
+
+- `src/initialize.jl`
+- `src/Catalysis_regime.jl`
+
+### 2. Mixed regime 的 `(q,K,k)` 与 `(q_ss,K,k)` 条件都改成带截距版本
+
+以下路径现在都会正确带上 catalysis offset：
+
+- `get_C_C0_nullity_xk(rgm::BncRegime, :combined)`
+- `_calc_C_qKk_catalysis_only_*`
+- `_calc_C_qKk_cat_*`
+- `_calc_C_qKk_ss_*`
+
+也就是说：
+
+- `(x,k)` 基底下 combined condition 现在含 `P0^θ` / `C0^θ`
+- `(q,K,k)` 基底下 catalytic-only / combined consistency 现在含 `C0^θ`
+- singular elimination 分支也不再默认这些常数项为 0
+
+相关文件：
+
+- `src/Bnc_regime.jl`
+
+### 3. `K_ss` 展开回 `(K,k)` 时，`BncRegime.H0` 现在会吸收 `P0^θ`
+
+以前代码只做了：
+
+```math
+\log K_{ss} = \begin{bmatrix}\log K\\-P^\theta \log k\end{bmatrix}
+```
+
+但正确形式应为：
+
+```math
+\log K_{ss} = \begin{bmatrix}\log K\\-(P^\theta \log k + P_0^\theta)\end{bmatrix}.
+```
+
+因此如果
+
+```math
+\log x = H_{ss}\log(q_{ss},K_{ss}) + H_{0,ss},
+\qquad
+H_{ss} = [H_L \;\; H_R],
+```
+
+则展开到 `(q_ss,K,k)` 后应为：
+
+```math
+H_{ssk} = [H_L \;\; -H_R P^\theta],
+\qquad
+H_{0,ssk} = H_{0,ss} - H_R P_0^\theta.
+```
+
+这一步已经写进 `_expand_Hss_to_qssKk`，并且 `BncRegime.H0` 现在保存的是展开后的 `H0_ssk`。
+
+直接受影响的输出有：
+
+- `get_H_H0(rgm::BncRegime)`
+- `show_expression_x(rgm::BncRegime)`
+- `get_qcat_F_F0(rgm::BncRegime)`
+- `show_expression_qcat(rgm::BncRegime)`
+
+相关文件：
+
+- `src/Bnc_regime.jl`
+
+### 4. Symbolics 渲染与 getter 现在会把 offset 显示出来
+
+修正后：
+
+- `show_condition_xk(cat_rgm; kind=:steady_state)` 使用 `P0^θ`
+- `show_condition_xk(cat_rgm; kind=:dominance)` 使用 `C0^θ`
+- mixed regime 的 `show_condition_xk / qKk / qssKk` 都会通过更新后的 getter 自动显示常数项
+
+另外新增：
+
+- `get_P0_pos_neg`
+
+相关文件：
+
+- `src/Catalysis_regime.jl`
+- `src/symbolics.jl`
+- `src/BindingAndCatalysis.jl`
+
+### 5. 新增一个真正带 offset 的回归测试模型
+
+测试里增加了：
+
+```julia
+Γ = [2 1 -1]
+Π = [1 0 0; 0 1 0; 0 0 1]
+```
+
+这个例子会产生：
+
+- 2 个 catalysis regimes
+- 非零 `P0^θ`
+- 非零 `C0^θ`
+
+并且测试了：
+
+- `CatalysisRegime` 的 `P0/C0`
+- `BncRegime.H0` 的 `P0^θ` 展开
+- `(q,K,k)` catalytic-only consistency 的常数项
+
+相关文件：
+
+- `test/runtests.jl`
+
+### 6. 文档更新
+
+新增或更新了：
+
+- `Archetecture.md`
+- `Matrix_relation.md`
+
+这两份文档现在都明确写了：
+
+- `S^+v` / `S^-v` 是正线性映射，不一定是 selector
+- `CatalysisRegime` 为什么会带 `P0^θ` / `C0^θ`
+- `K_ss`、`H_ssk`、`H0_ssk` 的正确关系
+
+
 ## 2026-03-23
 
 这次改动的目标是减少 regime 构建过程中的重复计算与重复存储，同时尽量不破坏现有公共接口。

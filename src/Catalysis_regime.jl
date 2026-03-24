@@ -120,13 +120,17 @@ function _initialize_regime!(vtx::CatalysisRegime)
     model = _require_catalysis_network(vtx)
     perm = vtx.perm
 
-    P_pos_neg, _ = _calc_P_P0(perm, model._S_helper)
-    C, _ = _calc_C_C0(perm, model._S_helper)
+    P_pos_neg, P0_pos_neg = _calc_P_P0(perm, model._S_helper)
+    C, C0 = _calc_C_C0(perm, model._S_helper)
     P = P_pos_neg[1:model.r_v, :] - P_pos_neg[model.r_v+1:end, :]
+    P0 = P0_pos_neg[1:model.r_v] - P0_pos_neg[model.r_v+1:end]
 
     vtx.P_pos_neg = P_pos_neg
+    vtx.P0_pos_neg = P0_pos_neg
     vtx.P = P
+    vtx.P0 = P0
     vtx.C = C
+    vtx.C0 = C0
     vtx.CΠ = C * model.Π
     vtx.PΠ = P * model.Π
     return vtx
@@ -219,11 +223,23 @@ function get_P_pos_neg(rgm::CatalysisRegime)
     _initialize_regime!(rgm)
     return rgm.P_pos_neg
 end
+function get_P0_pos_neg(rgm::CatalysisRegime)
+    _initialize_regime!(rgm)
+    return rgm.P0_pos_neg
+end
+get_P0_pos_neg(model::CatalysisData, perm_or_idx; kwargs...) = get_P0_pos_neg(get_catalysis_regime(model, perm_or_idx; kwargs...))
+
 function get_P(rgm::CatalysisRegime)
     _initialize_regime!(rgm)
     return rgm.P
 end
 get_P(model::CatalysisData, perm_or_idx; kwargs...) = get_P(get_catalysis_regime(model, perm_or_idx; kwargs...))
+
+function get_P0(rgm::CatalysisRegime)
+    _initialize_regime!(rgm)
+    return rgm.P0
+end
+get_P0(model::CatalysisData, perm_or_idx; kwargs...) = get_P0(get_catalysis_regime(model, perm_or_idx; kwargs...))
 
 function get_PΠ(rgm::CatalysisRegime)
     _initialize_regime!(rgm)
@@ -236,6 +252,12 @@ function get_C(rgm::CatalysisRegime)
     return rgm.C
 end
 get_C(model::CatalysisData, perm_or_idx; kwargs...) = get_C(get_catalysis_regime(model, perm_or_idx; kwargs...))
+
+function get_C0(rgm::CatalysisRegime)
+    _initialize_regime!(rgm)
+    return rgm.C0
+end
+get_C0(model::CatalysisData, perm_or_idx; kwargs...) = get_C0(get_catalysis_regime(model, perm_or_idx; kwargs...))
 
 get_C_k(rgm::CatalysisRegime) = get_C(rgm)
 get_C_k(model::CatalysisData, perm_or_idx; kwargs...) = get_C_k(get_catalysis_regime(model, perm_or_idx; kwargs...))
@@ -257,18 +279,22 @@ get_C_xk(model::CatalysisData, perm_or_idx; kwargs...) = get_C_xk(get_catalysis_
 function get_P_xk(rgm::CatalysisRegime)
     return hcat(get_PΠ(rgm), get_P(rgm))
 end
+get_P_xk(model::CatalysisData, perm_or_idx; kwargs...) = get_P_xk(get_catalysis_regime(model, perm_or_idx; kwargs...))
 
 function get_P_P0(rgm::CatalysisRegime)
-    P = get_P(rgm)
-    return P, zeros(Float64, size(P, 1))
+    return get_P(rgm), get_P0(rgm)
 end
 get_P_P0(model::CatalysisData, perm_or_idx; kwargs...) = get_P_P0(get_catalysis_regime(model, perm_or_idx; kwargs...))
-get_P0(rgm::CatalysisRegime) = get_P_P0(rgm)[2]
-get_P0(model::CatalysisData, perm_or_idx; kwargs...) = get_P0(get_catalysis_regime(model, perm_or_idx; kwargs...))
+
+function get_C_C0(rgm::CatalysisRegime)
+    return get_C(rgm), get_C0(rgm)
+end
+get_C_C0(model::CatalysisData, perm_or_idx; kwargs...) = get_C_C0(get_catalysis_regime(model, perm_or_idx; kwargs...))
 
 function get_C_C0_xk(rgm::CatalysisRegime)
     C = vcat(get_P_xk(rgm), get_C_xk(rgm))
-    return C, zeros(Float64, size(C, 1))
+    C0 = vcat(get_P0(rgm), get_C0(rgm))
+    return C, C0
 end
 get_C_C0_xk(model::CatalysisData, perm_or_idx; kwargs...) = get_C_C0_xk(get_catalysis_regime(model, perm_or_idx; kwargs...))
 get_C0_xk(rgm::CatalysisRegime) = get_C_C0_xk(rgm)[2]

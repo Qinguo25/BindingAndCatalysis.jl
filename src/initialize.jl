@@ -302,17 +302,23 @@ mutable struct CatalysisRegime <:AbstractRegime
 
     #--- Basic Properties ---
     P_pos_neg::Union{SparseMatrixCSC{Int, Int}, Nothing} # the vcat of P_pos and P_neg
+    P0_pos_neg::Union{Vector{Float64}, Nothing} # the vcat of P0_pos and P0_neg
     
     P:: Union{SparseMatrixCSC{Int, Int}, Nothing} # P_pos - P_neg
+    P0::Union{Vector{Float64}, Nothing} # P0_pos - P0_neg
     C::Union{SparseMatrixCSC{Int, Int}, Nothing} # the vcat of C_pos and C_neg
+    C0::Union{Vector{Float64}, Nothing} # the vcat of C0_pos and C0_neg
 
     CΠ:: Union{SparseMatrixCSC{Int, Int}, Nothing} # the vcat of C_pos*Π and C_neg*Π
     PΠ:: Union{SparseMatrixCSC{Int, Int}, Nothing} # the vcat of (P_pos - P_neg)*Π
     function CatalysisRegime(; network=nothing, perm, idx, is_asymptotic) 
         return new(network, perm, idx, is_asymptotic,
             nothing, # P_pos_neg
+            nothing, # P0_pos_neg
             nothing, # P
+            nothing, # P0
             nothing, # C
+            nothing, # C0
             nothing, # CΠ
             nothing  # PΠ
         )

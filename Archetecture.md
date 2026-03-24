@@ -104,10 +104,18 @@ M_0 := \begin{bmatrix} P_0 \\ 0 \end{bmatrix}.
 \dot q_{\mathrm{para}} = 0.
 ```
 
-对一个固定 catalysis regime，代码记录：
+这里有一个很重要的细节：
 
+- `S^+ v` 和 `S^- v` 一般不是单个 flux selector
+- 它们是正线性映射，因此 regime 近似会带常数截距
+
+所以对一个固定 catalysis regime，代码记录的是：
+
+- `P_pos_neg`, `P0_pos_neg`：`f([S^+; S^-])` 的 dominant monomial map
 - `Pθ = P^+ - P^-`
+- `P0θ = P0^+ - P0^-`
 - `Cθ = [C^+; C^-]`
+- `C0θ = [C0^+; C0^-]`
 - `PΠ = Pθ Π`
 - `CΠ = Cθ Π`
 
@@ -119,11 +127,11 @@ M_0 := \begin{bmatrix} P_0 \\ 0 \end{bmatrix}.
 具体地：
 
 ```math
-P^\theta \Pi \log x = - P^\theta \log k,
+P^\theta \Pi \log x + P^\theta \log k + P_0^\theta = 0,
 ```
 
 ```math
-C^\theta \Pi \log x + C^\theta \log k \ge 0.
+C^\theta \Pi \log x + C^\theta \log k + C_0^\theta \ge 0.
 ```
 
 
@@ -139,6 +147,16 @@ C^\theta \Pi \log x + C^\theta \log k \ge 0.
 - `(x, k)`：最贴近原始 dominance 选择
 - `(q, K, k)`：mixed consistency 的自然坐标
 - `(q_ss, K, k)`：steady-state reduction 后的自然坐标，其中 `q_ss = (w, q_para)`
+
+其中 steady-state reduction 实际上是先在 `(q_ss, K_ss)` 基底求
+
+```math
+\log x = H_{ss} \log(q_{ss}, K_{ss}) + H_{0,ss},
+\qquad
+\log K_{ss} = \begin{bmatrix}\log K \\ -(P^\theta \log k + P_0^\theta)\end{bmatrix},
+```
+
+再把它展开回 `(q_ss, K, k)`。
 
 这 3 个基底非常重要。读代码时如果搞混，大多数函数都会显得“名字相似但不知区别”。
 
@@ -212,12 +230,19 @@ C^\theta \Pi \log x + C^\theta \log k \ge 0.
 
 - `perm`
 - `P_pos_neg`
+- `P0_pos_neg`
 - `P`
+- `P0`
 - `C`
+- `C0`
 - `PΠ`
 - `CΠ`
 
-它本身只关心 “在给定 `x, k` 的情况下，这个 catalytic regime 是否成立”。
+直观上：
+
+- `P/P0` 对应 steady-state balance `P^θ log v + P0^θ = 0`
+- `C/C0` 对应 dominance inequalities `C^θ log v + C0^θ \gg 0`
+- `PΠ/CΠ` 是把它们搬到 `x` 基底后的系数矩阵
 
 
 ### 3.5 `BncRegime`
@@ -403,6 +428,7 @@ rgm = get_bnc_regime(model, bind_perm, cat_perm)
 - steady-state reduction
 - 消去 `q_cat`
 - 获得 reduced consistency 条件和 `q_cat` 显式表达
+- 吸收 `P0^θ` 对 `K_ss` 的平移效应
 
 典型函数：
 

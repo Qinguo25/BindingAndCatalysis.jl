@@ -22,6 +22,18 @@ function minimal_catalysis_model()
     return model
 end
 
+function offset_catalysis_model()
+    model = minimal_model()
+    update_catalysis!(
+        model;
+        Γ = [2 1 -1],
+        Π = [1 0 0; 0 1 0; 0 0 1],
+        q_picked = [:tE],
+        k_sym = [:k1, :k2, :k3],
+    )
+    return model
+end
+
 function notebook_model2()
     N = [
         1 1 -1 0 0
@@ -324,4 +336,62 @@ end
         @test size(Hs, 1) == model.n
         @test length(H0s) == model.n
     end
+end
+
+@testset "Catalysis Offsets And Mixed Consistency" begin
+    model = offset_catalysis_model()
+    cn = get_catalysis_network(model)
+    find_catalysis_regimes!(model)
+
+    @test n_regimes(cn) == 2
+
+    cat_rgms = [get_catalysis_regime(model, i) for i in 1:n_regimes(cn)]
+    @test sort([only(get_P0(rgm)) for rgm in cat_rgms]) ≈ [0.0, log10(2.0)]
+    @test sort([only(get_C0(rgm)) for rgm in cat_rgms]) ≈ [-log10(2.0), log10(2.0)]
+
+    for cat_rgm in cat_rgms
+        C_xk, C0_xk, nlt = get_C_C0_nullity_xk(cat_rgm)
+        @test nlt == cn.r_v
+        @test C0_xk[1:cn.r_v] == get_P0(cat_rgm)
+        @test C0_xk[cn.r_v+1:end] == get_C0(cat_rgm)
+        @test !isempty(show_condition_xk(cat_rgm; kind = :steady_state))
+        @test !isempty(show_condition_xk(cat_rgm; kind = :dominance))
+        @test size(C_xk, 2) == model.n + cn.n_v
+    end
+
+    match_regimes!(model)
+    mixed_regular = first(filter(r -> r.nlt == 0 && !is_singular(get_binding_regime(r)), get_bnc_regimes(model)))
+    bind_rgm = get_binding_regime(mixed_regular)
+    cat_rgm = get_catalysis_regime(mixed_regular)
+    r_v = size(get_P(cat_rgm), 1)
+
+    P_ss = Matrix{Float64}(bind_rgm.P[r_v+1:end, :])
+    P0_ss = Vector{Float64}(bind_rgm.P0[r_v+1:end])
+    N = Matrix{Float64}(bind_rgm.network.N)
+    PΠ = Matrix{Float64}(get_PΠ(cat_rgm))
+    Pθ = Matrix{Float64}(get_P(cat_rgm))
+    P0θ = Vector{Float64}(get_P0(cat_rgm))
+
+    M_ss = vcat(P_ss, N, PΠ)
+    M0_ss = vcat(P0_ss, zeros(Float64, size(N, 1) + r_v))
+    H_ss = inv(M_ss)
+    H0_ss = -(H_ss * M0_ss)
+    split = size(H_ss, 2) - r_v
+    H_right = H_ss[:, split+1:end]
+    H_expected = hcat(H_ss[:, 1:split], -(H_right * Pθ))
+    H0_expected = vec(H0_ss - H_right * P0θ)
+
+    @test Matrix(get_H(mixed_regular)) ≈ H_expected
+    @test get_H0(mixed_regular) ≈ H0_expected
+
+    C_cat_qKk, C0_cat_qKk, nlt_cat_qKk = get_C_C0_nullity_qKk(mixed_regular, :catalysis)
+    H_bind, H0_bind = get_H_H0(bind_rgm)
+    C_expected = hcat(Matrix{Float64}(get_CΠ(cat_rgm) * H_bind), Matrix{Float64}(get_C_k(cat_rgm)))
+    C0_expected = vec(get_CΠ(cat_rgm) * H0_bind + get_C0(cat_rgm))
+
+    @test nlt_cat_qKk == 0
+    @test Matrix(C_cat_qKk) ≈ C_expected
+    @test C0_cat_qKk ≈ C0_expected
+    @test !isempty(show_condition_qKk(mixed_regular; kind = :catalysis))
+    @test !isempty(show_condition_qssKk(mixed_regular))
 end

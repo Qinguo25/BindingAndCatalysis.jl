@@ -403,12 +403,9 @@ Show conditions in the `(x, k)` variables.
 function show_condition_xk(rgm::CatalysisRegime; kind::Symbol=:all, kwargs...)
     syms = xk_sym(rgm)
     if kind === :steady_state
-        P = get_P_xk(rgm)
-        C0 = zeros(Float64, size(P, 1))
-        return show_condition_poly(P, C0, size(P, 1); syms=syms, kwargs...)
+        return show_condition_poly(get_P_xk(rgm), get_P0(rgm), size(get_P(rgm), 1); syms=syms, kwargs...)
     elseif kind === :dominance
-        C = get_C_xk(rgm)
-        return show_condition_poly(C, zeros(Float64, size(C, 1)); syms=syms, kwargs...)
+        return show_condition_poly(get_C_xk(rgm), get_C0(rgm); syms=syms, kwargs...)
     elseif kind === :all || kind === :combined
         return show_condition_poly(get_C_C0_nullity_xk(rgm)...; syms=syms, kwargs...)
     else
