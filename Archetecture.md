@@ -330,8 +330,11 @@ find_all_regimes!(model)
 这一步会：
 
 - 从 `L` 的每一行 possible dominant choice 枚举 `perm`
-- 计算 asymptotic / singular 信息
-- 延迟或按需补全 `P, H, C_qK` 等缓存
+- 立刻用 `all_perms` 和 `model._L_helper` 构造 x-neighbor regime graph
+- 用 `_calc_nullity` 建立 `N_ρ` cache 并得到所有 regime 的 nullity
+- 沿 graph 的 regular connected components 用 rank-1 更新预填充 `nullity = 0` 的 `H/H0`
+- 并行补全 `nullity = 1` 的 `H/H0`
+- 把 `nullity >= 2` 的 regime 留在“只有 nullity、没有 affine inverse”的状态
 
 
 ### 4.4 枚举 catalysis regimes
@@ -673,17 +676,24 @@ regular 情况下很多东西可直接通过矩阵逆得到；singular 情况下
 - 保留扩展变量
 - 用 polyhedral elimination 直接消元
 
-所以有些函数在 singular 分支没有显式 `H0`，这是设计使然，不是缺字段。
+不过现在 `nullity = 1` 的 regime 也会保存同尺度下的 `H0 = -H M0`，方便做 interface 和几何分析。
+真正没有 affine inverse 的，主要是 `nullity >= 2` 的 regime。
 
 
-### 10.5 这个项目很依赖“延迟计算 + cache”
+### 10.5 这个项目很依赖“预填充 + 按需 materialize”
 
-很多对象初建时并不会把所有字段都算完，而是：
+现在 binding regime 初始化大致分两层：
 
-- 先保存最小身份信息
-- 后续按需补全
+- `find_all_regimes!` 时就预填充：
+  - regime graph
+  - nullity
+  - `nullity <= 1` 的 `H/H0`
+- 真正按需 materialize 的主要是：
+  - `C_qK`, `C0_qK`
+  - polyhedron / volume
+  - qK-space graph interface
 
-因此调试时如果看到某些字段是 `nothing`，先确认是不是还没触发对应初始化流程。
+因此调试时如果看到某些字段是 `nothing`，先区分它属于“高 nullity 无法定义”还是“尚未 materialize”。
 
 
 ## 11. 对开发者最有用的测试与示例

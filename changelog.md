@@ -1,5 +1,60 @@
 # Changelog
 
+## 2026-03-26
+
+这次改动把 binding regime 的初始化顺序往前推了一步：`find_all_regimes!` 不再只是枚举 perm 和算 nullity，而是会顺手把 x-neighbor regime graph 建出来，并预填 `nullity <= 1` 的 `H/H0`。
+
+### 1. `find_all_regimes!` 现在的顺序
+
+现在 binding 侧初始化流程变成：
+
+1. `_enumerate_all_regimes(model._L_helper)` 枚举所有 perm
+2. 立刻用 `all_perms + model._L_helper` 构造 x-neighbor regime graph
+3. `_calc_nullity(all_perms, model)` 建立 `N_ρ` cache 并得到所有 regime 的 nullity
+4. 构造 `BindRegime`
+5. 预填 `nullity = 0/1` 的 `H/H0`
+
+这样后面第一次访问 `get_H/get_H0` 时，不再需要再走一遍“先建 graph、再传播”的惰性路径。
+
+### 2. x-neighbor graph 的边改成更紧凑的存储
+
+`VertexEdge` 以前直接存：
+
+- `change_dir_x::SparseVector`
+
+现在改成只存：
+
+- `x_pos`
+- `x_neg`
+- `x_dim`
+- `intersect_x`
+
+也就是“哪一列系数是 `+1`、哪一列系数是 `-1`”，需要对外返回 `change_dir_x` 时再即时 materialize 成 sparse vector。
+
+这样做的直接收益是：
+
+- graph 边对象更轻
+- graph 构造时少做很多 `SparseVector` 分配
+- rank-1 传播时可以直接从边上拿 `j_from/j_to`，不用再 `findnz(change_dir_x)`
+
+### 3. `nullity = 0` 和 `nullity = 1` 的 affine info 现在会在初始化阶段预填
+
+- `nullity = 0`：先按 regular connected component 选 seed regime，再沿 graph 用 rank-1 更新传播
+- `nullity = 1`：并行补齐 `H/H0`
+- `nullity >= 2`：只保留 nullity，本轮不构造 affine inverse
+
+这一步由 `_prefill_affine_cache!` 统一负责。
+
+### 4. qK interface 计算也改为复用预填好的 affine cache
+
+`_fulfill_regimes_graph!` 不再对每个 low-nullity regime 再单独触发一次 `get_regime(...; inv_info=true)`，
+而是直接调用 `_prefill_affine_cache!`，让 qK 接口构造复用同一套预填结果。
+
+### 5. 文档与测试
+
+- `Archetecture.md` 已更新初始化流水线
+- `test/runtests.jl` 新增断言：`find_all_regimes!` 后 graph 已存在，且所有 `nullity <= 1` 的 regime 已有 `H/H0`
+
 ## 2026-03-24
 
 这次改动修正了一个重要的 catalysis 侧数学假设错误：以前代码默认 `S` 的 regime 只是从 `v` 里“选项”，于是把 catalysis regime 的常数截距全部当成了 0。现在已经改成支持一般正线性映射 `S^+ v` / `S^- v`。

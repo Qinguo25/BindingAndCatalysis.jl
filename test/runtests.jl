@@ -99,6 +99,9 @@ end
 
     @test length(perms) == n_regimes(model) == length(idxs) == length(perm_dict)
     @test idxs == collect(1:n_regimes(model))
+    @test model.vertices_graph !== nothing
+    @test all(i -> !isnothing(model.vertices_data[i].H) && !isnothing(model.vertices_data[i].H0),
+        filter(i -> get_nullity(model, i) <= 1, idxs))
 
     r1_perm = perms[1]
     r2_perm = perms[2]

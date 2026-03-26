@@ -383,15 +383,35 @@ Edge metadata connecting neighboring vertices in a regime graph.
 mutable struct VertexEdge{T}
     to::Int
     diff_r::Int
-    change_dir_x::SparseVector{Int8, T}
+    x_pos::T
+    x_neg::T
+    x_dim::Int
     intersect_x::Float64
     change_dir_qK::Union{Nothing, SparseVector{Float64, T}}
     intersect_qK::Union{Nothing, Float64}
     qK_interface_idx::Int
     qK_interface_sign::Int8
-    function VertexEdge(to::Int, diff_r::Int, change_dir_x::SparseVector{Int8, T}, intersect_x::Float64) where {T}
-        return new{T}(to, diff_r, change_dir_x, intersect_x, nothing, nothing, 0, 0)
+    function VertexEdge(to::Int, diff_r::Int, x_pos::T, x_neg::T, x_dim::Int, intersect_x::Float64) where {T<:Integer}
+        return new{T}(to, diff_r, x_pos, x_neg, x_dim, intersect_x, nothing, nothing, 0, 0)
     end
+end
+
+@inline function _edge_change_dir_x(edge::VertexEdge{T}) where {T}
+    return sparsevec(Int[edge.x_pos, edge.x_neg], Int8[1, -1], edge.x_dim)
+end
+
+@inline _edge_x_cols(edge::VertexEdge) = (Int(edge.x_neg), Int(edge.x_pos))
+
+function Base.getproperty(edge::VertexEdge, sym::Symbol)
+    if sym === :change_dir_x
+        return _edge_change_dir_x(edge)
+    end
+    return getfield(edge, sym)
+end
+
+function Base.propertynames(edge::VertexEdge, private::Bool=false)
+    names = Symbol[fieldnames(typeof(edge))..., :change_dir_x]
+    return private ? Tuple(unique(names)) : Tuple(sym for sym in unique(names) if !startswith(String(sym), "_"))
 end
 
 struct RegimeHyperplane{T}

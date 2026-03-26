@@ -2,26 +2,24 @@
 #This is graph associated functions for Bnc models and archetyple behaviors associated code
 #-----------------------------------------------------------------------------------------------
 """
-    _calc_regimes_graph(bnc::Bnc) -> VertexGraph
+    _calc_regimes_graph(bnc::Bnc, perms) -> VertexGraph
 
-Build a `VertexGraph` from vertex permutations, connecting vertices that differ
+Build a `VertexGraph` from regime permutations, connecting regimes that differ
 in exactly one row.
 """
-function  _calc_regimes_graph(Bnc::Bnc{T}) where {T} # optimized by GPT-5, not fullly understood yet.
-    regimes = Bnc.vertices_data
-    perms = getfield.(regimes, :perm)
-    n = Bnc.n    
-    L = Bnc.L
-
+function _calc_regimes_graph(Bnc::Bnc{T}, perms::Vector{<:AbstractVector{<:Integer}}) where {T}
+    n = Bnc.n
+    helper = Bnc._L_helper
     n_vtxs = length(perms)
-    d=length(perms[1])
+    d = length(perms[1])
     thread_edges = [Vector{Tuple{Int, VertexEdge{T}}}() for _ in 1:Threads.maxthreadid()]
 
-    # 按行分桶：key 为去掉该行后的签名（Tuple），值为该签名下的 (顶点索引, 该行取值)
+    # 按行分桶：key 为去掉该行后的签名（Tuple），值为该签名下的 (regime idx, row choice)
     @showprogress for i in 1:d
         buckets = Dict{Tuple{Vararg{T}}, Vector{Tuple{Int,T}}}()
+        row_logcoeff = helper.choice_logcoeff[i]
+        row_slot = helper.choice_slot[i]
 
-        # 构建桶
         @inbounds for q in 1:n_vtxs
             v = perms[q]
             sig = if i == 1
@@ -38,42 +36,41 @@ function  _calc_regimes_graph(Bnc::Bnc{T}) where {T} # optimized by GPT-5, not f
 
         groups = collect(values(buckets))
 
-        # 并行生成边：同桶内所有不同取值的顶点两两相连
+        # 同桶内两两相连：沿边方向表示“增加 target dominant term，减少 source dominant term”
         Threads.@threads for gi in eachindex(groups)
             tid = Threads.threadid()
             local_edges = thread_edges[tid]
-            group = groups[gi]  # ::Vector{Tuple{Int,T}}
+            group = groups[gi]
             m = length(group)
             m <= 1 && continue
 
             @inbounds for a in 1:m-1
-                p1, j1 = group[a]
+                from_idx, j_from = group[a]
+                log_from = row_logcoeff[row_slot[j_from]]
                 for b in a+1:m
-                    p2, j2 = group[b]
-                    j1 == j2 && continue
+                    to_idx, j_to = group[b]
+                    j_from == j_to && continue
 
-                    dx = if j1 < j2   # go from p2 to p1, decrease x_{j2}, increase x_{j1}
-                        SparseVector(n, [j1, j2], Int8[1, -1]) 
-                    else
-                         SparseVector(n, [j2, j1], Int8[-1, 1])
-                    end
-
-                    ins_x = log10(L[i, j1]) - log10(L[i, j2]) # go from p2 to p1
-
-                    push!(local_edges, (p2, VertexEdge(p1, i, dx, ins_x))) # p2 to p1,
-                    push!(local_edges, (p1, VertexEdge(p2, i, -dx, -ins_x)))  # p1 to p2
+                    log_to = row_logcoeff[row_slot[j_to]]
+                    push!(local_edges, (from_idx, VertexEdge(to_idx, i, j_to, j_from, n, log_to - log_from)))
+                    push!(local_edges, (to_idx, VertexEdge(from_idx, i, j_from, j_to, n, log_from - log_to)))
                 end
             end
         end
     end
 
-    # 归并线程本地边
     all_edges = reduce(vcat, thread_edges; init=Tuple{Int, VertexEdge{T}}[])
     neighbors = [Vector{VertexEdge{T}}() for _ in 1:n_vtxs]
     for (from, e) in all_edges
         push!(neighbors[from], e)
     end
     return VertexGraph(Bnc, neighbors)
+end
+
+function _calc_regimes_graph(Bnc::Bnc{T}) where {T}
+    regimes = Bnc.vertices_data
+    perms = getfield.(regimes, :perm)
+    return _calc_regimes_graph(Bnc, perms)
 end
 
 @inline _edge_has_qK_interface(edge::VertexEdge) =
@@ -158,12 +155,8 @@ function _fulfill_regimes_graph!(vtx_graph::VertexGraph)
 
     empty!(vtx_graph.qK_interface_pool)
 
-    # pre compute H/H0 for all regimes with nullity 0 or 1
-    Threads.@threads for idx in eachindex(vtx_graph.neighbors)
-        if regimes[idx].nullity <= 1
-            get_regime(Bnc, idx; inv_info=true)
-        end
-    end
+    # qK interfaces only need affine data for nullity 0/1 regimes.
+    _prefill_affine_cache!(Bnc)
 
     @showprogress for p1 in eachindex(vtx_graph.neighbors)
         edges = vtx_graph.neighbors[p1]
@@ -178,10 +171,7 @@ function _fulfill_regimes_graph!(vtx_graph::VertexGraph)
             end
             ins_x = e.intersect_x
             i = e.diff_r # different row
-            (j1,j2) = let 
-                I,V = findnz(e.change_dir_x) # should be two elements
-                V[1] > V[2] ? (I[2], I[1]) : (I[1], I[2])
-            end
+            j1, j2 = _edge_x_cols(e)
             change_dir_qK, intersect_qK = _calc_change_dir_qK(Bnc, p1, p2, i, j1, j2, ins_x)
             isnothing(change_dir_qK) && continue
             _set_edge_qK_interface_pair!(vtx_graph, p1, p2, change_dir_qK, intersect_qK)
@@ -508,19 +498,12 @@ Ensure the vertex graph is built; when `full=true`, also compute qK change direc
 """
 function get_regimes_graph!(Bnc::Bnc; full::Bool=false)::VertexGraph
 
-    initalize_regimes_graph!(Bnc) = let
-        find_all_regimes!(Bnc)# Ensure vertices are calculated
-        @info "Start calculating vertices neighbor graph, It may takes a while."
-        Bnc.vertices_graph =  _calc_regimes_graph(Bnc)
-        nothing
-    end
-
     if full
         vtx_graph = get_regimes_graph!(Bnc; full=false)
         _ensure_full_regimes_graph!(vtx_graph)
     else
         if isnothing(Bnc.vertices_graph)
-            initalize_regimes_graph!(Bnc)
+            find_all_regimes!(Bnc)
         end
     end
 

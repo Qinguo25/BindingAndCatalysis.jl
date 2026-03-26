@@ -33,7 +33,15 @@ Convert a `VertexGraph` to a sparse adjacency matrix.
 """
 function _regime_graph_to_sparse(G::VertexGraph{T}; weight_fn = e -> 1) where T
     n = length(G.neighbors)
-    Ty = eltype(weight_fn(first(G.neighbors[1]))) # infer the type of weights from the first edge
+    sample_edge = nothing
+    for edges in G.neighbors
+        if !isempty(edges)
+            sample_edge = first(edges)
+            break
+        end
+    end
+    isnothing(sample_edge) && return spzeros(Int, n, n)
+    Ty = typeof(weight_fn(sample_edge))
     # 预分配估计：平均度 × n
     nnz = sum(length(v) for v in G.neighbors)
     I = Vector{Int}(undef, nnz)
@@ -51,20 +59,6 @@ function _regime_graph_to_sparse(G::VertexGraph{T}; weight_fn = e -> 1) where T
     return sparse(I,J,V, n, n) |> dropzeros!
 end
 
-
-# function _fill_neighbor_info!(vtx::BindRegime)
-#     """
-#     Fill the neighbor info for a given vertex.
-#     """
-#     Bnc = vtx.network
-#     if isempty(vtx.neighbors_idx)
-#         vtx_grh = get_regimes_graph!(Bnc;full=false)
-#         vtx.neighbors_idx = vtx_grh.neighbors[vtx.idx] .|> e -> e.to
-#     end
-#     return nothing
-# end
-
-
 @inline is_bind_regimes_built(model::Bnc) = !isnothing(model.BindRegimes)
 
 #------------------------------------------------------------------------------
@@ -74,31 +68,38 @@ end
 """
     find_all_regimes!(bnc::Bnc) -> Vector{Vector{Int}}
 
-Compute and cache all vertex permutations, asymptotic flags, Nρ inverse cache,
-and vertex nullities.
+Compute and cache all regime permutations, the x-neighbor graph, Nρ inverse
+cache, regime nullities, and affine data for nullity 0/1 regimes.
 """
 function find_all_regimes!(model::Bnc{T};) where T
     if is_bind_regimes_built(model)
         return nothing
     end
 
-    @info "---------------------Start finding all vertices--------------------"
-    all_vertices, is_asymptotic =  _enumerate_all_regimes(model._L_helper)
-    all_vertices = [Vector{T}(v) for v in all_vertices]
+    @info "---------------------Start finding all regimes--------------------"
+    all_perms, is_asymptotic =  _enumerate_all_regimes(model._L_helper)
+    all_perms = [Vector{T}(v) for v in all_perms]
 
-    n_vertices = length(all_vertices)
+    n_vertices = length(all_perms)
     n_asym_rgms = sum(is_asymptotic)
-    @info "Finished, with $(n_vertices) vertices found and $(n_asym_rgms) asymptotic vertices."
+    @info "Finished, with $(n_vertices) regimes found and $(n_asym_rgms) asymptotic regimes."
+
+    @info "2.Building x-neighbor regime graph..."
+    model.vertices_graph = _calc_regimes_graph(model, all_perms)
     
-    @info "2.Calculating nullity for each vertex..."
-    nullity = _calc_nullity(all_vertices, model)
+    @info "3.Calculating nullity for each regime..."
+    nullity = _calc_nullity(all_perms, model)
     
-    @info "3.Building Regimes..."
+    @info "4.Building regime objects..."
     model.BindRegimes = let
-        regimes = _build_bind_regimes(model, all_vertices, is_asymptotic, nullity)    
-        vertices_perm_dict = Dict(perm => idx for (idx, perm) in enumerate(all_vertices))
+        regimes = _build_bind_regimes(model, all_perms, is_asymptotic, nullity)    
+        vertices_perm_dict = Dict(perm => idx for (idx, perm) in enumerate(all_perms))
         Regimes(vertices_perm_dict, regimes)
     end
+
+    @info "5.Prefilling affine data for nullity <= 1 regimes..."
+    _prefill_affine_cache!(model; ensure_built=false)
+
     @info "Finished."
     return nothing
 end
@@ -118,34 +119,36 @@ end
 end
 
 
-
-# @inline function _calc_nullity(perms, model::Bnc{T}) where T
-#     _build_Nρ_cache_parallel!(model, perms) # build Nρ_inv cache in parallel
-#     nullity = Vector{T}(undef, length(perms))
-    
-#     Threads.@threads for i in  eachindex(perms)
-#         perm = perms[i]
-#         nullity_P = _calc_perm_nullity(perm, model.n)
-#         _, nullity_N = _get_Nρ_inv_from_perm!(model, perm)
-#         nullity[i] = nullity_P + nullity_N # this is true as we can permute the matrix into diagnal block matrix.
-#     end
-#     return nullity
-# end
-
-
-@inline function _build_bind_regimes(model::Bnc{T}, all_vertices, is_asymptotic, nullity) where T
-    n_vertices = length(all_vertices)
+@inline function _build_bind_regimes(model::Bnc{T}, all_perms, is_asymptotic, nullity) where T
+    n_vertices = length(all_perms)
     regimes = Vector{BindRegime}(undef, n_vertices)
     for i in 1:n_vertices
         regimes[i] = BindRegime(
             network = model,
-            perm = all_vertices[i],
+            perm = all_perms[i],
             idx = i,
             is_asymptotic = is_asymptotic[i],
             nullity = nullity[i]
         )
     end
     return regimes
+end
+
+function _fill_nullity1_affine!(rgm::BindRegime)
+    _initialize_regime!(rgm)
+    _affine_info_ready(rgm) && return nothing
+
+    model = rgm.network
+    H = if allunique(rgm.perm)
+        _calc_H(model, rgm.perm)
+    else
+        H_tmp = _adj_singular_matrix(rgm.M)[1]
+        droptol!(sparse(H_tmp), 1e-10) .* model.direction
+    end
+
+    rgm.H = H
+    rgm.H0 = vec(-(H * rgm.M0))
+    return nothing
 end
 
 
@@ -203,13 +206,7 @@ function _masked_components(grh::SimpleGraph, mask::BitVector)
 end
 
 function _edge_rank1_data(model::Bnc, from_idx::Int, to_idx::Int, edge::VertexEdge)
-    i = edge.diff_r
-    perm_from = get_perm(model, from_idx)
-    perm_to = get_perm(model, to_idx)
-    j_from = perm_from[i]
-    j_to = perm_to[i]
-    δ0 = log10(Float64(model.L[i, j_to])) - log10(Float64(model.L[i, j_from]))
-    return i, j_from, j_to, δ0
+    return edge.diff_r, Int(edge.x_neg), Int(edge.x_pos), edge.intersect_x
 end
 
 function _propagate_regular_component!(model::Bnc, grh::VertexGraph, comp::Vector{Int})
@@ -260,27 +257,39 @@ function _propagate_regular_component!(model::Bnc, grh::VertexGraph, comp::Vecto
     return nothing
 end
 
-function _ensure_regular_affine_cache!(model::Bnc)
-    find_all_regimes!(model)
-    model._regimes_affine_ready && return nothing
+function _prefill_affine_cache_core!(model::Bnc)
+    regimes = model.vertices_data
+    grh = model.vertices_graph
+    isnothing(grh) && error("Regime graph is not initialized.")
 
+    regular_mask = falses(length(regimes))
+    nullity1_idxs = Int[]
+    @inbounds for i in eachindex(regimes)
+        nlt = regimes[i].nullity
+        regular_mask[i] = nlt == 0
+        nlt == 1 && push!(nullity1_idxs, i)
+    end
+
+    comps = _masked_components(grh.x_grh, regular_mask)
+    Threads.@threads for cid in eachindex(comps)
+        _propagate_regular_component!(model, grh, comps[cid])
+    end
+
+    Threads.@threads for t in eachindex(nullity1_idxs)
+        _fill_nullity1_affine!(regimes[nullity1_idxs[t]])
+    end
+
+    model._regimes_affine_ready = true
+    return nothing
+end
+
+function _prefill_affine_cache!(model::Bnc; ensure_built::Bool=true)
+    ensure_built && find_all_regimes!(model)
+    model._regimes_affine_ready && return nothing
     lock(model._regimes_affine_lock)
     try
         model._regimes_affine_ready && return nothing
-
-        regimes = model.vertices_data
-        grh = get_regimes_graph!(model; full=false)
-        regular_mask = falses(length(regimes))
-        @inbounds for i in eachindex(regimes)
-            regular_mask[i] = regimes[i].nullity == 0
-        end
-
-        comps = _masked_components(grh.x_grh, regular_mask)
-        Threads.@threads for cid in eachindex(comps)
-            _propagate_regular_component!(model, grh, comps[cid])
-        end
-
-        model._regimes_affine_ready = true
+        _prefill_affine_cache_core!(model)
     finally
         unlock(model._regimes_affine_lock)
     end
@@ -288,25 +297,20 @@ function _ensure_regular_affine_cache!(model::Bnc)
     return nothing
 end
 
+_ensure_regular_affine_cache!(model::Bnc) = _prefill_affine_cache!(model)
+
 function _fill_affine_info!(rgm::BindRegime)
     _initialize_regime!(rgm)
     _affine_info_ready(rgm) && return nothing
 
     model = rgm.network
     if rgm.nullity == 0
-        _ensure_regular_affine_cache!(model)
+        _prefill_affine_cache!(model)
         return nothing
     end
 
     if rgm.nullity == 1
-        H = if allunique(rgm.perm)
-            _calc_H(model, rgm.perm)
-        else
-            H_tmp = _adj_singular_matrix(rgm.M)[1]
-            droptol!(sparse(H_tmp), 1e-10) .* model.direction
-        end
-        rgm.H = H
-        rgm.H0 = vec(-(H * rgm.M0))
+        _fill_nullity1_affine!(rgm)
     end
 
     return nothing
