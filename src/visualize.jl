@@ -291,7 +291,7 @@ end
 
 Return edge labels for qK-space edges, optionally only one direction.
 """
-function get_edge_labels(Bnc::Bnc; half::Bool=false,f=nothing)::Dict{Edge,String}
+function get_edge_labels(Bnc::Bnc; half::Bool=false, f=nothing)::Dict{Edge,String}
     vg = get_regimes_graph!(Bnc;full=true)
     labels = Dict{Edge,String}()
     for (i, edges) in enumerate(vg.neighbors)
@@ -302,6 +302,8 @@ function get_edge_labels(Bnc::Bnc; half::Bool=false,f=nothing)::Dict{Edge,String
         f = isnothing(f) ? (from, to) -> get_change_dir_qK(Bnc, from, to)|> x-> sym_direction(Bnc,x) : f
 
         for e in edges
+            @show e 
+            @show e.change_dir_qK
             if isnothing(e.change_dir_qK) || (half && e.to < i)    # only label one direction
                 continue
             end 

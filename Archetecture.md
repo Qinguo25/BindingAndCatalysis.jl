@@ -331,10 +331,10 @@ find_all_regimes!(model)
 
 - 从 `L` 的每一行 possible dominant choice 枚举 `perm`
 - 立刻用 `all_perms` 和 `model._L_helper` 构造 x-neighbor regime graph
-- 用 `_calc_nullity` 建立 `N_ρ` cache 并得到所有 regime 的 nullity
-- 沿 graph 的 regular connected components 用 rank-1 更新预填充 `nullity = 0` 的 `H/H0`
-- 并行补全 `nullity = 1` 的 `H/H0`
-- 把 `nullity >= 2` 的 regime 留在“只有 nullity、没有 affine inverse”的状态
+- 直接初始化 `BindRegime` 的基础矩阵字段 `P/P0/M/M0/C_x/C0_x`
+- 以 component 为单位，从 seed regime 出发沿 x-neighbor graph 用 rank-1 更新传播 `H/H0`
+- 在传播过程中即时把可判定的 regime 标成 `nullity = 0/1`
+- 只把传播中识别出的 `nullity >= 2` 候选 perm 收集起来，最后再批量调用 `_calc_nullity`
 
 
 ### 4.4 枚举 catalysis regimes
@@ -677,7 +677,7 @@ regular 情况下很多东西可直接通过矩阵逆得到；singular 情况下
 - 用 polyhedral elimination 直接消元
 
 不过现在 `nullity = 1` 的 regime 也会保存同尺度下的 `H0 = -H M0`，方便做 interface 和几何分析。
-真正没有 affine inverse 的，主要是 `nullity >= 2` 的 regime。
+真正需要延后到 `_calc_nullity` 批量补齐的，是传播中识别出的 `nullity >= 2` 候选。
 
 
 ### 10.5 这个项目很依赖“预填充 + 按需 materialize”
@@ -686,8 +686,10 @@ regular 情况下很多东西可直接通过矩阵逆得到；singular 情况下
 
 - `find_all_regimes!` 时就预填充：
   - regime graph
-  - nullity
+  - 基础矩阵字段
+  - 通过 graph 传播得到的大部分 `nullity`
   - `nullity <= 1` 的 `H/H0`
+- 最后只对 deferred 的高 nullity perm 批量调用 `_calc_nullity`
 - 真正按需 materialize 的主要是：
   - `C_qK`, `C0_qK`
   - polyhedron / volume

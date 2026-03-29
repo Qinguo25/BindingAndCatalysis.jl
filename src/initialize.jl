@@ -181,14 +181,30 @@ Stored in canonical form with `u < v`:
 where `(num, den)` is the reduced integer ratio.
 """
 struct Hyperplane_perm{Tv<:Integer} 
-    u::Int # fast access 
-    v::Int # fast access
-    num::Tv # reduced positive integer
-    den::Tv # reduced positive integer
+    u::Int # fast access #j2 by default 
+    v::Int # fast access #j1 by default 
+
+    num::Tv # reduced positive integer L_{i,j2}
+    den::Tv # reduced positive integer L_{i,j1}
     c0::Float64 # pre-logarithm log10(num/den)
-    crow::SparseVector{Int8,Int}      # +1 at u, -1 at v
-    crow_neg::SparseVector{Int8,Int}  # +1 at v, -1 at u
 end
+
+function Base.:*(hp::Hyperplane_perm, M::AbstractMatrix{<:Real})
+    return transpose(@view(M[hp.u, :]) -@view(M[hp.v, :]))
+end
+
+function mul(hp::Hyperplane_perm, q::AbstractVector{<:Real}; with_c0::Bool=true)
+    if with_c0
+        return @view(q[hp.u]) - @view(q[hp.v]) .+ hp.c0
+    else
+        return @view(q[hp.u]) - @view(q[hp.v])
+    end
+end
+
+Base.:*(hp::Hyperplane_perm, q::AbstractVector{<:Real}) = mul(hp, q; with_c0=true)
+
+
+
 
 """
 One oriented inequality induced by choosing p in row i.
@@ -196,18 +212,16 @@ If `sign == +1`, use the canonical side:
     crow * z + c0 > 0
 If `sign == -1`, use the opposite side:
     crow_neg * z - c0 > 0
+
 `competitor` is the losing column k compared against the perm dominant p.
 `oriented_c0 = log10(L[i,p] / L[i,k])`
+
 so the actual inequality is:
     z_p - z_k + oriented_c0 > 0
 """
 struct ChoiceIneq
     hid::Int  # index into global hyperplane pool
     sign::Int8 # +1 for canonical side, -1 for opposite side
-
-    #Fast access
-    _competitor::Int # fast access
-    _oriented_c0::Float64 # fast access.
 end
 
 """
@@ -371,81 +385,6 @@ mutable struct BncRegime <:AbstractRegime
             nothing, nothing)
     end
 end
-
-
-
-
-"""
-    VertexEdge
-
-Edge metadata connecting neighboring vertices in a regime graph.
-"""
-mutable struct VertexEdge{T}
-    to::Int
-    diff_r::Int
-    x_pos::T
-    x_neg::T
-    x_dim::Int
-    intersect_x::Float64
-    change_dir_qK::Union{Nothing, SparseVector{Float64, T}}
-    intersect_qK::Union{Nothing, Float64}
-    qK_interface_idx::Int
-    qK_interface_sign::Int8
-    function VertexEdge(to::Int, diff_r::Int, x_pos::T, x_neg::T, x_dim::Int, intersect_x::Float64) where {T<:Integer}
-        return new{T}(to, diff_r, x_pos, x_neg, x_dim, intersect_x, nothing, nothing, 0, 0)
-    end
-end
-
-@inline function _edge_change_dir_x(edge::VertexEdge{T}) where {T}
-    return sparsevec(Int[edge.x_pos, edge.x_neg], Int8[1, -1], edge.x_dim)
-end
-
-@inline _edge_x_cols(edge::VertexEdge) = (Int(edge.x_neg), Int(edge.x_pos))
-
-function Base.getproperty(edge::VertexEdge, sym::Symbol)
-    if sym === :change_dir_x
-        return _edge_change_dir_x(edge)
-    end
-    return getfield(edge, sym)
-end
-
-function Base.propertynames(edge::VertexEdge, private::Bool=false)
-    names = Symbol[fieldnames(typeof(edge))..., :change_dir_x]
-    return private ? Tuple(unique(names)) : Tuple(sym for sym in unique(names) if !startswith(String(sym), "_"))
-end
-
-struct RegimeHyperplane{T}
-    change_dir_qK::SparseVector{Float64, T}
-    intersect_qK::Float64
-end
-
-# Adjacency list + optional caches
-"""
-    VertexGraph
-
-Adjacency structure for vertices with optional caches for change directions.
-"""
-mutable struct VertexGraph{T}
-    bn::AbstractBnc
-    x_grh::SimpleGraph 
-    neighbors::Vector{Vector{VertexEdge{T}}}
-    change_dir_qK_computed::Bool
-    edge_pos::Vector{Dict{Int, Int}}  # (u,v) -> (u,edge_pos[u][v]) to locate the VertexEdge.
-    qK_interface_pool::Vector{RegimeHyperplane{T}}
-    function VertexGraph(bn::AbstractBnc, neighbors::Vector{Vector{VertexEdge{T}}}) where {T}
-        edge_pos = [Dict{Int, Int}() for _ in 1:length(neighbors)]
-        g = SimpleGraph(length(neighbors))
-        for i in 1:length(neighbors)
-            edges = neighbors[i]
-            for (k, e) in enumerate(edges)
-                edge_pos[i][e.to] = k
-                add_edge!(g, i, e.to)
-            end
-        end
-        return new{T}(bn, g, neighbors, false, edge_pos, RegimeHyperplane{T}[])
-    end
-end
-
 
 
 
@@ -819,6 +758,8 @@ function update_catalysis!(model::Bnc;
         new_order = vcat(q_idx, setdiff(1:model.d, q_idx))
         _change_q_L_order!(model, new_order) # reorder the q and L in the model to make the picked q first, since the catalysis will involve the first r_v q.
         _remove_regime_data!(model) # remove the cached regime data, since the regimes will be changed after reordering q and L.
+    else
+        @info "q_cat is not picked, the catalysis will involve the first r_v q by default"
     end
 
     k_sym = isnothing(k_sym) ? Symbolics.variables(:k, 1:size(Π,1)) : name_converter(k_sym)
@@ -878,12 +819,18 @@ end
 end
 
 
+pth1 = joinpath(@__DIR__,"Mathcore/")
+include(joinpath(pth1,"find_matrix_vertex.jl")) # before regimes.jl
+include(joinpath(pth1,"d_stable.jl"))
+include(joinpath(pth1,"perm_graph_core.jl"))
+include(joinpath(pth1,"SparseSparse_modified.jl"))
+
 include(joinpath(@__DIR__,"helperfunctions.jl"))
 include(joinpath(@__DIR__,"matrix_inverse.jl"))
 include(joinpath(@__DIR__,"qK_x_mapping.jl"))
 include(joinpath(@__DIR__,"volume_calc.jl"))
 include(joinpath(@__DIR__,"numeric.jl"))
-include(joinpath(@__DIR__,"find_matrix_vertex.jl")) # before regimes.jl
+
 include(joinpath(@__DIR__,"regimes.jl"))
 include(joinpath(@__DIR__,"Catalysis_regime.jl"))
 include(joinpath(@__DIR__,"Bnc_regime.jl"))
@@ -893,7 +840,7 @@ include(joinpath(@__DIR__,"symbolics.jl"))
 include(joinpath(@__DIR__,"regime_graphs.jl"))
 include(joinpath(@__DIR__,"visualize.jl"))
 include(joinpath(@__DIR__,"old_api.jl"))
-include(joinpath(@__DIR__,"d_stable.jl"))
+
 
 
 """

@@ -69,10 +69,10 @@ function _get_Nρ_key_and_perm_nullity(perm::AbstractVector{<:Integer}, n::Int)
     return copy(@view keybuf[1:k]), pdef
 end
 
-@inline function _calc_perm_nullity(perm::AbstractVector{<:Integer}, n::Int)::Int
-    _, pdef = _get_Nρ_key_and_perm_nullity(perm, n)
-    return pdef
-end
+# @inline function _calc_perm_nullity(perm::AbstractVector{<:Integer}, n::Int)::Int
+#     _, pdef = _get_Nρ_key_and_perm_nullity(perm, n)
+#     return pdef
+# end
 
 # -----------------------------------------------------------------------------
 # permutation sign for exact adj(A) when A is singular and A * Π = M
@@ -469,51 +469,141 @@ function _sparse_outer(
     return sparse(I, J, V, nrow, ncol)
 end
 
-"""
-    _rank1_update_H_H0(H, H0, i, j_from, j_to, δ0; atol=1e-12, drop_tol=1e-10)
+# """
+#     _rank1_update_H_H0(H, H0, i, j_from, j_to, δ0; atol=1e-12, drop_tol=1e-10)
 
-Apply the rank-1 affine update
+# Apply the rank-1 affine update
 
-    M'  = M  + e_i (e_{j_to} - e_{j_from})'
-    M0' = M0 + δ0 e_i
+#     M'  = M  + e_i (e_{j_to} - e_{j_from})'
+#     M0' = M0 + δ0 e_i
 
-to an existing affine inverse
+# to an existing affine inverse
 
-    log x = H log y + H0.
+#     log x = H log y + H0.
 
-Returns `(H′, H0′, δ)`. If `δ ≈ 0`, `H′` and `H0′` are returned as `nothing`.
-"""
-function _rank1_update_H_H0(
+# Returns `(H′, H0′, δ)`. If `δ ≈ 0`, `H′` and `H0′` are returned as `nothing`.
+# """
+# function _rank1_update_H_H0(
+#     H::SparseMatrixCSC{Float64,Int},
+#     H0::AbstractVector{<:Real},
+#     i::Int,
+#     j_from::Int,
+#     j_to::Int,
+#     δ0::Real;
+#     atol::Float64=1e-12,
+#     drop_tol::Float64=1e-10,
+# )
+#     c = H[:, i]
+#     s = H[j_to, :] - H[j_from, :]
+#     δ = 1.0 + H[j_to, i] - H[j_from, i]
+
+#     if !isfinite(δ) || abs(δ) <= atol
+#         return nothing, nothing, δ
+#     end
+
+#     update = _sparse_outer(c, s, 1 / δ, size(H, 1), size(H, 2))
+#     H_new = sparse(H - update)
+#     drop_tol > 0 && droptol!(H_new, drop_tol)
+
+#     shift = (Float64(H0[j_to]) - Float64(H0[j_from]) + Float64(δ0)) / δ
+#     H0_new = Float64.(copy(H0))
+#     Ic, Vc = findnz(c)
+#     @inbounds for t in eachindex(Ic)
+#         H0_new[Ic[t]] -= Vc[t] * shift
+#     end
+
+#     return H_new, H0_new, δ
+# end
+
+
+function _rank1_step_update_from_regular(
     H::SparseMatrixCSC{Float64,Int},
     H0::AbstractVector{<:Real},
-    i::Int,
-    j_from::Int,
-    j_to::Int,
-    δ0::Real;
+    
+    i::Int, 
+    c_c0::Hyperplane_perm,
+
+    sign::Int8,
+
     atol::Float64=1e-12,
     drop_tol::Float64=1e-10,
 )
-    c = H[:, i]
-    s = H[j_to, :] - H[j_from, :]
-    δ = 1.0 + H[j_to, i] - H[j_from, i]
+    c_qK = c_c0*H .* sign 
+    c0_qK = c_c0*H0 * sign
 
-    if !isfinite(δ) || abs(δ) <= atol
-        return nothing, nothing, δ
+    drop_tol > 0 && droptol!(c_qK, drop_tol) 
+
+    a = c_qK[i]
+
+    if abs(a + 1) <= atol # the target regime is singular with nullity 1
+        H_to = -@view(H[:i]) * c_qK
+        H0_to = -@view(H[:i]) * c0_qK
+        nlt_to = 1
+    else
+        H_to = H .- @view(H[:i]) ./(1 + a) * c_qK
+        H0_to = H0 .- @view(H[:i]) ./(1 + a) * c0_qK
+        nlt_to = 0
+    end 
+
+    if drop_tol > 0
+        droptol!(H_to, drop_tol)
+        droptol!(H0_to, drop_tol)
     end
 
-    update = _sparse_outer(c, s, 1 / δ, size(H, 1), size(H, 2))
-    H_new = sparse(H - update)
-    drop_tol > 0 && droptol!(H_new, drop_tol)
-
-    shift = (Float64(H0[j_to]) - Float64(H0[j_from]) + Float64(δ0)) / δ
-    H0_new = Float64.(copy(H0))
-    Ic, Vc = findnz(c)
-    @inbounds for t in eachindex(Ic)
-        H0_new[Ic[t]] -= Vc[t] * shift
-    end
-
-    return H_new, H0_new, δ
+    return H_to, H0_to, nlt_to, c_qK, c0_qK
 end
+
+
+
+
+
+
+
+
+# """
+#     _rank1_step_H_H0_from_regular(H, H0, M0_to, i, j_from, j_to, δ0; kwargs...)
+
+# Transition across one x-neighbor edge when the source regime is regular.
+
+# Returns `(H_to, H0_to, nullity_to, δ)`:
+
+# - if `δ ≠ 0`, the target regime is regular and Sherman-Morrison is used
+# - if `δ = 0`, the target regime is singular with nullity exactly `1`, and a
+#   rank-1 adjugate-like ray is materialized directly from the edge data
+# """
+# function _rank1_step_H_H0_from_regular(
+#     H::SparseMatrixCSC{Float64,Int},
+#     H0::AbstractVector{<:Real},
+#     M0_to::AbstractVector{<:Real},
+#     i::Int,
+#     j_from::Int,
+#     j_to::Int,
+#     δ0::Real;
+#     atol::Float64=1e-12,
+#     drop_tol::Float64=1e-10,
+# )
+#     H_to, H0_to, δ = _rank1_update_H_H0(
+#         H,
+#         H0,
+#         i,
+#         j_from,
+#         j_to,
+#         δ0;
+#         atol=atol,
+#         drop_tol=drop_tol,
+#     )
+#     if !isnothing(H_to)
+#         return H_to, H0_to, 0, δ
+#     end
+
+#     c = H[:, i]
+#     s = H[j_to, :] - H[j_from, :]
+#     H_sing = _sparse_outer(c, s, -1.0, size(H, 1), size(H, 2))
+#     drop_tol > 0 && droptol!(H_sing, drop_tol)
+#     H0_sing = vec(-(H_sing * Float64.(M0_to)))
+
+#     return H_sing, H0_sing, 1, δ
+# end
 
 """
     _lowrank_update_H_H0(H, H0, U, V, δ0; kwargs...)
@@ -656,9 +746,24 @@ function _adj_singular_matrix(A::AbstractMatrix; atol=1e-12)::Tuple{SparseMatrix
         u = F.U[:, k]   # 左奇异向量
         v = F.V[:, k]   # 右奇异向量
         adj_A = (sign_correction * σprod) * (sparsevec(v) * sparsevec(u)')
-        return droptol!(adj_A, 1e-10), 1  # rank-1 矩阵
-        # return σprod * (v * u'), 1  # rank-1 矩阵
+        return adj_A, 1  # rank-1 矩阵
     else
         return spzeros(0, 0), nullity
     end
 end
+
+
+function direct_inverse_or_adjugate(A::AbstractMatrix; atol::Float64=1e-12)::Tuple{SparseMatrixCSC,Int}
+    n, m = size(A)
+    @assert n == m "A must be square"
+    F = lu(sparse(A); check=false)
+
+    if issuccess(F)
+        H = luFac(F) \ spdiagm(0=>ones(Float64,n))
+        return  H, 0
+    else
+        adj_A, nullity = _adj_singular_matrix(A; atol=atol)
+        return adj_A, nullity
+    end
+end
+

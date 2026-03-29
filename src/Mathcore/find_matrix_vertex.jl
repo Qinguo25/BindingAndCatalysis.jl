@@ -61,20 +61,15 @@ function _build_matrix_helper(L::AbstractMatrix{Tv}) where {Tv<:Integer}
                 hid = get(key_to_id, key, 0)
 
                 if hid == 0
-                    crow = sparsevec([u, v], Int8[1, -1], n)
-                    crow_neg = sparsevec([v, u], Int8[1, -1], n)
+                    # crow = sparsevec([u, v], Int8[1, -1], n)
+                    # crow_neg = sparsevec([v, u], Int8[1, -1], n)
                     c0 = log10(Float64(num)) - log10(Float64(den))
-                    push!(hyperplanes, Hyperplane_perm{Tv}(u, v, num, den, c0, crow, crow_neg))
+                    push!(hyperplanes, Hyperplane_perm{Tv}(u, v, num, den, c0))
                     hid = length(hyperplanes)
                     key_to_id[key] = hid
                 end
 
-                refs[ptr] = ChoiceIneq(
-                    hid,
-                    sign,
-                    k,
-                    log10(Float64(Lp)) - log10(Float64(Lk))
-                )
+                refs[ptr] = ChoiceIneq(hid,sign)
                 ptr += 1
             end
 
@@ -98,6 +93,12 @@ function _build_matrix_helper(L::AbstractMatrix{Tv}) where {Tv<:Integer}
     )
 end
 
+function sparsevec(hp::Hyperplane_perm{Tv}, n::Int, sign::Int8) where {Tv<:Integer}
+    I = [hp.u, hp.v]
+    J = [1, 1]
+    V = Int8[sign, -sign]
+    return sparse(I, J, V, n, 1)
+end
 
 
 function _enumerate_asymptotic_regimes(helper::MatrixHelper)
@@ -198,7 +199,10 @@ function _enumerate_all_regimes(
             edges = Vector{Tuple{Int,Float64}}(undef, length(refs))
             for s in eachindex(refs)
                 ref = refs[s]
-                edges[s] = (ref._competitor, ref._oriented_c0 - eps)
+                h = helper.hyperplanes[ref.hid]
+                competitor = ref.sign == 1 ? h.v : h.u
+                oriented_c0 = ref.sign == 1 ? h.c0 : -h.c0
+                edges[s] = (competitor, oriented_c0 - eps)
             end
             by_choice[t] = edges
         end
@@ -341,7 +345,7 @@ function _perm_process(
     helper::MatrixHelper{Tv},
 ) where {Tv<:Integer}
     d = length(helper.J)
-    n = helper.n
+    # n = helper.n
     P0 = Vector{Float64}(undef, d)
     hyperplane_id_signs = Vector{Tuple{Int,Int8}}(undef, helper.total_constraints)
     # signs = Vector{Int8}(undef, helper.total_constraints)
@@ -424,7 +428,18 @@ function _calc_C_C0(
     return C, C0
 end
 
-
+@inline function _calc_perm_nullity(perm)
+    perm_nullity = 0
+    seen = falses(length(perm))
+    @inbounds for p in perm
+        if seen[p]
+            perm_nullity += 1
+        else
+            seen[p] = true
+        end
+    end
+    return perm_nullity
+end
 
 
 
@@ -476,4 +491,20 @@ function find_all_regimes(
     end
     return perms, asymptotic
 
+end
+
+
+#=============================================================#
+# Utils
+#==============================================================#
+@inline function choiceineq_between(helper::MatrixHelper, i::Int, j2::Int, j1::Int)
+    tp = helper.choice_slot[i][j2]
+    tk = helper.choice_slot[i][j1]
+
+    # tp == 0 && throw(ArgumentError("p=$j2 ∉ J[$i]"))
+    # tk == 0 && throw(ArgumentError("k=$j1 ∉ J[$i]"))
+    # j2 == j1 && throw(ArgumentError("p and k must be different"))
+
+    s = tk < tp ? tk : tk - 1
+    return helper.choice_map[i][tp][s]
 end

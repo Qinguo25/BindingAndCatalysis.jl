@@ -68,8 +68,9 @@ end
 """
     find_all_regimes!(bnc::Bnc) -> Vector{Vector{Int}}
 
-Compute and cache all regime permutations, the x-neighbor graph, Nρ inverse
-cache, regime nullities, and affine data for nullity 0/1 regimes.
+Compute and cache all regime permutations, the x-neighbor graph, and regime
+objects. Low-nullity (`0/1`) affine data are inferred directly from the graph;
+only deferred high-nullity perms are sent to `_calc_nullity`.
 """
 function find_all_regimes!(model::Bnc{T};) where T
     if is_bind_regimes_built(model)
@@ -77,52 +78,46 @@ function find_all_regimes!(model::Bnc{T};) where T
     end
 
     @info "---------------------Start finding all regimes--------------------"
-    all_perms, is_asymptotic =  _enumerate_all_regimes(model._L_helper)
-    all_perms = [Vector{T}(v) for v in all_perms]
+    
+    (all_perms, is_asymptotic) =  let
+        perms, is_asymp  = _enumerate_all_regimes(model._L_helper)
+        perms = [Vector{T}(v) for v in perms]
+        (perms, is_asymp)
+    end
+
 
     n_vertices = length(all_perms)
     n_asym_rgms = sum(is_asymptotic)
     @info "Finished, with $(n_vertices) regimes found and $(n_asym_rgms) asymptotic regimes."
 
     @info "2.Building x-neighbor regime graph..."
-    model.vertices_graph = _calc_regimes_graph(model, all_perms)
-    
-    @info "3.Calculating nullity for each regime..."
-    nullity = _calc_nullity(all_perms, model)
-    
-    @info "4.Building regime objects..."
+    model.vertices_graph = let
+        grh = _calc_regimes_graph(model._L_helper, all_perms)
+        grh.bn = model
+        grh
+    end
+        
+
+    @info "3.Building regime objects..."
     model.BindRegimes = let
-        regimes = _build_bind_regimes(model, all_perms, is_asymptotic, nullity)    
+        regimes = _build_bind_regimes(model, all_perms, is_asymptotic, fill(T(-1), n_vertices))
         vertices_perm_dict = Dict(perm => idx for (idx, perm) in enumerate(all_perms))
         Regimes(vertices_perm_dict, regimes)
     end
 
-    @info "5.Prefilling affine data for nullity <= 1 regimes..."
+    @info "4.Propagating affine data and deferred nullity labels..."
     _prefill_affine_cache!(model; ensure_built=false)
+
+    _ensure_full_regimes_graph!(model)
 
     @info "Finished."
     return nothing
 end
 
-
-@inline function _calc_perm_nullity(perm, n::Integer)
-    perm_nullity = 0
-    seen = falses(n)
-    @inbounds for p in perm
-        if seen[p]
-            perm_nullity += 1
-        else
-            seen[p] = true
-        end
-    end
-    return perm_nullity
-end
-
-
 @inline function _build_bind_regimes(model::Bnc{T}, all_perms, is_asymptotic, nullity) where T
     n_vertices = length(all_perms)
     regimes = Vector{BindRegime}(undef, n_vertices)
-    for i in 1:n_vertices
+    Threads.@threads for i in 1:n_vertices
         regimes[i] = BindRegime(
             network = model,
             perm = all_perms[i],
@@ -132,23 +127,6 @@ end
         )
     end
     return regimes
-end
-
-function _fill_nullity1_affine!(rgm::BindRegime)
-    _initialize_regime!(rgm)
-    _affine_info_ready(rgm) && return nothing
-
-    model = rgm.network
-    H = if allunique(rgm.perm)
-        _calc_H(model, rgm.perm)
-    else
-        H_tmp = _adj_singular_matrix(rgm.M)[1]
-        droptol!(sparse(H_tmp), 1e-10) .* model.direction
-    end
-
-    rgm.H = H
-    rgm.H0 = vec(-(H * rgm.M0))
-    return nothing
 end
 
 
@@ -177,144 +155,6 @@ function _initialize_regime!(vtx::BindRegime)::BindRegime
     return vtx
 end
 
-@inline _affine_info_ready(rgm::BindRegime) = !isnothing(rgm.H) && !isnothing(rgm.H0)
-
-function _masked_components(grh::SimpleGraph, mask::BitVector)
-    n = nv(grh)
-    seen = falses(n)
-    comps = Vector{Vector{Int}}()
-
-    for src in 1:n
-        (!mask[src] || seen[src]) && continue
-        comp = Int[]
-        stack = [src]
-        seen[src] = true
-        while !isempty(stack)
-            v = pop!(stack)
-            push!(comp, v)
-            for nb in neighbors(grh, v)
-                if mask[nb] && !seen[nb]
-                    seen[nb] = true
-                    push!(stack, nb)
-                end
-            end
-        end
-        push!(comps, comp)
-    end
-
-    return comps
-end
-
-function _edge_rank1_data(model::Bnc, from_idx::Int, to_idx::Int, edge::VertexEdge)
-    return edge.diff_r, Int(edge.x_neg), Int(edge.x_pos), edge.intersect_x
-end
-
-function _propagate_regular_component!(model::Bnc, grh::VertexGraph, comp::Vector{Int})
-    isempty(comp) && return nothing
-
-    regimes = model.vertices_data
-    seed = comp[1]
-    seed_rgm = _initialize_regime!(regimes[seed])
-    H_seed = _calc_H(model, seed_rgm.perm)
-    H0_seed = vec(-(H_seed * seed_rgm.M0))
-    seed_rgm.H = H_seed
-    seed_rgm.H0 = H0_seed
-
-    in_comp = falses(length(regimes))
-    in_comp[comp] .= true
-    seen = falses(length(regimes))
-    seen[seed] = true
-    queue = [seed]
-
-    while !isempty(queue)
-        from_idx = popfirst!(queue)
-        from_rgm = regimes[from_idx]
-        H_from = from_rgm.H
-        H0_from = from_rgm.H0
-
-        for edge in grh.neighbors[from_idx]
-            to_idx = edge.to
-            (!in_comp[to_idx] || seen[to_idx]) && continue
-
-            to_rgm = _initialize_regime!(regimes[to_idx])
-            i, j_from, j_to, δ0 = _edge_rank1_data(model, from_idx, to_idx, edge)
-            H_to, H0_to, δ = _rank1_update_H_H0(H_from, H0_from, i, j_from, j_to, δ0)
-
-            if isnothing(H_to)
-                # Numerical fallback: the graph update should stay in the regular class,
-                # but direct construction is safer than failing hard here.
-                H_to = _calc_H(model, to_rgm.perm)
-                H0_to = vec(-(H_to * to_rgm.M0))
-            end
-
-            to_rgm.H = H_to
-            to_rgm.H0 = H0_to
-            seen[to_idx] = true
-            push!(queue, to_idx)
-        end
-    end
-
-    return nothing
-end
-
-function _prefill_affine_cache_core!(model::Bnc)
-    regimes = model.vertices_data
-    grh = model.vertices_graph
-    isnothing(grh) && error("Regime graph is not initialized.")
-
-    regular_mask = falses(length(regimes))
-    nullity1_idxs = Int[]
-    @inbounds for i in eachindex(regimes)
-        nlt = regimes[i].nullity
-        regular_mask[i] = nlt == 0
-        nlt == 1 && push!(nullity1_idxs, i)
-    end
-
-    comps = _masked_components(grh.x_grh, regular_mask)
-    Threads.@threads for cid in eachindex(comps)
-        _propagate_regular_component!(model, grh, comps[cid])
-    end
-
-    Threads.@threads for t in eachindex(nullity1_idxs)
-        _fill_nullity1_affine!(regimes[nullity1_idxs[t]])
-    end
-
-    model._regimes_affine_ready = true
-    return nothing
-end
-
-function _prefill_affine_cache!(model::Bnc; ensure_built::Bool=true)
-    ensure_built && find_all_regimes!(model)
-    model._regimes_affine_ready && return nothing
-    lock(model._regimes_affine_lock)
-    try
-        model._regimes_affine_ready && return nothing
-        _prefill_affine_cache_core!(model)
-    finally
-        unlock(model._regimes_affine_lock)
-    end
-
-    return nothing
-end
-
-_ensure_regular_affine_cache!(model::Bnc) = _prefill_affine_cache!(model)
-
-function _fill_affine_info!(rgm::BindRegime)
-    _initialize_regime!(rgm)
-    _affine_info_ready(rgm) && return nothing
-
-    model = rgm.network
-    if rgm.nullity == 0
-        _prefill_affine_cache!(model)
-        return nothing
-    end
-
-    if rgm.nullity == 1
-        _fill_nullity1_affine!(rgm)
-    end
-
-    return nothing
-end
 
 function _materialize_qK_conditions!(rgm::BindRegime)
     _initialize_regime!(rgm)
@@ -338,7 +178,7 @@ Ensure a `BindRegime` has `H/H0` and qK constraints computed and cached.
 """
 function _fill_inv_info!(vtx::BindRegime)
     _initialize_regime!(vtx)
-    _fill_affine_info!(vtx)
+    # _fill_affine_info!(vtx)
     _materialize_qK_conditions!(vtx)
     return nothing
 end

@@ -2,7 +2,7 @@
 
 ## 2026-03-26
 
-这次改动把 binding regime 的初始化顺序往前推了一步：`find_all_regimes!` 不再只是枚举 perm 和算 nullity，而是会顺手把 x-neighbor regime graph 建出来，并预填 `nullity <= 1` 的 `H/H0`。
+这次改动把 binding regime 的初始化逻辑改成了“先 graph 传播，再只对高 nullity 候选批量 `_calc_nullity`”。
 
 ### 1. `find_all_regimes!` 现在的顺序
 
@@ -10,11 +10,12 @@
 
 1. `_enumerate_all_regimes(model._L_helper)` 枚举所有 perm
 2. 立刻用 `all_perms + model._L_helper` 构造 x-neighbor regime graph
-3. `_calc_nullity(all_perms, model)` 建立 `N_ρ` cache 并得到所有 regime 的 nullity
-4. 构造 `BindRegime`
-5. 预填 `nullity = 0/1` 的 `H/H0`
+3. 构造 `BindRegime`，此时 `nullity` 先置为未知
+4. 以 graph connected component 为单位，从 seed regime 出发传播 `H/H0`
+5. 传播过程中直接把能判定的 regime 标成 `nullity = 0/1`
+6. 只把传播中识别出的 `nullity >= 2` 候选 perm 收集起来，最后再批量 `_calc_nullity`
 
-这样后面第一次访问 `get_H/get_H0` 时，不再需要再走一遍“先建 graph、再传播”的惰性路径。
+这样 `_calc_nullity` 不再是 binding 初始化的全量前置步骤，而是 deferred high-nullity fallback。
 
 ### 2. x-neighbor graph 的边改成更紧凑的存储
 
@@ -37,15 +38,17 @@
 - graph 构造时少做很多 `SparseVector` 分配
 - rank-1 传播时可以直接从边上拿 `j_from/j_to`，不用再 `findnz(change_dir_x)`
 
-### 3. `nullity = 0` 和 `nullity = 1` 的 affine info 现在会在初始化阶段预填
+### 3. `nullity = 0/1` 的 affine info 现在由 graph 传播直接填出
 
-- `nullity = 0`：先按 regular connected component 选 seed regime，再沿 graph 用 rank-1 更新传播
-- `nullity = 1`：并行补齐 `H/H0`
-- `nullity >= 2`：只保留 nullity，本轮不构造 affine inverse
+- 从 regular source 沿边传播时：
+  - `δ ≠ 0`，目标 regime 直接得到 regular `H/H0`
+  - `δ = 0`，目标 regime 直接得到 nullity-1 的 rank-1 singular ray `H/H0`
+- 对于 graph 中没有被 regular propagation 吃到的残余节点，再用 direct seed classification 补一轮
+- 仍然不能在传播里解决的，才进入 deferred high-nullity 集合
 
-这一步由 `_prefill_affine_cache!` 统一负责。
+这一步仍由 `_prefill_affine_cache!` 统一负责，但它现在不再依赖“先有全量 nullity”。
 
-### 4. qK interface 计算也改为复用预填好的 affine cache
+### 4. qK interface 计算复用同一套传播结果
 
 `_fulfill_regimes_graph!` 不再对每个 low-nullity regime 再单独触发一次 `get_regime(...; inv_info=true)`，
 而是直接调用 `_prefill_affine_cache!`，让 qK 接口构造复用同一套预填结果。
