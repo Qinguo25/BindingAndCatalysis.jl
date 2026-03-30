@@ -322,25 +322,22 @@ function _direct_seed_affine_and_nullity!(rgm::BindRegime; drop_tol::Float64=1e-
     _affine_info_ready(rgm) && return nothing
 
     perm_nullity = _calc_perm_nullity(rgm.perm)
+
     if perm_nullity >= 2
         rgm.nullity = 2 # assign a placeholder nullity for regimes that are expected to be high-nullity, to avoid unnecessary calculations in the propagation step. The exact nullity will be calculated later by _calc_nullity.
         return nothing
     end
 
-    H, nlt = direct_inverse_or_adjugate(rgm.M)
+    H, nlt = let
+        perm = rgm.perm
+        N = rgm.network.N
+        scale = rgm.network.direction        
+        direct_inverse_or_adjugate(perm, N, scale; drop_tol=drop_tol)
+    end
 
     rgm.nullity = nlt
-
-    if nlt == 0
-        drop_tol > 0 && droptol!(H, drop_tol)
-        rgm.H = H
-        rgm.H0 = vec(-(H * rgm.M0))
-    elseif nlt == 1
-        drop_tol > 0 && droptol!(H, drop_tol) 
-        H = H .* rgm.network.direction
-        rgm.H = H 
-        rgm.H0 = vec(-(H * rgm.M0))
-    end
+    rgm.H = H
+    rgm.H0 = vec(-(H * rgm.M0))
 
     return nothing
 end
@@ -475,6 +472,15 @@ end
     rgm2.nullity = nlt_to
 end
 
+
+
+
+
+
+
+#=============================================================================================#
+#          Calc qK-space change directions for edges with nullity <= 1 regimes
+#=============================================================================================#
 
 function _edge_qK_interface(grh::VertexGraph, edge::VertexEdge)
     edge.qK_interface_idx == 0 && return nothing
@@ -616,10 +622,8 @@ end
     nlt::Int,
     H::SparseMatrixCSC{Float64,Int},
     H0::AbstractVector{<:Real},
-
     c_c0::Hyperplane_perm,
     sign::Int8,
-
     drop_tol::Float64=1e-10,
 )
    c_qK = c_c0*H .* sign 

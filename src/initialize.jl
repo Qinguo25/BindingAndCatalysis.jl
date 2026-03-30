@@ -490,7 +490,7 @@ mutable struct Bnc{T} <: AbstractBnc # T is the int type to save all the indices
     r::Int # number of reactions
     n::Int # number of variables
     d::Int # number of conserved quantities
-    lcm::Int # least common multiple of [L;N]^{-1}
+    # lcm::Int # least common multiple of [L;N]^{-1}
 
     #-------symbols of species -----------
     x_sym::Vector{Num} # species symbols, each column is a species
@@ -541,13 +541,13 @@ mutable struct Bnc{T} <: AbstractBnc # T is the int type to save all the indices
         #The direction and lcm
         M = vcat(L_dense, N_dense)
         direction = sign(det(M)) # Ensure matrix is Float64 for det
-        lcm = get_max_denom(M)
+        # lcm = get_max_denom(M)
         #-------helper parameters-------------
         # paramters for default homotopcontinuous starting point.
         _L_helper = _build_matrix_helper(L)
         new(
             # Fields 1-5
-            N_sparse, L_sparse, r, n, d,lcm,
+            N_sparse, L_sparse, r, n, d,# lcm,
             # Fields 6-9
             x_sym, q_sym, K_sym, catalysis,
             # Fields 10-12 (Initialized empty)

@@ -68,18 +68,16 @@ function _get_Nρ_key_and_perm_nullity(perm::AbstractVector{<:Integer}, n::Int)
     k, pdef = _key_from_perm!(keybuf, seen, touched, perm, n)
     return copy(@view keybuf[1:k]), pdef
 end
-
-# @inline function _calc_perm_nullity(perm::AbstractVector{<:Integer}, n::Int)::Int
-#     _, pdef = _get_Nρ_key_and_perm_nullity(perm, n)
-#     return pdef
-# end
-
 # -----------------------------------------------------------------------------
 # permutation sign for exact adj(A) when A is singular and A * Π = M
 # -----------------------------------------------------------------------------
 
-function _perm_sign(p::AbstractVector{<:Integer})::Float64
-    n = length(p)
+@inline function _perm_sign_perm_key(
+    perm::AbstractVector{<:Integer},
+    key::AbstractVector{<:Integer},
+)::Float64
+    d = length(perm)
+    n = d + length(key)
     visited = falses(n)
     s = 1.0
 
@@ -89,7 +87,7 @@ function _perm_sign(p::AbstractVector{<:Integer})::Float64
             clen = 0
             while !visited[j]
                 visited[j] = true
-                j = Int(p[j])
+                j = j <= d ? Int(perm[j]) : Int(key[j - d])
                 clen += 1
             end
             if isodd(clen - 1)
@@ -99,7 +97,6 @@ function _perm_sign(p::AbstractVector{<:Integer})::Float64
     end
     return s
 end
-
 # -----------------------------------------------------------------------------
 # Nρ analysis / factorization cache
 # -----------------------------------------------------------------------------
@@ -147,8 +144,10 @@ function _factor_Nρ(
     if r == c
         F = lu(Nρ; check=false)
         if issuccess(F)
-            X = F \ Matrix{Float64}(I, r, r)
-            Xsp = sparse(X)
+            # X = F \ Matrix{Float64}(I, r, r)
+            # Xsp = sparse(X)
+            Xsp = luFac(F) \ spdiagm(0=>ones(Float64,r))
+            # return  H, 0
             drop_tol > 0 && droptol!(Xsp, drop_tol)
             return _entry_inv(Xsp)
         end
@@ -351,86 +350,119 @@ end
 # -----------------------------------------------------------------------------
 # Singular case: apply adj([P;N]) to a known direction without materializing H
 # -----------------------------------------------------------------------------
-
-function _apply_rank1_adjugate_to_direction(
-    perm::AbstractVector{<:Integer},
-    key::Vector{Int},
-    Nc::AbstractMatrix{Tv},
-    α::Float64,
-    u::Vector{Float64},
-    v::Vector{Float64},
-    direction::AbstractVector{<:Real};
-    exact_adj_sign::Bool=true,
-) where {Tv<:Real}
-    d = length(perm)
-    r = length(key)
-    n = d + r
-
-    @assert length(direction) == n
-
-    rhsP = @view direction[1:d]
-    rhsN = @view direction[(d + 1):n]
-
-    # adj(M) = [0; α v] * [ -u' * Nc   u' ]
-    # Therefore adj(M) * direction = [0; α v] * (u'*(rhsN - Nc*rhsP)).
-    # Use Nc' * u to avoid forming Nc*rhsP when d is the smaller side.
-    tmp = dot(u, rhsN) - dot(rhsP, Nc' * u)
-
-    s = 1.0
-    if exact_adj_sign
-        # A * Π = M, so adj(A) = det(Π) * Π * adj(M).
-        s = _perm_sign([Int.(perm); key])
-    end
-
-    out = zeros(Float64, length(direction))
-    scale = s * α * tmp
-    @inbounds for j in 1:r
-        out[key[j]] = scale * v[j]
-    end
-    return out
-end
-
 function _materialize_rank1_adjugate(
     perm::AbstractVector{<:Integer},
-    key::Vector{Int},
+    key::AbstractVector{<:Integer},
     Nc::AbstractMatrix{Tv},
     α::Float64,
-    u::Vector{Float64},
-    v::Vector{Float64};
-    scale::Real=1.0,
+    u::AbstractVector{<:Real},
+    v::AbstractVector{<:Real};
+    scale::Real = 1.0,
+    drop_tol::Float64 = 0.0,
 ) where {Tv<:Real}
+
     d = length(perm)
     r = length(key)
     n = d + r
 
     # right = [ -Nc' * u ; u ]
-    right = Vector{Float64}(undef, n)
     tmp = Nc' * u
+    right = Vector{Float64}(undef, n)
 
-    @inbounds for i in 1:d
-        right[i] = -tmp[i]
-    end
-    @inbounds for j in 1:r
-        right[d + j] = u[j]
-    end
-
-    s = _perm_sign([Int.(perm); key])  # 如果你要符号
-    σ = Float64(scale) * s
-
-    AdjA = zeros(Float64, n, n)
-
-    @inbounds for j in 1:r
-        row = key[j]
-        coeff = σ * α * v[j]
-        for k in 1:n
-            AdjA[row, k] = coeff * right[k]
+    @inbounds begin
+        for i in 1:d
+            right[i] = -Float64(tmp[i])
+        end
+        for j in 1:r
+            right[d + j] = Float64(u[j])
         end
     end
 
-    return sparse(AdjA)
+    γ = Float64(scale) * _perm_sign_perm_key(perm, key) * α
+
+    # 先筛掉明显无效的行/列
+    active_rows = Vector{Int}(undef, r)
+    row_coeffs  = Vector{Float64}(undef, r)
+    nr = 0
+    @inbounds for j in 1:r
+        c = γ * Float64(v[j])
+        if drop_tol <= 0
+            if c != 0.0
+                nr += 1
+                active_rows[nr] = Int(key[j])
+                row_coeffs[nr]  = c
+            end
+        else
+            if abs(c) > drop_tol
+                nr += 1
+                active_rows[nr] = Int(key[j])
+                row_coeffs[nr]  = c
+            end
+        end
+    end
+
+    active_cols = Vector{Int}(undef, n)
+    nc = 0
+    @inbounds for k in 1:n
+        x = right[k]
+        if drop_tol <= 0
+            if x != 0.0
+                nc += 1
+                active_cols[nc] = k
+            end
+        else
+            if abs(x) > drop_tol
+                nc += 1
+                active_cols[nc] = k
+            end
+        end
+    end
+
+    if nr == 0 || nc == 0
+        return spzeros(Float64, n, n)
+    end
+
+    # 精确按最终乘积阈值计数，避免后面再 droptol!
+    nnzA = 0
+    if drop_tol <= 0
+        nnzA = nr * nc
+    else
+        @inbounds for a in 1:nr
+            ca = row_coeffs[a]
+            for b in 1:nc
+                if abs(ca * right[active_cols[b]]) > drop_tol
+                    nnzA += 1
+                end
+            end
+        end
+    end
+
+    if nnzA == 0
+        return spzeros(Float64, n, n)
+    end
+
+    I = Vector{Int}(undef, nnzA)
+    J = Vector{Int}(undef, nnzA)
+    V = Vector{Float64}(undef, nnzA)
+
+    p = 0
+    @inbounds for a in 1:nr
+        row = active_rows[a]
+        ca  = row_coeffs[a]
+        for b in 1:nc
+            col = active_cols[b]
+            val = ca * right[col]
+            if drop_tol <= 0 || abs(val) > drop_tol
+                p += 1
+                I[p] = row
+                J[p] = col
+                V[p] = val
+            end
+        end
+    end
+
+    return sparse(I, J, V, n, n)
 end
-
-
 # -----------------------------------------------------------------------------
 # Rank-k / rank-1 affine update helpers
 # -----------------------------------------------------------------------------
@@ -614,12 +646,6 @@ end
 
 
 
-
-
-
-
-
-
 function _calc_H(
     model::Bnc,
     perm::AbstractVector{<:Integer};
@@ -637,6 +663,90 @@ function _calc_H(
         kwargs...
     )
 end
+
+
+function calc_H_and_nullity(
+    perm::AbstractVector{<:Integer},
+    N::AbstractMatrix{Tv},
+    scale::Real=1;
+    drop_tol::Float64=1e-12,
+) where {Tv<:Real}
+    atol     = 1e-12
+    rtol     = 1e-10
+
+    n = size(N, 2)
+
+    # 只做一次 Int 化，后面重复复用
+    perm_int = perm isa Vector{Int} ? perm : Int.(perm)
+
+    # ------------------------------------------------------------------
+    # 1) 一次性拿到 key (= complement of perm) 和 perm 自身重复导致的 nullity
+    # ------------------------------------------------------------------
+    seen    = zeros(UInt8, n)
+    touched = Vector{Int}(undef, length(perm_int))
+    keybuf  = Vector{Int}(undef, n)
+
+    k, perm_def = _key_from_perm!(keybuf, seen, touched, perm_int, n)
+    
+    if perm_def != 0
+        return nothing, nullity
+    end
+
+
+    key = copy(@view keybuf[1:k])
+
+    # ------------------------------------------------------------------
+    # 2) factor Nρ
+    # ------------------------------------------------------------------
+    Nρ = sparse(N[:, key])
+
+    entry = _factor_Nρ(Nρ; atol=atol, rtol=rtol, drop_tol=drop_tol)
+
+    nullity = perm_def + entry.deficiency
+
+    # ------------------------------------------------------------------
+    # 3) 和你现有 _calc_H 保持一致：
+    #    - perm 有重复 => 不构造 H
+    #    - total nullity >= 2 => 不支持，返回 nothing
+    # ------------------------------------------------------------------
+    if entry.deficiency == 0
+        BR = entry.inv
+        Nc = sparse(N[:, perm_int])
+        BL = -(BR * Nc)
+        drop_tol > 0 && SparseArrays.droptol!(BL, drop_tol)
+
+        H = _assemble_H_from_blocks(perm_int, key, BL, BR, n)
+        return H, nullity
+    end
+
+    if entry.deficiency == 1
+        Nc = sparse(N[:, perm_int])
+
+        H = _materialize_rank1_adjugate(
+            perm_int,
+            key,
+            Nc,
+            entry.α,
+            entry.u,
+            entry.v;
+            scale=scale,
+        )
+
+        return H, nullity
+    end
+
+    return nothing, nullity
+end
+
+
+
+
+
+
+
+
+
+
 
 
 # helper funtions to taking inverse when the matrix is singular.
@@ -682,12 +792,28 @@ function direct_inverse_or_adjugate(A::AbstractMatrix; atol::Float64=1e-12)::Tup
     n, m = size(A)
     @assert n == m "A must be square"
     F = lu(sparse(A); check=false)
-
     if issuccess(F)
         H = luFac(F) \ spdiagm(0=>ones(Float64,n))
         return  H, 0
     else
         adj_A, nullity = _adj_singular_matrix(A; atol=atol)
         return adj_A, nullity
+    end
+end
+
+function direct_inverse_or_adjugate(
+    perm::AbstractVector{<:Integer},
+    N::AbstractMatrix{Tv},
+    scale::Real=1;
+    atol::Float64=1e-12)::Tuple{SparseMatrixCSC,Int}
+
+    H, nlt = _calc_H_and_nullity(perm, N, scale)
+    if !isnothing(H)
+        return H, nlt
+    elseif nlt == 1
+        H, nullity = _adj_singular_matrix(A; atol=atol)
+        return H, nullity
+    else
+        return spzeros(0, 0), nlt
     end
 end
