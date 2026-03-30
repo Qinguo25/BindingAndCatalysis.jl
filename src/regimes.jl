@@ -31,7 +31,7 @@ end
 
 Convert a `VertexGraph` to a sparse adjacency matrix.
 """
-function _regime_graph_to_sparse(G::VertexGraph{T}; weight_fn = e -> 1) where T
+function _regime_graph_to_sparse(G::VertexGraph; weight_fn = e -> 1)
     n = length(G.neighbors)
     sample_edge = nothing
     for edges in G.neighbors
@@ -168,6 +168,22 @@ function _materialize_qK_conditions!(rgm::BindRegime)
         rgm.C_qK, rgm.C0_qK = _calc_C_C0_qK_singular(rgm.network, rgm.perm)
     end
 
+    return nothing
+end
+
+function _fill_affine_info!(rgm::BindRegime)
+    _initialize_regime!(rgm)
+    (!isnothing(rgm.H) && !isnothing(rgm.H0)) && return nothing
+
+    H, nlt = direct_inverse_or_adjugate(rgm.M)
+    rgm.nullity = nlt
+    if nlt == 0
+        rgm.H = H
+        rgm.H0 = vec(-(H * rgm.M0))
+    elseif nlt == 1
+        rgm.H = H .* rgm.network.direction
+        rgm.H0 = vec(-(rgm.H * rgm.M0))
+    end
     return nothing
 end
 
@@ -783,7 +799,9 @@ function get_interface_x(Bnc::Bnc, from, to)
     if edge === nothing 
         @error("Vertices $get_perm(Bnc, from) and $get_perm(Bnc, to) are not neighbors in x space.")
     else 
-        return edge.change_dir_x, edge.intersect_x
+        grh = get_regimes_graph!(Bnc; full=false)
+        hp = grh.x_interface_pool[edge.c_c0_x_idx]
+        return sparsevec(hp, Bnc.n, edge.c_c0_x_sign), hp.c0 * edge.c_c0_x_sign
     end
 end
 

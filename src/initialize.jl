@@ -203,7 +203,13 @@ end
 
 Base.:*(hp::Hyperplane_perm, q::AbstractVector{<:Real}) = mul(hp, q; with_c0=true)
 
-
+@inline _calc_c(hp::Hyperplane_perm,n::Int,sign::Int8) = let 
+    if sign > 0 
+        return sparsevec([hp.u, hp.v], Int8[1 -1], n)
+    else
+        return sparsevec([hp.u, hp.v], Int8[-1, 1], n)
+    end
+end
 
 
 """

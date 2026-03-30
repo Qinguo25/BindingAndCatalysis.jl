@@ -221,7 +221,6 @@ Return edges with weights for a specified qK change direction.
 """
 function get_edge_weight_vec(Bnc::Bnc,change_qK_idx)::Vector{Tuple{Edge,Dict{Symbol,Any}}}
     vg = get_regimes_graph!(Bnc;full=true)
-    n = length(vg.neighbors)
     weight_vec = Vector{Tuple{Edge,Dict{Symbol,Any}}}()
     for (i, edges) in enumerate(vg.neighbors)
         nlt = get_nullity(Bnc,i)
@@ -229,21 +228,15 @@ function get_edge_weight_vec(Bnc::Bnc,change_qK_idx)::Vector{Tuple{Edge,Dict{Sym
             continue
         end
         for e in edges
-            if isnothing(e.change_dir_qK)
-                continue
-            end 
-            # if nlt ==0 
-            #     val = e.change_dir_qK[change_qK_idx]
-            #     if val > 1e-6
-            #         push!(weight_vec, (Edge(i,e.to), Dict(:magnitude=>1.0)))
-            #     end
-            # else
-                val = e.change_dir_qK[change_qK_idx]
-                if val > 1e-6
-                    push!(weight_vec, (Edge(i,e.to), Dict(:magnitude=>val)))
-                end
-            # end 
-        end
+            !_edge_has_qK_interface(e) && continue
+            iface = _edge_qK_interface(vg, e)
+            iface === nothing && continue
+            dir_qK = iface[1]
+            val = dir_qK[change_qK_idx]
+            if val > 1e-6
+                push!(weight_vec, (Edge(i,e.to), Dict(:magnitude=>val)))
+            end
+        end 
     end
     return weight_vec
 end
@@ -294,17 +287,14 @@ Return edge labels for qK-space edges, optionally only one direction.
 function get_edge_labels(Bnc::Bnc; half::Bool=false, f=nothing)::Dict{Edge,String}
     vg = get_regimes_graph!(Bnc;full=true)
     labels = Dict{Edge,String}()
+    f = isnothing(f) ? (from, to) -> get_change_dir_qK(Bnc, from, to)|> x-> sym_direction(Bnc,x) : f
     for (i, edges) in enumerate(vg.neighbors)
         if get_nullity(Bnc,i) >1 # skip higher nullity
             continue
         end
 
-        f = isnothing(f) ? (from, to) -> get_change_dir_qK(Bnc, from, to)|> x-> sym_direction(Bnc,x) : f
-
         for e in edges
-            @show e 
-            @show e.change_dir_qK
-            if isnothing(e.change_dir_qK) || (half && e.to < i)    # only label one direction
+            if !_edge_has_qK_interface(e) || (half && e.to < i)    # only label one direction
                 continue
             end 
             labels[Edge(i, e.to)] = f(i, e.to)

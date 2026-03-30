@@ -289,6 +289,8 @@ function _ensure_full_regimes_graph!(grh::VertexGraph)
     return nothing
 end
 
+_ensure_full_regimes_graph!(model::Bnc) = _ensure_full_regimes_graph!(get_regimes_graph!(model; full=false))
+
 
 
 
@@ -341,20 +343,20 @@ end
 
 Return the edge between two vertices, optionally computing qK directions.
 """
-function get_edge(grh::VertexGraph, from, to; full=false)::Union{Nothing, VertexEdge}
+function get_edge(grh::VertexGraph, from, to; kwargs...)::Union{Nothing, VertexEdge}
     
     from = get_idx(get_binding_network(grh), from)
     to = get_idx(get_binding_network(grh), to)
     
-    if full
-        _ensure_full_regimes_graph!(grh)
-    end
+    # if full
+    #     _ensure_full_regimes_graph!(grh)
+    # end
     pos = get(grh.edge_pos[from], to, nothing)
     if pos === nothing
         return nothing
     end
     edge = grh.neighbors[from][pos]
-    full && _materialize_edge_qK_interface!(grh, edge)
+    # full && _materialize_edge_qK_interface!(grh, edge)
     return edge
 end
 

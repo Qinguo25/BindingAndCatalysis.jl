@@ -138,7 +138,7 @@ end
 
 Solve `L*X=B` for the unknown `X`, where `L` and `B` are sparse matrices. `L` should be either lower or upper triangular. If `numthreads>1` then multithreading is used. `solvemode` should be either `lower`, `upper` or `detect`.
 """
-function solve(L::SparseMatrixCSC{Tv,Ti},B::SparseMatrixCSC{Tv,Ti};solvemode=detect,numthreads=min(B.n,nthreads())) where {Tv,Ti<:Integer}
+function solve(L::SparseMatrixCSC{Tv,Ti},B::SparseMatrixCSC{Tv,Ti};solvemode=detect,numthreads=min(B.n, Threads.nthreads())) where {Tv,Ti<:Integer}
     if solvemode==detect
         if istril(L)
             solvemode=lower
@@ -153,7 +153,7 @@ function solve(L::SparseMatrixCSC{Tv,Ti},B::SparseMatrixCSC{Tv,Ti};solvemode=det
     end
     dk = B.n/numthreads
     X = Array{SparseMatrixCSC{Tv,Ti}}(undef,numthreads)
-    @threads for j=1:numthreads
+    Threads.@threads for j=1:numthreads
         a = (j==1) ? 1 : (Int(floor(j*dk)+1))
         b = (j==numthreads) ? B.n : Int(floor((j+1)*dk))
         X[j] = solvemat(L,B[:,a:b];lowertriangular=(solvemode==lower))

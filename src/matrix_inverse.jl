@@ -439,9 +439,9 @@ function _sparse_outer(
     c::SparseVector{Float64,Int},
     s::SparseVector{Float64,Int},
     scale::Float64,
-    nrow::Int,
-    ncol::Int,
 )
+    nrow = length(c)
+    ncol = length(s)
     Ic, Vc = findnz(c)
     Js, Vs = findnz(s)
 
@@ -514,7 +514,7 @@ end
 
 #     return H_new, H0_new, δ
 # end
-
+@inline zero_small!(A, tol) = (A[abs.(A) .< tol] .= zero(eltype(A)); A)
 
 function _rank1_step_update_from_regular(
     H::SparseMatrixCSC{Float64,Int},
@@ -528,26 +528,27 @@ function _rank1_step_update_from_regular(
     atol::Float64=1e-12,
     drop_tol::Float64=1e-10,
 )
-    c_qK = c_c0*H .* sign 
-    c0_qK = c_c0*H0 * sign
+    c_qK = c_c0 * H .* sign  
+    c0_qK = c_c0 * H0 * sign
 
     drop_tol > 0 && droptol!(c_qK, drop_tol) 
 
+    H_i = H[:, i]
     a = c_qK[i]
 
-    if abs(a + 1) <= atol # the target regime is singular with nullity 1
-        H_to = -@view(H[:i]) * c_qK
-        H0_to = -@view(H[:i]) * c0_qK
+    if abs(1 + a) <= atol
+        H_to = _sparse_outer(H_i, c_qK, -1.0)
+        H0_to = H_i * c0_qK
         nlt_to = 1
     else
-        H_to = H .- @view(H[:i]) ./(1 + a) * c_qK
-        H0_to = H0 .- @view(H[:i]) ./(1 + a) * c0_qK
+        H_to = H - _sparse_outer(H_i, c_qK, 1 / (1 + a))
+        H0_to = H0 .- H_i ./(1 + a) * c0_qK
         nlt_to = 0
     end 
 
     if drop_tol > 0
         droptol!(H_to, drop_tol)
-        droptol!(H0_to, drop_tol)
+        zero_small!(H0_to, drop_tol)
     end
 
     return H_to, H0_to, nlt_to, c_qK, c0_qK
@@ -766,4 +767,3 @@ function direct_inverse_or_adjugate(A::AbstractMatrix; atol::Float64=1e-12)::Tup
         return adj_A, nullity
     end
 end
-
