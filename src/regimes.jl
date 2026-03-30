@@ -71,11 +71,22 @@ end
 Compute and cache all regime permutations, the x-neighbor graph, and regime
 objects. Low-nullity (`0/1`) affine data are inferred directly from the graph;
 only deferred high-nullity perms are sent to `_calc_nullity`.
+
+Keyword `H_mode` controls how binding-regime affine coefficients are stored:
+- `:float`    uses floating-point `H` / `C_qK`
+- `:rational` uses exact rational coefficients for `H` / `C_qK`
 """
-function find_all_regimes!(model::Bnc{T};) where T
+function find_all_regimes!(model::Bnc{T}; H_mode::Symbol=_affine_mode(model)) where T
+    H_mode = _normalize_affine_mode(H_mode)
+
     if is_bind_regimes_built(model)
-        return nothing
+        if model.affine_coeff_mode == H_mode
+            return nothing
+        end
+        _remove_regime_data!(model)
     end
+
+    model.affine_coeff_mode = H_mode
 
     @info "---------------------Start finding all regimes--------------------"
     
@@ -162,8 +173,14 @@ function _materialize_qK_conditions!(rgm::BindRegime)
 
     if rgm.nullity == 0
         _fill_affine_info!(rgm)
-        rgm.C_qK = droptol!(sparse(rgm.C_x * rgm.H), 1e-10)
-        rgm.C0_qK = rgm.C0_x + rgm.C_x * rgm.H0
+        C_qK = sparse(rgm.C_x * rgm.H)
+        if eltype(C_qK) <: AbstractFloat
+            droptol!(C_qK, 1e-10)
+        else
+            dropzeros!(C_qK)
+        end
+        rgm.C_qK = C_qK
+        rgm.C0_qK = Float64.(rgm.C0_x + rgm.C_x * rgm.H0)
     else
         rgm.C_qK, rgm.C0_qK = _calc_C_C0_qK_singular(rgm.network, rgm.perm)
     end
@@ -577,11 +594,13 @@ get_H0(args...) = get_H_H0(args...)[2]
 Construct a polyhedron from inequality constraints in qK space.
 """
 function get_polyhedron(C::AbstractMatrix{<:Real}, C0::AbstractVector{<:Real}, nullity::Integer=0)::Polyhedron 
+    Cf = Float64.(C)
+    C0f = Float64.(C0)
     if nullity ==0
-        return hrep(-C,C0) |> x-> polyhedron(x,CDDLib.Library())
+        return hrep(-Cf, C0f) |> x-> polyhedron(x,CDDLib.Library())
     else
         linset = BitSet(1:nullity)
-        return hrep(-C,C0,linset) |> x-> polyhedron(x,CDDLib.Library())
+        return hrep(-Cf, C0f, linset) |> x-> polyhedron(x,CDDLib.Library())
     end
 end
 """

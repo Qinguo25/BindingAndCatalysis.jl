@@ -176,9 +176,21 @@ C^\theta \Pi \log x + C^\theta \log k + C_0^\theta \ge 0.
 - binding regimes：`BindRegimes`
 - mixed regimes：`BncRegimes`
 - graph cache：`vertices_graph`
-- 数值辅助缓存：`IntegrationHelper`, `_L_helper`
+- 组合学辅助缓存：`_L_helper`
+- affine / numerical cache：
+  - `_regimes_affine_ready`, `_regimes_affine_lock`
+  - `IntegrationHelper`, `_integration_helper_lock`
 
 可以把它理解成“项目里所有功能共享的根对象”。
+
+这里要特别注意两个 helper 的分工：
+
+- `_L_helper` 是 eager 的，构造 `Bnc` 时就建立；它服务于 regime 枚举、canonical x-space hyperplane、以及邻接图构造。
+- `IntegrationHelper` 是 lazy 的；现在不会在 `Bnc` 构造时立刻生成，而是在第一次数值积分 / 数值求解真正需要时，由 `_integration_helper!` 线程安全地创建并缓存。它保存：
+  - homotopy 默认 anchor
+  - `_LN_sparse = Float64.(sparse([L; N]))`
+  - `_LN_lu`
+  - top / bottom block 的稀疏索引辅助量
 
 
 ### 3.2 `BindRegime`
@@ -283,6 +295,46 @@ C^\theta \Pi \log x + C^\theta \log k + C_0^\theta \ge 0.
 - interface/change direction
 - SISO path 枚举
 
+它现在不是“只有图结构”的轻量对象，而是 binding regime 图算法的核心缓存层。当前实现里：
+
+- `neighbors[u]` 是 `VertexEdge` 列表
+- 每条边都记录：
+  - 改变的是哪一行 `i`
+  - 对应的 x-space hyperplane 在全局池中的索引 `c_c0_x_idx`
+  - 该边方向下的符号 `c_c0_x_sign`
+  - 对应的 qK-space hyperplane 在全局池中的索引 `qK_interface_idx`
+  - 该边方向下的符号 `qK_interface_sign`
+- `x_interface_pool` 直接复用 `MatrixHelper.hyperplanes`
+- `qK_interface_pool` 是专门给 qK-space 接口做的全局去重池
+
+这意味着 qK-space 超平面现在和 x-space 一样，是“总体只存一份”的设计：
+
+- edge 不再各自持有完整的 qK interface 向量
+- 正反两条边共享同一个 `qK_interface_idx`
+- 方向差异只靠 `qK_interface_sign = ±1` 表示
+
+这套设计把 graph cache 从“邻接表”提升成了“邻接表 + canonical interface pool”。
+
+
+### 3.7 `MatrixHelper` 和 `IntegrationHelper`
+
+这两个 helper 现在分别服务于“组合学层”和“数值层”。
+
+`MatrixHelper`：
+
+- 来自 `L`
+- 保存每行可选 dominant monomial、constraint row partition、choice map
+- 建立 canonical 的 x-space hyperplane pool
+- 被 regime 枚举、graph 构造、rank-1 propagation 直接复用
+
+`IntegrationHelper`：
+
+- 来自 `(L, N)`
+- 保存 homotopy / nonlinear solve 常用的 `_LN_sparse`、`_LN_lu`
+- 保存 top block / bottom block 稀疏索引
+- 默认 anchor 也放在这里
+- 现在采用 lazy + lock 的方式缓存，避免构造 `Bnc` 时做不必要的数值预处理，也避免多线程首次调用时重复计算
+
 
 ## 4. 代码的整体流水线
 
@@ -300,7 +352,8 @@ model = Bnc(; N=..., L=..., x_sym=..., q_sym=..., K_sym=...)
 
 - 验证 `N, L` 维度
 - 自动生成缺失的 `L` 或 `N`
-- 构造数值缓存和 matrix helper
+- 立刻构造 `_L_helper`
+- 只保留数值 helper 的 lazy 入口，不会预先计算 `IntegrationHelper`
 
 
 ### 4.2 可选：附加 catalysis 网络
@@ -331,10 +384,21 @@ find_all_regimes!(model)
 
 - 从 `L` 的每一行 possible dominant choice 枚举 `perm`
 - 立刻用 `all_perms` 和 `model._L_helper` 构造 x-neighbor regime graph
-- 直接初始化 `BindRegime` 的基础矩阵字段 `P/P0/M/M0/C_x/C0_x`
-- 以 component 为单位，从 seed regime 出发沿 x-neighbor graph 用 rank-1 更新传播 `H/H0`
-- 在传播过程中即时把可判定的 regime 标成 `nullity = 0/1`
-- 只把传播中识别出的 `nullity >= 2` 候选 perm 收集起来，最后再批量调用 `_calc_nullity`
+- 先只建立轻量的 `BindRegime` 容器对象
+- 然后进入 `_prefill_affine_cache!`：
+  - 按 x-graph connected component 处理
+  - 在每个 component 里挑 seed
+  - seed 先直接计算 `P/P0/M/M0/C_x/C0_x`
+  - 若 seed regular，则沿图用 rank-1 update 传播 `H/H0`
+  - 传播过程中即时给可判定的 regime 打上 `nullity = 0/1`
+  - 若 seed 是 `nullity = 1`，只直接计算自身，不再继续传播
+- 只有剩下的高 nullity 候选才 defer 到 `_calc_nullity`
+- 最后 `_ensure_full_regimes_graph!` 再把所有可定义的 qK-space interface 补进 `VertexGraph.qK_interface_pool`
+
+这里有两个重要实现选择：
+
+- `_prefill_affine_cache_core!` 不会把全部 regime 的 nullity 重新显式算一遍；它保留“图上传播 + 高 nullity defer”的原逻辑
+- 多线程传播工作区 `AffinePropagateWorkspace` 现在按 `Threads.maxthreadid()` 分配槽位，而不是 `Threads.nthreads()`，避免 notebook / task 调度下的线程槽越界
 
 
 ### 4.4 枚举 catalysis regimes
@@ -446,16 +510,19 @@ rgm = get_bnc_regime(model, bind_perm, cat_perm)
 ### 6.1 基础类型与装配
 
 - [src/initialize.jl](/home/joker/Realizibility_index/BindingAndCatalysis.jl/src/initialize.jl)
-  负责定义 `Bnc`, `BindRegime`, `CatalysisData`, `CatalysisRegime`, `BncRegime`, `SISOPaths` 等核心类型，以及构造器、缓存初始化、`include` 顺序。
+  负责定义 `Bnc`, `BindRegime`, `CatalysisData`, `CatalysisRegime`, `BncRegime`, `SISOPaths` 等核心类型，以及构造器、lazy numerical cache、`include` 顺序。
 
 
 ### 6.2 组合学枚举与矩阵辅助
 
-- [src/find_matrix_vertex.jl](/home/joker/Realizibility_index/BindingAndCatalysis.jl/src/find_matrix_vertex.jl)
+- [src/Mathcore/find_matrix_vertex.jl](/home/joker/Realizibility_index/BindingAndCatalysis.jl/src/Mathcore/find_matrix_vertex.jl)
   负责从一个矩阵的每一行 dominant choice 出发构造 regime/vertex 组合。
 
+- [src/Mathcore/perm_graph_core.jl](/home/joker/Realizibility_index/BindingAndCatalysis.jl/src/Mathcore/perm_graph_core.jl)
+  负责 x-neighbor graph 构造、component 级 affine propagation、qK interface pool 去重、以及 graph cache 的补全。
+
 - [src/matrix_inverse.jl](/home/joker/Realizibility_index/BindingAndCatalysis.jl/src/matrix_inverse.jl)
-  负责 `M` 或其相关子矩阵的逆、rank-1 singular 情况下的 ray-like 信息，以及对应 cache。
+  负责 `M` 或其相关子矩阵的逆、adjugate/nullity-1 情况下的 affine 信息，以及 rank-1 update 公式。
 
 - [src/helperfunctions.jl](/home/joker/Realizibility_index/BindingAndCatalysis.jl/src/helperfunctions.jl)
   杂项矩阵/符号/索引辅助函数。
@@ -470,7 +537,7 @@ rgm = get_bnc_regime(model, bind_perm, cat_perm)
   给定 `x` 或 `qK`，判断当前点属于哪个 regime。
 
 - [src/qK_x_mapping.jl](/home/joker/Realizibility_index/BindingAndCatalysis.jl/src/qK_x_mapping.jl)
-  数值映射 `x ↔ qK`，包括 homotopy / nonlinear solve / trajectory。
+  数值映射 `x ↔ qK`，包括 homotopy / nonlinear solve / trajectory；当前会按需拉起 `IntegrationHelper`，并复用缓存的 `_LN_sparse` / `_LN_lu`。
 
 - [src/numeric.jl](/home/joker/Realizibility_index/BindingAndCatalysis.jl/src/numeric.jl)
   数值导数与 reaction-order 类计算。
@@ -698,6 +765,32 @@ regular 情况下很多东西可直接通过矩阵逆得到；singular 情况下
 因此调试时如果看到某些字段是 `nothing`，先区分它属于“高 nullity 无法定义”还是“尚未 materialize”。
 
 
+### 10.6 数值 helper 现在是 lazy + thread-safe
+
+以前容易误以为 `Bnc` 构造完成后，数值积分相关缓存都已经准备好了。现在不是这样：
+
+- `_L_helper` 仍然是 eager
+- `IntegrationHelper` 则是 lazy
+
+所以如果你在调试 `qK_x_mapping.jl` 或 `assign_regime_x`，看到第一次调用会经过 `_integration_helper!`，这是当前设计的一部分，不是多余绕路。
+
+这么做的目的有两个：
+
+- 避免很多只做组合学/图分析的 workflow 白算一份 `_LN_sparse` 和 `_LN_lu`
+- 避免多线程第一次进入数值入口时重复初始化
+
+
+### 10.7 qK-space graph interface 现在是 pooled，而不是 edge-local
+
+如果你以前见过“edge 直接挂一整条 qK 超平面”的旧实现，需要更新这个 mental model：
+
+- x-space hyperplane 和 qK-space hyperplane 现在都是 pool 化管理
+- edge 只存 pool index 和 sign
+- 正反边共享同一份几何对象
+
+这让 graph cache 更紧凑，也让“同一接口的正反方向”保持严格一致。
+
+
 ## 11. 对开发者最有用的测试与示例
 
 - [test/runtests.jl](/home/joker/Realizibility_index/BindingAndCatalysis.jl/test/runtests.jl)
@@ -707,7 +800,7 @@ regular 情况下很多东西可直接通过矩阵逆得到；singular 情况下
   最适合交互式学习。
 
 - [test/work_summary_and_suggestions.md](/home/joker/Realizibility_index/BindingAndCatalysis.jl/test/work_summary_and_suggestions.md)
-  记录了最近一轮关于 `CatalysisRegime` / `BncRegime` 的补全与一些设计建议。
+  记录了最近几轮关于 `CatalysisRegime` / `BncRegime` / binding graph cache / numerical cache 的补全与一些设计建议。
 
 
 ## 12. 如果我要改功能，先看哪里

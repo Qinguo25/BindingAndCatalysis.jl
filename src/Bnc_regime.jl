@@ -4,6 +4,9 @@
 #============================================================================================#
 
 @inline _spI(T, n) = spdiagm(0 => ones(T, n))
+@inline _float_sparse(A::SparseMatrixCSC{Float64,Int}) = A
+@inline _float_sparse(A::SparseMatrixCSC{<:Real,Int}) = sparse(Float64.(A))
+@inline _float_vec(v::AbstractVector{<:Real}) = Float64.(v)
 
 
 get_binding_regime(rgm::BncRegime) = rgm.bind_rgm
@@ -127,12 +130,14 @@ is_stable(model::Bnc, bind, cat; kwargs...) = is_stable(get_bnc_regime(model, bi
 
 function _binding_C_qKk(bind_rgm::BindRegime, n_v::Int)
     C_qK, C0_qK, nlt = get_C_C0_nullity_qK(bind_rgm)
+    C_qK = _float_sparse(C_qK)
     C = hcat(C_qK, spzeros(Float64, size(C_qK, 1), n_v))
-    return C, Float64.(C0_qK), nlt
+    return C, _float_vec(C0_qK), nlt
 end
 
 function _calc_C_qKk_catalysis_only_regular(bind_rgm::BindRegime, cat_rgm::CatalysisRegime)
     H, H0 = get_H_H0(bind_rgm)
+    H = _float_sparse(H)
     CΠ = get_CΠ(cat_rgm)
     Cθ = get_C_k(cat_rgm)
     C0θ = get_C0(cat_rgm)
@@ -436,7 +441,9 @@ Output variables are ordered as (q, K, k).
 """
 function _calc_C_qKk_cat_regular(bind_rgm::BindRegime, cat_rgm::CatalysisRegime)
     H, H0 = get_H_H0(bind_rgm)
+    H = _float_sparse(H)
     C_qK, C0_qK = get_C_C0_qK(bind_rgm)
+    C_qK = _float_sparse(C_qK)
     CΠ = get_CΠ(cat_rgm)
     Cθ = get_C_k(cat_rgm)
     C0θ = get_C0(cat_rgm)
@@ -447,7 +454,7 @@ function _calc_C_qKk_cat_regular(bind_rgm::BindRegime, cat_rgm::CatalysisRegime)
     C2 = hcat(CΠ * H, Cθ)
 
     C = vcat(C1, C2)
-    C0 = vcat(C0_qK, CΠ * H0 + C0θ)
+    C0 = vcat(_float_vec(C0_qK), CΠ * H0 + C0θ)
 
     return C, C0, 0
 end

@@ -222,6 +222,44 @@ end
     return 0
 end
 
+function _seed_nullity_hint!(rgm::BindRegime; drop_tol::Float64=1e-10)
+    rgm.nullity >= 0 && return rgm.nullity
+
+    _initialize_regime!(rgm)
+    perm_nullity = _calc_perm_nullity(rgm.perm)
+    if perm_nullity >= 2
+        rgm.nullity = 2
+        return 2
+    end
+
+    _, nlt = calc_H_and_nullity(rgm.perm, rgm.network.N, rgm.network.direction; drop_tol=drop_tol)
+    rgm.nullity = nlt
+    return nlt
+end
+
+function _find_preferred_seed!(
+    regimes::Vector{BindRegime},
+    comp::Vector{Int},
+    remaining::Vector{UInt8};
+    drop_tol::Float64=1e-10,
+)
+    seed = _find_remaining_seed(comp, remaining)
+    seed == 0 && return 0
+
+    if !_affine_is_exact(regimes[seed].network)
+        return seed
+    end
+
+    for idx in comp
+        remaining[idx] == 0x01 || continue
+        if _seed_nullity_hint!(regimes[idx]; drop_tol=drop_tol) == 0
+            return idx
+        end
+    end
+
+    return seed
+end
+
 
 function _prefill_affine_cache!(model::Bnc; ensure_built::Bool=true)
     ensure_built && find_all_regimes!(model)
@@ -285,7 +323,7 @@ function _explore_component_and_collect_high!(
     high_idxs = Int[] # collect indices of regimes with nullity >= 2
 
     while true
-        seed = _find_remaining_seed(comp, remaining)
+        seed = _find_preferred_seed!(regimes, comp, remaining)
         seed == 0 && break
 
         remaining[seed] = 0x00
@@ -328,16 +366,20 @@ function _direct_seed_affine_and_nullity!(rgm::BindRegime; drop_tol::Float64=1e-
         return nothing
     end
 
-    H, nlt = let
-        perm = rgm.perm
-        N = rgm.network.N
-        scale = rgm.network.direction        
-        direct_inverse_or_adjugate(perm, N, scale; drop_tol=drop_tol)
+    H, nlt = if _affine_is_exact(rgm.network)
+        _exact_direct_inverse_or_adjugate(rgm.perm, rgm.network.N, rgm.network.direction; allow_singular=true)
+    else
+        let
+            perm = rgm.perm
+            N = rgm.network.N
+            scale = rgm.network.direction
+            direct_inverse_or_adjugate(perm, N, scale; drop_tol=drop_tol)
+        end
     end
 
     rgm.nullity = nlt
     rgm.H = H
-    rgm.H0 = vec(-(H * rgm.M0))
+    rgm.H0 = vec(Float64.(-(H * rgm.M0)))
 
     return nothing
 end
@@ -479,7 +521,7 @@ end
 
 
 #=============================================================================================#
-#          Calc qK-space change directions for edges with nullity <= 1 regimes
+#          Calc qK-space change directions for edges with nullity <= 1 regimes This part is pure AI
 #=============================================================================================#
 
 function _edge_qK_interface(grh::VertexGraph, edge::VertexEdge)
@@ -620,18 +662,22 @@ end
 
 @inline function _calc_dir(
     nlt::Int,
-    H::SparseMatrixCSC{Float64,Int},
+    H::SparseMatrixCSC{<:Real,Int},
     H0::AbstractVector{<:Real},
     c_c0::Hyperplane_perm,
     sign::Int8,
     drop_tol::Float64=1e-10,
 )
-   c_qK = c_c0*H .* sign 
+    c_qK = c_c0 * H .* sign
     c0_qK = nlt ==0 ? c_c0 * H0 * sign : mul(c_c0, H0; with_c0=false) * sign 
-    
+
+    I, V = findnz(c_qK)
+    c_qK = SparseArrays.sparsevec(I, Float64.(V), length(c_qK))
     if drop_tol > 0 
         droptol!(c_qK, drop_tol) 
-        droptol!(c0_qK, drop_tol)
+        c0_qK = droptol!(Float64(c0_qK), drop_tol)
+    else
+        c0_qK = Float64(c0_qK)
     end
 
     return c_qK, c0_qK

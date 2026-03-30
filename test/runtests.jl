@@ -234,6 +234,22 @@ end
     @test length(H0s) == model.n
 end
 
+@testset "Rational H Mode" begin
+    model = minimal_model()
+    find_all_regimes!(model; H_mode = :rational)
+
+    H = get_H(model, 1)
+    CqK = get_C_qK(model, 1)
+
+    @test model.affine_coeff_mode == :rational
+    @test eltype(H) <: Rational
+    @test eltype(CqK) <: Rational
+
+    find_all_regimes!(model; H_mode = :float)
+    @test model.affine_coeff_mode == :float
+    @test eltype(get_H(model, 1)) == Float64
+end
+
 @testset "Larger RO Path Workflow" begin
     model = notebook_model2()
     pths = SISOPaths(model, 1)

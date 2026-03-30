@@ -164,12 +164,22 @@ struct NρCacheEntry
     v::Vector{Float64}                 # right null vector (length r)
 end
 
-
-
-
+const ExactAffineCoeff = Rational{Int}
+const BindAffineMatrix = Union{
+    SparseMatrixCSC{Float64,Int},
+    SparseMatrixCSC{ExactAffineCoeff,Int},
+}
 
 abstract type AbstractBnc end
 abstract type AbstractRegime end
+
+@inline function _normalize_affine_mode(mode::Symbol)
+    mode in (:float, :rational) || error("Unsupported H_mode=$mode. Use :float or :rational.")
+    return mode
+end
+
+@inline _affine_mode(::AbstractBnc) = :float
+@inline _affine_is_exact(model::AbstractBnc) = _affine_mode(model) === :rational
 #=================================================================================#
 # f(L) -> {P,P0,C,C0} associated structs and helpers
 #=================================================================================#
@@ -296,9 +306,9 @@ mutable struct BindRegime{F,T} <: AbstractRegime
 
     # --- Expensive Calculated Properties ---
     nullity::T
-    H::Union{SparseMatrixCSC{Float64, Int}, Nothing} # Taking inverse, can have Float.
+    H::Union{BindAffineMatrix, Nothing}
     H0::Union{Vector{F}, Nothing} 
-    C_qK::Union{SparseMatrixCSC{Float64, Int}, Nothing}
+    C_qK::Union{BindAffineMatrix, Nothing}
     C0_qK::Union{Vector{F}, Nothing} 
     
     volume::Union{Volume, Nothing}
@@ -386,7 +396,7 @@ mutable struct BncRegime <:AbstractRegime
         PΠ = get_PΠ(catalysis_rgm)
         H = get_H(bind_rgm)
         r_v = size(PΠ,1)
-        H_bd = PΠ * H[:,1:r_v]
+        H_bd = sparse(Float64.(PΠ * H[:,1:r_v]))
         return new(bind_rgm, catalysis_rgm, 
             H_bd, Int8(-1),
             -1,nothing, nothing,
@@ -516,6 +526,7 @@ mutable struct Bnc{T} <: AbstractBnc # T is the int type to save all the indices
 
     #------other helper parameters------
     direction::Int8 # direction of the binding reactions, determine the ray direction for invertible regime, calculated by sign of det[L;N]
+    affine_coeff_mode::Symbol
     IntegrationHelper::Union{IntegrationHelper,Nothing}
     _L_helper::MatrixHelper
 
@@ -560,12 +571,14 @@ mutable struct Bnc{T} <: AbstractBnc # T is the int type to save all the indices
             ReentrantLock(),                 # _integration_helper_lock
             # Fields 13-28 (Calculated values)
             direction,
+            :float,                          # affine_coeff_mode
             nothing,
             _L_helper,
         )
     end
 end
 
+@inline _affine_mode(model::Bnc) = getfield(model, :affine_coeff_mode)
 
 
 

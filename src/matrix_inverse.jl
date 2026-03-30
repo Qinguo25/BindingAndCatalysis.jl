@@ -301,12 +301,12 @@ end
 function _append_block_triplets!(
     I::Vector{Int},
     J::Vector{Int},
-    V::Vector{Float64},
+    V::Vector{Tc},
     p::Int,
     rowmap::Vector{Int},
     coloffset::Int,
-    A::SparseMatrixCSC{Float64,Int},
-)
+    A::SparseMatrixCSC{Tc,Int},
+) where {Tc<:Real}
     @inbounds for col in 1:size(A, 2)
         for ptr in A.colptr[col]:(A.colptr[col + 1] - 1)
             p += 1
@@ -321,23 +321,23 @@ end
 function _assemble_H_from_blocks(
     perm::AbstractVector{<:Integer},
     key::Vector{Int},
-    BL::SparseMatrixCSC{Float64,Int},
-    BR::SparseMatrixCSC{Float64,Int},
+    BL::SparseMatrixCSC{Tc,Int},
+    BR::SparseMatrixCSC{Tc,Int},
     n::Int,
-)
+) where {Tc<:Real}
     d = length(perm)
     nnzH = d + nnz(BL) + nnz(BR)
 
     I = Vector{Int}(undef, nnzH)
     J = Vector{Int}(undef, nnzH)
-    V = Vector{Float64}(undef, nnzH)
+    V = Vector{Tc}(undef, nnzH)
 
     p = 0
     @inbounds for i in 1:d
         p += 1
         I[p] = Int(perm[i])
         J[p] = i
-        V[p] = 1.0
+        V[p] = one(Tc)
     end
 
     p = _append_block_triplets!(I, J, V, p, key, 1,     BL)
@@ -468,23 +468,23 @@ end
 # -----------------------------------------------------------------------------
 
 function _sparse_outer(
-    c::SparseVector{Float64,Int},
-    s::SparseVector{Float64,Int},
-    scale::Float64,
-)
+    c::SparseVector{Tc,Int},
+    s::SparseVector{Tc,Int},
+    scale::Tc,
+) where {Tc<:Real}
     nrow = length(c)
     ncol = length(s)
     Ic, Vc = findnz(c)
     Js, Vs = findnz(s)
 
     if isempty(Ic) || isempty(Js)
-        return spzeros(Float64, nrow, ncol)
+        return spzeros(Tc, nrow, ncol)
     end
 
     nnzA = length(Ic) * length(Js)
     I = Vector{Int}(undef, nnzA)
     J = Vector{Int}(undef, nnzA)
-    V = Vector{Float64}(undef, nnzA)
+    V = Vector{Tc}(undef, nnzA)
 
     p = 0
     @inbounds for a in eachindex(Ic)
@@ -501,6 +501,33 @@ function _sparse_outer(
     return sparse(I, J, V, nrow, ncol)
 end
 
+@inline _is_float_eltype(::Type{T}) where {T<:Real} = T <: AbstractFloat
+
+@inline function _cleanup_affine_sparse!(A::SparseMatrixCSC{T,Int}, tol::Float64) where {T<:Real}
+    if _is_float_eltype(T)
+        tol > 0 && droptol!(A, tol)
+    else
+        dropzeros!(A)
+    end
+    return A
+end
+
+@inline function _cleanup_affine_sparse!(v::SparseVector{T,Int}, tol::Float64) where {T<:Real}
+    if _is_float_eltype(T)
+        tol > 0 && droptol!(v, tol)
+    else
+        dropzeros!(v)
+    end
+    return v
+end
+
+@inline function _cleanup_affine_vector!(v::AbstractVector{T}, tol::Float64) where {T<:Real}
+    tol > 0 && droptol!(v, tol)
+    return v
+end
+
+@inline _cleanup_affine_scalar(x::T, tol::Float64) where {T<:Real} = _is_float_eltype(T) && tol > 0 ? droptol!(x, tol) : x
+
 function droptol!(A::AbstractArray, tol)
     @inbounds for i in eachindex(A)
         if abs(A[i]) < tol
@@ -514,8 +541,10 @@ function droptol!(A::Real, tol)
     return A = abs(A) < tol ? zero(eltype(A)) : A
 end
 
+@inline _rank1_target_is_singular(a::Rational, atol::Float64) = a == -one(a)
+@inline _rank1_target_is_singular(a::Real, atol::Float64) = abs(1 + Float64(a)) <= atol
 function _rank1_step_update_from_regular(
-    H::SparseMatrixCSC{Float64,Int},
+    H::SparseMatrixCSC{Tc,Int},
     H0::AbstractVector{<:Real},
     
     i::Int, 
@@ -525,29 +554,25 @@ function _rank1_step_update_from_regular(
 
     atol::Float64=1e-12,
     drop_tol::Float64=1e-10,
-)
+) where {Tc<:Real}
     c_qK = c_c0 * H .* sign  
     c0_qK = c_c0 * H0 * sign
 
-    drop_tol > 0 && droptol!(c_qK, drop_tol) 
+    _cleanup_affine_sparse!(c_qK, drop_tol)
 
     H_i = H[:, i]
     a = c_qK[i]
 
-    if abs(1 + a) <= atol
-        H_to = _sparse_outer(H_i, c_qK, -1.0)
-        H0_to = H_i * c0_qK
+    if _rank1_target_is_singular(a, atol)
+        H_to = _cleanup_affine_sparse!(_sparse_outer(H_i, c_qK, -one(Tc)), drop_tol)
+        H0_to = _cleanup_affine_vector!(Vector(H_i * c0_qK), drop_tol)
         nlt_to = 1
     else
-        H_to = H - _sparse_outer(H_i, c_qK, 1 / (1 + a))
-        H0_to = H0 .- H_i ./(1 + a) * c0_qK
+        scale = inv(one(Tc) + a)
+        H_to = _cleanup_affine_sparse!(H - _sparse_outer(H_i, c_qK, scale), drop_tol)
+        H0_to = _cleanup_affine_vector!(H0 .- H_i .* scale .* c0_qK, drop_tol)
         nlt_to = 0
     end 
-
-    if drop_tol > 0
-        droptol!(H_to, drop_tol)
-        droptol!(H0_to, drop_tol)
-    end
 
     return H_to, H0_to, nlt_to, c_qK, c0_qK
 end
@@ -688,9 +713,7 @@ function calc_H_and_nullity(
 
     k, perm_def = _key_from_perm!(keybuf, seen, touched, perm_int, n)
     
-    if perm_def != 0
-        return nothing, nullity
-    end
+    
 
 
     key = copy(@view keybuf[1:k])
@@ -703,12 +726,17 @@ function calc_H_and_nullity(
     entry = _factor_Nρ(Nρ; atol=atol, rtol=rtol, drop_tol=drop_tol)
 
     nullity = perm_def + entry.deficiency
-
+    
     # ------------------------------------------------------------------
     # 3) 和你现有 _calc_H 保持一致：
     #    - perm 有重复 => 不构造 H
     #    - total nullity >= 2 => 不支持，返回 nothing
     # ------------------------------------------------------------------
+    
+    if perm_def != 0
+        return nothing, nullity
+    end
+
     if entry.deficiency == 0
         BR = entry.inv
         Nc = sparse(N[:, perm_int])
@@ -787,6 +815,146 @@ function _adj_singular_matrix(A::AbstractMatrix; atol=1e-12)::Tuple{SparseMatrix
     end
 end
 
+#=======================================================================================================#
+# Bareiss algorithm for exact determinant of integer matrices, used in the exact adjugate computation.
+#=======================================================================================================#
+
+function _bareiss_det_big(A::AbstractMatrix{<:Integer})::BigInt
+    n, m = size(A)
+    @assert n == m "A must be square."
+    n == 0 && return BigInt(1)
+    n == 1 && return BigInt(A[1, 1])
+
+    B = Matrix{BigInt}(A)
+    sign = BigInt(1)
+    prev = BigInt(1)
+
+    @inbounds for k in 1:(n - 1)
+        if B[k, k] == 0
+            swap = findfirst(i -> B[i, k] != 0, (k + 1):n)
+            swap === nothing && return BigInt(0)
+            B[k, :], B[swap, :] = B[swap, :], B[k, :]
+            sign = -sign
+        end
+
+        pivot = B[k, k]
+        pivot == 0 && return BigInt(0)
+
+        for i in (k + 1):n
+            for j in (k + 1):n
+                B[i, j] = (B[i, j] * pivot - B[i, k] * B[k, j]) ÷ prev
+            end
+        end
+        prev = pivot
+    end
+
+    return sign * B[n, n]
+end
+
+function _minor_matrix(A::AbstractMatrix{<:Integer}, row::Int, col::Int)
+    n = size(A, 1)
+    B = Matrix{Int}(undef, n - 1, n - 1)
+    bi = 0
+    @inbounds for i in 1:n
+        i == row && continue
+        bi += 1
+        bj = 0
+        for j in 1:n
+            j == col && continue
+            bj += 1
+            B[bi, bj] = Int(A[i, j])
+        end
+    end
+    return B
+end
+
+function _exact_inverse_matrix(A::AbstractMatrix{<:Integer})
+    AQ = ExactAffineCoeff.(Matrix{Int}(A))
+    H = sparse(inv(AQ))
+    dropzeros!(H)
+    return H
+end
+
+function _exact_calc_H_regular(
+    perm::AbstractVector{<:Integer},
+    N::AbstractMatrix{<:Integer},
+)
+    n = size(N, 2)
+    key, perm_def = _get_Nρ_key_and_perm_nullity(perm, n)
+    perm_def == 0 || return nothing
+
+    BR = _exact_inverse_matrix(N[:, key])
+    Nc = sparse(ExactAffineCoeff.(Matrix{Int}(N[:, Int.(perm)])))
+    BL = -(BR * Nc)
+    dropzeros!(BL)
+
+    return _assemble_H_from_blocks(perm, key, BL, BR, n)
+end
+
+function _exact_adjugate_matrix(A::AbstractMatrix{<:Integer})
+    n, m = size(A)
+    @assert n == m "A must be square."
+
+    if n == 1
+        return sparse(reshape(ExactAffineCoeff[one(ExactAffineCoeff)], 1, 1))
+    end
+
+    Adj = Matrix{ExactAffineCoeff}(undef, n, n)
+    @inbounds for i in 1:n
+        for j in 1:n
+            cof = _bareiss_det_big(_minor_matrix(A, j, i))
+            if isodd(i + j)
+                cof = -cof
+            end
+            Adj[i, j] = ExactAffineCoeff(Int(cof), 1)
+        end
+    end
+
+    H = sparse(Adj)
+    dropzeros!(H)
+    return H
+end
+
+function _exact_direct_inverse_or_adjugate(A::AbstractMatrix{<:Integer}, scale::Integer=1)
+    detA = _bareiss_det_big(A)
+    if detA != 0
+        return _exact_inverse_matrix(A), 0
+    end
+
+    H = _exact_adjugate_matrix(A)
+    if nnz(H) == 0
+        return spzeros(ExactAffineCoeff, size(A, 1), size(A, 2)), 2
+    end
+
+    if scale != 1
+        H = sparse(scale .* H)
+        dropzeros!(H)
+    end
+    return H, 1
+end
+
+function _exact_direct_inverse_or_adjugate(
+    perm::AbstractVector{<:Integer},
+    N::AbstractMatrix{<:Integer},
+    scale::Integer=1;
+    allow_singular::Bool=true,
+)
+    H = _exact_calc_H_regular(perm, N)
+    if !isnothing(H)
+        return H, 0
+    end
+
+    if !allow_singular
+        n = size(N, 2)
+        return spzeros(ExactAffineCoeff, n, n), 1
+    end
+
+    d = length(perm)
+    P = sparse(1:d, Int.(perm), ones(Int, d), d, size(N, 2))
+    M = [Matrix(P); Matrix(N)]
+    return _exact_direct_inverse_or_adjugate(M, scale)
+end
+
 
 function direct_inverse_or_adjugate(A::AbstractMatrix; atol::Float64=1e-12)::Tuple{SparseMatrixCSC,Int}
     n, m = size(A)
@@ -805,14 +973,13 @@ function direct_inverse_or_adjugate(
     perm::AbstractVector{<:Integer},
     N::AbstractMatrix{Tv},
     scale::Real=1;
-    atol::Float64=1e-12)::Tuple{SparseMatrixCSC,Int}
+    atol::Float64=1e-12,
+    drop_tol::Float64=1e-12,
+)::Tuple{SparseMatrixCSC,Int} where {Tv<:Real}
 
-    H, nlt = _calc_H_and_nullity(perm, N, scale)
+    H, nlt = calc_H_and_nullity(perm, N, scale; drop_tol=drop_tol)
     if !isnothing(H)
         return H, nlt
-    elseif nlt == 1
-        H, nullity = _adj_singular_matrix(A; atol=atol)
-        return H, nullity
     else
         return spzeros(0, 0), nlt
     end

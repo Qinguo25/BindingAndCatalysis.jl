@@ -754,13 +754,13 @@ function _calc_RO_for_single_path(model, path::AbstractVector{<:Integer}, change
     r_ord = Vector{Float64}(undef, length(path))
     for i in eachindex(path)
         if !is_singular(model, path[i])
-            r_ord[i] = get_H(model, path[i])[observe_x_idx, change_qK_idx] |> x->round(x;digits=3)
+            r_ord[i] = round(Float64(get_H(model, path[i])[observe_x_idx, change_qK_idx]); digits=3)
         else
             ord = get_H(model, path[i])[observe_x_idx, change_qK_idx]
             if abs(ord) < 1e-6
                 r_ord[i] = NaN  # We use NaN to denote continuous singular, if reaction order not same before and after, means discontinuity
             else 
-                r_ord[i] = ord  * Inf
+                r_ord[i] = Float64(ord) * Inf
             end     
         end
     end

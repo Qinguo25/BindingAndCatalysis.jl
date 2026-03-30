@@ -398,6 +398,37 @@ function get_node_size(model::Bnc; default_node_size=50, asymptotic=true, kwargs
     return Dict(i=>sqrt(Volume[i]) for i in eachindex(Volume))
 end
 
+@inline function _node_subset_by_nullity(model::Bnc; hide_nullity_ge_2::Bool=false)
+    if hide_nullity_ge_2
+        return [i for i in 1:n_regimes(model) if get_nullity(model, i) <= 1]
+    else
+        return collect(1:n_regimes(model))
+    end
+end
+
+function _filter_edge_labels_for_nodes(edge_labels, grh::AbstractGraph, keep_nodes::Vector{Int})
+    keep_set = Set(keep_nodes)
+    old_to_new = Dict(keep_nodes[i] => i for i in eachindex(keep_nodes))
+
+    if edge_labels isa Dict
+        labels = Dict{Edge,Any}()
+        for (e, lbl) in edge_labels
+            (e.src in keep_set && e.dst in keep_set) || continue
+            labels[Edge(old_to_new[e.src], old_to_new[e.dst])] = lbl
+        end
+        return labels
+    elseif edge_labels isa AbstractVector
+        labels = Any[]
+        for (e, lbl) in zip(edges(grh), edge_labels)
+            (src(e) in keep_set && dst(e) in keep_set) || continue
+            push!(labels, lbl)
+        end
+        return labels
+    else
+        return edge_labels
+    end
+end
+
 
 
 
@@ -425,7 +456,8 @@ end
 
 """
     draw_graph(model::Bnc, grh=nothing; default_node_size=50, node_posi=nothing, edge_labels=nothing,
-        node_labels=nothing, node_colors=nothing, add_rgm_idx=true, figsize=(1000,1000), kwargs...) -> (Figure, Axis, Plot)
+        node_labels=nothing, node_colors=nothing, add_rgm_idx=true, figsize=(1000,1000),
+        hide_nullity_ge_2=false, kwargs...) -> (Figure, Axis, Plot)
 
 Draw a graph with customizable node/edge annotations.
 """
@@ -436,17 +468,31 @@ function draw_graph(model::Bnc, grh=nothing;
     node_labels=nothing,
     node_colors=nothing,
     add_rgm_idx::Bool=true, 
+    hide_nullity_ge_2::Bool=false,
     figsize=(1000,1000), 
     kwargs...)
 
     # use provided grh or compute a default neighbor graph
     grh = isnothing(grh) ? get_neighbor_graph_qK(model) : grh
+    full_grh = grh
 
     edge_labels =  isnothing(edge_labels) ? get_edge_labels(model) : edge_labels
     posi = isnothing(node_posi) ? get_node_positions(model) : Point2f.(node_posi)
     node_labels = isnothing(node_labels) ? get_node_labels(model) : node_labels
     node_colors = isnothing(node_colors) ? get_node_colors(model) : node_colors
     node_size = get_node_size(model; default_node_size=default_node_size)
+
+    keep_nodes = _node_subset_by_nullity(model; hide_nullity_ge_2=hide_nullity_ge_2)
+    if length(keep_nodes) < nv(grh)
+        grh, _ = induced_subgraph(grh, keep_nodes)
+        edge_labels = _filter_edge_labels_for_nodes(edge_labels, full_grh, keep_nodes)
+        posi = posi[keep_nodes]
+        node_labels = node_labels[keep_nodes]
+        node_colors = node_colors[keep_nodes]
+        node_size = [node_size[i] for i in keep_nodes]
+    else
+        node_size = [node_size[i] for i in 1:length(node_labels)]
+    end
 
 
     f = Figure(size = figsize)
