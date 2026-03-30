@@ -12,6 +12,7 @@ function assign_regime_x(Bnc::Bnc{T}, x::AbstractVector{<:Real};
     asymptotic_only::Bool=true,
     return_idx::Bool=false) where T
     # x = input_logspace ? exp10.(x) : x
+    helper = _integration_helper!(Bnc)
     L = Bnc.L
     d = Bnc.d
     n = Bnc.n
@@ -21,10 +22,10 @@ function assign_regime_x(Bnc::Bnc{T}, x::AbstractVector{<:Real};
     rowval = L.rowval
 
     if asymptotic_only
-        nzval = @view(x[Bnc.IntegrationHelper._LN_top_cols])
+        nzval = @view(x[helper._LN_top_cols])
     else
         x = input_logspace ? exp10.(x) : x # linear or log space only matters when not asymptotic
-        nzval = @view(x[Bnc.IntegrationHelper._LN_top_cols]) .* L.nzval
+        nzval = @view(x[helper._LN_top_cols]) .* L.nzval
     end
 
     @inbounds for col in 1:n

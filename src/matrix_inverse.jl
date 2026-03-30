@@ -469,51 +469,6 @@ function _sparse_outer(
     return sparse(I, J, V, nrow, ncol)
 end
 
-# """
-#     _rank1_update_H_H0(H, H0, i, j_from, j_to, δ0; atol=1e-12, drop_tol=1e-10)
-
-# Apply the rank-1 affine update
-
-#     M'  = M  + e_i (e_{j_to} - e_{j_from})'
-#     M0' = M0 + δ0 e_i
-
-# to an existing affine inverse
-
-#     log x = H log y + H0.
-
-# Returns `(H′, H0′, δ)`. If `δ ≈ 0`, `H′` and `H0′` are returned as `nothing`.
-# """
-# function _rank1_update_H_H0(
-#     H::SparseMatrixCSC{Float64,Int},
-#     H0::AbstractVector{<:Real},
-#     i::Int,
-#     j_from::Int,
-#     j_to::Int,
-#     δ0::Real;
-#     atol::Float64=1e-12,
-#     drop_tol::Float64=1e-10,
-# )
-#     c = H[:, i]
-#     s = H[j_to, :] - H[j_from, :]
-#     δ = 1.0 + H[j_to, i] - H[j_from, i]
-
-#     if !isfinite(δ) || abs(δ) <= atol
-#         return nothing, nothing, δ
-#     end
-
-#     update = _sparse_outer(c, s, 1 / δ, size(H, 1), size(H, 2))
-#     H_new = sparse(H - update)
-#     drop_tol > 0 && droptol!(H_new, drop_tol)
-
-#     shift = (Float64(H0[j_to]) - Float64(H0[j_from]) + Float64(δ0)) / δ
-#     H0_new = Float64.(copy(H0))
-#     Ic, Vc = findnz(c)
-#     @inbounds for t in eachindex(Ic)
-#         H0_new[Ic[t]] -= Vc[t] * shift
-#     end
-
-#     return H_new, H0_new, δ
-# end
 function droptol!(A::AbstractArray, tol)
     @inbounds for i in eachindex(A)
         if abs(A[i]) < tol
@@ -566,56 +521,6 @@ function _rank1_step_update_from_regular(
 end
 
 
-
-
-
-
-
-
-# """
-#     _rank1_step_H_H0_from_regular(H, H0, M0_to, i, j_from, j_to, δ0; kwargs...)
-
-# Transition across one x-neighbor edge when the source regime is regular.
-
-# Returns `(H_to, H0_to, nullity_to, δ)`:
-
-# - if `δ ≠ 0`, the target regime is regular and Sherman-Morrison is used
-# - if `δ = 0`, the target regime is singular with nullity exactly `1`, and a
-#   rank-1 adjugate-like ray is materialized directly from the edge data
-# """
-# function _rank1_step_H_H0_from_regular(
-#     H::SparseMatrixCSC{Float64,Int},
-#     H0::AbstractVector{<:Real},
-#     M0_to::AbstractVector{<:Real},
-#     i::Int,
-#     j_from::Int,
-#     j_to::Int,
-#     δ0::Real;
-#     atol::Float64=1e-12,
-#     drop_tol::Float64=1e-10,
-# )
-#     H_to, H0_to, δ = _rank1_update_H_H0(
-#         H,
-#         H0,
-#         i,
-#         j_from,
-#         j_to,
-#         δ0;
-#         atol=atol,
-#         drop_tol=drop_tol,
-#     )
-#     if !isnothing(H_to)
-#         return H_to, H0_to, 0, δ
-#     end
-
-#     c = H[:, i]
-#     s = H[j_to, :] - H[j_from, :]
-#     H_sing = _sparse_outer(c, s, -1.0, size(H, 1), size(H, 2))
-#     drop_tol > 0 && droptol!(H_sing, drop_tol)
-#     H0_sing = vec(-(H_sing * Float64.(M0_to)))
-
-#     return H_sing, H0_sing, 1, δ
-# end
 
 """
     _lowrank_update_H_H0(H, H0, U, V, δ0; kwargs...)
@@ -707,6 +612,14 @@ function _calc_H(
     error("nullity([P;N]) >= 2 is not supported by _calc_H; call _calc_nullity first and skip those perms.")
 end
 
+
+
+
+
+
+
+
+
 function _calc_H(
     model::Bnc,
     perm::AbstractVector{<:Integer};
@@ -757,7 +670,7 @@ function _adj_singular_matrix(A::AbstractMatrix; atol=1e-12)::Tuple{SparseMatrix
         sign_correction = det(F.U) * det(F.V) # to ensure the sign is right!!!!!!
         u = F.U[:, k]   # 左奇异向量
         v = F.V[:, k]   # 右奇异向量
-        adj_A = (sign_correction * σprod) * (sparsevec(v) * sparsevec(u)')
+        adj_A = (sign_correction * σprod) * (sparse(v) * sparse(u)')
         return adj_A, 1  # rank-1 矩阵
     else
         return spzeros(0, 0), nullity

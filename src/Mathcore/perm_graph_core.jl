@@ -172,7 +172,7 @@ mutable struct AffinePropagateWorkspace
     next_locals::Vector{Vector{Int}}
     disc_locals::Vector{Vector{Int}}
 end
-function AffinePropagateWorkspace(n::Int; nt::Int=Threads.nthreads())
+function AffinePropagateWorkspace(n::Int; nt::Int=Threads.maxthreadid())
     return AffinePropagateWorkspace(
         fill(UInt8(0), n),
         [Threads.Atomic{Int}(0) for _ in 1:n],
@@ -590,6 +590,7 @@ function _fulfill_regimes_graph!(vtx_graph::VertexGraph)
 
             src_rgm = regimes[src_idx]
             c_c0 = vtx_graph.x_interface_pool[src_edge.c_c0_x_idx]
+            
             dir_qK, intersect_qK = _calc_dir(
                 src_rgm.nullity,
                 src_rgm.H,

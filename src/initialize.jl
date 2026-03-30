@@ -120,6 +120,7 @@ mutable struct IntegrationHelper
     _LN_bottom_cols::Vector{Int} # the corresponding column number in N for _LN_bottom_idx
     _LN_top_diag_idx::Vector{Int} # the diagonal index of the top d rows of _LN_sparse, used for fast calculation
 
+    _LN_sparse::SparseMatrixCSC{Float64,Int} # cached Float64.(sparse([L; N])) for numerical integration
     _LN_lu::Union{SparseArrays.UMFPACK.UmfpackLU{Float64,Int}, Nothing} # LU decomposition of _LNt_sparse, used for fast calculation
 end
 
@@ -148,6 +149,7 @@ end
         _LN_bottom_rows,
         _LN_bottom_cols,
         _LN_top_diag_idx,
+        _LN_sparse,
         _LN_lu,
     )
 end
@@ -510,10 +512,11 @@ mutable struct Bnc{T} <: AbstractBnc # T is the int type to save all the indices
     _vertices_Nρ_inv_dict :: Union{Any,Nothing}
     _regimes_affine_ready::Bool
     _regimes_affine_lock::ReentrantLock
+    _integration_helper_lock::ReentrantLock
 
     #------other helper parameters------
     direction::Int8 # direction of the binding reactions, determine the ray direction for invertible regime, calculated by sign of det[L;N]
-    IntegrationHelper::IntegrationHelper
+    IntegrationHelper::Union{IntegrationHelper,Nothing}
     _L_helper::MatrixHelper
 
     # Inner constructor 
@@ -541,7 +544,6 @@ mutable struct Bnc{T} <: AbstractBnc # T is the int type to save all the indices
         lcm = get_max_denom(M)
         #-------helper parameters-------------
         # paramters for default homotopcontinuous starting point.
-        integration_helper = calc_integration_helper(L, N)
         _L_helper = _build_matrix_helper(L)
         new(
             # Fields 1-5
@@ -555,9 +557,10 @@ mutable struct Bnc{T} <: AbstractBnc # T is the int type to save all the indices
             nothing,                         # _vertices_perm_Ninv_dict
             false,                           # _regimes_affine_ready
             ReentrantLock(),                 # _regimes_affine_lock
+            ReentrantLock(),                 # _integration_helper_lock
             # Fields 13-28 (Calculated values)
             direction,
-            integration_helper,
+            nothing,
             _L_helper,
         )
     end
@@ -814,9 +817,28 @@ end
 
 @inline function _rebuild_helper!(bn::Bnc)
     bn.direction = sign(det([bn.L;bn.N])) # recalculate the direction, since L has been changed.
-    bn.IntegrationHelper = calc_integration_helper(bn.L, bn.N) # recalculate the integration helper, since L has been changed.
+    bn.IntegrationHelper = nothing # lazily rebuild integration helper on first numerical integration.
     bn._L_helper = _build_matrix_helper(bn.L)
     return nothing
+end
+
+@inline function _integration_helper!(bn::Bnc)
+    helper = bn.IntegrationHelper
+    if !isnothing(helper)
+        return helper
+    end
+
+    lock(bn._integration_helper_lock)
+    try
+        helper = bn.IntegrationHelper
+        if isnothing(helper)
+            helper = calc_integration_helper(bn.L, bn.N)
+            bn.IntegrationHelper = helper
+        end
+        return helper
+    finally
+        unlock(bn._integration_helper_lock)
+    end
 end
 
 @inline function _remove_regime_data!(bn::Bnc{T}) where T 
