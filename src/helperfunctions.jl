@@ -104,8 +104,6 @@ Return indices into `A.nzval` for diagonal entries up to `end_row`.
 """
 function diag_indices(A::SparseMatrixCSC,end_row::Int)
     # 获取稀疏矩阵 A 中对角线前end_row行元素在 nzval 中的位置
-    # rows = Int[]        # 存储行坐标
-    # cols = Int[]        # 存储列坐标
     idxs = Int[]        # 存储 nzval 的索引位置
 
     for j in 1:size(A,2)              # 遍历列
@@ -118,33 +116,6 @@ function diag_indices(A::SparseMatrixCSC,end_row::Int)
     end
     return idxs
 end
-
-#= Unused helpers retained for potential future reference.
-function log_sum_exp10(L::AbstractMatrix,logx::AbstractArray)
-    m = maximum(logx)
-    z = exp10.(x .-m)
-    y = L * z
-    return log10.(y) .+ m
-end
-
-function log_sum_exp10!(logq::AbstractVector, L::SparseMatrixCSC, logx::AbstractVector)
-    d, n = size(L)
-    m = maximum(logx)
-    fill!(logq, 0.0)
-    for col = 1:n
-        xj = logx[col] - m
-        ej = exp10(xj)
-        for idx = L.colptr[col]:(L.colptr[col+1]-1)
-            row = L.rowval[idx]
-            logq[row] += L.nzval[idx] * ej
-        end
-    end
-    @inbounds for i in 1:d
-        logq[i] = log10(logq[i]) + m
-    end
-    return logq
-end
-=#
 
 """
     randomize(n::Int, size; kwargs...) -> Array{Vector{Float64}}
@@ -651,22 +622,8 @@ end
 Return the provided index directly for convenience.
 """
 locate_sym(syms, target_sym::Integer) = target_sym
-
-"""
-    locate_sym_x(model::Bnc, target_sym) -> Int
-
-Locate a species symbol in a `Bnc` model.
-"""
 locate_sym_x(model::Bnc,target_sym) = locate_sym(x_sym(model), target_sym)
-"""
-    locate_sym_qK(model::Bnc, target_sym) -> Int
-
-Locate a total or binding constant symbol in a `Bnc` model.
-"""
 locate_sym_qK(model::Bnc,target_sym) = locate_sym(qK_sym(model), target_sym)
-
-
-
 
 
 #--------------------------------------------
@@ -678,24 +635,6 @@ locate_sym_qK(model::Bnc,target_sym) = locate_sym(qK_sym(model), target_sym)
 Remove everything before the first `[` character, including the bracket.
 """
 strip_before_bracket(s::AbstractString) =    replace(s, r"^[^\[]*" => "")
-
-#----------------------------------
-# helper functions for calculation
-#------------------------------------
-#= Unused helper for copying vectors without an index.
-function removed_copy(v::Vector{T}, i::Int) where T
-    n = length(v)
-    @boundscheck 1 ≤ i ≤ n || throw(BoundsError(v, i))
-    out = Vector{T}(undef, n - 1)
-    @inbounds begin
-        copyto!(out, 1, v, 1, i - 1)
-        copyto!(out, i, v, i + 1, n - i)
-    end
-    return out
-end
-
-rest = removed_copy(v, i)
-=#
 
 
 #------------------------------------------------------------
@@ -742,53 +681,6 @@ function sources_sinks_from_paths(paths::AbstractVector{<:AbstractVector{<:Integ
     sinks = unique(p -> p[end], paths)
     return sources, sinks
 end
-
-
-
-
-# #---------------------------------------------------
-# # Try using DAE solver to solve the logx-logqK conversion problem.
-# #---------------------------------------------------
-
-# function _logx_traj_with_logqK_change_test(Bnc::Bnc,
-#     startlogqK::Union{Vector{<:Real},Nothing},
-#     endlogqK::Vector{<:Real};
-#     startlogx::Union{Vector{<:Real},Nothing}=nothing,
-#     reltol=1e-8,
-#     abstol=1e-9,
-#     kwargs... 
-# )::ODESolution
-#     n = Bnc.n
-#     d = Bnc.d
-#     startlogx = isnothing(startlogx) ? qK2x(Bnc, startlogqK; input_logspace=true, output_logspace=true) : startlogx
-#     #Homotopy path in log-space( a straight line)
-#     ΔlogqK = Float64.(endlogqK - startlogqK)
-#     # Create thread-local copies of all mutable data structures
-#     logqK = Vector{Float64}(undef, n)
-
-#     L = Bnc.L
-#     N = Bnc.N
-    
-#     function f(resid,du,u,p,t) # du:δlogx u:logx, 
-#         logqK .= t* ΔlogqK .+ startlogqK
-#         J = [diagm( 1 ./ exp10.(logqK[1:d])) * L * diagm( exp10.(u) );
-#                 N ] # J = diag(1/q) * L * diag(x)
-#         resid .= J * du .- ΔlogqK
-#     end
-
-#     function jac(J,du,u,p,gamma,t)
-#         logqK .= t* ΔlogqK .+ startlogqK
-#         J .= [diagm( 1 ./ exp10.(logqK[1:d])) * L * diagm(exp10.(u) .* (du .+ gamma));
-#                 N ]
-#     end
-
-#     func = DAEFunction(f; jac=jac, jac_prototype = sparse([L;N]))
-
-#     tspan = (0.0, 1.0)
-#     prob = ODE.DAEProblem(func, startlogx, tspan, params)
-#     sol = ODE.solve(prob, Sundials.IDA(linear_solver=:KLU); reltol=reltol, abstol=abstol, callback=callback, kwargs...)
-#     return sol
-# end
 
 """
     norm_vec_space(x::AbstractVector{<:Real}) -> Vector{Float64}
@@ -1142,3 +1034,14 @@ function S_to_S_pos_neg(S::SparseMatrixCSC{T,Ti}) where {T<:Real,Ti<:Integer}
 
     return SparseMatrixCSC(2m, n, colptr, rowval, nzval)
 end
+
+
+function get_max_denom(M::AbstractMatrix{<:Integer})
+    F = snf(M)
+    return F[2][end,end]
+end
+
+
+
+
+

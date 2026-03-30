@@ -514,7 +514,18 @@ end
 
 #     return H_new, H0_new, δ
 # end
-@inline zero_small!(A, tol) = (A[abs.(A) .< tol] .= zero(eltype(A)); A)
+function droptol!(A::AbstractArray, tol)
+    @inbounds for i in eachindex(A)
+        if abs(A[i]) < tol
+            A[i] = zero(eltype(A))
+        end
+    end
+    return A
+end
+
+function droptol!(A::Real, tol)
+    return A = abs(A) < tol ? zero(eltype(A)) : A
+end
 
 function _rank1_step_update_from_regular(
     H::SparseMatrixCSC{Float64,Int},
@@ -548,7 +559,7 @@ function _rank1_step_update_from_regular(
 
     if drop_tol > 0
         droptol!(H_to, drop_tol)
-        zero_small!(H0_to, drop_tol)
+        droptol!(H0_to, drop_tol)
     end
 
     return H_to, H0_to, nlt_to, c_qK, c0_qK

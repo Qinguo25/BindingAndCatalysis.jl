@@ -9,6 +9,7 @@ import OrdinaryDiffEq as ODE
 import DiffEqCallbacks as CB
 using StatsBase
 using SparseArrays
+using IntegerSmithNormalForm # to get the maximum of denum 
 # using JuMP
 # using CUDA # Speedup calculation for distance matrix
 using DataStructures:Queue,enqueue!,dequeue!,isempty
@@ -190,14 +191,14 @@ struct Hyperplane_perm{Tv<:Integer}
 end
 
 function Base.:*(hp::Hyperplane_perm, M::AbstractMatrix{<:Real})
-    return transpose(@view(M[hp.u, :]) -@view(M[hp.v, :]))
+    return M[hp.u, :] -M[hp.v, :]
 end
 
 function mul(hp::Hyperplane_perm, q::AbstractVector{<:Real}; with_c0::Bool=true)
     if with_c0
-        return @view(q[hp.u]) - @view(q[hp.v]) .+ hp.c0
+        return q[hp.u] - q[hp.v] .+ hp.c0
     else
-        return @view(q[hp.u]) - @view(q[hp.v])
+        return q[hp.u] - q[hp.v]
     end
 end
 
@@ -487,6 +488,7 @@ mutable struct Bnc{T} <: AbstractBnc # T is the int type to save all the indices
     r::Int # number of reactions
     n::Int # number of variables
     d::Int # number of conserved quantities
+    lcm::Int # least common multiple of [L;N]^{-1}
 
     #-------symbols of species -----------
     x_sym::Vector{Num} # species symbols, each column is a species
@@ -533,15 +535,17 @@ mutable struct Bnc{T} <: AbstractBnc # T is the int type to save all the indices
             @assert length(K_sym) == r "K_sym length must equal number of reactions (r)"
         end
 
-        #The direction
-        direction = sign(det([L_dense;N_dense])) # Ensure matrix is Float64 for det
+        #The direction and lcm
+        M = vcat(L_dense, N_dense)
+        direction = sign(det(M)) # Ensure matrix is Float64 for det
+        lcm = get_max_denom(M)
         #-------helper parameters-------------
         # paramters for default homotopcontinuous starting point.
         integration_helper = calc_integration_helper(L, N)
         _L_helper = _build_matrix_helper(L)
         new(
             # Fields 1-5
-            N_sparse, L_sparse, r, n, d,
+            N_sparse, L_sparse, r, n, d,lcm,
             # Fields 6-9
             x_sym, q_sym, K_sym, catalysis,
             # Fields 10-12 (Initialized empty)

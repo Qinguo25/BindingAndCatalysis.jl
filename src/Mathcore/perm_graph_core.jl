@@ -626,7 +626,7 @@ end
     
     if drop_tol > 0 
         droptol!(c_qK, drop_tol) 
-        zero_small!(c0_qK, drop_tol)
+        droptol!(c0_qK, drop_tol)
     end
 
     return c_qK, c0_qK
