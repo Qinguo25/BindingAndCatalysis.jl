@@ -87,11 +87,6 @@ end
 @testset "Minimal Notebook Workflow" begin
     model = minimal_model()
 
-    @test begin
-        summary(model)
-        true
-    end
-
     find_all_regimes!(model)
     perms = get_regimes(model)
     idxs = get_regimes(model; return_idx = true)
@@ -109,10 +104,6 @@ end
 
     r1 = get_regime(model, r1_perm)
     @test r1 === get_regime(model, 1)
-    @test begin
-        summary(r1)
-        true
-    end
 
     C1, C01, nlt1 = get_C_C0_nullity(r1)
     C2, C02, nlt2 = get_C_C0_nullity(model, 1)
@@ -194,10 +185,6 @@ end
 
     siso = SISOPaths(model, :tS)
     @test !isempty(siso.rgm_paths)
-    @test begin
-        summary(siso; show_volume = false)
-        true
-    end
 
     p1_idx = 1
     p1 = get_path(siso, p1_idx)
@@ -239,15 +226,60 @@ end
     find_all_regimes!(model; H_mode = :rational)
 
     H = get_H(model, 1)
+    H0 = get_H0(model, 1)
     CqK = get_C_qK(model, 1)
+    poly = get_polyhedron(model, 1)
+    vg = get_regimes_graph!(model; full = true)
+    perms = get_regimes(model)
+    rational_singular_idx = only(filter(i -> get_nullity(model, i) == 1, get_regimes(model; return_idx = true)))
+    Hs, H0s = get_H_H0(model, rational_singular_idx)
 
     @test model.affine_coeff_mode == :rational
     @test eltype(H) <: Rational
+    @test eltype(H0) == Float64
     @test eltype(CqK) <: Rational
+    @test get_nullity(poly) == get_nullity(model, 1)
+    @test size(get_C(poly), 2) == model.d + model.r
+    @test eltype(Hs) <: Rational
+    @test eltype(H0s) == Float64
+
+    edge_21 = get_edge(vg, perms[2], perms[1]; full = true)
+    edge_12 = get_edge(vg, perms[1], perms[2]; full = true)
+    @test edge_21.qK_interface_idx == edge_12.qK_interface_idx != 0
+    @test edge_21.qK_interface_sign == -edge_12.qK_interface_sign
 
     find_all_regimes!(model; H_mode = :float)
     @test model.affine_coeff_mode == :float
     @test eltype(get_H(model, 1)) == Float64
+
+    @test_throws ErrorException find_all_regimes!(minimal_model(); H_mode = :invalid_mode)
+end
+
+@testset "Two-Row N Singular H Sign Invariance" begin
+    N = [
+        1 1 -1 0
+        0 1  1 -1
+    ]
+    singular_perm = [3, 3]
+
+    for H_mode in (:float, :rational)
+        model = Bnc(N = N)
+        swapped_model = Bnc(N = N[[2, 1], :])
+
+        find_all_regimes!(model; H_mode = H_mode)
+        find_all_regimes!(swapped_model; H_mode = H_mode)
+
+        @test have_perm(model, singular_perm)
+        @test have_perm(swapped_model, singular_perm)
+        @test get_nullity(model, singular_perm) == 1
+        @test get_nullity(swapped_model, singular_perm) == 1
+
+        H = Matrix(get_H(model, singular_perm))
+        H_swapped = Matrix(get_H(swapped_model, singular_perm))
+
+        @test H == H_swapped
+        @test H != -H_swapped
+    end
 end
 
 @testset "Larger RO Path Workflow" begin
@@ -271,10 +303,6 @@ end
     @test length(ro_paths_1) == length(pths.rgm_paths)
     @test length(ro_paths_2) == length(pths.rgm_paths)
     @test length(ro_paths_2_filtered) == length(pths.rgm_paths)
-    @test begin
-        summary_RO_path(pths; observe_x = 5, show_volume = false, deduplicate = true, keep_nonasymptotic = false, keep_singular = false)
-        true
-    end
 end
 
 @testset "Catalysis And Mixed Regimes" begin

@@ -177,6 +177,7 @@ C^\theta \Pi \log x + C^\theta \log k + C_0^\theta \ge 0.
 - mixed regimes：`BncRegimes`
 - graph cache：`vertices_graph`
 - 组合学辅助缓存：`_L_helper`
+- binding affine coefficient mode：`affine_coeff_mode`
 - affine / numerical cache：
   - `_regimes_affine_ready`, `_regimes_affine_lock`
   - `IntegrationHelper`, `_integration_helper_lock`
@@ -191,6 +192,16 @@ C^\theta \Pi \log x + C^\theta \log k + C_0^\theta \ge 0.
   - `_LN_sparse = Float64.(sparse([L; N]))`
   - `_LN_lu`
   - top / bottom block 的稀疏索引辅助量
+
+`Bnc` 还记录 binding 层 affine 系数的存储模式：
+
+- `affine_coeff_mode = :float`：默认模式，`BindRegime.H` / `C_qK` 存 `Float64`
+- `affine_coeff_mode = :rational`：exact mode，`BindRegime.H` / `C_qK` 存 `Rational{Int}`
+
+这个 mode 只影响 binding 层的线性系数矩阵：
+
+- exact：`H`, `C_qK`
+- 仍保持 `Float64`：`P0`, `M0`, `H0`, `C0_x`, `C0_qK`
 
 
 ### 3.2 `BindRegime`
@@ -213,6 +224,12 @@ C^\theta \Pi \log x + C^\theta \log k + C_0^\theta \ge 0.
 - `perm` 是 regime 的离散标签
 - `P/P0/M/M0/H/H0` 是这个 regime 下的线性化映射
 - `C_*` 是这个 regime 的 admissibility 条件
+
+现在还要额外记住：
+
+- `H` 和 `C_qK` 可以是 `Float64` 稀疏矩阵，也可以是 `Rational{Int}` 稀疏矩阵
+- `H0`、`C0_qK` 仍然是 `Float64`
+- `nullity > 1` 时不会定义 `H/H0`
 
 
 ### 3.3 `CatalysisData`
@@ -279,6 +296,13 @@ C^\theta \Pi \log x + C^\theta \log k + C_0^\theta \ge 0.
 
 - `H_bd` 不是映射，而是 stability screening matrix
 
+当前 mixed 层还有一个很重要的实现边界：
+
+- binding 层若使用 `H_mode = :rational`，`bind_rgm.H` / `bind_rgm.C_qK` 可以是 exact 的
+- 一旦进入 `BncRegime` 组装、mixed consistency、stability screening 这类数值流程，会显式转回 `Float64`
+
+因此 exact mode 目前是“binding-layer exact”，不是“整个 mixed pipeline 全 exact”。
+
 
 ### 3.6 `Regimes` 和 `VertexGraph`
 
@@ -335,6 +359,8 @@ C^\theta \Pi \log x + C^\theta \log k + C_0^\theta \ge 0.
 - 默认 anchor 也放在这里
 - 现在采用 lazy + lock 的方式缓存，避免构造 `Bnc` 时做不必要的数值预处理，也避免多线程首次调用时重复计算
 
+因此常用的 `Float64.(sparse([L; N]))` 现在不会在每次积分 / mapping 时重建，而是复用 helper 内的缓存；需要可变副本时再 `copy(...)` 或 `deepcopy(...)`。
+
 
 ## 4. 代码的整体流水线
 
@@ -378,6 +404,8 @@ update_catalysis!(model; Γ=..., Π=..., k_sym=..., q_picked=...)
 
 ```julia
 find_all_regimes!(model)
+# 或
+find_all_regimes!(model; H_mode = :rational)
 ```
 
 这一步会：
@@ -385,6 +413,7 @@ find_all_regimes!(model)
 - 从 `L` 的每一行 possible dominant choice 枚举 `perm`
 - 立刻用 `all_perms` 和 `model._L_helper` 构造 x-neighbor regime graph
 - 先只建立轻量的 `BindRegime` 容器对象
+- 根据 `H_mode` 决定 binding affine 系数存成 `Float64` 还是 `Rational{Int}`
 - 然后进入 `_prefill_affine_cache!`：
   - 按 x-graph connected component 处理
   - 在每个 component 里挑 seed
@@ -398,7 +427,14 @@ find_all_regimes!(model)
 这里有两个重要实现选择：
 
 - `_prefill_affine_cache_core!` 不会把全部 regime 的 nullity 重新显式算一遍；它保留“图上传播 + 高 nullity defer”的原逻辑
+- exact mode 下会优先找 `nullity == 0` 的 regular seed，再沿图传播回 singular regime；只有找不到 regular seed 时，才退回 exact singular fallback
 - 多线程传播工作区 `AffinePropagateWorkspace` 现在按 `Threads.maxthreadid()` 分配槽位，而不是 `Threads.nthreads()`，避免 notebook / task 调度下的线程槽越界
+
+另外，exact mode 的边界是：
+
+- rank-1 propagation 会保持 `H` 与 `C_qK` 的 exact 性质
+- `H0` / `C0_qK` 继续走 `Float64`
+- `get_polyhedron(...)` 在真正交给 `Polyhedra.jl` / `CDDLib` 之前，会把 exact 系数转成 `Float64`
 
 
 ### 4.4 枚举 catalysis regimes
@@ -522,7 +558,7 @@ rgm = get_bnc_regime(model, bind_perm, cat_perm)
   负责 x-neighbor graph 构造、component 级 affine propagation、qK interface pool 去重、以及 graph cache 的补全。
 
 - [src/matrix_inverse.jl](/home/joker/Realizibility_index/BindingAndCatalysis.jl/src/matrix_inverse.jl)
-  负责 `M` 或其相关子矩阵的逆、adjugate/nullity-1 情况下的 affine 信息，以及 rank-1 update 公式。
+  负责 `M` 或其相关子矩阵的逆、adjugate/nullity-1 情况下的 affine 信息，以及 rank-1 update 公式。现在同时包含 float mode、exact mode、以及 exact-aware sparse rank-1 update 的实现。
 
 - [src/helperfunctions.jl](/home/joker/Realizibility_index/BindingAndCatalysis.jl/src/helperfunctions.jl)
   杂项矩阵/符号/索引辅助函数。
@@ -531,7 +567,7 @@ rgm = get_bnc_regime(model, bind_perm, cat_perm)
 ### 6.3 Binding 层
 
 - [src/regimes.jl](/home/joker/Realizibility_index/BindingAndCatalysis.jl/src/regimes.jl)
-  binding regime 的核心逻辑：初始化 `BindRegime`、计算 `P/M/H/C` 等对象、提供访问 API。
+  binding regime 的核心逻辑：初始化 `BindRegime`、计算 `P/M/H/C` 等对象、提供访问 API。`find_all_regimes!(...; H_mode=...)`、`_materialize_qK_conditions!`、以及 exact/float mode 切换逻辑都在这里。
 
 - [src/regime_assign.jl](/home/joker/Realizibility_index/BindingAndCatalysis.jl/src/regime_assign.jl)
   给定 `x` 或 `qK`，判断当前点属于哪个 regime。
@@ -552,7 +588,7 @@ rgm = get_bnc_regime(model, bind_perm, cat_perm)
   catalysis regime 的枚举、getter、条件矩阵和查询 API。
 
 - [src/Bnc_regime.jl](/home/joker/Realizibility_index/BindingAndCatalysis.jl/src/Bnc_regime.jl)
-  mixed regime 构造、pair-based retrieval、consistency 条件、steady-state reduced map、`H_bd` 和稳定性接口。
+  mixed regime 构造、pair-based retrieval、consistency 条件、steady-state reduced map、`H_bd` 和稳定性接口。这里也负责把 binding exact 系数在 mixed 边界显式转回 `Float64`。
 
 - [src/d_stable.jl](/home/joker/Realizibility_index/BindingAndCatalysis.jl/src/d_stable.jl)
   diagonal stability / Hurwitz 性质的数值判断。
@@ -567,7 +603,7 @@ rgm = get_bnc_regime(model, bind_perm, cat_perm)
   把内部矩阵渲染成易读表达式，是 notebook 和 debug 最常用的“解释层”。
 
 - [src/visualize.jl](/home/joker/Realizibility_index/BindingAndCatalysis.jl/src/visualize.jl)
-  图结构、路径、切片、多 regime 轨迹可视化。
+  图结构、路径、切片、多 regime 轨迹可视化。`draw_graph(model; hide_nullity_ge_2=true)` 可以在画图时直接隐藏 `nullity >= 2` 的 binding regime 节点。
 
 
 ### 6.6 兼容层
@@ -608,6 +644,8 @@ update_catalysis!(model; Γ=..., Π=..., q_picked=..., k_sym=...)
 
 ```julia
 find_all_regimes!(model)
+# 或
+find_all_regimes!(model; H_mode = :rational)
 rgm = get_regime(model, 1)
 rgms = get_regimes(model)
 ```
@@ -746,6 +784,12 @@ regular 情况下很多东西可直接通过矩阵逆得到；singular 情况下
 不过现在 `nullity = 1` 的 regime 也会保存同尺度下的 `H0 = -H M0`，方便做 interface 和几何分析。
 真正需要延后到 `_calc_nullity` 批量补齐的，是传播中识别出的 `nullity >= 2` 候选。
 
+而且 exact mode 下也不再默认要求 singular seed 一开始就硬算 adjugate：
+
+- 会优先找 regular seed
+- 从 regular regime 沿图传播回 singular regime
+- 只有确实找不到 regular seed 时，才退回 exact singular fallback
+
 
 ### 10.5 这个项目很依赖“预填充 + 按需 materialize”
 
@@ -779,6 +823,8 @@ regular 情况下很多东西可直接通过矩阵逆得到；singular 情况下
 - 避免很多只做组合学/图分析的 workflow 白算一份 `_LN_sparse` 和 `_LN_lu`
 - 避免多线程第一次进入数值入口时重复初始化
 
+数值入口现在会直接复用 helper 内缓存的 `_LN_sparse` 与 `_LN_lu`。
+
 
 ### 10.7 qK-space graph interface 现在是 pooled，而不是 edge-local
 
@@ -789,6 +835,23 @@ regular 情况下很多东西可直接通过矩阵逆得到；singular 情况下
 - 正反边共享同一份几何对象
 
 这让 graph cache 更紧凑，也让“同一接口的正反方向”保持严格一致。
+
+
+### 10.8 exact mode 的边界要分清
+
+现在的 exact/rational 设计是分层的：
+
+- binding coefficient matrices：可以 exact
+- log offsets：继续 `Float64`
+- polyhedron / volume / mixed regime / stability：进入这些数值或外部库接口前会转成 `Float64`
+
+所以如果你在 debug 时看到：
+
+- `get_H(model, i)` 是 `Rational`
+- `get_H0(model, i)` 是 `Float64`
+- mixed `BncRegime.H` 又回到了 `Float64`
+
+这不是不一致，而是当前架构有意画出的边界。
 
 
 ## 11. 对开发者最有用的测试与示例
