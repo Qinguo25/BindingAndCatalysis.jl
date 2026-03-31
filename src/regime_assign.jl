@@ -1,3 +1,5 @@
+export assign_regime, assign_regime_qK, assign_regime_x
+
 #-----------------------------------------------------------------
 # Functions for assigning vertices
 #-----------------------------------------------------------------

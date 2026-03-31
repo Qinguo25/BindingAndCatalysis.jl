@@ -1,3 +1,5 @@
+export logder_x_qK, logder_qK_x, ∂logx_∂logqK, ∂logqK_∂logx
+
 #----------------Functions for calculates the derivative of log(x) with respect to log(qK) and vice versa----------------------
 
 """
@@ -260,7 +262,6 @@ end
 
 
 # for now as the perm is not defined , we shall 
-
 
 
 

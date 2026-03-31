@@ -1,3 +1,5 @@
+export x2qK, qK2x, x_traj_with_qK_change, x_traj_with_q_change, x_traj_cat, qK_traj_cat, q_traj_cat
+
 # ----------------Functions for mapping between qK space and x space----------------------------------
 
 """

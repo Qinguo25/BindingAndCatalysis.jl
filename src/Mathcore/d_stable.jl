@@ -1,3 +1,5 @@
+export judge_dstable
+
 # using SparseArrays
 # using LinearAlgebra
 import JuMP

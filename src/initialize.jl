@@ -29,6 +29,8 @@ import ImageFiltering: imfilter, Kernel
 import Random
 import Base: summary,show
 
+export Bnc, update_catalysis!
+
 #---------------------------plot dependency-----------------------------
 using Makie
 using GraphMakie
@@ -871,7 +873,7 @@ include(joinpath(pth1,"perm_graph_core.jl"))
 include(joinpath(pth1,"SparseSparse_modified.jl"))
 
 include(joinpath(@__DIR__,"helperfunctions.jl"))
-include(joinpath(@__DIR__,"matrix_inverse.jl"))
+include(joinpath(pth1,"matrix_inverse.jl"))
 include(joinpath(@__DIR__,"qK_x_mapping.jl"))
 include(joinpath(@__DIR__,"volume_calc.jl"))
 include(joinpath(@__DIR__,"numeric.jl"))

@@ -557,7 +557,7 @@ rgm = get_bnc_regime(model, bind_perm, cat_perm)
 - [src/Mathcore/perm_graph_core.jl](/home/joker/Realizibility_index/BindingAndCatalysis.jl/src/Mathcore/perm_graph_core.jl)
   负责 x-neighbor graph 构造、component 级 affine propagation、qK interface pool 去重、以及 graph cache 的补全。
 
-- [src/matrix_inverse.jl](/home/joker/Realizibility_index/BindingAndCatalysis.jl/src/matrix_inverse.jl)
+- [src/Mathcore/matrix_inverse.jl](/home/joker/Realizibility_index/BindingAndCatalysis.jl/src/Mathcore/matrix_inverse.jl)
   负责 `M` 或其相关子矩阵的逆、adjugate/nullity-1 情况下的 affine 信息，以及 rank-1 update 公式。现在同时包含 float mode、exact mode、以及 exact-aware sparse rank-1 update 的实现。
 
 - [src/helperfunctions.jl](/home/joker/Realizibility_index/BindingAndCatalysis.jl/src/helperfunctions.jl)

@@ -1,3 +1,18 @@
+export find_all_regimes!, get_bind_regimes_dict, get_nullities, get_volumes, have_perm
+export get_regimes, get_regimes_neighbor_mat
+export is_singular, is_asymptotic, n_regimes
+export get_idx, get_perm, get_regime, get_neighbors, get_nullity, get_one_inner_point
+export get_P_P0, get_P, get_P0
+export get_M_M0, get_M, get_M0
+export get_H_H0, get_H, get_H0
+export get_C_C0_x, get_C_x, get_C0_x
+export get_C_C0_nullity_qK, get_C_C0_qK, get_C_qK, get_C0_qK
+export get_C_C0_nullity, get_C_C0, get_C, get_C0
+export check_feasibility_with_constraint, feasible_vertieces_with_constraint
+export get_polyhedron, get_volume
+export is_neighbor, get_interface, get_change_dir
+export get_function
+
 #--------------Core computation functions-------------------------
 
 """
@@ -172,7 +187,6 @@ function _materialize_qK_conditions!(rgm::BindRegime)
     (!isnothing(rgm.C_qK) && !isnothing(rgm.C0_qK)) && return nothing
 
     if rgm.nullity == 0
-        _fill_affine_info!(rgm)
         C_qK = sparse(rgm.C_x * rgm.H)
         if eltype(C_qK) <: AbstractFloat
             droptol!(C_qK, 1e-10)
@@ -188,22 +202,6 @@ function _materialize_qK_conditions!(rgm::BindRegime)
     return nothing
 end
 
-function _fill_affine_info!(rgm::BindRegime)
-    _initialize_regime!(rgm)
-    (!isnothing(rgm.H) && !isnothing(rgm.H0)) && return nothing
-
-    H, nlt = direct_inverse_or_adjugate(rgm.M)
-    rgm.nullity = nlt
-    if nlt == 0
-        rgm.H = H
-        rgm.H0 = vec(-(H * rgm.M0))
-    elseif nlt == 1
-        rgm.H = H .* rgm.network.direction
-        rgm.H0 = vec(-(rgm.H * rgm.M0))
-    end
-    return nothing
-end
-
 """
     _fill_inv_info!(vtx::BindRegime) -> nothing
 
@@ -211,7 +209,6 @@ Ensure a `BindRegime` has `H/H0` and qK constraints computed and cached.
 """
 function _fill_inv_info!(vtx::BindRegime)
     _initialize_regime!(vtx)
-    # _fill_affine_info!(vtx)
     _materialize_qK_conditions!(vtx)
     return nothing
 end

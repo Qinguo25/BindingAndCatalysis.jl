@@ -1,3 +1,7 @@
+export find_catalysis_regimes!, get_catalysis_network, get_catalysis_regime, get_catalysis_regimes, get_catalysis_regimes_dict
+export get_PΠ, get_CΠ, get_P_pos_neg, get_P0_pos_neg
+export get_C_k, get_C_C0_xk, get_C0_xk, get_C_xk, get_C_C0_nullity_xk
+
 @inline function _require_catalysis_network(args...)
     model = get_catalysis_network(args...)
     isnothing(model) && error("Catalysis network not found in the model.")
@@ -5,6 +9,13 @@
 end
 
 
+
+
+
+
+
+get_binding_network(rgm::CatalysisRegime) = get_binding_network(rgm.network)
+get_binding_network(rgm::BncRegime) = get_binding_network(rgm.bind_rgm)
 function get_binding_network(model::CatalysisData)
     if isnothing(model.bn)
         @warn "Binding Network not found in the model"
@@ -12,10 +23,14 @@ function get_binding_network(model::CatalysisData)
     end
     return model.bn
 end
-get_binding_network(rgm::CatalysisRegime) = get_binding_network(rgm.network)
-get_binding_network(rgm::BncRegime) = get_binding_network(rgm.bind_rgm)
 
 
+
+
+get_catalysis_network(model::CatalysisData) = model
+get_catalysis_network(rgm::BindRegime) = get_catalysis_network(rgm.network)
+get_catalysis_network(rgm::CatalysisRegime) = rgm.network
+get_catalysis_network(rgm::BncRegime) = get_catalysis_network(rgm.catalysis_rgm)
 function get_catalysis_network(model::Bnc)
     if isnothing(model.catalysis)
         @warn "Catalysis Network not found in the model"
@@ -23,29 +38,32 @@ function get_catalysis_network(model::Bnc)
     end
     return model.catalysis
 end
-get_catalysis_network(model::CatalysisData) = model
-get_catalysis_network(rgm::BindRegime) = get_catalysis_network(rgm.network)
-get_catalysis_network(rgm::CatalysisRegime) = rgm.network
-get_catalysis_network(rgm::BncRegime) = get_catalysis_network(rgm.catalysis_rgm)
+
 
 
 @inline _catalysis_regimes(model::CatalysisData) = getfield(model, :CatalysisRegimes)
 @inline _catalysis_regimes_built(model::CatalysisData) = !isnothing(_catalysis_regimes(model))
+
+
 
 @inline function _catalysis_regimes_data(model::CatalysisData)
     regimes = _catalysis_regimes(model)
     return isnothing(regimes) ? CatalysisRegime[] : regimes.vertices_data
 end
 
+
+
+
 @inline function _catalysis_regimes_perm_dict(model::CatalysisData)
     regimes = _catalysis_regimes(model)
     return isnothing(regimes) ? Dict{Vector{Int},Int}() : regimes.vertices_perm_dict
 end
 
+
+
 @inline _catalysis_regimes_perm(model::CatalysisData) = getfield.(_catalysis_regimes_data(model), :perm)
 @inline _catalysis_regimes_asymptotic_flag(model::CatalysisData) = getfield.(_catalysis_regimes_data(model), :is_asymptotic)
 @inline _catalysis_regimes_initialized(model::CatalysisData) = BitVector(.!isnothing.(getfield.(_catalysis_regimes_data(model), :P_pos_neg)))
-
 function Base.getproperty(model::CatalysisData, sym::Symbol)
     if sym === :vertices_perm
         return _catalysis_regimes_perm(model)
@@ -60,7 +78,6 @@ function Base.getproperty(model::CatalysisData, sym::Symbol)
     end
     return getfield(model, sym)
 end
-
 function Base.propertynames(model::CatalysisData, private::Bool=false)
     names = Symbol[fieldnames(typeof(model))...,
         :vertices_perm,
@@ -71,6 +88,11 @@ function Base.propertynames(model::CatalysisData, private::Bool=false)
     ]
     return private ? Tuple(unique(names)) : Tuple(sym for sym in unique(names) if !startswith(String(sym), "_"))
 end
+
+
+
+
+
 
 
 find_all_regimes!(model::CatalysisData) = find_catalysis_regimes!(model)

@@ -1,10 +1,10 @@
+export get_regimes_graph!, SISOPaths, get_polyhedra, get_polyhedron, get_SISO_graph
+export get_path, get_edge, get_intersect
+export get_neighbor_graph_x, get_neighbor_graph_qK, get_neighbor_graph
+export get_sources, get_sinks, get_sources_sinks
+export get_RO_path, group_sum, get_RO_paths, summary_RO_path
+export get_volume
 
-
-# function _calc_regimes_graph(Bnc::Bnc{T}) where {T}
-#     regimes = Bnc.vertices_data
-#     perms = getfield.(regimes, :perm)
-#     return _calc_regimes_graph(Bnc, perms)
-# end
 #---------------------------------------------------------------------------------------------------
 #             Helper functions: Functions for construct the regime graph paths
 #----------------------------------------------------------------------------------------------------
@@ -728,20 +728,6 @@ function get_expression_path(grh::SISOPaths, pth; observe_x=nothing)
 end
 
 
-
-
-
-# function show_expression_path(grh::SISOPaths, pth_idx::Integer; observe_x=nothing)
-#     bn = get_binding_network(grh)
-#     observe_x_idx = isnothing(observe_x) ? bn.n : locate_sym_x.(Ref(bn), observe_x)
-#     rgm_pth = get_path(grh, pth_idx; return_idx=true)
-#     pth = map(rgm_pth) do r
-#         is_singular(bn, r) ? fill(NaN, length(observe_x_idx)) : get_expression(bn, r)[observe_x_idx]
-#     end
-#     pth = get_path(grh, pth_idx; return_idx=false)
-#     print_expression_path(get_binding_network(grh), pth; prefix="#")
-#     return nothing
-# end
 
 #-------------------------------------------------------------------------------------------
 # 

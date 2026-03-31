@@ -1,3 +1,5 @@
+export calc_volume
+
 """
     calc_volume(Cs, C0s; kwargs...) -> Vector{Volume}
 
