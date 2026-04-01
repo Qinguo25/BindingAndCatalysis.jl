@@ -874,6 +874,7 @@ include(joinpath(pth1,"SparseSparse_modified.jl"))
 
 include(joinpath(@__DIR__,"helperfunctions.jl"))
 include(joinpath(pth1,"matrix_inverse.jl"))
+include(joinpath(pth1,"graph_propagate.jl"))
 include(joinpath(@__DIR__,"qK_x_mapping.jl"))
 include(joinpath(@__DIR__,"volume_calc.jl"))
 include(joinpath(@__DIR__,"numeric.jl"))

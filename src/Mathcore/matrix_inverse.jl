@@ -205,38 +205,42 @@ function _build_Nρ_cache_parallel!(
 ) where {Tv<:Real}
     nperm = length(perms)
     n = size(N, 2)
-    d = n - size(N, 1)
+    nperm == 0 && return NρKey[], Int[]
 
     perm_keys = Vector{NρKey}(undef, nperm)
     perm_defs = Vector{Int}(undef, nperm)
 
+    nt = Threads.maxthreadid()
+    seen_locals = [zeros(UInt8, n) for _ in 1:nt]
+    touched_locals = [Vector{Int}(undef, max(length(perms[1]), 1)) for _ in 1:nt]
+    keybuf_locals = [Vector{Int}(undef, n) for _ in 1:nt]
+
+    Threads.@threads :greedy for i in eachindex(perms)
+        tid = Threads.threadid()
+        seen = seen_locals[tid]
+        touched = touched_locals[tid]
+        keybuf = keybuf_locals[tid]
+
+        k, pdef = _key_from_perm!(keybuf, seen, touched, perms[i], n)
+        perm_keys[i] = _tuple_from_prefix(keybuf, k)
+        perm_defs[i] = pdef
+    end
+
     uniq_index = Dict{NρKey,Int}()
     keys = Vector{Vector{Int}}()
-
-    seen    = zeros(UInt8, n)
-    touched = Vector{Int}(undef, max(d, 1))
-    keybuf  = Vector{Int}(undef, n)
 
     sizehint!(uniq_index, nperm)
     sizehint!(keys, nperm)
 
-    # Single-thread pass: create the canonical key for each perm and deduplicate.
-    for i in eachindex(perms)
-        perm = perms[i]
-        k, pdef = _key_from_perm!(keybuf, seen, touched, perm, n)
-        tkey = _tuple_from_prefix(keybuf, k)
-        perm_keys[i] = tkey
-        perm_defs[i] = pdef
-
+    for tkey in perm_keys
         if !haskey(uniq_index, tkey)
             uniq_index[tkey] = length(keys) + 1
-            push!(keys, copy(@view keybuf[1:k]))
+            push!(keys, collect(tkey))
         end
     end
 
-    # Parallel factorization of all unique Nρ blocks.
     entries = Vector{NρCacheEntry}(undef, length(keys))
-    Threads.@threads for i in eachindex(keys)
+    Threads.@threads :greedy for i in eachindex(keys)
         Nρ = sparse(N[:, keys[i]])
         entries[i] = _factor_Nρ(Nρ; atol=atol, rtol=rtol, drop_tol=drop_tol)
     end
@@ -248,6 +252,80 @@ function _build_Nρ_cache_parallel!(
     end
 
     return perm_keys, perm_defs
+end
+
+@inline _perm_total_nullity(perm_def::Int, entry::NρCacheEntry) = perm_def + entry.deficiency
+@inline _is_regular_seed(perm_def::Int, entry::NρCacheEntry) = perm_def == 0 && entry.deficiency == 0
+
+function _build_regular_H_from_key_entry(
+    perm::AbstractVector{<:Integer},
+    N::AbstractMatrix{Tv},
+    key::AbstractVector{<:Integer},
+    entry::NρCacheEntry;
+    drop_tol::Float64=1e-12,
+) where {Tv<:Real}
+    perm_int = perm isa Vector{Int} ? perm : Int.(perm)
+    n = size(N, 2)
+
+    BR = entry.inv
+    Nc = sparse(N[:, perm_int])
+    BL = -(BR * Nc)
+    drop_tol > 0 && SparseArrays.droptol!(BL, drop_tol)
+
+    return _assemble_H_from_blocks(perm_int, Int.(collect(key)), BL, BR, n)
+end
+
+function _build_regular_H_from_key_entry_exact(
+    perm::AbstractVector{<:Integer},
+    N::AbstractMatrix{<:Integer},
+    key::AbstractVector{<:Integer},
+    _entry=nothing;
+    drop_tol::Float64=1e-12,
+)
+    perm_int = perm isa Vector{Int} ? perm : Int.(perm)
+    n = size(N, 2)
+
+    BR = _exact_inverse_matrix(N[:, Int.(collect(key))])
+    Nc = sparse(ExactAffineCoeff.(Matrix{Int}(N[:, perm_int])))
+    BL = -(BR * Nc)
+    dropzeros!(BL)
+
+    return _assemble_H_from_blocks(perm_int, Int.(collect(key)), BL, BR, n)
+end
+
+function _build_singular_H_from_perm(
+    perm::AbstractVector{<:Integer},
+    N::AbstractMatrix{Tv},
+    scale::Real=1;
+    atol::Float64=1e-12,
+    drop_tol::Float64=1e-12,
+) where {Tv<:Real}
+    d = length(perm)
+    n = size(N, 2)
+    P = sparse(1:d, Int.(perm), ones(Int, d), d, n)
+    M = [Matrix(P); Matrix(N)]
+
+    H, nlt = direct_inverse_or_adjugate(M; atol=atol)
+    if nlt == 1 && scale != 1
+        H = sparse(scale .* H)
+        drop_tol > 0 && SparseArrays.droptol!(H, drop_tol)
+    end
+
+    return H, nlt
+end
+
+function _build_singular_H_from_perm_exact(
+    perm::AbstractVector{<:Integer},
+    N::AbstractMatrix{<:Integer},
+    scale::Integer=1;
+    atol::Float64=1e-12,
+    drop_tol::Float64=1e-12,
+)
+    d = length(perm)
+    n = size(N, 2)
+    P = sparse(1:d, Int.(perm), ones(Int, d), d, n)
+    M = [Matrix(P); Matrix(N)]
+    return _exact_direct_inverse_or_adjugate(M, scale)
 end
 
 # -----------------------------------------------------------------------------
@@ -464,69 +542,8 @@ function _materialize_rank1_adjugate(
     return sparse(I, J, V, n, n)
 end
 # -----------------------------------------------------------------------------
-# Rank-k / rank-1 affine update helpers
+# Generic numerical cleanup helpers
 # -----------------------------------------------------------------------------
-
-function _sparse_outer(
-    c::SparseVector{Tc,Int},
-    s::SparseVector{Tc,Int},
-    scale::Tc,
-) where {Tc<:Real}
-    nrow = length(c)
-    ncol = length(s)
-    Ic, Vc = findnz(c)
-    Js, Vs = findnz(s)
-
-    if isempty(Ic) || isempty(Js)
-        return spzeros(Tc, nrow, ncol)
-    end
-
-    nnzA = length(Ic) * length(Js)
-    I = Vector{Int}(undef, nnzA)
-    J = Vector{Int}(undef, nnzA)
-    V = Vector{Tc}(undef, nnzA)
-
-    p = 0
-    @inbounds for a in eachindex(Ic)
-        ia = Ic[a]
-        va = scale * Vc[a]
-        for b in eachindex(Js)
-            p += 1
-            I[p] = ia
-            J[p] = Js[b]
-            V[p] = va * Vs[b]
-        end
-    end
-
-    return sparse(I, J, V, nrow, ncol)
-end
-
-@inline _is_float_eltype(::Type{T}) where {T<:Real} = T <: AbstractFloat
-
-@inline function _cleanup_affine_sparse!(A::SparseMatrixCSC{T,Int}, tol::Float64) where {T<:Real}
-    if _is_float_eltype(T)
-        tol > 0 && droptol!(A, tol)
-    else
-        dropzeros!(A)
-    end
-    return A
-end
-
-@inline function _cleanup_affine_sparse!(v::SparseVector{T,Int}, tol::Float64) where {T<:Real}
-    if _is_float_eltype(T)
-        tol > 0 && droptol!(v, tol)
-    else
-        dropzeros!(v)
-    end
-    return v
-end
-
-@inline function _cleanup_affine_vector!(v::AbstractVector{T}, tol::Float64) where {T<:Real}
-    tol > 0 && droptol!(v, tol)
-    return v
-end
-
-@inline _cleanup_affine_scalar(x::T, tol::Float64) where {T<:Real} = _is_float_eltype(T) && tol > 0 ? droptol!(x, tol) : x
 
 function droptol!(A::AbstractArray, tol)
     @inbounds for i in eachindex(A)
@@ -539,82 +556,6 @@ end
 
 function droptol!(A::Real, tol)
     return A = abs(A) < tol ? zero(eltype(A)) : A
-end
-
-@inline _rank1_target_is_singular(a::Rational, atol::Float64) = a == -one(a)
-@inline _rank1_target_is_singular(a::Real, atol::Float64) = abs(1 + Float64(a)) <= atol
-function _rank1_step_update_from_regular(
-    H::SparseMatrixCSC{Tc,Int},
-    H0::AbstractVector{<:Real},
-    
-    i::Int, 
-    c_c0::Hyperplane_perm,
-
-    sign::Int8,
-
-    atol::Float64=1e-12,
-    drop_tol::Float64=1e-10,
-) where {Tc<:Real}
-    c_qK = c_c0 * H .* sign  
-    c0_qK = c_c0 * H0 * sign
-
-    _cleanup_affine_sparse!(c_qK, drop_tol)
-
-    H_i = H[:, i]
-    a = c_qK[i]
-
-    if _rank1_target_is_singular(a, atol)
-        H_to = _cleanup_affine_sparse!(_sparse_outer(H_i, c_qK, -one(Tc)), drop_tol)
-        H0_to = _cleanup_affine_vector!(Vector(H_i * c0_qK), drop_tol)
-        nlt_to = 1
-    else
-        scale = inv(one(Tc) + a)
-        H_to = _cleanup_affine_sparse!(H - _sparse_outer(H_i, c_qK, scale), drop_tol)
-        H0_to = _cleanup_affine_vector!(H0 .- H_i .* scale .* c0_qK, drop_tol)
-        nlt_to = 0
-    end 
-
-    return H_to, H0_to, nlt_to, c_qK, c0_qK
-end
-
-
-
-"""
-    _lowrank_update_H_H0(H, H0, U, V, δ0; kwargs...)
-
-Woodbury-style affine update for
-
-    M'  = M  + U V'
-    M0' = M0 + U δ0
-
-with
-
-    H'  = H - H U (I + V' H U)^(-1) V' H
-    H0' = H0 - H U (I + V' H U)^(-1) (V' H0 + δ0).
-
-This helper is mainly here to centralize the formula used by the rank-1 edge
-update and future row-replacement updates.
-"""
-function _lowrank_update_H_H0(
-    H::SparseMatrixCSC{Float64,Int},
-    H0::AbstractVector{<:Real},
-    U::SparseMatrixCSC{Float64,Int},
-    V::SparseMatrixCSC{Float64,Int},
-    δ0::AbstractVector{<:Real};
-    atol::Float64=1e-12,
-)
-    HU = Matrix(H * U)
-    VtH = Matrix(transpose(V) * H)
-    K = Matrix{Float64}(I, size(U, 2), size(U, 2)) + Matrix(transpose(V) * sparse(HU))
-    abs(det(K)) <= atol && return nothing, nothing, K
-
-    KVtH = K \ VtH
-    H_new = sparse(Matrix(H) - HU * KVtH)
-
-    rhs0 = Vector{Float64}(transpose(V) * Float64.(H0)) + Float64.(δ0)
-    H0_new = Float64.(H0) - HU * (K \ rhs0)
-
-    return H_new, vec(H0_new), K
 end
 
 
@@ -696,55 +637,43 @@ function calc_H_and_nullity(
     scale::Real=1;
     drop_tol::Float64=1e-12,
 ) where {Tv<:Real}
+    H, nullity, _, _, _ = _calc_H_and_nullity_uncached(
+        perm,
+        N,
+        scale;
+        drop_tol=drop_tol,
+    )
+    return H, nullity
+end
+
+function _calc_H_and_nullity_uncached(
+    perm::AbstractVector{<:Integer},
+    N::AbstractMatrix{Tv},
+    scale::Real=1;
+    drop_tol::Float64=1e-12,
+) where {Tv<:Real}
     atol     = 1e-12
     rtol     = 1e-10
 
     n = size(N, 2)
-
-    # 只做一次 Int 化，后面重复复用
     perm_int = perm isa Vector{Int} ? perm : Int.(perm)
-
-    # ------------------------------------------------------------------
-    # 1) 一次性拿到 key (= complement of perm) 和 perm 自身重复导致的 nullity
-    # ------------------------------------------------------------------
     seen    = zeros(UInt8, n)
     touched = Vector{Int}(undef, length(perm_int))
     keybuf  = Vector{Int}(undef, n)
 
     k, perm_def = _key_from_perm!(keybuf, seen, touched, perm_int, n)
-    
-    
-
-
     key = copy(@view keybuf[1:k])
-
-    # ------------------------------------------------------------------
-    # 2) factor Nρ
-    # ------------------------------------------------------------------
     Nρ = sparse(N[:, key])
-
     entry = _factor_Nρ(Nρ; atol=atol, rtol=rtol, drop_tol=drop_tol)
+    nullity = _perm_total_nullity(perm_def, entry)
 
-    nullity = perm_def + entry.deficiency
-    
-    # ------------------------------------------------------------------
-    # 3) 和你现有 _calc_H 保持一致：
-    #    - perm 有重复 => 不构造 H
-    #    - total nullity >= 2 => 不支持，返回 nothing
-    # ------------------------------------------------------------------
-    
     if perm_def != 0
-        return nothing, nullity
+        return nothing, nullity, key, perm_def, entry
     end
 
     if entry.deficiency == 0
-        BR = entry.inv
-        Nc = sparse(N[:, perm_int])
-        BL = -(BR * Nc)
-        drop_tol > 0 && SparseArrays.droptol!(BL, drop_tol)
-
-        H = _assemble_H_from_blocks(perm_int, key, BL, BR, n)
-        return H, nullity
+        H = _build_regular_H_from_key_entry(perm_int, N, key, entry; drop_tol=drop_tol)
+        return H, nullity, key, perm_def, entry
     end
 
     if entry.deficiency == 1
@@ -755,15 +684,15 @@ function calc_H_and_nullity(
             key,
             Nc,
             entry.α,
-            entry.u,
-            entry.v;
-            scale=scale,
+                entry.u,
+                entry.v;
+                scale=scale,
         )
 
-        return H, nullity
+        return H, nullity, key, perm_def, entry
     end
 
-    return nothing, nullity
+    return nothing, nullity, key, perm_def, entry
 end
 
 
@@ -977,10 +906,11 @@ function direct_inverse_or_adjugate(
     drop_tol::Float64=1e-12,
 )::Tuple{SparseMatrixCSC,Int} where {Tv<:Real}
 
-    H, nlt = calc_H_and_nullity(perm, N, scale; drop_tol=drop_tol)
-    if !isnothing(H)
-        return H, nlt
-    else
-        return spzeros(0, 0), nlt
+    H_regular, nlt = calc_H_and_nullity(perm, N, scale; drop_tol=drop_tol)
+    if !isnothing(H_regular)
+        return H_regular, nlt
     end
+
+    nlt == 1 && return _build_singular_H_from_perm(perm, N, scale; atol=atol, drop_tol=drop_tol)
+    return spzeros(Float64, size(N, 2), size(N, 2)), nlt
 end

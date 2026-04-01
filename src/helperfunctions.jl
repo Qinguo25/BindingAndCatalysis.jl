@@ -1,4 +1,5 @@
 export locate_sym_x, locate_sym_qK, pythonprint, N_generator, L_generator, randomize
+export same_polyhedron
 
 """
     L_from_N(N::Matrix{Int}) -> Matrix{Int}
@@ -1043,6 +1044,16 @@ function get_max_denom(M::AbstractMatrix{<:Integer})
     return F[2][end,end]
 end
 
+
+
+function same_polyhedron(P, Q)
+    HP = hrep(P)
+    HQ = hrep(Q)
+    removehredundancy!(HP)
+    removehredundancy!(HQ)
+    all(h -> issubset(P, h), allhalfspaces(HQ)) &&
+    all(h -> issubset(Q, h), allhalfspaces(HP))
+end
 
 
 

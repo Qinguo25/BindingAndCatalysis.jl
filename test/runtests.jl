@@ -1,5 +1,6 @@
 using BindingAndCatalysis
 using Random
+using SparseArrays
 using Test
 
 function minimal_model()
@@ -280,6 +281,45 @@ end
         @test H == H_swapped
         @test H != -H_swapped
     end
+end
+
+@testset "Sparse L/N Singular Seed Fallback" begin
+    L = SparseArrays.sparse(
+        [1, 2, 3, 4, 4, 1, 3, 4, 2, 4],
+        [1, 2, 3, 3, 4, 5, 5, 5, 6, 6],
+        ones(Int, 10),
+        4,
+        6,
+    )
+    N = SparseArrays.sparse(
+        [1, 2, 1, 2, 1, 2],
+        [1, 2, 3, 4, 5, 6],
+        [1, 1, 1, 1, -1, -1],
+        2,
+        6,
+    )
+
+    model_float = Bnc(L = L, N = N)
+    model_rational = Bnc(L = L, N = N)
+
+    find_all_regimes!(model_float; H_mode = :float)
+    find_all_regimes!(model_rational; H_mode = :rational)
+
+    @test n_regimes(model_float) == 24
+    @test n_regimes(model_rational) == 24
+
+    singular_idx = first(filter(i -> get_nullity(model_rational, i) == 1, get_regimes(model_rational; return_idx = true)))
+    singular_perm = get_perm(model_rational, singular_idx)
+
+    @test have_perm(model_float, singular_perm)
+
+    Hf, H0f = get_H_H0(model_float, singular_perm)
+    Hr, H0r = get_H_H0(model_rational, singular_perm)
+
+    @test size(Hf) == (model_float.n, model_float.n)
+    @test length(H0f) == model_float.n
+    @test Matrix(Hf) ≈ Float64.(Matrix(Hr))
+    @test H0f ≈ H0r
 end
 
 @testset "Larger RO Path Workflow" begin
