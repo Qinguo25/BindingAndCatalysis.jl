@@ -828,6 +828,35 @@ function get_RO_path(
     return ord_path
 end
 
+
+
+
+function _ensure_ro_regimes_materialized!(
+    model::Bnc,
+    rgm_idx_for_each_paths::AbstractVector{<:AbstractVector{<:Integer}},
+)
+    seen = Set{Int}()
+    ordered_idxs = Int[]
+
+    for path in rgm_idx_for_each_paths
+        for idx in path
+            idx = Int(idx)
+            if !(idx in seen)
+                push!(ordered_idxs, idx)
+                push!(seen, idx)
+            end
+        end
+    end
+
+    for idx in ordered_idxs
+        get_regime(model, idx; inv_info=true)
+    end
+
+    return nothing
+end
+
+
+
 """
     get_RO_paths(model::Bnc, rgm_paths, args...; kwargs...) -> Vector{Vector}
 
@@ -836,6 +865,9 @@ Calculate reaction-order profiles for multiple regime paths.
 function get_RO_paths(model::Bnc, rgm_paths::AbstractVector{<:AbstractVector}, args...; kwargs...)::Vector{Vector{<:Real}}
     
     rgm_idx_for_each_paths = rgm_paths .|> x -> get_idx.(Ref(model), x)
+    # Different paths may share the same regime. Pre-materialize once so the
+    # threaded loop below only reads cached affine/qK data.
+    _ensure_ro_regimes_materialized!(model, rgm_idx_for_each_paths)
 
     ord_for_each_paths = Vector{Vector{<:Real}}(undef, length(rgm_idx_for_each_paths))
     Threads.@threads for i in eachindex(rgm_idx_for_each_paths)

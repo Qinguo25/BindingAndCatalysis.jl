@@ -44,6 +44,25 @@ function notebook_model2()
     return Bnc(N = N)
 end
 
+function clique5_binding_model()
+    N = [
+        1 1 0 0 0 -1 0 0 0 0 0 0 0 0 0
+        1 0 1 0 0 0 -1 0 0 0 0 0 0 0 0
+        1 0 0 1 0 0 0 -1 0 0 0 0 0 0 0
+        1 0 0 0 1 0 0 0 -1 0 0 0 0 0 0
+        0 1 1 0 0 0 0 0 0 -1 0 0 0 0 0
+        0 1 0 1 0 0 0 0 0 0 -1 0 0 0 0
+        0 1 0 0 1 0 0 0 0 0 0 -1 0 0 0
+        0 0 1 1 0 0 0 0 0 0 0 0 -1 0 0
+        0 0 1 0 1 0 0 0 0 0 0 0 0 -1 0
+        0 0 0 1 1 0 0 0 0 0 0 0 0 0 -1
+    ]
+    x_sym = [:A, :B, :C, :D, :E, :ab, :ac, :ad, :ae, :bc, :bd, :be, :cd, :ce, :de]
+    q_sym = [:tA, :tB, :tC, :tD, :tE]
+    K_sym = [:K12, :K13, :K14, :K15, :K23, :K24, :K25, :K34, :K35, :K45]
+    return Bnc(N = N, x_sym = x_sym, q_sym = q_sym, K_sym = K_sym)
+end
+
 @testset "BindingAndCatalysis.jl" begin
     model = minimal_model()
 
@@ -343,6 +362,16 @@ end
     @test length(ro_paths_1) == length(pths.rgm_paths)
     @test length(ro_paths_2) == length(pths.rgm_paths)
     @test length(ro_paths_2_filtered) == length(pths.rgm_paths)
+end
+
+@testset "Nested Threaded Regime Propagation" begin
+    if Threads.nthreads() > 1
+        model = clique5_binding_model()
+        @test begin
+            find_all_regimes!(model)
+            n_regimes(model) > 0
+        end
+    end
 end
 
 @testset "Catalysis And Mixed Regimes" begin

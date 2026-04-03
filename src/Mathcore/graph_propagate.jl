@@ -606,7 +606,10 @@ function _propagate_from_regular_seed!(
                 empty!(buf)
             end
 
-            Threads.@threads :static for pos in eachindex(frontier)
+            # Avoid `:static` here: this frontier propagation can run inside the
+            # outer threaded component scan in `find_all_regimes!`, and nested
+            # static scheduling throws `@threads :static cannot be used concurrently or nested`.
+            Threads.@threads for pos in eachindex(frontier)
                 tid = Threads.threadid()
                 next_local = next_locals[tid]
                 disc_local = disc_locals[tid]

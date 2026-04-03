@@ -198,12 +198,12 @@ function _graph_init(
         end
         for e in edges
             # process each undirected pair once
-            if isnothing(e.change_dir_qK) || e.to < i
+            if !_edge_has_qK_interface(e) || e.to < i
                 continue
             end
 
             # use only q-space components (first d coordinates in qK space)
-            dir = dot(e.change_dir_qK[1:bnc_sys.d], v)
+            dir = dot( _edge_qK_interface(vtx_grh,e)[1][1:bnc_sys.d], v)
             if dir > tol
                 connectome[i, e.to] = true
             elseif dir < -tol

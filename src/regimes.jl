@@ -92,17 +92,14 @@ Keyword `H_mode` controls how binding-regime affine coefficients are stored:
 - `:rational` uses exact rational coefficients for `H` / `C_qK`
 """
 function find_all_regimes!(model::Bnc{T}; H_mode::Symbol=_affine_mode(model)) where T
+
     H_mode = _normalize_affine_mode(H_mode)
-
-    if is_bind_regimes_built(model)
-        if model.affine_coeff_mode == H_mode
-            return nothing
-        end
-        _remove_regime_data!(model)
-    end
-
+    is_bind_regimes_built(model) && model.affine_coeff_mode == H_mode && return nothing
+    
+    _remove_regime_data!(model)
     model.affine_coeff_mode = H_mode
 
+    
     @info "---------------------Start finding all regimes--------------------"
     
     (all_perms, is_asymptotic) =  let
