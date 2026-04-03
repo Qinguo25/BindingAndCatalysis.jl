@@ -532,6 +532,23 @@ mutable struct Bnc{T} <: AbstractBnc # T is the int type to save all the indices
     IntegrationHelper::Union{IntegrationHelper,Nothing}
     _L_helper::MatrixHelper
 
+
+
+    
+    # Xiaoyu's global pool storage of H-representation of the polyhedra -- NOT IMPLEMENTED YET
+    # will wait for further analysis on what types of hyperplanes can be shared among different vertices, and how to efficiently store and update them.
+    # the implementation of this global pool will theoretically speed up the following rotation step (a part of path condition calculation) by at least 100 folds
+    # each hyperplane can be writen as: w^T x + b = 0
+    vertices_hyperplane_wT::Vector{Vector{Float64}} # the w^T for all of the hyperplanes of vertices
+    vertices_hyperplane_b::Vector{Vector{Float64}} # the b for all of the hyperplanes of vertices
+    vertices_polyhedron::Vector{Int} # the index of hyperplanes for each vertex, the hyperplanes are stored in the vertices_hyperplane_wT and vertices_hyperplane_b
+    vertices_poly_direction::Vector{Int} # the direction of the hyperplanes for each vertex, 1 for w^T x + b >= 0, -1 for w^T x + b <= 0, stored in the same order as vertices_polyhedron
+
+
+
+
+
+
     # Inner constructor 
     function Bnc{T}(N, L, x_sym, q_sym, K_sym, catalysis) where {T<:Integer}
         N_sparse = sparse(N)
@@ -576,6 +593,12 @@ mutable struct Bnc{T} <: AbstractBnc # T is the int type to save all the indices
             :float,                          # affine_coeff_mode
             nothing,
             _L_helper,
+
+            # Xiaoyu's global pool storage of H-representation of the polyhedra
+            Vector{Vector{Float64}}(), # vertices_hyperplane_wT
+            Vector{Vector{Float64}}(), # vertices_hyperplane_b
+            Vector{Int}[], # vertices_polyhedron
+            Vector{Int}[], # vertices_poly_direction
         )
     end
 end
@@ -888,7 +911,7 @@ include(joinpath(@__DIR__,"symbolics.jl"))
 include(joinpath(@__DIR__,"regime_graphs.jl"))
 include(joinpath(@__DIR__,"visualize.jl"))
 include(joinpath(@__DIR__,"old_api.jl"))
-
+include(joinpath(@__DIR__,"better_path.jl"))
 
 
 """
@@ -896,20 +919,20 @@ include(joinpath(@__DIR__,"old_api.jl"))
 
 Print a summary of a binding network model to standard output.
 """
-function summary(Bnc::Bnc)
+function summary(model::Bnc)
     println("----------Binding Network Summary:-------------")
-    println("Number of species (n): ", Bnc.n)
-    println("Number of conserved quantities (d): ", Bnc.d)
-    println("Number of reactions (r): ", Bnc.r)
-    println("L matrix: ", Bnc.L)
-    println("N matrix: ", Bnc.N)
-    println("Direction of binding reactions: ", Bnc.direction > 0 ? "forward" : "backward")
-    catalysis_str = isnothing(Bnc.catalysis) ? "No" : "Yes"
+    println("Number of species (n): ", model.n)
+    println("Number of conserved quantities (d): ", model.d)
+    println("Number of reactions (r): ", model.r)
+    println("L matrix: ", model.L)
+    println("N matrix: ", model.N)
+    println("Direction of binding reactions: ", model.direction > 0 ? "forward" : "backward")
+    catalysis_str = isnothing(model.catalysis) ? "No" : "Yes"
     println("Catalysis involved: ", catalysis_str)
-    is_regimes_built = _bind_regimes_built(Bnc) ? "Yes" : "No"
+    is_regimes_built = _bind_regimes_built(model) ? "Yes" : "No"
     println("Regimes constructed: ", is_regimes_built)
-    if _bind_regimes_built(Bnc)
-        vertices = _bind_regimes_data(Bnc)
+    if _bind_regimes_built(model)
+        vertices = _bind_regimes_data(model)
         map = countmap((vtx.is_asymptotic, vtx.nullity > 0) for vtx in vertices)
         println("Number of regimes: ", length(vertices))
         println("  - Invertible + Asymptotic: ", get(map, (true, false), 0))
