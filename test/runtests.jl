@@ -108,12 +108,16 @@ end
     model = minimal_model()
 
     find_all_regimes!(model)
-    perms = get_regimes(model)
-    idxs = get_regimes(model; return_idx = true)
+    rgms = get_regimes(model)
+    perms = get_perms(model)
+    idxs = get_indices(model)
     perm_dict = get_bind_regimes_dict(model)
 
-    @test length(perms) == n_regimes(model) == length(idxs) == length(perm_dict)
+    @test length(rgms) == length(perms) == n_regimes(model) == length(idxs) == length(perm_dict)
     @test idxs == collect(1:n_regimes(model))
+    @test all(r -> r isa BindingAndCatalysis.BindRegime, rgms)
+    @test get_perms(rgms) == perms
+    @test get_indices(rgms) == idxs
     @test model.vertices_graph !== nothing
     @test all(i -> !isnothing(model.vertices_data[i].H) && !isnothing(model.vertices_data[i].H0),
         filter(i -> get_nullity(model, i) <= 1, idxs))
@@ -137,6 +141,9 @@ end
     @test get_nullity(model, 1) == get_nullity(r1)
     @test is_singular(r1) == (get_nullity(r1) > 0)
     @test is_asymptotic(model, 1)
+    @test occursin("dominant mode", sprint(show, MIME"text/plain"(), r1))
+    @test occursin("nullity", sprint(show, MIME"text/plain"(), r1))
+    @test occursin("asymptotic", sprint(show, MIME"text/plain"(), r1))
 
     P, P0 = get_P_P0(model, r1_perm)
     H, H0 = get_H_H0(model, 1)
@@ -250,8 +257,8 @@ end
     CqK = get_C_qK(model, 1)
     poly = get_polyhedron(model, 1)
     vg = get_regimes_graph!(model; full = true)
-    perms = get_regimes(model)
-    rational_singular_idx = only(filter(i -> get_nullity(model, i) == 1, get_regimes(model; return_idx = true)))
+    perms = get_perms(model)
+    rational_singular_idx = only(filter(i -> get_nullity(model, i) == 1, get_indices(model)))
     Hs, H0s = get_H_H0(model, rational_singular_idx)
 
     @test model.affine_coeff_mode == :rational
@@ -327,7 +334,7 @@ end
     @test n_regimes(model_float) == 24
     @test n_regimes(model_rational) == 24
 
-    singular_idx = first(filter(i -> get_nullity(model_rational, i) == 1, get_regimes(model_rational; return_idx = true)))
+    singular_idx = first(filter(i -> get_nullity(model_rational, i) == 1, get_indices(model_rational)))
     singular_perm = get_perm(model_rational, singular_idx)
 
     @test have_perm(model_float, singular_perm)
@@ -391,6 +398,9 @@ end
     @test get_idx(cn, cat_perm) == get_idx(cat_rgm)
     @test get_perm(cn, get_idx(cat_rgm)) == cat_perm
     @test size(get_P(cat_rgm), 1) == cn.r_v
+    @test occursin("dominant mode", sprint(show, MIME"text/plain"(), cat_rgm))
+    @test occursin("nullity", sprint(show, MIME"text/plain"(), cat_rgm))
+    @test occursin("asymptotic", sprint(show, MIME"text/plain"(), cat_rgm))
 
     C_xk_cat, C0_xk_cat, nlt_xk_cat = get_C_C0_nullity_xk(cat_rgm)
     @test size(C_xk_cat, 2) == model.n + cn.n_v
@@ -406,7 +416,7 @@ end
     match_regimes!(model)
     @test n_bnc_regimes(model) > 0
 
-    bind_perm = first(get_regimes(model))
+    bind_perm = first(get_perms(model))
     @test have_perm(model, bind_perm, cat_perm)
 
     mixed = get_bnc_regime(model, bind_perm, cat_perm)
@@ -415,6 +425,9 @@ end
     @test get_binding_perm(mixed) == bind_perm
     @test get_catalysis_perm(mixed) == cat_perm
     @test get_idx(mixed) == CartesianIndex(get_idx(cat_rgm), get_idx(model, bind_perm))
+    @test occursin("dominant mode", sprint(show, MIME"text/plain"(), mixed))
+    @test occursin("nullity", sprint(show, MIME"text/plain"(), mixed))
+    @test occursin("asymptotic", sprint(show, MIME"text/plain"(), mixed))
 
     C_qKk, C0_qKk, nlt_qKk = get_C_C0_nullity_qKk(mixed)
     @test size(C_qKk, 2) == model.d + model.r + cn.n_v

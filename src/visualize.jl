@@ -206,7 +206,7 @@ end
 
 Return a color map for vertices in a model.
 """
-get_color_map(model::Bnc, args...;colormap=:rainbow, kwargs...) = get_color_map(get_regimes(model,args...;kwargs...), colormap=colormap)
+get_color_map(model::Bnc, args...;colormap=:rainbow, kwargs...) = get_color_map(get_perms(model,args...;kwargs...), colormap=colormap)
 
 
 

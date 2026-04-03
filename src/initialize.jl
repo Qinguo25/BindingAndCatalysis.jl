@@ -9,7 +9,7 @@ import OrdinaryDiffEq as ODE
 import DiffEqCallbacks as CB
 using StatsBase
 using SparseArrays
-using IntegerSmithNormalForm # to get the maximum of denum 
+# using IntegerSmithNormalForm # to get the maximum of denum 
 # using JuMP
 # using CUDA # Speedup calculation for distance matrix
 using DataStructures:Queue,enqueue!,dequeue!,isempty
@@ -662,44 +662,6 @@ end
 
 
 
-
-
-struct SISOPaths{T} 
-    bn::Bnc{T}   # binding Newtork
-    qK_grh::SimpleDiGraph # SimpleDiGraph in qK space
-    change_qK_idx::T  # which qK is changing in this SISO graph
-
-    sources::Vector{Int}  # source vertices in the graph
-    sinks::Vector{Int}    # sink vertices in the graph
-    paths_dict::Dict{Vector{Int},Int} # map from path (vector of vertex idx) to its idx in rgm_paths
-    rgm_paths::Vector{Vector{Int}} #All paths from sources to sinks, each path is represented as a vector of vertex idx. Grows exponentially
-    path_polys::Vector{Polyhedron} # the polyhedron for each path, lazily calculated when needed, stored in the same order as rgm_paths
-    path_volume::Vector{Volume}# the volume for each path, lazily calculated when needed, stored in the same order as rgm_paths
-
-    path_volume_is_calc::BitVector # whether the volume for each path is calculated, stored in the same order as rgm_paths
-    path_polys_is_calc::BitVector # whether the polyhedron for each path is calculated, stored in the same order as rgm_paths
-    
-     function SISOPaths(model::Bnc{T}, qK_grh, change_qK_idx, sources, sinks, rgm_paths) where T
-        path_polys = Vector{Polyhedron}(undef, length(rgm_paths))
-        path_volume = Vector{Volume}(undef, length(rgm_paths))
-        path_volume_is_calc = falses(length(rgm_paths))
-        path_polys_is_calc = falses(length(rgm_paths))
-        paths_dict = Dict{Vector{Int},Int}()
-        for (i, p) in enumerate(rgm_paths)
-            paths_dict[p] = i
-        end  
-        new{T}(model, qK_grh, change_qK_idx, 
-            sources, sinks, 
-            paths_dict,
-            rgm_paths, path_polys, path_volume,
-            path_volume_is_calc, path_polys_is_calc)
-    end
-end
-
-
-
-
-
 """
     Bnc(; N=nothing, L=nothing, x_sym=nothing, q_sym=nothing, K_sym=nothing,
         Γ=nothing, Π=nothing, k=nothing, cat_x_idx=nothing) -> Bnc
@@ -907,8 +869,9 @@ include(joinpath(@__DIR__,"Catalysis_regime.jl"))
 include(joinpath(@__DIR__,"Bnc_regime.jl"))
 
 include(joinpath(@__DIR__,"regime_assign.jl"))
-include(joinpath(@__DIR__,"symbolics.jl"))
 include(joinpath(@__DIR__,"regime_graphs.jl"))
+include(joinpath(@__DIR__,"SISO.jl"))
+include(joinpath(@__DIR__,"symbolics.jl"))
 include(joinpath(@__DIR__,"visualize.jl"))
 include(joinpath(@__DIR__,"old_api.jl"))
 include(joinpath(@__DIR__,"better_path.jl"))

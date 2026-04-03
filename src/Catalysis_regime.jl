@@ -221,6 +221,11 @@ function get_regimes(model::CatalysisData; return_idx::Bool=false, asymptotic::U
     return return_idx ? idxs : getfield.(model.vertices_data[idxs], :perm)
 end
 
+get_indices(model::CatalysisData; kwargs...) = get_regimes(model; return_idx=true, kwargs...)
+get_perms(model::CatalysisData; kwargs...) = get_regimes(model; return_idx=false, kwargs...)
+get_indices(rgms::AbstractVector{<:CatalysisRegime}) = getfield.(rgms, :idx)
+get_perms(rgms::AbstractVector{<:CatalysisRegime}) = getfield.(rgms, :perm)
+
 n_regimes(model::CatalysisData) = (find_catalysis_regimes!(model); length(model.vertices_data))
 
 have_perm(model::CatalysisData, perm::AbstractVector) = haskey(get_catalysis_regimes_dict(model), Vector{Int}(perm))
@@ -337,3 +342,27 @@ function summary_regime(rgm::CatalysisRegime)
 end
 
 summary(rgm::CatalysisRegime) = summary_regime(rgm)
+
+@inline function _regime_display_dominant_mode(rgm::CatalysisRegime)
+    return "perm=$(get_perm(rgm))"
+end
+
+function Base.show(io::IO, rgm::CatalysisRegime)
+    print(
+        io,
+        "CatalysisRegime(",
+        _regime_display_dominant_mode(rgm),
+        ", nullity=",
+        get_nullity(rgm),
+        ", asymptotic=",
+        is_asymptotic(rgm),
+        ")",
+    )
+end
+
+function Base.show(io::IO, ::MIME"text/plain", rgm::CatalysisRegime)
+    println(io, "CatalysisRegime")
+    println(io, "  dominant mode: ", _regime_display_dominant_mode(rgm))
+    println(io, "  nullity: ", get_nullity(rgm))
+    print(io, "  asymptotic: ", is_asymptotic(rgm))
+end

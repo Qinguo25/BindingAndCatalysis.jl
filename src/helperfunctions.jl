@@ -1039,10 +1039,11 @@ function S_to_S_pos_neg(S::SparseMatrixCSC{T,Ti}) where {T<:Real,Ti<:Integer}
 end
 
 
-function get_max_denom(M::AbstractMatrix{<:Integer})
-    F = snf(M)
-    return F[2][end,end]
-end
+
+# function get_max_denom(M::AbstractMatrix{<:Integer})
+#     F = snf(M)
+#     return F[2][end,end]
+# end
 
 
 
@@ -1054,4 +1055,69 @@ function same_polyhedron(P, Q)
 end
 
 
+"""
+    group_sum(keys, vals; sort_values=true) -> Vector{Tuple}
+
+Group values by keys, returning indices, key, and summed values.
+"""
+function group_sum(keys::AbstractVector{I}, vals::AbstractVector{J}; 
+    sort_values::Bool=true
+    ) :: Vector{Tuple{Vector{Int}, I, J}} where {I,J}
+
+    @assert length(keys) == length(vals)
+    # Dictionary to accumulate sum of values for each key
+    dict = Dict{I,J}()
+    # Store indices of keys for later reference
+    index_dict = Dict{I, Vector{Int}}()
+    
+    @inbounds for (i, (k, v)) in enumerate(zip(keys, vals))
+        dict[k] = get(dict, k, zero(v)) + v
+        push!(get!(index_dict, k, Int[]), i)  # Store the index
+    end
+    
+    # Collect and sort if needed
+    dict_vec = collect(dict)
+    
+    if sort_values
+        # Sort by values (sum of vals)
+        sort!(dict_vec, by=x->x[2], rev=true)
+    end
+    
+    # Create a Vector of Tuples with (index, key, summed value)
+    result = Vector{Tuple{Vector{Int}, I, J}}(undef, length(dict))
+    
+    # @show dict, index_dict
+    for i in eachindex(dict_vec)
+        key, sum_val = dict_vec[i]
+        group = index_dict[key]
+        result[i] = (group, key, sum_val)
+    end
+    
+    return result
+end
+
+function group_sum(
+    keys::AbstractVector{I},
+    vals::AbstractVector{Nothing};
+    sort_values::Bool=true,
+)::Vector{Tuple{Vector{Int}, I, Nothing}} where {I}
+
+    @assert length(keys) == length(vals)
+
+    index_dict = Dict{I, Vector{Int}}()
+    order = I[]
+
+    @inbounds for (i, k) in enumerate(keys)
+        if !haskey(index_dict, k)
+            push!(order, k)
+        end
+        push!(get!(index_dict, k, Int[]), i)
+    end
+
+    if sort_values
+        sort!(order, by = k -> length(index_dict[k]), rev = true)
+    end
+
+    return [(index_dict[k], k, nothing) for k in order]
+end
 

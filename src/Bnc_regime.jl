@@ -785,6 +785,34 @@ summary(rgm::BncRegime) = summary_regime(rgm)
 summary_regime(model::Bnc, bind, cat) = summary_regime(get_bnc_regime(model, bind, cat; check=true))
 summary(model::Bnc, bind, cat) = summary_regime(model, bind, cat)
 
+@inline function _is_asymptotic(rgm::BncRegime)
+    return is_asymptotic(rgm.bind_rgm) && is_asymptotic(rgm.catalysis_rgm)
+end
+
+@inline function _regime_display_dominant_mode(rgm::BncRegime)
+    return "bind=$(get_binding_perm(rgm)), cat=$(get_catalysis_perm(rgm)), ss=$(get_perm(rgm))"
+end
+
+function Base.show(io::IO, rgm::BncRegime)
+    print(
+        io,
+        "BncRegime(",
+        _regime_display_dominant_mode(rgm),
+        ", nullity=",
+        rgm.nlt,
+        ", asymptotic=",
+        _is_asymptotic(rgm),
+        ")",
+    )
+end
+
+function Base.show(io::IO, ::MIME"text/plain", rgm::BncRegime)
+    println(io, "BncRegime")
+    println(io, "  dominant mode: ", _regime_display_dominant_mode(rgm))
+    println(io, "  nullity: ", rgm.nlt)
+    print(io, "  asymptotic: ", _is_asymptotic(rgm))
+end
+
 
 # ------------------------------------------------
 # Top-level entry
