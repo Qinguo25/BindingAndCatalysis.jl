@@ -23,7 +23,7 @@ function _default_optimizer_factory(time_limit::Real)
 end
 
 function _build_model(optimizer_factory)
-    model = Model(optimizer_factory)
+    model = JuMP.Model(optimizer_factory)
     try
         set_silent(model)
     catch
@@ -92,11 +92,11 @@ function _neg_lyap_triangle(
     signs::Union{Nothing, AbstractVector{<:Real}} = nothing,
 )
     n = size(A, 1)
-    tri = [AffExpr(0.0) for _ in 1:(n * (n + 1) ÷ 2)]
+    tri = [JuMP.AffExpr(0.0) for _ in 1:(n * (n + 1) ÷ 2)]
 
     # 对角：-t I
     for i in 1:n
-        add_to_expression!(tri[tri_index(i, i)], -1.0, t)
+        JuMP.add_to_expression!(tri[tri_index(i, i)], -1.0, t)
     end
 
     rows = rowvals(A)
@@ -116,7 +116,7 @@ function _neg_lyap_triangle(
 
             s = isnothing(signs) ? 1.0 : Float64(signs[row])
             coeff = -(row == col ? 2.0 : 1.0) * a * s
-            add_to_expression!(tri[idx], coeff, x[row])
+            JuMP.add_to_expression!(tri[idx], coeff, x[row])
         end
     end
 
@@ -151,11 +151,11 @@ function _signed_diag_lyap_margin(
     JuMP.@constraint(model, tri in MOI.PositiveSemidefiniteConeTriangle(n))
     JuMP.@objective(model, Max, t)
 
-    optimize!(model)
+    JuMP.optimize!(model)
 
     st = JuMP.termination_status(model)
     if st == MOI.OPTIMAL || st == MOI.ALMOST_OPTIMAL
-        return value(t)
+        return JuMP.value(t)
     end
     return -Inf
 end

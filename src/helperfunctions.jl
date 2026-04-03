@@ -1049,8 +1049,6 @@ end
 function same_polyhedron(P, Q)
     HP = hrep(P)
     HQ = hrep(Q)
-    removehredundancy!(HP)
-    removehredundancy!(HQ)
     all(h -> issubset(P, h), allhalfspaces(HQ)) &&
     all(h -> issubset(Q, h), allhalfspaces(HP))
 end
