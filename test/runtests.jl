@@ -351,6 +351,7 @@ end
 @testset "Larger RO Path Workflow" begin
     model = notebook_model2()
     pths = SISOPaths(model, 1)
+    pths_single = SISOPaths(notebook_model2(), 1)
 
     grouped = group_sum([[1, 2], [1, 2], [2, 3]], fill(nothing, 3))
     @test length(grouped) == 2
@@ -359,16 +360,46 @@ end
     @test !isempty(pths.rgm_paths)
     @test get_path(pths, 1; return_idx = true) == pths.rgm_paths[1]
     @test get_idx(pths, get_path(pths, 1)) == 1
+    @test pths.rgm_paths == pths_single.rgm_paths
 
     ro1 = get_RO_path(pths, 1; observe_x = 1)
     ro_paths_1 = get_RO_paths(pths; observe_x = 1)
     ro_paths_2 = get_RO_paths(pths; observe_x = 2, deduplicate = true)
     ro_paths_2_filtered = get_RO_paths(pths; observe_x = 2, deduplicate = true, keep_nonasymptotic = false, keep_singular = false)
+    bulk_polys = get_polyhedra(pths)
+    single_polys = [get_polyhedron(pths_single, i) for i in eachindex(pths_single.rgm_paths)]
 
     @test !isempty(ro1)
     @test length(ro_paths_1) == length(pths.rgm_paths)
     @test length(ro_paths_2) == length(pths.rgm_paths)
     @test length(ro_paths_2_filtered) == length(pths.rgm_paths)
+    @test all(BindingAndCatalysis.same_polyhedron.(bulk_polys, single_polys))
+end
+
+@testset "Better Path Condition Mismatch Example" begin
+    model = notebook_model2()
+    siso = SISOPaths(model, 1)
+    path = [1, 4, 3]
+    siso_poly = get_polyhedron(siso, path)
+
+    rg = better_path_finder(model, [1.0, 0.0])
+    better_path_polys = Dict{Vector{Int},Any}()
+    for source in rg.sources, sink in rg.sinks
+        ps = rg.paths[source, sink]
+        ps === nothing && continue
+        for p in ps
+            better_path_polys[p.path] = p.condition
+        end
+    end
+
+    @test !haskey(better_path_polys, [1, 3])
+    @test haskey(better_path_polys, path)
+
+    better_poly_reduced = BindingAndCatalysis.Polyhedra.eliminate(better_path_polys[path], 1)
+    BindingAndCatalysis.Polyhedra.detecthlinearity!(better_poly_reduced)
+    BindingAndCatalysis.Polyhedra.removehredundancy!(better_poly_reduced)
+
+    @test !BindingAndCatalysis.same_polyhedron(siso_poly, better_poly_reduced)
 end
 
 @testset "Nested Threaded Regime Propagation" begin

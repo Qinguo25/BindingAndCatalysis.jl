@@ -8,6 +8,14 @@ mutable struct SISOPaths{T}
     sinks::Vector{Int}    # sink vertices in the graph
     paths_dict::Union{Nothing,Dict{Vector{Int},Int}} # lazily-built map from path to its idx in rgm_paths
     rgm_paths::Vector{Vector{Int}} #All paths from sources to sinks, each path is represented as a vector of vertex idx. Grows exponentially
+    path_edge_idxs::Vector{Vector{Int}} # undirected edge ids for each path
+    edge_keys::Vector{Tuple{Int,Int}} # global undirected edge pool shared by all paths
+
+    node_polys::Vector{Polyhedron} # vertex polyhedra cache
+    node_polys_is_calc::BitVector
+    edge_polys::Vector{Polyhedron} # projected edge polyhedra cache
+    edge_polys_is_calc::BitVector
+
     path_polys::Vector{Polyhedron} # the polyhedron for each path, lazily calculated when needed, stored in the same order as rgm_paths
     path_volume::Vector{Volume}# the volume for each path, lazily calculated when needed, stored in the same order as rgm_paths
 
@@ -15,6 +23,11 @@ mutable struct SISOPaths{T}
     path_polys_is_calc::BitVector # whether the polyhedron for each path is calculated, stored in the same order as rgm_paths
     
      function SISOPaths(model::Bnc{T}, qK_grh, change_qK_idx, sources, sinks, rgm_paths) where T
+        edge_keys, path_edge_idxs = _build_path_edge_index(rgm_paths)
+        node_polys = Vector{Polyhedron}(undef, n_regimes(model))
+        node_polys_is_calc = falses(length(node_polys))
+        edge_polys = Vector{Polyhedron}(undef, length(edge_keys))
+        edge_polys_is_calc = falses(length(edge_keys))
         path_polys = Vector{Polyhedron}(undef, length(rgm_paths))
         path_volume = Vector{Volume}(undef, length(rgm_paths))
         path_volume_is_calc = falses(length(rgm_paths))
@@ -22,7 +35,9 @@ mutable struct SISOPaths{T}
         new{T}(model, qK_grh, change_qK_idx, 
             sources, sinks, 
             nothing,
-            rgm_paths, path_polys, path_volume,
+            rgm_paths, path_edge_idxs, edge_keys,
+            node_polys, node_polys_is_calc, edge_polys, edge_polys_is_calc,
+            path_polys, path_volume,
             path_volume_is_calc, path_polys_is_calc)
     end
 end
@@ -41,6 +56,235 @@ function _ensure_paths_dict!(grh::SISOPaths)
     grh.paths_dict = _build_paths_dict(grh.rgm_paths)
     return grh.paths_dict
 end
+
+_clean_polyhedron!(p::Polyhedron) = (detecthlinearity!(p); removehredundancy!(p); p)
+
+function _build_path_edge_index(rgm_paths::AbstractVector{<:AbstractVector{<:Integer}})
+    total_refs = sum(max(length(path) - 1, 0) for path in rgm_paths)
+    edge_keys = Tuple{Int,Int}[]
+    sizehint!(edge_keys, total_refs)
+    edge_dict = Dict{Tuple{Int,Int},Int}()
+    path_edge_idxs = Vector{Vector{Int}}(undef, length(rgm_paths))
+
+    for (path_idx, path) in enumerate(rgm_paths)
+        n_edges = max(length(path) - 1, 0)
+        idxs = Vector{Int}(undef, n_edges)
+        @inbounds for i in 1:n_edges
+            u = Int(path[i])
+            v = Int(path[i + 1])
+            a, b = u < v ? (u, v) : (v, u)
+            edge_key = (a, b)
+            edge_idx = get!(edge_dict, edge_key) do
+                push!(edge_keys, edge_key)
+                length(edge_keys)
+            end
+            idxs[i] = edge_idx
+        end
+        path_edge_idxs[path_idx] = idxs
+    end
+
+    return edge_keys, path_edge_idxs
+end
+
+function _ensure_node_polyhedra!(grh::SISOPaths, rgm_idxs::AbstractVector{<:Integer})
+    bn = get_binding_network(grh)
+    for idx in unique(Int.(rgm_idxs))
+        if !grh.node_polys_is_calc[idx]
+            grh.node_polys[idx] = get_polyhedron(bn, idx)
+            grh.node_polys_is_calc[idx] = true
+        end
+    end
+    return nothing
+end
+
+function _ensure_edge_polyhedra!(grh::SISOPaths, edge_idxs::AbstractVector{<:Integer})
+    edge_idxs_unique = unique(Int.(edge_idxs))
+    edge_idxs_to_calc = filter(edge_idxs_unique) do idx
+        !grh.edge_polys_is_calc[idx]
+    end
+    isempty(edge_idxs_to_calc) && return nothing
+
+    rgm_idxs = Int[]
+    sizehint!(rgm_idxs, 2 * length(edge_idxs_to_calc))
+    for edge_idx in edge_idxs_to_calc
+        u, v = grh.edge_keys[edge_idx]
+        push!(rgm_idxs, u)
+        push!(rgm_idxs, v)
+    end
+    _ensure_node_polyhedra!(grh, rgm_idxs)
+
+    el_dim = BitSet((grh.change_qK_idx,))
+    @info "Start building polyhedra for edges (total: $(length(edge_idxs_to_calc)))"
+    @showprogress Threads.@threads for pos in eachindex(edge_idxs_to_calc)
+        edge_idx = edge_idxs_to_calc[pos]
+        u, v = grh.edge_keys[edge_idx]
+        p = intersect(grh.node_polys[u], grh.node_polys[v])
+        grh.edge_polys[edge_idx] = eliminate(p, el_dim)
+        grh.edge_polys_is_calc[edge_idx] = true
+    end
+
+    return nothing
+end
+
+function _build_path_polyhedron(
+    grh::SISOPaths,
+    path::AbstractVector{<:Integer},
+    edge_idxs::AbstractVector{<:Integer},
+)::Polyhedron
+    if isempty(edge_idxs)
+        _ensure_node_polyhedra!(grh, [Int(first(path))])
+        return eliminate(grh.node_polys[Int(first(path))], BitSet((grh.change_qK_idx,))) |> _clean_polyhedron!
+    end
+    return intersect(grh.edge_polys[Int.(edge_idxs)]...) |> _clean_polyhedron!
+end
+
+function _calc_polyhedra_for_paths_bulk_suffix_dag!(
+    grh::SISOPaths,
+    path_idxs::AbstractVector{<:Integer},
+)::Vector{Polyhedron}
+    path_idxs = Int.(path_idxs)
+    isempty(path_idxs) && return Polyhedron[]
+
+    edge_idxs = unique(vcat(grh.path_edge_idxs[path_idxs]...))
+    _ensure_edge_polyhedra!(grh, edge_idxs)
+
+    sink_vertices = unique(Int.(last.(grh.rgm_paths[path_idxs])))
+    _ensure_node_polyhedra!(grh, sink_vertices)
+    el_dim = BitSet((grh.change_qK_idx,))
+
+    child_of = Int[]
+    vertex_of = Int[]
+    edge_of = Int[]
+    poly_of = Vector{Any}()
+    is_calc = Bool[]
+    key_to_node = Dict{Tuple{Int,Int},Int}()
+
+    function make_node(child::Int, vertex::Int, edge_idx::Int)
+        push!(child_of, child)
+        push!(vertex_of, vertex)
+        push!(edge_of, edge_idx)
+        push!(poly_of, nothing)
+        push!(is_calc, false)
+        return length(child_of)
+    end
+
+    function get_base_node(v::Int)
+        return get!(key_to_node, (0, v)) do
+            make_node(0, v, 0)
+        end
+    end
+
+    path_nodes = Vector{Int}(undef, length(path_idxs))
+    for (i, path_idx) in enumerate(path_idxs)
+        path = grh.rgm_paths[path_idx]
+        edge_path = grh.path_edge_idxs[path_idx]
+        node = get_base_node(Int(last(path)))
+        @inbounds for pos in length(edge_path):-1:1
+            u = Int(path[pos])
+            edge_idx = Int(edge_path[pos])
+            node = get!(key_to_node, (node, u)) do
+                make_node(node, u, edge_idx)
+            end
+        end
+        path_nodes[i] = node
+    end
+
+    function calc(node::Int)::Polyhedron
+        if is_calc[node]
+            return poly_of[node]::Polyhedron
+        end
+
+        poly = if child_of[node] == 0
+            eliminate(grh.node_polys[vertex_of[node]], el_dim) |> _clean_polyhedron!
+        else
+            intersect(grh.edge_polys[edge_of[node]], calc(child_of[node])) |> _clean_polyhedron!
+        end
+
+        poly_of[node] = poly
+        is_calc[node] = true
+        return poly
+    end
+
+    @info "Start building polyhedra for paths (total: $(length(path_idxs))) via suffix DAG"
+    return [calc(node) for node in path_nodes]
+end
+
+
+"""
+    _calc_polyhedra_for_path(model::Bnc, paths, change_qK_idx) -> Vector{Polyhedron}
+
+Compute qK-space polyhedra for each regime path.
+"""
+function _calc_polyhedra_for_path(
+    model::Bnc,
+    paths::AbstractVector{<:AbstractVector{<:Integer}},
+    change_qK_idx::Integer,
+)::Vector{Union{Nothing, Polyhedron}}
+
+    el_dim = BitSet((change_qK_idx,))
+    #dict: node: polyhedron 
+    node_polyhedra = let
+                        unique_rgms = unique(vcat(paths...))
+                        dic = Dict{Int,Polyhedron}()
+                        for r in unique_rgms
+                            pr = get_polyhedron(model, r)
+                            dic[Int(r)] = pr        
+                        end
+                        dic
+                    end
+    # -------------------------
+    # 2) Build unique undirected edges and edge index map
+    # key = (min(u,v), max(u,v))
+    # -------------------------
+    
+    #dict: (u,v): edge_idx
+    edges, edge_paths = _build_path_edge_index(paths)
+
+    # -------------------------
+    # 3) Compute poly for each edge = intersect(poly_of[u], poly_of[v])
+    # -------------------------
+
+    edge_poly = let 
+        edge_poly = Vector{Polyhedron}(undef, length(edges))
+        @info "Start building polyhedra for edges (total: $(length(edges)))"
+        @showprogress Threads.@threads  for i in eachindex(edges)
+            (u, v) = edges[i]
+            p = intersect(node_polyhedra[u], node_polyhedra[v])
+            edge_poly[i] = eliminate(p, el_dim)
+        end
+        edge_poly
+    end
+
+    
+
+    out = Vector{Polyhedron}(undef, length(edge_paths))
+    @info "Start building polyhedra for paths (total: $(length(edge_paths)))"
+    @showprogress Threads.@threads for i in eachindex(edge_paths)
+        if isempty(edge_paths[i])
+            out[i] = eliminate(node_polyhedra[Int(first(paths[i]))], el_dim) |> _clean_polyhedron!
+        else
+            out[i] = intersect(edge_poly[edge_paths[i]]...) |> _clean_polyhedron!
+        end
+    end
+    return out
+end
+
+function _calc_polyhedra_for_path(
+    model::Bnc,
+    path::AbstractVector{<:Integer},
+    change_qK,
+)::Polyhedron
+    change_qK_idx = change_qK isa Integer ? Int(change_qK) : locate_sym_qK(model, change_qK)
+    return _calc_polyhedra_for_path(model, [Int.(path)], change_qK_idx)[1]
+end
+"""
+    Polyhedra.intersect(p::Polyhedron) -> Polyhedron
+
+Identity overload for single-polyhedron intersections.
+"""
+Polyhedra.intersect(p::Polyhedron)= p # a fix for above function for if only one edge, no need to intersect
+
+
 
 """
     get_neighbor_graph_qK(grh::SISOPaths; kwargs...) -> SimpleDiGraph
@@ -205,9 +449,17 @@ function get_polyhedra(grh::SISOPaths, pth_idx::Union{AbstractVector,Nothing} = 
     pth_poly_to_calc = filter(x -> !grh.path_polys_is_calc[x], pth_idx)
     
     if !isempty(pth_poly_to_calc)
-        polys = _calc_polyhedra_for_path(get_binding_network(grh), grh.rgm_paths[pth_poly_to_calc], grh.change_qK_idx)
-        grh.path_polys[pth_poly_to_calc] .= polys
-        grh.path_polys_is_calc[pth_poly_to_calc] .= true
+        if length(pth_poly_to_calc) == 1
+            idx = only(pth_poly_to_calc)
+            edge_idxs_to_calc = grh.path_edge_idxs[idx]
+            _ensure_edge_polyhedra!(grh, edge_idxs_to_calc)
+            grh.path_polys[idx] = _build_path_polyhedron(grh, grh.rgm_paths[idx], edge_idxs_to_calc)
+            grh.path_polys_is_calc[idx] = true
+        else
+            polys = _calc_polyhedra_for_paths_bulk_suffix_dag!(grh, pth_poly_to_calc)
+            grh.path_polys[pth_poly_to_calc] .= polys
+            grh.path_polys_is_calc[pth_poly_to_calc] .= true
+        end
     end
 
     return grh.path_polys[pth_idx]
