@@ -179,9 +179,8 @@ function _graph_init(
     )::Matrix{Bool}
 
     # ensure that the vertices have been calculated
-    n_vtx = length(bnc_sys.vertices_perm)
-    n_vtx == 0 && find_all_vertices!(bnc_sys)
-    n_vtx = length(bnc_sys.vertices_perm)
+    find_all_vertices!(bnc_sys)
+    n_vtx = length(_bind_regimes_data(bnc_sys))
 
     # ensure that the length of v is correct
     length(v) == bnc_sys.d || error("Length of v must be $(bnc_sys.d), got $(length(v)).")

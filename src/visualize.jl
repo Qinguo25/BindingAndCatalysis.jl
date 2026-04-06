@@ -376,7 +376,7 @@ end
 Return labels for nodes based on dominant species symbols.
 """
 function get_node_labels(model::Bnc)
-    getfield.(model.vertices_data, :perm) .|>
+    getfield.(_bind_regimes_data(model), :perm) .|>
         x -> model.x_sym[x] |>
         repr |> strip_before_bracket
 end

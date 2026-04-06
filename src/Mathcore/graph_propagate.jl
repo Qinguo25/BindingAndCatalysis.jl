@@ -397,7 +397,7 @@ function _prefill_affine_cache!(model::Bnc; ensure_built::Bool=true)
 end
 
 function _prefill_affine_cache_core!(model::Bnc)
-    regimes = model.vertices_data
+    regimes = _bind_regimes_data(model)
     grh = model.vertices_graph
     isnothing(grh) && error("Regime graph is not initialized.")
 
@@ -530,7 +530,7 @@ function _finalize_deferred_affine_and_nullity!(
 )
     isempty(deferred_idxs) && return nothing
 
-    regimes = model.vertices_data
+    regimes = _bind_regimes_data(model)
 
     @inbounds for idx in deferred_idxs
         regimes[idx].nullity = max(regimes[idx].nullity, state.total_nullities[idx])

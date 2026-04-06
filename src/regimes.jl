@@ -252,7 +252,7 @@ get_regimes_dict(model::Regimes) = model.vertices_perm_dict
 get_bind_regimes_dict(args...; kwargs...) =let 
     bn = get_binding_network(args...; kwargs...)
     find_all_regimes!(bn; kwargs...)
-    bn.vertices_perm_dict
+    _bind_regimes_perm_dict(bn)
 end
 
 
@@ -292,7 +292,7 @@ function get_perm(Bnc::Bnc,perm::Vector{<:Integer};check::Bool=false)
     return perm
 end
 get_perm(Bnc::Bnc, perm::AbstractVector) = get_perm(Bnc, locate_sym_x.(Ref(Bnc), perm))
-get_perm(Bnc::Bnc, idx::Integer; kwargs...)=(find_all_regimes!(Bnc); Bnc.vertices_data[idx].perm)
+get_perm(Bnc::Bnc, idx::Integer; kwargs...)=(find_all_regimes!(Bnc); _bind_regimes_data(Bnc)[idx].perm)
 get_perm(vtx::BindRegime) = vtx.perm
 get_perm(Bnc::Bnc, vtx::BindRegime;kwargs...)= get_perm(vtx)
 
@@ -307,7 +307,7 @@ function get_regime(Bnc::Bnc, perm; check::Bool=false, kwargs...)::BindRegime
     
     vtx = begin
         idx = get_idx(Bnc, perm; check=check)          
-        _initialize_regime!(Bnc.vertices_data[idx])
+        _initialize_regime!(_bind_regimes_data(Bnc)[idx])
     end
     return get_regime(vtx; kwargs...)
 end
@@ -373,7 +373,8 @@ function get_volumes(Bnc::Bnc,vtxs::Union{AbstractVector,Nothing}=nothing;
         if recalculate
             all_vtxs
         else
-            filter(i -> isnothing(Bnc.vertices_data[i].volume), all_vtxs)
+            vertices = _bind_regimes_data(Bnc)
+            filter(i -> isnothing(vertices[i].volume), all_vtxs)
         end
     
     if !isempty(vtxs_to_calc)
@@ -393,14 +394,14 @@ function get_volumes(Bnc::Bnc,vtxs::Union{AbstractVector,Nothing}=nothing;
            get_regime(Bnc,idx; inv_info=true)
         end
         
-        vtx_data = @view Bnc.vertices_data[vtxs_to_calc]
+        vtx_data = @view _bind_regimes_data(Bnc)[vtxs_to_calc]
         rlts = calc_volume(vtx_data; rebase_mat=rebase_mat, kwargs...)
         for (i,idx) in enumerate(vtxs_to_calc)
             vtx = get_regime(Bnc,idx; inv_info=false)
             vtx.volume = rlts[i]
         end
     end
-    return [vtx.volume for vtx in Bnc.vertices_data[all_vtxs]]
+    return [vtx.volume for vtx in _bind_regimes_data(Bnc)[all_vtxs]]
 end
 
 
@@ -450,7 +451,7 @@ Return `true` if the vertex is asymptotic (real).
 is_asymptotic(args...) = begin
     model = get_binding_network(args...)
     find_all_regimes!(model)
-    return model.vertices_data[get_idx(args...)].is_asymptotic
+    return _bind_regimes_data(model)[get_idx(args...)].is_asymptotic
 end::Bool
 is_asymptotic(vtx::BindRegime) = vtx.is_asymptotic
 
@@ -597,7 +598,7 @@ get_C0(args...;kwargs...) = get_C_C0_nullity(args...;kwargs...)[2]
 
 Return the number of vertices in the model.
 """
-n_regimes(Bnc::Bnc) = (find_all_regimes!(Bnc); length(Bnc.vertices_data))
+n_regimes(Bnc::Bnc) = (find_all_regimes!(Bnc); length(_bind_regimes_data(Bnc)))
 
 """
     get_volume(args...; kwargs...) -> Volume
@@ -732,7 +733,7 @@ function get_neighbors(args...; singular::Union{Bool,Int,Nothing}=nothing, asymp
 
     idx = keys(grh.edge_pos[rgm_idx]) |> collect
     
-    vertices = Bnc.vertices_data
+    vertices = _bind_regimes_data(Bnc)
     idx = filter(idx) do i
         vtx = vertices[i]
         nlt = vtx.nullity
@@ -792,7 +793,7 @@ function filter_regimes(model::Bnc, vtxs::AbstractVector{T}; kwargs...)::Vector{
     return filter_regimes(rgms; kwargs...)
 end
 
-
+_get_regimes_mask(args...; kwargs...) = _get_mask(args...; kwargs...)
 get_idxes(args...; kwargs...) = get_indices(args...; kwargs...)
 
 
@@ -804,7 +805,7 @@ Return regime indices that satisfy singularity/asymptotic filters.
 """
 function get_indices(Bnc::Bnc; kwargs...)
     find_all_regimes!(Bnc)
-    idx_all = eachindex(Bnc.vertices_data)
+    idx_all = eachindex(_bind_regimes_data(Bnc))
     masks = _get_mask(Bnc, idx_all; kwargs...)
     return findall(masks)
 end
@@ -816,10 +817,18 @@ Return regime permutations that satisfy singularity/asymptotic filters.
 """
 function get_perms(Bnc::Bnc; kwargs...)
     idxs = get_indices(Bnc; kwargs...)
-    return getfield.(Bnc.vertices_data[idxs], :perm)
+    return getfield.(_bind_regimes_data(Bnc)[idxs], :perm)
 end
-get_perms(rgms::AbstractVector{<:BindRegime}) = getfield.(rgms, :perm)
-get_indices(rgms::AbstractVector{<:BindRegime}) = getfield.(rgms, :idx)
+
+get_perms(rgms::AbstractVector{<:BindRegime};kwargs...) = let
+    rgms = filter_regimes(rgms; kwargs...)
+    return getfield.(rgms, :perm)
+end
+
+get_indices(rgms::AbstractVector{<:BindRegime};kwargs...) = let
+    rgms = filter_regimes(rgms; kwargs...)
+    return getfield.(rgms, :idx)
+end
 
 """
     get_regimes(bnc::Bnc; singular=nothing, asymptotic=nothing, return_idx=false) -> Vector
@@ -829,7 +838,7 @@ Use `get_perms` or `get_indices` for permutation/index lists.
 """
 function get_regimes(Bnc::Bnc; return_idx::Bool=false, kwargs...)
     idxs = get_indices(Bnc; kwargs...)
-    return return_idx ? idxs : Bnc.vertices_data[idxs]
+    return return_idx ? idxs : _bind_regimes_data(Bnc)[idxs]
 end
 
 """
@@ -845,7 +854,7 @@ end
 
 
 
-_get_regimes_mask(args...; kwargs...) = _get_mask(args...; kwargs...)
+
 
 
 

@@ -234,7 +234,7 @@ Compute qK-space change directions for edges in the vertex graph.
 """
 function _fulfill_regimes_graph!(vtx_graph::VertexGraph)
     Bnc = vtx_graph.bn
-    regimes = Bnc.vertices_data
+    regimes = _bind_regimes_data(Bnc)
     empty!(vtx_graph.qK_interface_pool)
     key_to_id = Dict{Any,Int}()
 

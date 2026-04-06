@@ -1,12 +1,12 @@
 
-struct SISOPaths{T} 
+mutable struct SISOPaths{T} 
     bn::Bnc{T}   # binding Newtork
     qK_grh::SimpleDiGraph # SimpleDiGraph in qK space
     change_qK_idx::T  # which qK is changing in this SISO graph
 
     sources::Vector{Int}  # source vertices in the graph
     sinks::Vector{Int}    # sink vertices in the graph
-    paths_dict::Dict{Vector{Int},Int} # map from path (vector of vertex idx) to its idx in rgm_paths
+    paths_dict::Union{Nothing,Dict{Vector{Int},Int}} # lazily-built map from path to its idx in rgm_paths
     rgm_paths::Vector{Vector{Int}} #All paths from sources to sinks, each path is represented as a vector of vertex idx. Grows exponentially
     path_polys::Vector{Polyhedron} # the polyhedron for each path, lazily calculated when needed, stored in the same order as rgm_paths
     path_volume::Vector{Volume}# the volume for each path, lazily calculated when needed, stored in the same order as rgm_paths
@@ -19,16 +19,27 @@ struct SISOPaths{T}
         path_volume = Vector{Volume}(undef, length(rgm_paths))
         path_volume_is_calc = falses(length(rgm_paths))
         path_polys_is_calc = falses(length(rgm_paths))
-        paths_dict = Dict{Vector{Int},Int}()
-        for (i, p) in enumerate(rgm_paths)
-            paths_dict[p] = i
-        end  
         new{T}(model, qK_grh, change_qK_idx, 
             sources, sinks, 
-            paths_dict,
+            nothing,
             rgm_paths, path_polys, path_volume,
             path_volume_is_calc, path_polys_is_calc)
     end
+end
+
+function _build_paths_dict(rgm_paths::AbstractVector{<:AbstractVector{<:Integer}})
+    paths_dict = Dict{Vector{Int},Int}()
+    sizehint!(paths_dict, length(rgm_paths))
+    for (i, p) in enumerate(rgm_paths)
+        paths_dict[p] = i
+    end
+    return paths_dict
+end
+
+function _ensure_paths_dict!(grh::SISOPaths)
+    isnothing(grh.paths_dict) || return grh.paths_dict
+    grh.paths_dict = _build_paths_dict(grh.rgm_paths)
+    return grh.paths_dict
 end
 
 """
@@ -164,7 +175,7 @@ Return the index for a SISO path specification.
 get_idx(grh::SISOPaths, pth::AbstractVector) = let
     bn = get_binding_network(grh)
     idxs = get_idx.(Ref(bn), pth)
-    grh.paths_dict[idxs] 
+    _ensure_paths_dict!(grh)[idxs] 
 end
 """
     get_idx(grh::SISOPaths, pth::Integer) -> Int

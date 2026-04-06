@@ -10,6 +10,10 @@ export sym_direction, print_path, print_paths, format_arrow
 
 #----------------------------------------------------------Symbolics calculation fucntions-----------------------------------------------------------
 
+#===============================================#
+# Get variables name from the model
+#===============================================#
+#Binding network symbols
 """
     x_sym(args...) -> Vector{Num}
 
@@ -30,17 +34,22 @@ Return binding constant symbols for a binding network.
 K_sym(args...)=get_binding_network(args...).K_sym
 
 """
-    k_sym(args...) -> Vector{Num}
-
-Return catalysis rate-constant symbols.
-"""
-k_sym(args...) = _require_catalysis_network(args...).k_sym
-"""
     qK_sym(args...) -> Vector{Num}
 
 Return concatenated `[q; K]` symbols for a binding network.
 """
 qK_sym(args...)= [q_sym(args...); K_sym(args...)]
+
+
+
+
+#Catalysis network symbols
+"""
+    k_sym(args...) -> Vector{Num}
+
+Return catalysis rate-constant symbols.
+"""
+k_sym(args...) = _require_catalysis_network(args...).k_sym
 
 """
     q_cat_sym(args...) -> Vector{Num}
@@ -63,7 +72,6 @@ function w_sym(args...)
     cn = _require_catalysis_network(args...)
     return bn.q_sym[cn.r_v+1:cn.r_v+cn.d_w]
 end
-
 """
     q_para_sym(args...) -> Vector{Num}
 
@@ -95,6 +103,11 @@ function _flux_sym(args...)
     return k_sym(args...) .* flux_monomials
 end
 
+
+
+
+
+# SISO path associated symbols
 """
     q_sym(grh::SISOPaths, args...) -> Vector{Num}
 
@@ -124,24 +137,30 @@ K_sym(grh::SISOPaths,args...)= begin
     return K_sym
 end
 
+
+
+
+
+#===============================================#
+# Basic Reaction order symbols
+#===============================================#
 """
     ∂logqK_∂logx_sym(bnc::Bnc; show_x_space=false) -> Matrix{Num}
 
 Symbolically compute `∂log(qK)/∂log(x)`.
 """
 function ∂logqK_∂logx_sym(Bnc::Bnc; show_x_space::Bool=false)::Matrix{Num}
-
     if show_x_space
         q = Bnc.L * Bnc.x_sym
     else
         q = Bnc.q_sym
     end
-
     return [
         transpose(Bnc.x_sym) .* Matrix(Bnc.L) ./ q
         Matrix(Bnc.N)
     ]
 end
+
 """
     logder_qK_x_sym(args...; kwargs...) -> Matrix{Num}
 
@@ -167,9 +186,9 @@ Alias for `∂logx_∂logqK_sym`.
 logder_x_qK_sym(args...;kwargs...) = ∂logx_∂logqK_sym(args...;kwargs...)
 
 
-#---------------------------------------------------------
-#   Below are regimes associtaed symbolic functions
-#---------------------------------------------------------
+#===============================================#
+# Regimes associated symbols
+#===============================================#
 
 """
     show_condition_poly(C, C0, nullity=0; syms, log_space=true, asymptotic=false) -> Vector
