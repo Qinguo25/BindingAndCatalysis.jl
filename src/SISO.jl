@@ -294,15 +294,6 @@ function _calc_polyhedra_for_path(
     return _calc_polyhedra_for_path(model, [Int.(path)], change_qK_idx)[1]
 end
 """
-    Polyhedra.intersect(p::Polyhedron) -> Polyhedron
-
-Identity overload for single-polyhedron intersections.
-"""
-Polyhedra.intersect(p::Polyhedron)= p # a fix for above function for if only one edge, no need to intersect
-
-
-
-"""
     get_neighbor_graph_qK(grh::SISOPaths; kwargs...) -> SimpleDiGraph
 
 Return the qK neighbor graph for a SISO path object.

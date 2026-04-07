@@ -4,6 +4,125 @@ export assign_regime, assign_regime_qK, assign_regime_x
 # Functions for assigning vertices
 #-----------------------------------------------------------------
 
+struct QKHyperplaneClassifier
+    regime_ids::Vector{Int}
+    dirs::Vector{SparseVector{Float64,Int}}
+    bias::Vector{Float64}
+    signature_to_regimes::Dict{Tuple{Vararg{Int8}},Vector{Int}}
+end
+
+@inline function _hyperplane_side(val::Real, tol::Real)
+    return val > tol ? Int8(1) : val < -tol ? Int8(-1) : Int8(0)
+end
+
+function _qK_signature(
+    dirs::AbstractVector{<:SparseVector},
+    bias::AbstractVector{<:Real},
+    logqK::AbstractVector{<:Real};
+    tol::Real=0,
+)
+    signs = Vector{Int8}(undef, length(dirs))
+    @inbounds for i in eachindex(dirs)
+        signs[i] = _hyperplane_side(dot(dirs[i], logqK) + bias[i], tol)
+    end
+    return Tuple(signs)
+end
+
+function _lookup_qK_signature(
+    classifier::QKHyperplaneClassifier,
+    sig::Tuple{Vararg{Int8}},
+)
+    direct = get(classifier.signature_to_regimes, sig, Int[])
+    length(direct) == 1 && return direct[1]
+
+    any(iszero, sig) || return nothing
+
+    matches = Int[]
+    for (key, ids) in classifier.signature_to_regimes
+        ok = true
+        @inbounds for i in eachindex(sig)
+            s = sig[i]
+            s == 0 && continue
+            if key[i] != s
+                ok = false
+                break
+            end
+        end
+        ok && append!(matches, ids)
+    end
+
+    unique!(matches)
+    return length(matches) == 1 ? matches[1] : nothing
+end
+
+function _classifier_point(Bnc::Bnc, idx::Int; asymptotic_only::Bool=false)
+    return get_one_inner_point(Bnc, idx)
+end
+
+function _build_qK_hyperplane_classifier(Bnc::Bnc; asymptotic_only::Bool=false)
+    grh = get_regimes_graph!(Bnc; full=true)
+    regimes = get_regimes(
+        Bnc;
+        singular=false,
+        asymptotic=asymptotic_only ? true : nothing,
+        return_idx=true,
+    )
+
+    dirs = getfield.(grh.qK_interface_pool, :change_dir_qK)
+    bias = asymptotic_only ? zeros(Float64, length(dirs)) : Float64.(getfield.(grh.qK_interface_pool, :intersect_qK))
+    signature_to_regimes = Dict{Tuple{Vararg{Int8}},Vector{Int}}()
+
+    for idx in regimes
+        pt = _classifier_point(Bnc, idx; asymptotic_only=asymptotic_only)
+        sig = _qK_signature(dirs, bias, pt; tol=1.0e-8)
+        push!(get!(signature_to_regimes, sig) do
+            Int[]
+        end, idx)
+    end
+
+    return QKHyperplaneClassifier(regimes, dirs, bias, signature_to_regimes)
+end
+
+function _get_qK_hyperplane_classifier(Bnc::Bnc; asymptotic_only::Bool=false)
+    grh = get_regimes_graph!(Bnc; full=true)
+    field = asymptotic_only ? :qK_classifier_asymptotic : :qK_classifier_full
+    classifier = getfield(grh, field)
+    if isnothing(classifier)
+        classifier = _build_qK_hyperplane_classifier(Bnc; asymptotic_only=asymptotic_only)
+        setfield!(grh, field, classifier)
+    end
+    return classifier::QKHyperplaneClassifier
+end
+
+function _assign_regime_qK_fallback(
+    Bnc::Bnc,
+    logqK::AbstractVector{<:Real};
+    asymptotic_only::Bool=false,
+    eps=0,
+    return_idx::Bool=false,
+)
+    real_only = asymptotic_only ? true : nothing
+    all_vertice_idx = get_regimes(Bnc, singular=false, asymptotic = real_only, return_idx = true)
+
+    record = Vector{Float64}(undef,length(all_vertice_idx))
+    for (i, idx) in enumerate(all_vertice_idx)
+        C, C0 = get_C_C0_qK(Bnc, idx)
+        min_val = if !asymptotic_only
+            minimum(C * logqK .+ C0)
+        else
+            minimum(C * logqK)
+        end
+        record[i] = min_val
+
+        if record[i] >= -eps
+            return return_idx ? idx : get_perm(Bnc, idx)
+        end
+    end
+    @warn("All vertex conditions failed for logqK=$logqK. Returning the best-fit vertex.")
+    idx = all_vertice_idx[findmax(record)[2]]
+    return return_idx ? idx : get_perm(Bnc, idx)
+end
+
 """
     assign_regime_x(bnc::Bnc, x; input_logspace=false, asymptotic_only=true, return_idx=false)
 
@@ -66,28 +185,19 @@ end
 Assign a regime given qK coordinates.
 """
 function assign_regime_qK(Bnc::Bnc, qK::AbstractVector{<:Real}; input_logspace::Bool=false, asymptotic_only::Bool=false, eps=0, return_idx::Bool=false) 
-    real_only = asymptotic_only ? true : nothing
-    all_vertice_idx = get_regimes(Bnc, singular=false, asymptotic = real_only, return_idx = true)
-    # @show all_vertice_idx
     logqK = input_logspace ? qK : log10.(qK)
-    
-    record = Vector{Float64}(undef,length(all_vertice_idx))
-    for (i, idx) in enumerate(all_vertice_idx)
-        C, C0 = get_C_C0_qK(Bnc, idx) 
-        min_val = if !asymptotic_only
-            minimum(C * logqK .+ C0)
-        else
-            minimum(C * logqK)
-        end
-        record[i] = min_val
+    classifier = _get_qK_hyperplane_classifier(Bnc; asymptotic_only=asymptotic_only)
+    sig = _qK_signature(classifier.dirs, classifier.bias, logqK; tol=abs(eps))
+    idx = _lookup_qK_signature(classifier, sig)
+    !isnothing(idx) && return return_idx ? idx : get_perm(Bnc, idx)
 
-        if record[i] >= -eps
-            return return_idx ? idx : get_perm(Bnc, idx)
-        end
-    end
-    @warn("All vertex conditions failed for logqK=$logqK. Returning the best-fit vertex.")
-    idx = all_vertice_idx[findmax(record)[2]]
-    return return_idx ? idx : get_perm(Bnc, idx)
+    return _assign_regime_qK_fallback(
+        Bnc,
+        logqK;
+        asymptotic_only=asymptotic_only,
+        eps=eps,
+        return_idx=return_idx,
+    )
 end
 
 """

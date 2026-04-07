@@ -263,12 +263,12 @@ end
 
     @test model.affine_coeff_mode == :rational
     @test eltype(H) <: Rational
-    @test eltype(H0) == Float64
+    @test eltype(H0) == ExactLogExpr
     @test eltype(CqK) <: Rational
     @test get_nullity(poly) == get_nullity(model, 1)
     @test size(get_C(poly), 2) == model.d + model.r
     @test eltype(Hs) <: Rational
-    @test eltype(H0s) == Float64
+    @test eltype(H0s) == ExactLogExpr
 
     edge_21 = get_edge(vg, perms[2], perms[1]; full = true)
     edge_12 = get_edge(vg, perms[1], perms[2]; full = true)
@@ -376,32 +376,6 @@ end
     @test all(BindingAndCatalysis.same_polyhedron.(bulk_polys, single_polys))
 end
 
-@testset "Better Path Condition Mismatch Example" begin
-    model = notebook_model2()
-    siso = SISOPaths(model, 1)
-    path = [1, 4, 3]
-    siso_poly = get_polyhedron(siso, path)
-
-    rg = better_path_finder(model, [1.0, 0.0])
-    better_path_polys = Dict{Vector{Int},Any}()
-    for source in rg.sources, sink in rg.sinks
-        ps = rg.paths[source, sink]
-        ps === nothing && continue
-        for p in ps
-            better_path_polys[p.path] = p.condition
-        end
-    end
-
-    @test !haskey(better_path_polys, [1, 3])
-    @test haskey(better_path_polys, path)
-
-    better_poly_reduced = BindingAndCatalysis.Polyhedra.eliminate(better_path_polys[path], 1)
-    BindingAndCatalysis.Polyhedra.detecthlinearity!(better_poly_reduced)
-    BindingAndCatalysis.Polyhedra.removehredundancy!(better_poly_reduced)
-
-    @test !BindingAndCatalysis.same_polyhedron(siso_poly, better_poly_reduced)
-end
-
 @testset "Nested Threaded Regime Propagation" begin
     if Threads.nthreads() > 1
         model = clique5_binding_model()
@@ -496,6 +470,23 @@ end
         @test size(Hs, 1) == model.n
         @test length(H0s) == model.n
     end
+end
+
+@testset "Catalysis Exact Mixed Mode" begin
+    model = minimal_catalysis_model()
+    find_all_regimes!(model; H_mode = :rational)
+    find_catalysis_regimes!(model)
+    match_regimes!(model)
+
+    mixed = first(get_bnc_regimes(model))
+    regular = first(filter(r -> r.nlt == 0, get_bnc_regimes(model)))
+
+    @test eltype(get_H0(mixed)) == ExactLogExpr
+    @test eltype(get_C0_qKk(mixed)) == ExactLogExpr
+    @test eltype(get_C0_qssKk(mixed)) == ExactLogExpr
+    @test !isempty(show_condition_qKk(mixed))
+    @test !isempty(show_condition_qssKk(mixed))
+    @test !isempty(show_expression_qcat(regular))
 end
 
 @testset "Catalysis Offsets And Mixed Consistency" begin

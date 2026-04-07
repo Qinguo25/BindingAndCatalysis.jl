@@ -31,17 +31,19 @@ function _calc_C_C0_qK_singular(Bnc::Bnc, vtx)
 end
 
 function _affine_mapping_polyhedra(C,C0,M,M0)
-    # n = Bnc.n
-    poly_x = hrep(-C,C0) |> x->polyhedron(x,CDDLib.Library())
-    poly_elim = M * poly_x  # If for convenience, one can write `translate(M * poly_x, M0)`, and then C0qK = b
-    rlt = MixedMatHRep(hrep(poly_elim))
-    A, b, linset = (rlt.A, rlt.b, rlt.linset)
-    # @show linset
-    @assert linset == BitSet(1:maximum(linset)) "linear rows are not the first top n rows, code fix is needed"
-    # perm = [collect(linset) ; [i for i in 1:size(A,1) if i ∉ linset]]
-    CqK = sparse(-A) |> x->droptol!(x,1e-10)
-    C0qK = (b+A*M0)
-    return CqK, C0qK, linset
+    n_qK = size(M, 1)
+    n_x = size(M, 2)
+    n_ineq = size(C, 1)
+
+    Eq = hcat(-spdiagm(0 => ones(Int, n_qK)), M)
+    In = hcat(spzeros(eltype(C), n_ineq, n_qK), C)
+
+    C_full = vcat(Eq, In)
+    C0_full = vcat(M0, C0)
+
+    poly = get_polyhedron(C_full, C0_full, n_qK)
+    poly_elim = eliminate(poly, BitSet((n_qK + 1):(n_qK + n_x)))
+    return get_C_C0_nullity(poly_elim)
 end
 
 
@@ -201,7 +203,7 @@ function _materialize_qK_conditions!(rgm::BindRegime)
             dropzeros!(C_qK)
         end
         rgm.C_qK = C_qK
-        rgm.C0_qK = Float64.(rgm.C0_x + rgm.C_x * rgm.H0)
+        rgm.C0_qK = rgm.C0_x + rgm.C_x * rgm.H0
     else
         rgm.C_qK, rgm.C0_qK, _ = _calc_C_C0_qK_singular(rgm.network, rgm.perm)
     end
@@ -964,7 +966,7 @@ end
 Extract `(C, C0, nullity)` from a polyhedron in H-representation.
 """
 function get_C_C0_nullity(poly::Polyhedron) #Have to make sure the polyhedron has been already detecthlinearity.
-    p = MixedMatHRep(hrep(poly))
+    p = hrep(poly)
     C = -p.A
     C0 = p.b
     nullity = begin
@@ -993,13 +995,13 @@ get_nullity(poly::Polyhedron,args...;kwargs...) = get_C_C0_nullity(poly::Polyhed
 Construct a polyhedron from inequality constraints in qK space.
 """
 function get_polyhedron(C::AbstractMatrix{<:Real}, C0::AbstractVector{<:Real}, nullity::Integer=0)::Polyhedron 
-    Cf = Matrix(Float64.(C))
-    C0f = vec(Float64.(C0))
+    Csp = sparse(C)
+    C0v = vec(copy(C0))
     if nullity ==0
-        return hrep(-Cf, C0f) |> x-> polyhedron(x,CDDLib.Library())
+        return polyhedron(hrep(-Csp, C0v))
     else
         linset = BitSet(1:nullity)
-        return hrep(-Cf, C0f, linset) |> x-> polyhedron(x,CDDLib.Library())
+        return polyhedron(hrep(-Csp, C0v, linset))
     end
 end
 """
@@ -1039,7 +1041,7 @@ Compute the interface hyperplane directly from polyhedral intersection.
 function get_interface_direct(Bnc::Bnc, from, to)::Tuple{SparseVector{Float64,Int}, Float64}
     p = get_intersect(Bnc, from, to)
     hplanes = hyperplanes(p)
-    # @show hplanes
+    isempty(hplanes) && return spzeros(Float64, fulldim(p)), 0.0
     hp = collect(hplanes)[end]
     a = droptol!(sparse(hp.a), 1e-10)
     b = -hp.β
@@ -1075,23 +1077,9 @@ end
 Return a point guaranteed to lie inside the polyhedron.
 """
 function get_one_inner_point(poly::T;rand_line=true,rand_ray=true,extend=3) where T<:Polyhedron
-    vrep_poly = MixedMatVRep(vrep(poly))
-    point = [mean(p) for p in eachcol(vrep_poly.V)]
-    ray_avg = zeros(size(point,1))
-    for (i, ray) in enumerate(eachrow(vrep_poly.R))
-        if i ∉ vrep_poly.Rlinset
-            norm_ray = norm(ray)
-            sigma = rand_ray ? (rand()+0.5)*extend : extend
-            ray_avg .+= (ray ./ norm_ray .* sigma )
-        else
-            if rand_line
-                norm_ray = norm(ray)
-                sigma = (rand()-0.5)*extend
-                ray_avg .+= (ray ./ norm_ray * sigma)
-            end
-        end
-    end
-    return (point.+ ray_avg)
+    point = NativePolyhedra.interior_point(poly)
+    isnothing(point) && error("Could not find an interior point for the polyhedron.")
+    return point
 end
 """
     get_one_inner_point(args...; kwargs...) -> Vector

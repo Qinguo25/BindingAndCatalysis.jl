@@ -44,6 +44,8 @@ mutable struct VertexGraph{Tv}
     qK_interface_pool::Vector{RegimeHyperplane}
     x_interface_pool::Vector{Hyperplane_perm{Tv}}
     change_dir_qK_computed::Bool
+    qK_classifier_full::Any
+    qK_classifier_asymptotic::Any
 
     function VertexGraph(L_helper::MatrixHelper{Tv}, neighbors::Vector{Vector{VertexEdge}}) where {Tv}
         
@@ -61,7 +63,16 @@ mutable struct VertexGraph{Tv}
                 edge_pos
             end
 
-        return new{Tv}(nothing, neighbors, edge_pos, RegimeHyperplane[], L_helper.hyperplanes, false)
+        return new{Tv}(
+            nothing,
+            neighbors,
+            edge_pos,
+            RegimeHyperplane[],
+            L_helper.hyperplanes,
+            false,
+            nothing,
+            nothing,
+        )
     end
 end
 

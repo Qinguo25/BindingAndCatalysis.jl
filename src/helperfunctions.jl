@@ -1051,7 +1051,9 @@ function same_polyhedron(P, Q)
     HP = hrep(P)
     HQ = hrep(Q)
     all(h -> issubset(P, h), allhalfspaces(HQ)) &&
-    all(h -> issubset(Q, h), allhalfspaces(HP))
+    all(h -> issubset(P, h), hyperplanes(Q)) &&
+    all(h -> issubset(Q, h), allhalfspaces(HP)) &&
+    all(h -> issubset(Q, h), hyperplanes(P))
 end
 
 
@@ -1120,4 +1122,3 @@ function group_sum(
 
     return [(index_dict[k], k, nothing) for k in order]
 end
-

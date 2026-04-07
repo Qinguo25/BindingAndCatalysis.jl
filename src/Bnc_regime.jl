@@ -12,9 +12,12 @@ export judge_stability!, is_stable
 #============================================================================================#
 
 @inline _spI(T, n) = spdiagm(0 => ones(T, n))
-@inline _float_sparse(A::SparseMatrixCSC{Float64,Int}) = A
-@inline _float_sparse(A::SparseMatrixCSC{<:Real,Int}) = sparse(Float64.(A))
-@inline _float_vec(v::AbstractVector{<:Real}) = Float64.(v)
+@inline _zeros_like(A::AbstractMatrix{T}, m::Int, n::Int) where {T<:Real} = spzeros(T, m, n)
+@inline _zeros_like(v::AbstractVector{T}, n::Int) where {T<:Real} = zeros(T, n)
+@inline function _det_sign_exact(A::AbstractMatrix{<:Integer})
+    detA = _bareiss_det_big(Matrix{Int}(A))
+    return detA > 0 ? 1 : detA < 0 ? -1 : 0
+end
 
 
 get_binding_regime(rgm::BncRegime) = rgm.bind_rgm
@@ -138,20 +141,18 @@ is_stable(model::Bnc, bind, cat; kwargs...) = is_stable(get_bnc_regime(model, bi
 
 function _binding_C_qKk(bind_rgm::BindRegime, n_v::Int)
     C_qK, C0_qK, nlt = get_C_C0_nullity_qK(bind_rgm)
-    C_qK = _float_sparse(C_qK)
-    C = hcat(C_qK, spzeros(Float64, size(C_qK, 1), n_v))
-    return C, _float_vec(C0_qK), nlt
+    C = hcat(C_qK, _zeros_like(C_qK, size(C_qK, 1), n_v))
+    return C, C0_qK, nlt
 end
 
 function _calc_C_qKk_catalysis_only_regular(bind_rgm::BindRegime, cat_rgm::CatalysisRegime)
     H, H0 = get_H_H0(bind_rgm)
-    H = _float_sparse(H)
     CΠ = get_CΠ(cat_rgm)
     Cθ = get_C_k(cat_rgm)
     C0θ = get_C0(cat_rgm)
     C = hcat(CΠ * H, Cθ)
     C0 = CΠ * H0 + C0θ
-    return C, Vector{Float64}(C0), 0
+    return C, vec(C0), 0
 end
 
 function _calc_C_qKk_catalysis_only_singular(bind_rgm::BindRegime, cat_rgm::CatalysisRegime)
@@ -165,8 +166,8 @@ function _calc_C_qKk_catalysis_only_singular(bind_rgm::BindRegime, cat_rgm::Cata
     n_v = size(Cθ, 2)
     d_cat = size(CΠ, 1)
 
-    Eq = hcat(-_spI(Int, n_qK), spzeros(n_qK, n_v), M)
-    In_cat = hcat(spzeros(d_cat, n_qK), Cθ, CΠ)
+    Eq = hcat(-_spI(Int, n_qK), _zeros_like(M, n_qK, n_v), M)
+    In_cat = hcat(_zeros_like(CΠ, d_cat, n_qK), Cθ, CΠ)
 
     C = vcat(Eq, In_cat)
     C0 = vcat(M0, C0θ)
@@ -194,20 +195,20 @@ function get_C_C0_nullity_xk(rgm::BncRegime, kind::Symbol=:combined)
 
     if kind === :binding
         C_x, C0_x = get_C_C0_x(bind_rgm)
-        C = hcat(C_x, spzeros(Float64, size(C_x, 1), n_v))
-        return C, Float64.(C0_x), 0
+        C = hcat(C_x, _zeros_like(C_x, size(C_x, 1), n_v))
+        return C, C0_x, 0
     elseif kind === :catalysis
         return get_C_C0_nullity_xk(cat_rgm)
     elseif kind === :combined
         Ceq = get_P_xk(cat_rgm)
         Ccat = get_C_xk(cat_rgm)
         Cbind_x, C0bind_x = get_C_C0_x(bind_rgm)
-        Cbind = hcat(Cbind_x, spzeros(Float64, size(Cbind_x, 1), n_v))
+        Cbind = hcat(Cbind_x, _zeros_like(Cbind_x, size(Cbind_x, 1), n_v))
         C = vcat(Ceq, Cbind, Ccat)
         C0 = vcat(
-            Float64.(get_P0(cat_rgm)),
-            Float64.(C0bind_x),
-            Float64.(get_C0(cat_rgm)),
+            get_P0(cat_rgm),
+            C0bind_x,
+            get_C0(cat_rgm),
         )
         return C, C0, size(Ceq, 1)
     else
@@ -264,7 +265,7 @@ function get_qcat_F_F0(rgm::BncRegime)
     P0_cat = rgm.bind_rgm.P0[1:r_v]
     F = P_cat * rgm.H
     F0 = P0_cat + P_cat * rgm.H0
-    return F, Vector{Float64}(F0)
+    return F, vec(F0)
 end
 
 
@@ -311,8 +312,8 @@ end
 
 function _build_row_affine_cache(rgms, i, valid_js, perms, nlt_valid, N_ss, r_v, direction, cache)
     perm_keys, unique_keys, first_pos = _row_unique_perm_data(perms)
-    Hs = Vector{Union{Nothing,SparseMatrixCSC{Float64,Int}}}(undef, length(unique_keys))
-    H0s = Vector{Union{Nothing,Vector{Float64}}}(undef, length(unique_keys))
+    Hs = Vector{Any}(undef, length(unique_keys))
+    H0s = Vector{Any}(undef, length(unique_keys))
 
     Threads.@threads for t in eachindex(unique_keys)
         k = first_pos[t]
@@ -328,7 +329,9 @@ function _build_row_affine_cache(rgms, i, valid_js, perms, nlt_valid, N_ss, r_v,
         perm = perms[k]
         _, M0_ss = _steady_state_offsets(rgm, r_v, N_ss)
 
-        H_ss = if nlt == 0
+        H_ss = if _affine_is_exact(rgm.bind_rgm.network)
+            _build_singular_H_from_perm_exact(perm, N_ss, Int(direction))[1]
+        elseif nlt == 0
             _calc_H(N_ss, cache, perm)
         else
             M_ss = vcat(rgm.bind_rgm.P[r_v+1:end, :], N_ss)
@@ -344,7 +347,7 @@ function _build_row_affine_cache(rgms, i, valid_js, perms, nlt_valid, N_ss, r_v,
         H0s[t] = vec(-(H_ss * M0_ss))
     end
 
-    affine_by_perm = Dict{Tuple{Vararg{Int}},Tuple{SparseMatrixCSC{Float64,Int},Vector{Float64}}}()
+    affine_by_perm = Dict{Tuple{Vararg{Int}},Tuple{Any,Any}}()
     for t in eachindex(unique_keys)
         Hs[t] === nothing && continue
         affine_by_perm[unique_keys[t]] = (Hs[t], H0s[t])
@@ -372,7 +375,7 @@ function _build_row_context(rgms::AbstractMatrix{<:Union{BncRegime,Nothing}}, i:
 
     N_ss = vcat(bn.N, ref_vtx.catalysis_rgm.PΠ)
     L_ss = bn.L[r_v+1:end, :]
-    direction = sign(det(Matrix{Float64}(vcat(L_ss, N_ss))))
+    direction = _det_sign_exact(vcat(L_ss, N_ss))
 
     perms = [get_perm(rgms[i, j]::BncRegime) for j in valid_js]
     nlt_valid, cache = _calc_nullity(perms, N_ss)
@@ -449,20 +452,18 @@ Output variables are ordered as (q, K, k).
 """
 function _calc_C_qKk_cat_regular(bind_rgm::BindRegime, cat_rgm::CatalysisRegime)
     H, H0 = get_H_H0(bind_rgm)
-    H = _float_sparse(H)
     C_qK, C0_qK = get_C_C0_qK(bind_rgm)
-    C_qK = _float_sparse(C_qK)
     CΠ = get_CΠ(cat_rgm)
     Cθ = get_C_k(cat_rgm)
     C0θ = get_C0(cat_rgm)
 
     n_v = size(Cθ, 2)
 
-    C1 = hcat(C_qK, spzeros(size(C_qK, 1), n_v))
+    C1 = hcat(C_qK, _zeros_like(C_qK, size(C_qK, 1), n_v))
     C2 = hcat(CΠ * H, Cθ)
 
     C = vcat(C1, C2)
-    C0 = vcat(_float_vec(C0_qK), CΠ * H0 + C0θ)
+    C0 = vcat(C0_qK, CΠ * H0 + C0θ)
 
     return C, C0, 0
 end
@@ -495,9 +496,9 @@ function _calc_C_qKk_cat_singular(bind_rgm::BindRegime, cat_rgm::CatalysisRegime
     d_bind = size(C_x, 1)
     d_cat = size(CΠ, 1)
 
-    Eq = hcat(-_spI(Int, n_qK), spzeros(n_qK, n_v), M)
-    In_bind = hcat(spzeros(d_bind, n_qK + n_v), C_x)
-    In_cat = hcat(spzeros(d_cat, n_qK), Cθ, CΠ)
+    Eq = hcat(-_spI(Int, n_qK), _zeros_like(M, n_qK, n_v), M)
+    In_bind = hcat(_zeros_like(C_x, d_bind, n_qK + n_v), C_x)
+    In_cat = hcat(_zeros_like(CΠ, d_cat, n_qK), Cθ, CΠ)
 
     C = vcat(Eq, In_bind, In_cat)
     C0 = vcat(M0, C0_x, C0θ)
@@ -600,12 +601,12 @@ function _calc_C_qKk_ss_singular(bind_rgm::BindRegime, cat_rgm::CatalysisRegime)
     n_x = size(P_ss, 2)
     r_cat = size(Pθ, 1)
 
-    Eq_qss = hcat(-_spI(Int, d_ss), spzeros(d_ss, r + n_v), P_ss)
-    Eq_K = hcat(spzeros(r, d_ss), -_spI(Int, r), spzeros(r, n_v), N)
-    Eq_cat = hcat(spzeros(r_cat, d_ss + r), Pθ, PΠ)
+    Eq_qss = hcat(-_spI(Int, d_ss), _zeros_like(P_ss, d_ss, r + n_v), P_ss)
+    Eq_K = hcat(_zeros_like(N, r, d_ss), -_spI(Int, r), _zeros_like(N, r, n_v), N)
+    Eq_cat = hcat(_zeros_like(PΠ, r_cat, d_ss + r), Pθ, PΠ)
 
-    In_bind = hcat(spzeros(size(C_x_bind, 1), d_ss + r + n_v), C_x_bind)
-    In_cat = hcat(spzeros(size(CΠ, 1), d_ss + r), Cθ, CΠ)
+    In_bind = hcat(_zeros_like(C_x_bind, size(C_x_bind, 1), d_ss + r + n_v), C_x_bind)
+    In_cat = hcat(_zeros_like(CΠ, size(CΠ, 1), d_ss + r), Cθ, CΠ)
 
     C = vcat(Eq_qss, Eq_K, Eq_cat, In_bind, In_cat)
     C0 = vcat(

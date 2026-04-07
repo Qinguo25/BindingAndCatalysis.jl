@@ -208,6 +208,129 @@ calc_volume(C::AbstractMatrix{<:Real}, C0::AbstractVector{<:Real}; kwargs...)::T
 # calc_vertex_volume(Bnc::Bnc, perm;kwargs...) = calc_vertices_volume(Bnc,[perm]; kwargs...)[1]
 
 
+function _calc_volume_via_classifier(
+    Bnc::Bnc,
+    regime_ids::AbstractVector{<:Integer};
+    sampler::Symbol = :gaussian,
+    μ::Union{Nothing,AbstractVector{<:Real}} = nothing,
+    σ::Float64 = 1.0,
+    log_lower::Float64 = -6.0,
+    log_upper::Float64 = 6.0,
+    confidence_level::Float64 = 0.95,
+    regime_judge_tol::Float64 = 0.0,
+    batch_size::Int = 100_000,
+    abs_tol::Float64 = 1.0e-8,
+    rel_tol::Float64 = 0.005,
+    time_limit::Float64 = 120.0,
+    show_progress::Bool = false,
+    asymptotic_only::Bool = false,
+)::Vector{Volume}
+    n_regimes = length(regime_ids)
+    n_regimes == 0 && return Volume[]
+
+    classifier = _get_qK_hyperplane_classifier(Bnc; asymptotic_only=asymptotic_only)
+    n_dim = Bnc.d + Bnc.r
+    idx_to_pos = Dict(regime_ids[i] => i for i in eachindex(regime_ids))
+
+    z = quantile(Normal(), (1 + confidence_level) / 2)
+    @inline function wilson_center_margin(count::Int, N::Int)
+        p̂ = count / N
+        z2 = z*z
+        denom = 1 + z2 / N
+        center = (p̂ + z2 / (2N)) / denom
+        margin = (z / denom) * sqrt(p̂ * (1 - p̂) / N + z2 / (4N*N))
+        return center, margin
+    end
+
+    μ64 = Vector{Float64}(undef, n_dim)
+    if sampler === :gaussian
+        if μ === nothing
+            fill!(μ64, 0.0)
+        else
+            @assert length(μ) == n_dim "length(μ) must equal qK dimension"
+            @inbounds for k in 1:n_dim
+                μ64[k] = Float64(μ[k])
+            end
+        end
+        @assert σ > 0 "σ must be > 0"
+    elseif sampler === :uniform_box
+        @assert log_upper > log_lower "log_upper must be > log_lower"
+    else
+        error("sampler must be :gaussian or :uniform_box, got $sampler")
+    end
+
+    total_counts = zeros(Int, n_regimes)
+    total_N = 0
+    stats = [Volume(0.0, 0.0) for _ in 1:n_regimes]
+    active_ids = collect(1:n_regimes)
+
+    n_slots = Threads.maxthreadid()
+    thread_counts = [zeros(Int, n_regimes) for _ in 1:n_slots]
+    thread_rng = [Random.MersenneTwister(0x5eed1234 + tid) for tid in 1:n_slots]
+    thread_x = [Vector{Float64}(undef, n_dim) for _ in 1:n_slots]
+
+    box_width = log_upper - log_lower
+    p = show_progress ? Progress(n_regimes, desc="Calculating...", dt=1.0) : nothing
+    start_time = time()
+
+    while true
+        (time() - start_time > time_limit) && (@info "Reached time limit ($(round(time() - start_time, digits=2)) s). Stopping."; break)
+        isempty(active_ids) && (@info "All regimes converged after $total_N samples."; break)
+
+        Threads.@threads for _ in 1:batch_size
+            tid = Threads.threadid()
+            rng = thread_rng[tid]
+            x = thread_x[tid]
+            local_counts = thread_counts[tid]
+
+            if sampler === :gaussian
+                @inbounds @simd for k in 1:n_dim
+                    x[k] = μ64[k] + σ * randn(rng)
+                end
+            else
+                @inbounds @simd for k in 1:n_dim
+                    x[k] = log_lower + box_width * rand(rng)
+                end
+            end
+
+            sig = _qK_signature(classifier.dirs, classifier.bias, x; tol=regime_judge_tol)
+            regime_idx = _lookup_qK_signature(classifier, sig)
+            isnothing(regime_idx) && continue
+
+            pos = get(idx_to_pos, regime_idx, 0)
+            pos == 0 && continue
+            local_counts[pos] += 1
+        end
+
+        @inbounds for c in thread_counts
+            for idx in active_ids
+                total_counts[idx] += c[idx]
+                c[idx] = 0
+            end
+        end
+        total_N += batch_size
+
+        new_active = Int[]
+        sizehint!(new_active, length(active_ids))
+        @inbounds for idx in active_ids
+            center, margin = wilson_center_margin(total_counts[idx], total_N)
+            stats[idx] = Volume(center, margin^2)
+            re = center == 0.0 ? Inf : (margin / center)
+            if re > rel_tol && margin > abs_tol
+                push!(new_active, idx)
+            end
+        end
+
+        if show_progress
+            next!(p, step = length(active_ids) - length(new_active))
+        end
+        active_ids = new_active
+    end
+
+    show_progress && finish!(p)
+    return stats
+end
+
 
 #-------------------------------------------------------------------------------------
 # Volume calculation for polyhedras
@@ -220,8 +343,8 @@ calc_volume(C::AbstractMatrix{<:Real}, C0::AbstractVector{<:Real}; kwargs...)::T
 Remove intersection offsets to test asymptoticity in polyhedra.
 """
 function _remove_poly_intersect(poly::Polyhedron)
-    (A,b,linset) = MixedMatHRep(hrep(poly)) |> p->(p.A, p.b,p.linset)
-    p_new = hrep(A, zeros(size(b)), linset) |> x-> polyhedron(x,CDDLib.Library())
+    (A,b,linset) = hrep(poly) |> p->(p.A, p.b,p.linset)
+    p_new = polyhedron(hrep(A, zeros(eltype(b), size(b)), linset))
     return p_new
 end
 
@@ -285,7 +408,43 @@ Compute volumes for a collection of polyhedra or vertices.
 
 Compute volumes for selected regimes in a model.
 """
-function calc_volume(rgms::Union{AbstractVector{<:BindRegime}, AbstractVector{<:Polyhedron}};
+function calc_volume(rgms::AbstractVector{<:BindRegime};
+    asymptotic::Bool=true,
+    contain_overlap::Bool=false,
+    rebase_mat::Union{AbstractMatrix{<:Real},Nothing}=nothing,
+    kwargs...
+) # singular/ asymptotic not be put here, as dimensions could reduce and change.
+    n_all = length(rgms)
+    vals = [Volume(0.0, 0.0) for _ in 1:n_all]
+    n_all == 0 && return vals
+
+    idx_mask = _get_mask(rgms;
+        singular=false,
+        asymptotic=asymptotic ? true : nothing)
+    idxs = findall(idx_mask)
+    isempty(idxs) && return vals
+
+    same_model = all(get_binding_network(rgm) === get_binding_network(rgms[1]) for rgm in rgms)
+    if same_model && isnothing(rebase_mat) && !contain_overlap
+        Bnc = get_binding_network(rgms[1])
+        regime_ids = get_idx.(rgms[idxs])
+        vals[idxs] .= _calc_volume_via_classifier(
+            Bnc,
+            regime_ids;
+            asymptotic_only=asymptotic,
+            kwargs...,
+        )
+        return vals
+    end
+
+    C_C0s = rgms[idxs] .|> get_C_C0
+    Cs = getindex.(C_C0s, 1)
+    C0s = asymptotic ? [zeros(size(rep[2])) for rep in C_C0s] : getindex.(C_C0s, 2)
+    vals[idxs] .= calc_volume(Cs, C0s; contain_overlap=contain_overlap, rebase_mat=rebase_mat, kwargs...)
+    return vals
+end
+
+function calc_volume(rgms::AbstractVector{<:Polyhedron};
     # model::Bnc, perms=nothing;
     asymptotic::Bool=true,
     kwargs...

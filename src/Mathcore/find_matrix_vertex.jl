@@ -14,12 +14,12 @@ function _build_matrix_helper(L::AbstractMatrix{Tv}) where {Tv<:Integer}
     d, n = size(L)
     J = Vector{Vector{Int}}(undef, d)
     choice_slot = [zeros(Int, n) for _ in 1:d]
-    choice_logcoeff = Vector{Vector{Float64}}(undef, d)
+    choice_logcoeff = Vector{Vector{ExactLogExpr}}(undef, d)
     choice_map = Vector{Vector{Vector{ChoiceIneq}}}(undef, d)
 
     # Global deduplicated hyperplane pool
     key_to_id = Dict{Tuple{Int,Int,Tv,Tv}, Int}()
-    hyperplanes = Hyperplane_perm{Tv}[]
+    hyperplanes = Hyperplane_perm{Tv,ExactLogExpr}[]
 
     # First build J / choice_map
     @inbounds for i in 1:d
@@ -33,7 +33,7 @@ function _build_matrix_helper(L::AbstractMatrix{Tv}) where {Tv<:Integer}
         isempty(Ji) && throw(ArgumentError("row $i of L has no positive entry"))
 
         J[i] = Ji
-        choice_logcoeff[i] = [log10(Float64(L[i, j])) for j in Ji]
+        choice_logcoeff[i] = [exact_log10(L[i, j]) for j in Ji]
 
         row_choices = Vector{Vector{ChoiceIneq}}(undef, length(Ji))
 
@@ -65,8 +65,8 @@ function _build_matrix_helper(L::AbstractMatrix{Tv}) where {Tv<:Integer}
                 if hid == 0
                     # crow = sparsevec([u, v], Int8[1, -1], n)
                     # crow_neg = sparsevec([v, u], Int8[1, -1], n)
-                    c0 = log10(Float64(num)) - log10(Float64(den))
-                    push!(hyperplanes, Hyperplane_perm{Tv}(u, v, num, den, c0))
+                    c0 = exact_log10_ratio(num, den)
+                    push!(hyperplanes, Hyperplane_perm{Tv,ExactLogExpr}(u, v, num, den, c0))
                     hid = length(hyperplanes)
                     key_to_id[key] = hid
                 end
@@ -344,11 +344,11 @@ end
 
 function _perm_process(
     perm::Vector{<:Integer},
-    helper::MatrixHelper{Tv},
-) where {Tv<:Integer}
+    helper::MatrixHelper{Tv,To},
+) where {Tv<:Integer,To<:Real}
     d = length(helper.J)
     # n = helper.n
-    P0 = Vector{Float64}(undef, d)
+    P0 = Vector{To}(undef, d)
     hyperplane_id_signs = Vector{Tuple{Int,Int8}}(undef, helper.total_constraints)
     # signs = Vector{Int8}(undef, helper.total_constraints)
 
@@ -369,11 +369,11 @@ end
 
 
 function _calc_P_P0(perm::Vector{<:Integer},
-    helper::MatrixHelper{Tv},
-) where {Tv<:Integer}
+    helper::MatrixHelper{Tv,To},
+) where {Tv<:Integer,To<:Real}
     d = length(perm)
     n = helper.n
-    P0 = Vector{Float64}(undef, d)
+    P0 = Vector{To}(undef, d)
     @inbounds for i in 1:d
         p = perm[i]
         t = helper.choice_slot[i][p]
@@ -388,8 +388,8 @@ end
 
 function _calc_C_C0(
     perm::Vector{<:Integer},
-    helper::MatrixHelper{Tv},
-) where {Tv<:Integer}
+    helper::MatrixHelper{Tv,To},
+) where {Tv<:Integer,To<:Real}
     d = length(perm)
     m = helper.total_constraints
     n = helper.n
@@ -399,7 +399,7 @@ function _calc_C_C0(
     J = Vector{Int}(undef, 2m)
     V = Vector{Int8}(undef, 2m)
 
-    C0 = Vector{Float64}(undef, m)
+    C0 = Vector{To}(undef, m)
 
     ptr = 1
     @inbounds for i in 1:d

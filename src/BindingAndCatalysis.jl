@@ -20,8 +20,9 @@ using NonlinearSolve
 using Statistics:quantile
 using Distributions:Uniform, Normal
 
-using Polyhedra#:vrep,hrep,eliminate,MixedMatHRep,MixedMatVRep,polyhedron,Polyhedron
-import CDDLib
+include(joinpath(@__DIR__, "NativePolyhedra/NativePolyhedra.jl"))
+using .NativePolyhedra
+const Polyhedra = NativePolyhedra
 
 using Graphs
 import Printf
@@ -32,6 +33,7 @@ import Random
 import Base: summary,show
 
 export Bnc, update_catalysis!
+export ExactLogExpr, exact_log10, exact_log10_ratio
 
 #---------------------------plot dependency-----------------------------
 using Makie
@@ -170,6 +172,7 @@ end
 
 const ExactAffineCoeff = Rational{Int}
 const BindAffineMatrix = Union{
+    SparseMatrixCSC{Int,Int},
     SparseMatrixCSC{Float64,Int},
     SparseMatrixCSC{ExactAffineCoeff,Int},
 }
@@ -197,13 +200,13 @@ Stored in canonical form with `u < v`:
 
 where `(num, den)` is the reduced integer ratio.
 """
-struct Hyperplane_perm{Tv<:Integer} 
+struct Hyperplane_perm{Tv<:Integer,To<:Real} 
     u::Int # fast access #j2 by default 
     v::Int # fast access #j1 by default 
 
     num::Tv # reduced positive integer L_{i,j2}
     den::Tv # reduced positive integer L_{i,j1}
-    c0::Float64 # pre-logarithm log10(num/den)
+    c0::To # pre-logarithm log10(num/den)
 end
 
 function Base.:*(hp::Hyperplane_perm, M::AbstractMatrix{<:Real})
@@ -256,19 +259,19 @@ Helper struct for managing matrix operations.
 - `asymptotic`: all asymptotic regimes
 - `feasible`: all regimes feasible under the weighted constraints
 """
-struct MatrixHelper{Tv<:Integer}
+struct MatrixHelper{Tv<:Integer,To<:Real}
     n::Int # number of columns
     J::Vector{Vector{Int}} # positive columns idx for each row
 
     # Fast access from column index to "local slot" in J[i]/ choice_logcoeff[i]
     choice_slot::Vector{Vector{Int}} # k = choice_slot[i][p] denotes p is the k th positive column in row i, or 0 if p ∉ J[i]
-    choice_logcoeff::Vector{Vector{Float64}} # choice_logcoeff[i] = [log10(L[i, j]) for j in Ji]
+    choice_logcoeff::Vector{Vector{To}} # choice_logcoeff[i] = [log10(L[i, j]) for j in Ji]
 
     rowptr::Vector{Int} # rowptr[i] gives the starting index of constraints for row i in the global constraint list
 
     total_constraints::Int # total number of constraints across all rows
     choice_map::Vector{Vector{Vector{ChoiceIneq}}} # choice_map[i][t] gives the list of oriented inequalities for choosing p = J[i][t]
-    hyperplanes::Vector{Hyperplane_perm{Tv}} # global deduplicated hyperplane pool
+    hyperplanes::Vector{Hyperplane_perm{Tv,To}} # global deduplicated hyperplane pool
 end
 
 
@@ -314,11 +317,12 @@ mutable struct BindRegime{F,T} <: AbstractRegime
     H0::Union{Vector{F}, Nothing} 
     C_qK::Union{BindAffineMatrix, Nothing}
     C0_qK::Union{Vector{F}, Nothing} 
-    
+
     volume::Union{Volume, Nothing}
 
     function BindRegime(; network=nothing, perm, idx, is_asymptotic, nullity::T) where {T<:Integer}
-        return new{Float64,T}(network, perm, idx, is_asymptotic,
+        F = (network isa AbstractBnc && _affine_is_exact(network)) ? ExactLogExpr : Float64
+        return new{F,T}(network, perm, idx, is_asymptotic,
             nothing, nothing, nothing, nothing, nothing, nothing, # P, P0, M, M0, C_x, C0_x
             nullity,
             nothing, nothing, # H, H0
@@ -331,7 +335,7 @@ end
 
 
 
-mutable struct CatalysisRegime <:AbstractRegime
+mutable struct CatalysisRegime{F<:Real} <:AbstractRegime
     network::Union{AbstractBnc,Nothing} # Reference to the parent Bnc model
     perm::Vector{Int} # The regime vector
     idx::Int # Index of the vertex in the Catalysis.vertices list
@@ -339,17 +343,25 @@ mutable struct CatalysisRegime <:AbstractRegime
 
     #--- Basic Properties ---
     P_pos_neg::Union{SparseMatrixCSC{Int, Int}, Nothing} # the vcat of P_pos and P_neg
-    P0_pos_neg::Union{Vector{Float64}, Nothing} # the vcat of P0_pos and P0_neg
+    P0_pos_neg::Union{Vector{F}, Nothing} # the vcat of P0_pos and P0_neg
     
     P:: Union{SparseMatrixCSC{Int, Int}, Nothing} # P_pos - P_neg
-    P0::Union{Vector{Float64}, Nothing} # P0_pos - P0_neg
+    P0::Union{Vector{F}, Nothing} # P0_pos - P0_neg
     C::Union{SparseMatrixCSC{Int, Int}, Nothing} # the vcat of C_pos and C_neg
-    C0::Union{Vector{Float64}, Nothing} # the vcat of C0_pos and C0_neg
+    C0::Union{Vector{F}, Nothing} # the vcat of C0_pos and C0_neg
 
     CΠ:: Union{SparseMatrixCSC{Int, Int}, Nothing} # the vcat of C_pos*Π and C_neg*Π
     PΠ:: Union{SparseMatrixCSC{Int, Int}, Nothing} # the vcat of (P_pos - P_neg)*Π
     function CatalysisRegime(; network=nothing, perm, idx, is_asymptotic) 
-        return new(network, perm, idx, is_asymptotic,
+        bn = if !isnothing(network) && hasfield(typeof(network), :bn)
+            getfield(network, :bn)
+        elseif network isa AbstractBnc
+            network
+        else
+            nothing
+        end
+        F = (bn isa AbstractBnc && _affine_is_exact(bn)) ? ExactLogExpr : Float64
+        return new{F}(network, perm, idx, is_asymptotic,
             nothing, # P_pos_neg
             nothing, # P0_pos_neg
             nothing, # P
@@ -377,8 +389,8 @@ mutable struct BncRegime <:AbstractRegime
 
     #
     nlt::Int  
-    H::Union{SparseMatrixCSC{Float64, Int}, Nothing}
-    H0::Union{Vector{Float64}, Nothing}
+    H::Union{AbstractMatrix{<:Real}, Nothing}
+    H0::Union{AbstractVector{<:Real}, Nothing}
 
 
     # Conditions
@@ -389,13 +401,13 @@ mutable struct BncRegime <:AbstractRegime
     # Binding could directly extract from bind_rgm, catalysis needs to calculate seperately
     # If binding is singular, we need to Combine with M,M0 to do the elimination again
     
-    C_qKk_cat::Union{SparseMatrixCSC{Float64, Int}, Nothing}
-    C0_qKk_cat::Union{Vector{Float64}, Nothing}
+    C_qKk_cat::Union{AbstractMatrix{<:Real}, Nothing}
+    C0_qKk_cat::Union{AbstractVector{<:Real}, Nothing}
     nlt_qKk_cat::Int
 
     ## q_ss, K, k base
-    C_qKk_ss::Union{SparseMatrixCSC{Float64, Int}, Nothing}
-    C0_qKk_ss::Union{Vector{Float64}, Nothing}
+    C_qKk_ss::Union{AbstractMatrix{<:Real}, Nothing}
+    C0_qKk_ss::Union{AbstractVector{<:Real}, Nothing}
     function BncRegime(bind_rgm, catalysis_rgm)
         PΠ = get_PΠ(catalysis_rgm)
         H = get_H(bind_rgm)
@@ -657,7 +669,8 @@ include(joinpath(@__DIR__,"SISO.jl"))
 include(joinpath(@__DIR__,"symbolics.jl"))
 include(joinpath(@__DIR__,"visualize.jl"))
 include(joinpath(@__DIR__,"old_api.jl"))
-include(joinpath(@__DIR__,"better_path.jl"))
+# Experimental path-search prototype removed from the main package:
+# include(joinpath(@__DIR__,"better_path.jl"))
 
 
 
