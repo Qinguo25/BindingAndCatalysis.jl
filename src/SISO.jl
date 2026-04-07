@@ -189,24 +189,40 @@ function _calc_polyhedra_for_paths_bulk_suffix_dag!(
         path_nodes[i] = node
     end
 
-    function calc(node::Int)::Polyhedron
-        if is_calc[node]
-            return poly_of[node]::Polyhedron
-        end
-
-        poly = if child_of[node] == 0
-            eliminate(grh.node_polys[vertex_of[node]], el_dim) |> _clean_polyhedron!
-        else
-            intersect(grh.edge_polys[edge_of[node]], calc(child_of[node])) |> _clean_polyhedron!
-        end
-
-        poly_of[node] = poly
-        is_calc[node] = true
-        return poly
+    n_nodes = length(child_of)
+    depth_of = zeros(Int, n_nodes)
+    max_depth = 0
+    @inbounds for node in 1:n_nodes
+        depth = child_of[node] == 0 ? 0 : depth_of[child_of[node]] + 1
+        depth_of[node] = depth
+        max_depth = max(max_depth, depth)
     end
 
-    @info "Start building polyhedra for paths (total: $(length(path_idxs))) via suffix DAG"
-    return [calc(node) for node in path_nodes]
+    nodes_by_depth = [Int[] for _ in 0:max_depth]
+    sizehint!.(nodes_by_depth, 0)
+    @inbounds for node in 1:n_nodes
+        push!(nodes_by_depth[depth_of[node] + 1], node)
+    end
+
+    @info "Start building polyhedra for paths (total: $(length(path_idxs))) via suffix DAG with $(n_nodes) unique suffix states across $(max_depth + 1) layers"
+    @showprogress dt=0.1 desc="Building polyhedra via suffix DAG" for depth in 0:max_depth
+        layer_nodes = nodes_by_depth[depth + 1]
+        isempty(layer_nodes) && continue
+        @info "Suffix DAG layer $(depth + 1)/$(max_depth + 1): $(length(layer_nodes)) states"
+
+        Threads.@threads for pos in eachindex(layer_nodes)
+            node = layer_nodes[pos]
+            poly = if child_of[node] == 0
+                eliminate(grh.node_polys[vertex_of[node]], el_dim) |> _clean_polyhedron!
+            else
+                intersect(grh.edge_polys[edge_of[node]], poly_of[child_of[node]]::Polyhedron) |> _clean_polyhedron!
+            end
+            poly_of[node] = poly
+            is_calc[node] = true
+        end
+    end
+
+    return [poly_of[node]::Polyhedron for node in path_nodes]
 end
 
 
