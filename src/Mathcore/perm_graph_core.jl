@@ -76,6 +76,9 @@ mutable struct VertexGraph{Tv}
     end
 end
 
+Base.display(io::IO, grh::VertexGraph) = print(io, "VertexGraph with $(length(grh.neighbors)) vertices and $(sum(length.(grh.neighbors))) edges")
+Base.show(io::IO, grh::VertexGraph) = print(io, "VertexGraph with $(length(grh.neighbors)) vertices and $(sum(length.(grh.neighbors))) edges")
+
 
 
 

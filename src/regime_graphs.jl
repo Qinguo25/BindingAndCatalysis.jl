@@ -226,18 +226,11 @@ end
 
 Ensure the vertex graph is built; when `full=true`, also compute qK change directions.
 """
-function get_regimes_graph!(Bnc::Bnc; full::Bool=false)::VertexGraph
-
-    if full
-        vtx_graph = get_regimes_graph!(Bnc; full=false)
-        _ensure_full_regimes_graph!(vtx_graph)
-    else
-        if isnothing(Bnc.vertices_graph)
-            find_all_regimes!(Bnc)
-        end
+function get_regimes_graph!(model::Bnc; full::Bool=false)::VertexGraph
+    if isnothing(model.vertices_graph)
+        find_all_regimes!(model)
     end
-
-    return Bnc.vertices_graph
+    return model.vertices_graph
 end
 
 
@@ -251,9 +244,6 @@ function get_edge(grh::VertexGraph, from, to; kwargs...)::Union{Nothing, VertexE
     from = get_idx(get_binding_network(grh), from)
     to = get_idx(get_binding_network(grh), to)
     
-    # if full
-    #     _ensure_full_regimes_graph!(grh)
-    # end
     pos = get(grh.edge_pos[from], to, nothing)
     if pos === nothing
         return nothing
@@ -310,7 +300,6 @@ get_neighbor_graph_x(Bnc::Bnc) = get_neighbor_graph_x(get_regimes_graph!(Bnc; fu
 Return the qK-space neighbor graph for a vertex graph.
 """
 get_neighbor_graph_qK(grh::VertexGraph; both_side::Bool=false)::SimpleDiGraph = let
-    _ensure_full_regimes_graph!(grh)
 
     qK_grh = let # construct the qK_graph
         Bnc = get_binding_network(grh)

@@ -548,7 +548,7 @@ get_C0_qK(args...) = get_C_C0_nullity_qK(args...)[2]
 
 Return the nullity of a vertex.
 """
-get_nullity(args...) = get_regime(args...; inv_info=true).nullity
+get_nullity(args...) = get_regime(args...; inv_info=false).nullity
 
 """
     get_H_H0(args...) -> (SparseMatrixCSC, Vector)
@@ -787,11 +787,11 @@ end
 
 
 function _get_mask(model::Bnc,vtxs::AbstractVector{T};kwargs...)::Vector{Bool} where T
-    rgms = get_regime.(Ref(model), vtxs)
+    rgms = get_regime.(Ref(model), vtxs;inv_info=false)
     return _get_mask(rgms; kwargs...)
 end
 function filter_regimes(model::Bnc, vtxs::AbstractVector{T}; kwargs...)::Vector{T} where T
-    rgms = get_regime.(Ref(model), vtxs)
+    rgms = get_regime.(Ref(model), vtxs;inv_info=false)
     return filter_regimes(rgms; kwargs...)
 end
 
