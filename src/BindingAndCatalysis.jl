@@ -181,12 +181,13 @@ abstract type AbstractBnc end
 abstract type AbstractRegime end
 
 @inline function _normalize_affine_mode(mode::Symbol)
-    mode in (:float, :rational) || error("Unsupported H_mode=$mode. Use :float or :rational.")
+    mode == :rational && return :exact
+    mode in (:float, :exact) || error("Unsupported mode=$mode. Use :float or :exact.")
     return mode
 end
 
 @inline _affine_mode(::AbstractBnc) = :float
-@inline _affine_is_exact(model::AbstractBnc) = _affine_mode(model) === :rational
+@inline _affine_is_exact(model::AbstractBnc) = _affine_mode(model) === :exact
 #=================================================================================#
 # f(L) -> {P,P0,C,C0} associated structs and helpers
 #=================================================================================#

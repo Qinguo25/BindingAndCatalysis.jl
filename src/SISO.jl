@@ -57,7 +57,7 @@ function _ensure_paths_dict!(grh::SISOPaths)
     return grh.paths_dict
 end
 
-_clean_polyhedron!(p::Polyhedron) = (detecthlinearity!(p); removehredundancy!(p); p)
+_clean_polyhedron!(p::Polyhedron) = (removehredundancy!(p); p)
 
 function _build_path_edge_index(rgm_paths::AbstractVector{<:AbstractVector{<:Integer}})
     total_refs = sum(max(length(path) - 1, 0) for path in rgm_paths)
@@ -119,7 +119,7 @@ function _ensure_edge_polyhedra!(grh::SISOPaths, edge_idxs::AbstractVector{<:Int
         edge_idx = edge_idxs_to_calc[pos]
         u, v = grh.edge_keys[edge_idx]
         p = intersect(grh.node_polys[u], grh.node_polys[v])
-        grh.edge_polys[edge_idx] = eliminate(p, el_dim)
+        grh.edge_polys[edge_idx] = eliminate(p, el_dim; canonicalize=false)
         grh.edge_polys_is_calc[edge_idx] = true
     end
 
@@ -133,9 +133,9 @@ function _build_path_polyhedron(
 )::Polyhedron
     if isempty(edge_idxs)
         _ensure_node_polyhedra!(grh, [Int(first(path))])
-        return eliminate(grh.node_polys[Int(first(path))], BitSet((grh.change_qK_idx,))) |> _clean_polyhedron!
+        return eliminate(grh.node_polys[Int(first(path))], BitSet((grh.change_qK_idx,)); canonicalize=false) |> _clean_polyhedron!
     end
-    return intersect(grh.edge_polys[Int.(edge_idxs)]...) |> _clean_polyhedron!
+    return intersect(grh.edge_polys[Int.(edge_idxs)]...; canonicalize=false) |> _clean_polyhedron!
 end
 
 function _calc_polyhedra_for_paths_bulk_suffix_dag!(
@@ -213,16 +213,16 @@ function _calc_polyhedra_for_paths_bulk_suffix_dag!(
         Threads.@threads for pos in eachindex(layer_nodes)
             node = layer_nodes[pos]
             poly = if child_of[node] == 0
-                eliminate(grh.node_polys[vertex_of[node]], el_dim) |> _clean_polyhedron!
+                eliminate(grh.node_polys[vertex_of[node]], el_dim; canonicalize=false)
             else
-                intersect(grh.edge_polys[edge_of[node]], poly_of[child_of[node]]::Polyhedron) |> _clean_polyhedron!
+                intersect(grh.edge_polys[edge_of[node]], poly_of[child_of[node]]::Polyhedron; canonicalize=false)
             end
             poly_of[node] = poly
             is_calc[node] = true
         end
     end
 
-    return [poly_of[node]::Polyhedron for node in path_nodes]
+    return [_clean_polyhedron!(poly_of[node]::Polyhedron) for node in path_nodes]
 end
 
 
@@ -265,8 +265,8 @@ function _calc_polyhedra_for_path(
         @info "Start building polyhedra for edges (total: $(length(edges)))"
         @showprogress Threads.@threads  for i in eachindex(edges)
             (u, v) = edges[i]
-            p = intersect(node_polyhedra[u], node_polyhedra[v])
-            edge_poly[i] = eliminate(p, el_dim)
+            p = intersect(node_polyhedra[u], node_polyhedra[v]; canonicalize=false)
+            edge_poly[i] = eliminate(p, el_dim; canonicalize=false)
         end
         edge_poly
     end
@@ -277,9 +277,9 @@ function _calc_polyhedra_for_path(
     @info "Start building polyhedra for paths (total: $(length(edge_paths)))"
     @showprogress Threads.@threads for i in eachindex(edge_paths)
         if isempty(edge_paths[i])
-            out[i] = eliminate(node_polyhedra[Int(first(paths[i]))], el_dim) |> _clean_polyhedron!
+            out[i] = eliminate(node_polyhedra[Int(first(paths[i]))], el_dim; canonicalize=false) |> _clean_polyhedron!
         else
-            out[i] = intersect(edge_poly[edge_paths[i]]...) |> _clean_polyhedron!
+            out[i] = intersect(edge_poly[edge_paths[i]]...; canonicalize=false) |> _clean_polyhedron!
         end
     end
     return out

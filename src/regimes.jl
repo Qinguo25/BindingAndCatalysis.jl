@@ -90,7 +90,7 @@ end
 # ------------------------------------------------------------------------------
 
 
-find_bind_regimes!(model::Bnc{T}; H_mode::Symbol=_affine_mode(model)) where T = find_all_regimes!(model; H_mode=H_mode)
+find_bind_regimes!(model::Bnc{T}; mode::Symbol=_affine_mode(model)) where T = find_all_regimes!(model; mode=mode)
 """
     find_all_regimes!(bnc::Bnc) -> Vector{Vector{Int}}
 
@@ -98,19 +98,19 @@ Compute and cache all regime permutations, the x-neighbor graph, and regime
 objects. Low-nullity (`0/1`) affine data are inferred directly from the graph;
 only deferred high-nullity perms are sent to `_calc_nullity`.
 
-Keyword `H_mode` controls how binding-regime affine coefficients are stored:
+Keyword `mode` controls how binding-regime affine coefficients are stored:
 - `:float`    uses floating-point `H` / `C_qK`
-- `:rational` uses exact rational coefficients for `H` / `C_qK`
+- `:exact`    uses exact rational coefficients for `H` / `C_qK`
 """
-function find_all_regimes!(model::Bnc{T}; H_mode::Symbol=_affine_mode(model)) where T
+function find_all_regimes!(model::Bnc{T}; mode::Symbol=_affine_mode(model), H_mode::Symbol=mode) where T
 
     
     # Decide what type should we used to store H.
-    H_mode = _normalize_affine_mode(H_mode)
-    is_bind_regimes_built(model) && model.affine_coeff_mode == H_mode && return nothing
+    mode = _normalize_affine_mode(H_mode)
+    is_bind_regimes_built(model) && model.affine_coeff_mode == mode && return nothing
     
     _remove_regime_data!(model)
-    model.affine_coeff_mode = H_mode
+    model.affine_coeff_mode = mode
 
     
     @info "---------------------Start finding all regimes--------------------"

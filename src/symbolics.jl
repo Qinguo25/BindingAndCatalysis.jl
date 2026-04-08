@@ -491,12 +491,29 @@ show_consistency_condition(args...; kwargs...) = show_condition_qssKk(args...; k
 
 Convert `A*log10(x) + b` into a multiplicative form `x^A * 10^b`.
 """
+function _exact_exp10_factor(b::ExactLogExpr)
+    out = one(Int)
+
+    if !iszero(b.constant)
+        out *= 10 ^ b.constant
+    end
+
+    for (p, c) in sort!(collect(b.coeffs); by=first)
+        out *= p ^ c
+    end
+
+    return out
+end
+
+_exp10_factor(b::ExactLogExpr) = _exact_exp10_factor(b)
+_exp10_factor(b::Real) = 10^b
+
 function handle_log_weighted_sum(A::AbstractMatrix{<:Real}, x , b::Union{Nothing,AbstractVector{<:Real}}=nothing)::Vector{Num}
     rows = size(A,1)
     rst = Vector{Num}(undef, rows)
     b = isnothing(b) ? zeros(Int, rows) : b
     for i in 1:rows
-        rst[i] = x .^ A[i,:] |> prod |> (x-> x*10^b[i])
+        rst[i] = x .^ A[i,:] |> prod |> (x-> x * _exp10_factor(b[i]))
     end
     return rst
 end

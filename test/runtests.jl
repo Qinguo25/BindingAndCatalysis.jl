@@ -1,7 +1,10 @@
 using BindingAndCatalysis
+using LinearAlgebra
 using Random
 using SparseArrays
 using Test
+
+const NP = BindingAndCatalysis.NativePolyhedra
 
 function minimal_model()
     N = [1 1 -1]
@@ -9,6 +12,24 @@ function minimal_model()
     q_sym = [:tE, :tS]
     K_sym = [:K]
     return Bnc(N = N, x_sym = x_sym, q_sym = q_sym, K_sym = K_sym)
+end
+
+function sparse_singular_model()
+    L = sparse(
+        [1, 2, 3, 4, 4, 1, 3, 4, 2, 4],
+        [1, 2, 3, 3, 4, 5, 5, 5, 6, 6],
+        ones(Int, 10),
+        4,
+        6,
+    )
+    N = sparse(
+        [1, 2, 1, 2, 1, 2],
+        [1, 2, 3, 4, 5, 6],
+        [1, 1, 1, 1, -1, -1],
+        2,
+        6,
+    )
+    return Bnc(L = L, N = N)
 end
 
 function minimal_catalysis_model()
@@ -250,7 +271,7 @@ end
 
 @testset "Rational H Mode" begin
     model = minimal_model()
-    find_all_regimes!(model; H_mode = :rational)
+    find_all_regimes!(model; mode = :exact)
 
     H = get_H(model, 1)
     H0 = get_H0(model, 1)
@@ -261,7 +282,7 @@ end
     rational_singular_idx = only(filter(i -> get_nullity(model, i) == 1, get_indices(model)))
     Hs, H0s = get_H_H0(model, rational_singular_idx)
 
-    @test model.affine_coeff_mode == :rational
+    @test model.affine_coeff_mode == :exact
     @test eltype(H) <: Rational
     @test eltype(H0) == ExactLogExpr
     @test eltype(CqK) <: Rational
@@ -275,11 +296,11 @@ end
     @test edge_21.qK_interface_idx == edge_12.qK_interface_idx != 0
     @test edge_21.qK_interface_sign == -edge_12.qK_interface_sign
 
-    find_all_regimes!(model; H_mode = :float)
+    find_all_regimes!(model; mode = :float)
     @test model.affine_coeff_mode == :float
     @test eltype(get_H(model, 1)) == Float64
 
-    @test_throws ErrorException find_all_regimes!(minimal_model(); H_mode = :invalid_mode)
+    @test_throws ErrorException find_all_regimes!(minimal_model(); mode = :invalid_mode)
 end
 
 @testset "Two-Row N Singular H Sign Invariance" begin
@@ -289,12 +310,12 @@ end
     ]
     singular_perm = [3, 3]
 
-    for H_mode in (:float, :rational)
+    for mode in (:float, :exact)
         model = Bnc(N = N)
         swapped_model = Bnc(N = N[[2, 1], :])
 
-        find_all_regimes!(model; H_mode = H_mode)
-        find_all_regimes!(swapped_model; H_mode = H_mode)
+        find_all_regimes!(model; mode = mode)
+        find_all_regimes!(swapped_model; mode = mode)
 
         @test have_perm(model, singular_perm)
         @test have_perm(swapped_model, singular_perm)
@@ -328,8 +349,8 @@ end
     model_float = Bnc(L = L, N = N)
     model_rational = Bnc(L = L, N = N)
 
-    find_all_regimes!(model_float; H_mode = :float)
-    find_all_regimes!(model_rational; H_mode = :rational)
+    find_all_regimes!(model_float; mode = :float)
+    find_all_regimes!(model_rational; mode = :exact)
 
     @test n_regimes(model_float) == 24
     @test n_regimes(model_rational) == 24
@@ -474,7 +495,7 @@ end
 
 @testset "Catalysis Exact Mixed Mode" begin
     model = minimal_catalysis_model()
-    find_all_regimes!(model; H_mode = :rational)
+    find_all_regimes!(model; mode = :exact)
     find_catalysis_regimes!(model)
     match_regimes!(model)
 
@@ -545,4 +566,152 @@ end
     @test C0_cat_qKk ≈ C0_expected
     @test !isempty(show_condition_qKk(mixed_regular; kind = :catalysis))
     @test !isempty(show_condition_qssKk(mixed_regular))
+end
+
+@testset "Native Polyhedra API" begin
+    exact_val = exact_log10(100)
+    exact_ratio = exact_log10_ratio(2, 5)
+    @test exact_val isa ExactLogExpr
+    @test Float64(exact_val) ≈ 2.0
+    @test Float64(exact_ratio) ≈ log10(2 / 5)
+
+    rep_raw = NP.hrep(
+        [1 0; -1 0; 0 1; 0 1],
+        [1.0, -1.0, 1.0, 1.0],
+    )
+    @test rep_raw isa NP.HRep
+    @test rep_raw isa NP.MixedMatHRep
+
+    poly_raw = NP.Polyhedron(copy(rep_raw.A), copy(rep_raw.b), copy(rep_raw.linset), false, false)
+    NP.detecthlinearity!(poly_raw)
+    NP.removehredundancy!(poly_raw)
+    @test poly_raw isa NP.Polyhedron
+    @test NP.fulldim(poly_raw) == 2
+    @test NP.hashyperplanes(poly_raw)
+    @test length(NP.hyperplanes(poly_raw)) == 1
+    @test length(NP.allhalfspaces(poly_raw)) == 1
+    @test NP.dim(poly_raw) == 1
+    @test NP.feasible_point(poly_raw) !== nothing
+
+    box = NP.polyhedron(NP.hrep(
+        [1 0; -1 0; 0 1; 0 -1],
+        [1.0, 0.0, 1.0, 0.0],
+    ))
+    @test NP.hrep(box) isa NP.HRep
+    @test NP.interior_point(box) !== nothing
+
+    cut = NP.intersect(
+        box,
+        NP.HyperPlane([1.0, 0.0], 1.0),
+        NP.HalfSpace([0.0, 1.0], 1.0),
+    )
+    proj = NP.eliminate(cut, 1)
+    @test NP.issubset(cut, NP.HyperPlane([1.0, 0.0], 1.0))
+    @test NP.fulldim(proj) == 1
+    @test NP.feasible_point(proj) !== nothing
+end
+
+@testset "Legacy And Numeric API Smoke" begin
+    model = minimal_model()
+    find_all_vertices!(model)
+
+    @test n_vertices(model) == n_regimes(model)
+    @test get_vertices_perm_dict(model) == get_bind_regimes_dict(model)
+    @test get_regimes_perm_dict(model) == get_bind_regimes_dict(model)
+    @test get_vertices(model) == get_regimes(model)
+    @test get_vertex(model, 1) === get_regime(model, 1)
+    @test get_vertices_graph!(model) === get_regimes_graph!(model)
+    @test get_vertices_neighbor_mat(model) == get_regimes_neighbor_mat(model)
+    @test get_vertices_neighbor_mat_x(model) == get_vertices_neighbor_mat(model)
+    @test get_vertices_neighbor_mat_qK(model) == get_vertices_neighbor_mat(model)
+
+    inner = get_one_inner_point(model, 2)
+    @test assign_vertex(model, inner; input_logspace = true, asymptotic_only = false, return_idx = true) == 2
+    @test assign_vertex_qK(model, inner; input_logspace = true, asymptotic_only = false, return_idx = true) == 2
+    @test assign_vertex_x(model, qK2x(model, inner; input_logspace = true, output_logspace = true); input_logspace = true, return_idx = true) == 2
+
+    jac_qK_x = ∂logqK_∂logx(model; qK = inner, input_logspace = true)
+    jac_x_qK = ∂logx_∂logqK(model; qK = inner, input_logspace = true)
+    @test logder_qK_x(model; qK = inner, input_logspace = true) == jac_qK_x
+    @test logder_x_qK(model; qK = inner, input_logspace = true) ≈ jac_x_qK
+
+    @test locate_sym_x(model, :E) == 1
+    @test locate_sym_qK(model, :K) == 3
+    @test size(N_generator(2, 4)) == (2, 4)
+    @test size(L_generator(2, 4)) == (2, 4)
+    @test length(randomize(model, 2)) == 2
+    @test_nowarn pythonprint([1, 2, 3])
+
+    @test get_nullities(model) == get_nullity.(get_regimes(model))
+    @test length(get_neighbors(model, 1)) == 2
+    @test get_function(get_regime(model, 1))(inner; input_logspace = true, output_logspace = true) isa AbstractVector
+    @test summary_vertex(model, 1) === nothing
+end
+
+@testset "High Nullity Exact Conditions" begin
+    model = sparse_singular_model()
+    find_all_regimes!(model; mode = :exact)
+    idx = first(filter(i -> get_nullity(model, i) > 1, get_indices(model)))
+    cond_log = show_condition_qK(model, idx)
+    cond_lin = show_condition_qK(model, idx; log_space = false)
+
+    @test get_nullity(model, idx) == 2
+    @test !isempty(cond_log)
+    @test !isempty(cond_lin)
+    @test all(c -> !occursin(".0", string(c)), cond_lin)
+end
+
+@testset "Shared Hyperplane Assignment And Interface Orientation" begin
+    model = notebook_model2()
+    find_all_regimes!(model)
+
+    Random.seed!(1234)
+    samples = [rand(5) .* 12 .- 6 for _ in 1:100]
+    assigned = [assign_regime(model, x; input_logspace = true, asymptotic_only = false, return_idx = true) for x in samples]
+    fallback = [BindingAndCatalysis._assign_regime_qK_idx_fallback(model, x; asymptotic_only = false, eps = 0.0, warn_on_fallback = false) for x in samples]
+    @test assigned == fallback
+
+    simple = minimal_model()
+    find_all_regimes!(simple)
+    dir, ins = get_interface(simple, 2, 1)
+    p_from = get_one_inner_point(simple, 2)
+    p_to = get_one_inner_point(simple, 1)
+    @test LinearAlgebra.dot(dir, p_from) + ins < 0
+    @test LinearAlgebra.dot(dir, p_to) + ins > 0
+end
+
+@testset "Exact Symbolics Without Decimal Suffix" begin
+    model = minimal_model()
+    find_all_regimes!(model; mode = :exact)
+    exprs = vcat(
+        string.(show_condition_qK(model, 4; log_space = false)),
+        string.(show_expression_x(model, 1; log_space = false)),
+        string.(show_expression_qK(model, 1; log_space = false)),
+    )
+    @test all(s -> !occursin(".0", s), exprs)
+
+    cat_model = minimal_catalysis_model()
+    find_all_regimes!(cat_model; mode = :exact)
+    find_catalysis_regimes!(cat_model)
+    match_regimes!(cat_model)
+    regular = first(filter(r -> r.nlt == 0, get_bnc_regimes(cat_model)))
+    cat_exprs = vcat(
+        string.(show_expression_qcat(regular; log_space = false)),
+        string.(show_condition_qssKk(regular; log_space = false)),
+        string.(show_condition_qKk(regular; log_space = false)),
+    )
+    @test all(s -> !occursin(".0", s), cat_exprs)
+end
+
+@testset "SISO Export Smoke" begin
+    model = notebook_model2()
+    pths = SISOPaths(model, 1)
+    @test get_SISO_graph(model, 1) == get_SISO_graph(pths)
+    @test get_neighbor_graph(pths) == get_neighbor_graph_qK(pths)
+    sources = get_sources(get_SISO_graph(pths))
+    sinks = get_sinks(get_SISO_graph(pths))
+    @test sources == first(get_sources_sinks(get_SISO_graph(pths)))
+    @test sinks == last(get_sources_sinks(get_SISO_graph(pths)))
+    @test summary_RO_path(pths; observe_x = 1, show_volume = false) === nothing
+    @test first(show_expression_path(pths, 1, 1; log_space = false)) isa AbstractVector
 end

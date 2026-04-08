@@ -293,9 +293,38 @@ function _calc_volume_via_classifier(
                 end
             end
 
-            sig = _qK_signature(classifier.dirs, classifier.bias, x; tol=regime_judge_tol)
-            regime_idx = _lookup_qK_signature(classifier, sig)
-            isnothing(regime_idx) && continue
+            candidate_ids, _ = _candidate_regimes(classifier, x; tol=regime_judge_tol)
+            regime_idx =
+                if length(candidate_ids) == 1
+                    candidate_ids[1]
+                elseif !isempty(candidate_ids)
+                    _assign_regime_qK_from_candidates(
+                        Bnc,
+                        x,
+                        candidate_ids;
+                        asymptotic_only=asymptotic_only,
+                        eps=regime_judge_tol,
+                        return_idx=true,
+                    )
+                else
+                    _assign_regime_qK_idx_fallback(
+                        Bnc,
+                        x;
+                        asymptotic_only=asymptotic_only,
+                        eps=regime_judge_tol,
+                        warn_on_fallback=false,
+                    )
+                end
+
+            if isnothing(regime_idx)
+                regime_idx = _assign_regime_qK_idx_fallback(
+                    Bnc,
+                    x;
+                    asymptotic_only=asymptotic_only,
+                    eps=regime_judge_tol,
+                    warn_on_fallback=false,
+                )
+            end
 
             pos = get(idx_to_pos, regime_idx, 0)
             pos == 0 && continue

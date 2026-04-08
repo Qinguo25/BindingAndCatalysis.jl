@@ -198,9 +198,61 @@ end
     return Int8(1), 0.0
 end
 
+@inline function _dense_hyperplane_sign_and_scale(dir::SparseVector; atol::Float64=1e-10)
+    I, V = findnz(dir)
+    @inbounds for k in eachindex(V)
+        if abs(Float64(V[k])) > atol
+            sgn = V[k] >= 0 ? Int8(1) : Int8(-1)
+            return sgn, abs(V[k])
+        end
+    end
+    return Int8(1), zero(eltype(dir))
+end
+
+@inline _is_exact_hyperplane_scalar(x) = x isa Integer || x isa Rational || x isa ExactLogExpr
+
+@inline function _exact_hyperplane_bias(x)
+    if _is_exact_hyperplane_scalar(x)
+        return x
+    elseif x isa AbstractFloat && iszero(x)
+        return 0//1
+    else
+        return nothing
+    end
+end
+
+function _canonicalize_qK_key_exact(
+    I::AbstractVector{<:Integer},
+    V::AbstractVector,
+    intersect,
+    sign::Int8,
+    scale,
+)
+    all(v -> v isa Integer || v isa Rational, V) || return nothing
+    β = _exact_hyperplane_bias(intersect)
+    isnothing(β) && return nothing
+    coeffs = Tuple(((v * sign) / scale for v in V))
+    βnorm = (β * sign) / scale
+    return (Tuple(Int.(I)), coeffs, βnorm)
+end
+
+@inline function _canonicalize_qK_key_float(
+    I::AbstractVector{<:Integer},
+    Vnorm::AbstractVector{<:Real},
+    bnorm::Real;
+    round_digits::Int=10,
+)
+    return (
+        Tuple(Int.(I)),
+        Tuple(round.(Float64.(Vnorm); digits=round_digits)),
+        round(Float64(bnorm); digits=round_digits),
+    )
+end
+
 function _canonicalize_qK_interface(
-    dir::SparseVector{Float64,Int},
+    dir::SparseVector,
     intersect::Real;
+    key_mode::Symbol=:float,
     atol::Float64=1e-10,
     round_digits::Int=10,
 )
@@ -216,19 +268,25 @@ function _canonicalize_qK_interface(
     droptol!(dir_norm, atol)
     I2, V2 = findnz(dir_norm)
     bnorm = Float64(intersect) * sign / scale
-    key = (Tuple(Int.(I2)), Tuple(round.(Float64.(V2); digits=round_digits)), round(bnorm; digits=round_digits))
+    key = if key_mode === :exact
+        exact_key = _canonicalize_qK_key_exact(I, V, intersect, sign, scale)
+        isnothing(exact_key) ? _canonicalize_qK_key_float(I2, V2, bnorm; round_digits=round_digits) : exact_key
+    else
+        _canonicalize_qK_key_float(I2, V2, bnorm; round_digits=round_digits)
+    end
     return dir_norm, bnorm, sign, key
 end
 
 function _intern_qK_interface!(
     grh::VertexGraph,
     key_to_id::Dict,
-    dir::SparseVector{Float64,Int},
+    dir::SparseVector,
     intersect::Real;
+    key_mode::Symbol=:float,
     atol::Float64=1e-10,
     round_digits::Int=10,
 )
-    canon = _canonicalize_qK_interface(dir, intersect; atol=atol, round_digits=round_digits)
+    canon = _canonicalize_qK_interface(dir, intersect; key_mode=key_mode, atol=atol, round_digits=round_digits)
     canon === nothing && return 0, Int8(0)
     dir_norm, bnorm, sign, key = canon
     hid = get!(key_to_id, key) do
@@ -251,6 +309,7 @@ function _fulfill_regimes_graph!(vtx_graph::VertexGraph)
     regimes = _bind_regimes_data(Bnc)
     empty!(vtx_graph.qK_interface_pool)
     key_to_id = Dict{Any,Int}()
+    key_mode = _affine_is_exact(Bnc) ? :exact : :float
 
     for edges in vtx_graph.neighbors
         for e in edges
@@ -293,7 +352,7 @@ function _fulfill_regimes_graph!(vtx_graph::VertexGraph)
                 src_edge.c_c0_x_sign,
             )
 
-            hid, sign = _intern_qK_interface!(vtx_graph, key_to_id, dir_qK, intersect_qK)
+            hid, sign = _intern_qK_interface!(vtx_graph, key_to_id, dir_qK, intersect_qK; key_mode=key_mode)
             hid == 0 && continue
 
             src_edge.qK_interface_idx = hid
