@@ -534,20 +534,6 @@ mutable struct Bnc{T} <: AbstractBnc # T is the int type to save all the indices
     IntegrationHelper::Union{IntegrationHelper,Nothing}
     _L_helper::MatrixHelper
 
-
-
-    
-    # Xiaoyu's global pool storage of H-representation of the polyhedra -- NOT IMPLEMENTED YET
-    # will wait for further analysis on what types of hyperplanes can be shared among different vertices, and how to efficiently store and update them.
-    # the implementation of this global pool will theoretically speed up the following rotation step (a part of path condition calculation) by at least 100 folds
-    # each hyperplane can be writen as: w^T x + b = 0
-    vertices_hyperplane_wT::Vector{Vector{Float64}} # the w^T for all of the hyperplanes of vertices
-    vertices_hyperplane_b::Vector{Vector{Float64}} # the b for all of the hyperplanes of vertices
-    vertices_polyhedron::Vector{Int} # the index of hyperplanes for each vertex, the hyperplanes are stored in the vertices_hyperplane_wT and vertices_hyperplane_b
-    vertices_poly_direction::Vector{Int} # the direction of the hyperplanes for each vertex, 1 for w^T x + b >= 0, -1 for w^T x + b <= 0, stored in the same order as vertices_polyhedron
-
-
-
     # Inner constructor 
     function Bnc{T}(N, L, x_sym, q_sym, K_sym, catalysis) where {T<:Integer}
         N_sparse = sparse(N)
@@ -593,11 +579,6 @@ mutable struct Bnc{T} <: AbstractBnc # T is the int type to save all the indices
             nothing,
             _L_helper,
 
-            # Xiaoyu's global pool storage of H-representation of the polyhedra
-            Vector{Vector{Float64}}(), # vertices_hyperplane_wT
-            Vector{Vector{Float64}}(), # vertices_hyperplane_b
-            Vector{Int}[], # vertices_polyhedron
-            Vector{Int}[], # vertices_poly_direction
         )
     end
 end
@@ -657,7 +638,6 @@ include(joinpath(@__DIR__,"SISO.jl"))
 include(joinpath(@__DIR__,"symbolics.jl"))
 include(joinpath(@__DIR__,"visualize.jl"))
 include(joinpath(@__DIR__,"old_api.jl"))
-include(joinpath(@__DIR__,"better_path.jl"))
 
 
 

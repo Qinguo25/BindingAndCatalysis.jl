@@ -376,30 +376,32 @@ end
     @test all(BindingAndCatalysis.same_polyhedron.(bulk_polys, single_polys))
 end
 
-@testset "Better Path Condition Mismatch Example" begin
+@testset "SISO Helper Condition Alignment Example" begin
     model = notebook_model2()
     siso = SISOPaths(model, 1)
     path = [1, 4, 3]
     siso_poly = get_polyhedron(siso, path)
 
-    rg = better_path_finder(model, [1.0, 0.0])
-    better_path_polys = Dict{Vector{Int},Any}()
-    for source in rg.sources, sink in rg.sinks
-        ps = rg.paths[source, sink]
+    helper = BindingAndCatalysis.SISOHelper(model, 1)
+    BindingAndCatalysis._find_all_path_conditions!(helper)
+    helper_path_polys = Dict{Tuple{Vararg{Int}},Any}()
+    for source in helper.sources, sink in helper.sinks
+        ps = helper.paths[source, sink]
         ps === nothing && continue
         for p in ps
-            better_path_polys[p.path] = p.condition
+            helper_path_polys[Tuple(p.path)] = p.condition
         end
     end
 
-    @test !haskey(better_path_polys, [1, 3])
-    @test haskey(better_path_polys, path)
+    @test haskey(helper_path_polys, (1, 3))
+    @test haskey(helper_path_polys, Tuple(path))
+    @test Set(keys(helper_path_polys)) == Set(Tuple.(siso.rgm_paths))
 
-    better_poly_reduced = BindingAndCatalysis.Polyhedra.eliminate(better_path_polys[path], 1)
-    BindingAndCatalysis.Polyhedra.detecthlinearity!(better_poly_reduced)
-    BindingAndCatalysis.Polyhedra.removehredundancy!(better_poly_reduced)
+    @test BindingAndCatalysis.same_polyhedron(siso_poly, helper_path_polys[Tuple(path)])
 
-    @test !BindingAndCatalysis.same_polyhedron(siso_poly, better_poly_reduced)
+    for (pth, poly) in helper_path_polys
+        @test BindingAndCatalysis.same_polyhedron(get_polyhedron(siso, collect(pth)), poly)
+    end
 end
 
 @testset "Nested Threaded Regime Propagation" begin
