@@ -808,3 +808,9 @@ function summary_RO_path(grh::SISOPaths;observe_x, show_volume::Bool=true,
     print_paths(ords; prefix="", ids=ids, volumes=vols)
     return nothing
 end
+
+function Base.display(grh::SISOPaths)
+    println("SISOPaths object with $(length(grh.rgm_paths)) paths for qK coordinate index $(grh.change_qK_idx)")
+    return nothing
+end
+Base.show(io::IO, grh::SISOPaths) = print(io, "SISOPaths object with $(length(grh.rgm_paths)) paths for qK coordinate index $(grh.change_qK_idx)")
