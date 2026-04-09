@@ -115,8 +115,9 @@ Return q symbols for a SISO path, excluding the varying coordinate.
 """
 q_sym(grh::SISOPaths,args...)= begin
     bn = get_binding_network(grh)
-    q_sym = if grh.change_qK_idx <= bn.d
-        deleteat!(copy(bn.q_sym), grh.change_qK_idx)
+    change_qK_idx = get_change_qK_idx(grh)
+    q_sym = if change_qK_idx <= bn.d
+        deleteat!(copy(bn.q_sym), change_qK_idx)
     else
         bn.q_sym
     end
@@ -129,8 +130,9 @@ Return K symbols for a SISO path, excluding the varying coordinate.
 """
 K_sym(grh::SISOPaths,args...)= begin
     bn = get_binding_network(grh)
-    K_sym = if grh.change_qK_idx > bn.d
-        deleteat!(copy(bn.K_sym), grh.change_qK_idx - bn.d)
+    change_qK_idx = get_change_qK_idx(grh)
+    K_sym = if change_qK_idx > bn.d
+        deleteat!(copy(bn.K_sym), change_qK_idx - bn.d)
     else
         bn.K_sym
     end
@@ -729,7 +731,7 @@ function show_expression_path(grh::SISOPaths, pth; observe_x=nothing, kwargs...)
     bn = get_binding_network(grh)
 
     observe_x_idx = isnothing(observe_x) ? (1:bn.n) : locate_sym_x.(Ref(bn), observe_x)
-    change_qK_idx = grh.change_qK_idx
+    change_qK_idx = get_change_qK_idx(grh)
 
     xsym = x_sym(bn)[observe_x_idx]
     qKsym = qK_sym(bn)
@@ -829,4 +831,4 @@ end
 
 Convenience wrapper for `show_expression_path` with a SISO path index.
 """
-show_expression_path(grh::SISOPaths, pth_idx, observe_x; kwargs...)=show_expression_path(get_binding_network(grh), grh.rgm_paths[pth_idx], grh.change_qK_idx, observe_x; kwargs...)
+show_expression_path(grh::SISOPaths, pth_idx, observe_x; kwargs...)=show_expression_path(get_binding_network(grh), grh.rgm_paths[pth_idx], get_change_qK_idx(grh), observe_x; kwargs...)

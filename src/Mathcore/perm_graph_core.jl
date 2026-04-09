@@ -66,29 +66,6 @@ mutable struct VertexGraph{Tv}
 end
 
 
-
-
-function Base.getproperty(grh::VertexGraph, sym::Symbol)
-    if sym === :x_grh
-        neighbors = getfield(grh, :neighbors)
-        g = SimpleGraph(length(neighbors))
-        for i in eachindex(neighbors)
-            edges = neighbors[i]
-            for e in edges
-                add_edge!(g, i, e.to)
-            end
-        end
-        return g
-    end
-    return getfield(grh, sym)
-end
-function Base.propertynames(grh::VertexGraph, private::Bool=false)
-    names = Symbol[fieldnames(typeof(grh))..., :x_grh]
-    return private ? Tuple(unique(names)) : Tuple(sym for sym in unique(names) if !startswith(String(sym), "_"))
-end
-
-
-
 #-----------------------------------------------------------------------------------------------
 #This is graph associated functions for Bnc models and archetyple behaviors associated code
 #-----------------------------------------------------------------------------------------------

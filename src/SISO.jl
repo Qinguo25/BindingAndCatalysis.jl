@@ -96,7 +96,17 @@ end
 
 Return the x-space neighbor graph for a vertex graph.
 """
-get_neighbor_graph_x(grh::VertexGraph) = grh.x_grh
+function get_neighbor_graph_x(grh::VertexGraph)
+    neighbors = getfield(grh, :neighbors)
+    g = SimpleGraph(length(neighbors))
+    for i in eachindex(neighbors)
+        edges = neighbors[i]
+        for e in edges
+            add_edge!(g, i, e.to)
+        end
+    end
+    return g
+end
 
 """
     get_neighbor_graph_x(bnc::Bnc) -> SimpleGraph
@@ -432,8 +442,7 @@ Identity overload for single-polyhedron intersections.
 Polyhedra.intersect(p::Polyhedron) = p
 
 function _project_polyhedron(poly::Polyhedron, change_qK_idx::Int)::Polyhedron
-    detecthlinearity!(poly)
-    removehredundancy!(poly)
+    _clean_polyhedron!(poly)
     isempty(poly) && return poly
     poly = eliminate(poly, change_qK_idx)
     removehredundancy!(poly)
@@ -475,106 +484,140 @@ end
 
 
 # ============================================================================
-# SISO Helper
+# SISO Problem / Helper
 # ============================================================================
 
-mutable struct RegimePath
-    path::Vector{Int}
-    condition::Polyhedra.Polyhedron
-end
+const SISOPathKey = Tuple{Vararg{Int}}
+const SISOPairKey = NTuple{2,Int}
+const SISOPathConditionMap = Dict{SISOPathKey,Polyhedron}
 
-mutable struct SISOHelper
-    bnc_system::Bnc
-    change_qK_idx::Int
-    connectome::Matrix{Bool}
-    predecessors::Vector{Set{Int}}
-    successors::Vector{Set{Int}}
-    upstream::Vector{Set{Int}}
-    downstream::Vector{Set{Int}}
-    paths::Matrix{Union{Vector{RegimePath},Nothing}}
-    path_found::BitMatrix
+struct SISODAG
+    graph::SimpleDiGraph
     sources::Vector{Int}
     sinks::Vector{Int}
-    vertex_prisms::Vector{Union{Nothing,Polyhedra.Polyhedron}}
-    vertex_prism_found::BitVector
-    interface_prisms::Matrix{Union{Nothing,Polyhedra.Polyhedron}}
-    interface_prism_found::BitMatrix
+    reachable::BitMatrix
 end
 
-function _build_predecessor_successor_sets(
-    connectome::AbstractMatrix{Bool},
-)::Tuple{Vector{Set{Int}},Vector{Set{Int}}}
-    n_vtx = size(connectome, 1)
-    predecessors = Vector{Set{Int}}(undef, n_vtx)
-    successors = Vector{Set{Int}}(undef, n_vtx)
-    for i in 1:n_vtx
-        predecessors[i] = Set{Int}(findall(@view connectome[:, i]))
-        successors[i] = Set{Int}(findall(@view connectome[i, :]))
+struct SISOProblem{T}
+    bn::Bnc{T}
+    change_qK_idx::Int
+    dag::SISODAG
+end
+
+mutable struct SISOHelper{T}
+    problem::SISOProblem{T}
+    vertex_prisms::Vector{Union{Nothing,Polyhedron}}
+    interface_prisms::Dict{SISOPairKey,Polyhedron}
+    pair_conditions::Dict{SISOPairKey,SISOPathConditionMap}
+end
+
+@inline _pair_key(from::Int, to::Int)::SISOPairKey = (from, to)
+@inline _undirected_pair_key(a::Int, b::Int)::SISOPairKey = a <= b ? (a, b) : (b, a)
+@inline _path_key(path::AbstractVector{<:Integer})::SISOPathKey = Tuple(Int.(path))
+@inline _prepend_vertex(v::Int, key::SISOPathKey)::SISOPathKey = (v, key...)
+@inline _append_vertex(key::SISOPathKey, v::Int)::SISOPathKey = (key..., v)
+@inline _wrap_vertices(left::Int, key::SISOPathKey, right::Int)::SISOPathKey = (left, key..., right)
+
+function _connectome_to_digraph(connectome::AbstractMatrix{Bool})::SimpleDiGraph
+    n = size(connectome, 1)
+    size(connectome, 2) == n || error("connectome must be square, got size $(size(connectome)).")
+    g = SimpleDiGraph(n)
+    for i in 1:n, j in 1:n
+        connectome[i, j] && add_edge!(g, i, j)
     end
-    return predecessors, successors
+    return g
 end
 
-function _init_path_condition_storage(n_vtx::Int)
-    paths = Matrix{Union{Vector{RegimePath},Nothing}}(undef, n_vtx, n_vtx)
-    fill!(paths, nothing)
+function _build_reachability(g::SimpleDiGraph)::BitMatrix
+    n = nv(g)
+    reachable = falses(n, n)
+    topo = topological_sort_by_dfs(g)
 
-    vertex_prisms = Vector{Union{Nothing,Polyhedra.Polyhedron}}(undef, n_vtx)
+    for v in Iterators.reverse(topo)
+        row_v = @view reachable[v, :]
+        for nb in outneighbors(g, v)
+            row_v[nb] = true
+            row_nb = @view reachable[nb, :]
+            @inbounds for j in 1:n
+                row_v[j] |= row_nb[j]
+            end
+        end
+    end
+    return reachable
+end
+
+function _build_siso_problem(
+    bnc_sys::Bnc{T},
+    change_qK_idx::Integer,
+    qK_grh::SimpleDiGraph,
+    sources::AbstractVector{<:Integer},
+    sinks::AbstractVector{<:Integer},
+) where {T}
+    dag = SISODAG(
+        qK_grh,
+        sort!(Int.(collect(sources))),
+        sort!(Int.(collect(sinks))),
+        _build_reachability(qK_grh),
+    )
+    return SISOProblem{T}(bnc_sys, Int(change_qK_idx), dag)
+end
+
+function SISOHelper(problem::SISOProblem{T}) where {T}
+    n_vtx = nv(problem.dag.graph)
+    vertex_prisms = Vector{Union{Nothing,Polyhedron}}(undef, n_vtx)
     fill!(vertex_prisms, nothing)
-
-    interface_prisms = Matrix{Union{Nothing,Polyhedra.Polyhedron}}(undef, n_vtx, n_vtx)
-    fill!(interface_prisms, nothing)
-
-    return paths, vertex_prisms, interface_prisms
-end
-
-function SISOHelper(
-    bnc_sys::Bnc,
-    change_qK;
-    connectome=nothing,
-)::SISOHelper
-    change_qK_idx = change_qK isa Integer ? Int(change_qK) : locate_sym_qK(bnc_sys, change_qK)
-    connectome_bool = isnothing(connectome) ?
-        _oriented_connectome(get_regimes_graph!(bnc_sys; full=true), change_qK_idx) :
-        Matrix{Bool}(connectome)
-
-    n_vtx = size(connectome_bool, 1)
-    predecessors, successors = _build_predecessor_successor_sets(connectome_bool)
-    paths, vertex_prisms, interface_prisms = _init_path_condition_storage(n_vtx)
-
-    return SISOHelper(
-        bnc_sys,
-        change_qK_idx,
-        connectome_bool,
-        predecessors,
-        successors,
-        [Set{Int}() for _ in 1:n_vtx],
-        [Set{Int}() for _ in 1:n_vtx],
-        paths,
-        falses(n_vtx, n_vtx),
-        Int[],
-        Int[],
+    return SISOHelper{T}(
+        problem,
         vertex_prisms,
-        falses(n_vtx),
-        interface_prisms,
-        falses(n_vtx, n_vtx),
+        Dict{SISOPairKey,Polyhedron}(),
+        Dict{SISOPairKey,SISOPathConditionMap}(),
     )
 end
 
-@inline _edge_exists(helper::SISOHelper, from::Int, to::Int) = helper.connectome[from, to]
+function SISOHelper(
+    bnc_sys::Bnc{T},
+    change_qK;
+    connectome=nothing,
+)::SISOHelper{T} where {T}
+    change_qK_idx = change_qK isa Integer ? Int(change_qK) : locate_sym_qK(bnc_sys, change_qK)
+    if isnothing(connectome)
+        qK_grh = get_SISO_graph(bnc_sys, change_qK_idx)
+        sources, sinks = get_sources_sinks(bnc_sys, qK_grh)
+    else
+        connectome_bool = Matrix{Bool}(connectome)
+        qK_grh = _connectome_to_digraph(connectome_bool)
+        sources, sinks = get_sources_sinks(bnc_sys, connectome_bool)
+    end
+    return SISOHelper(_build_siso_problem(bnc_sys, change_qK_idx, qK_grh, sources, sinks))
+end
+
+get_binding_network(problem::SISOProblem, args...) = problem.bn
+get_binding_network(helper::SISOHelper, args...) = get_binding_network(helper.problem)
+get_SISO_graph(problem::SISOProblem) = problem.dag.graph
+get_SISO_graph(helper::SISOHelper) = get_SISO_graph(helper.problem)
+get_sources(problem::SISOProblem) = copy(problem.dag.sources)
+get_sources(helper::SISOHelper) = get_sources(helper.problem)
+get_sinks(problem::SISOProblem) = copy(problem.dag.sinks)
+get_sinks(helper::SISOHelper) = get_sinks(helper.problem)
+get_change_qK_idx(problem::SISOProblem) = problem.change_qK_idx
+get_change_qK_idx(helper::SISOHelper) = get_change_qK_idx(helper.problem)
+
+@inline _edge_exists(helper::SISOHelper, from::Int, to::Int) = has_edge(get_SISO_graph(helper), from, to)
+@inline _pair_is_cached(helper::SISOHelper, from::Int, to::Int) = haskey(helper.pair_conditions, _pair_key(from, to))
+@inline _pair_conditions(helper::SISOHelper, from::Int, to::Int) = get(helper.pair_conditions, _pair_key(from, to), nothing)
+@inline _can_reach(helper::SISOHelper, from::Int, to::Int) = helper.problem.dag.reachable[from, to]
 
 function _get_vertex_prism!(
     helper::SISOHelper,
     vertex_idx::Int,
 )::Polyhedra.Polyhedron
-    if helper.vertex_prism_found[vertex_idx]
-        prism = helper.vertex_prisms[vertex_idx]
-        prism === nothing && error("Cached vertex prism for $vertex_idx is missing.")
+    prism = helper.vertex_prisms[vertex_idx]
+    if !isnothing(prism)
         return prism
     end
 
-    prism = _get_polyhedron_prism(helper.bnc_system, vertex_idx, helper.change_qK_idx) |> _clean_polyhedron!
+    prism = _get_polyhedron_prism(helper.problem.bn, vertex_idx, helper.problem.change_qK_idx) |> _clean_polyhedron!
     helper.vertex_prisms[vertex_idx] = prism
-    helper.vertex_prism_found[vertex_idx] = true
     return prism
 end
 
@@ -583,115 +626,55 @@ function _get_interface_prism!(
     vertex_idx_from::Int,
     vertex_idx_to::Int,
 )::Polyhedra.Polyhedron
-    if helper.interface_prism_found[vertex_idx_from, vertex_idx_to]
-        prism = helper.interface_prisms[vertex_idx_from, vertex_idx_to]
-        prism === nothing && error("Cached interface prism for ($(vertex_idx_from), $(vertex_idx_to)) is missing.")
+    key = _undirected_pair_key(vertex_idx_from, vertex_idx_to)
+    prism = get(helper.interface_prisms, key, nothing)
+    if !isnothing(prism)
         return prism
     end
 
     prism = _get_interface_prism(
-        helper.bnc_system,
+        helper.problem.bn,
         vertex_idx_from,
         vertex_idx_to,
-        helper.change_qK_idx,
+        helper.problem.change_qK_idx,
     ) |> _clean_polyhedron!
 
-    helper.interface_prisms[vertex_idx_from, vertex_idx_to] = prism
-    helper.interface_prisms[vertex_idx_to, vertex_idx_from] = prism
-    helper.interface_prism_found[vertex_idx_from, vertex_idx_to] = true
-    helper.interface_prism_found[vertex_idx_to, vertex_idx_from] = true
+    helper.interface_prisms[key] = prism
     return prism
 end
 
-function _dfs_upstream!(
-    helper::SISOHelper,
-    visited::Vector{Bool},
-    current::Int,
-    upstream_done::Vector{Bool},
-    n_vtx::Int,
-)::Nothing
-    visited[current] = true
-    if upstream_done[current]
-        visited[current] = false
-        return
+function _bridge_successors(helper::SISOHelper, from::Int, to::Int)::Vector{Int}
+    out = Int[]
+    for successor in outneighbors(get_SISO_graph(helper), from)
+        successor == to && continue
+        _can_reach(helper, successor, to) || continue
+        push!(out, successor)
     end
-
-    for neighbor in 1:n_vtx
-        if helper.connectome[neighbor, current] && !visited[neighbor]
-            _dfs_upstream!(helper, visited, neighbor, upstream_done, n_vtx)
-            push!(helper.upstream[current], neighbor)
-            union!(helper.upstream[current], helper.upstream[neighbor])
-        end
-    end
-
-    upstream_done[current] = true
-    visited[current] = false
-    return
+    return out
 end
 
-function _dfs_downstream!(
-    helper::SISOHelper,
-    visited::Vector{Bool},
-    current::Int,
-    downstream_done::Vector{Bool},
-    n_vtx::Int,
-)::Nothing
-    visited[current] = true
-    if downstream_done[current]
-        visited[current] = false
-        return
+function _bridge_predecessors(helper::SISOHelper, from::Int, to::Int)::Vector{Int}
+    out = Int[]
+    for predecessor in inneighbors(get_SISO_graph(helper), to)
+        predecessor == from && continue
+        _can_reach(helper, from, predecessor) || continue
+        push!(out, predecessor)
     end
-
-    for neighbor in 1:n_vtx
-        if helper.connectome[current, neighbor] && !visited[neighbor]
-            _dfs_downstream!(helper, visited, neighbor, downstream_done, n_vtx)
-            push!(helper.downstream[current], neighbor)
-            union!(helper.downstream[current], helper.downstream[neighbor])
-        end
-    end
-
-    downstream_done[current] = true
-    visited[current] = false
-    return
+    return out
 end
 
-function _trace_reachability!(
-    helper::SISOHelper;
-    recompute_sources_sinks::Bool=true,
-)::Nothing
-    n_vtx = size(helper.connectome, 1)
-    helper.upstream = [Set{Int}() for _ in 1:n_vtx]
-    helper.downstream = [Set{Int}() for _ in 1:n_vtx]
-
-    if recompute_sources_sinks
-        helper.sources, helper.sinks = get_sources_sinks(helper.bnc_system, helper.connectome)
-    end
-
-    upstream_done = fill(false, n_vtx)
-    for sink in helper.sinks
-        _dfs_upstream!(helper, fill(false, n_vtx), sink, upstream_done, n_vtx)
-    end
-
-    downstream_done = fill(false, n_vtx)
-    for source in helper.sources
-        _dfs_downstream!(helper, fill(false, n_vtx), source, downstream_done, n_vtx)
-    end
-    return nothing
-end
-
-@inline function _cache_pair_paths!(
+function _cache_pair_conditions!(
     helper::SISOHelper,
     from::Int,
     to::Int,
-    paths::Vector{RegimePath},
-)::Bool
-    helper.paths[from, to] = isempty(paths) ? nothing : paths
-    helper.path_found[from, to] = true
-    return !isempty(paths)
+    conditions::SISOPathConditionMap,
+)::SISOPathConditionMap
+    helper.pair_conditions[_pair_key(from, to)] = conditions
+    return conditions
 end
 
-function _maybe_push_direct_path!(
-    paths::Vector{RegimePath},
+function _maybe_store_direct_path!(
+    conditions::SISOPathConditionMap,
     helper::SISOHelper,
     from::Int,
     to::Int,
@@ -699,7 +682,7 @@ function _maybe_push_direct_path!(
     _edge_exists(helper, from, to) || return nothing
     condition = _get_interface_prism!(helper, from, to)
     isempty(condition) && return nothing
-    push!(paths, RegimePath([from, to], condition))
+    conditions[(from, to)] = condition
     return nothing
 end
 
@@ -707,31 +690,27 @@ function _find_pair_path_conditions!(
     helper::SISOHelper,
     from::Int,
     to::Int,
-)::Bool
-    if helper.path_found[from, to]
-        return !isnothing(helper.paths[from, to])
-    end
+)::SISOPathConditionMap
+    cached = _pair_conditions(helper, from, to)
+    !isnothing(cached) && return cached
 
+    conditions = SISOPathConditionMap()
     if from == to
         condition = _get_vertex_prism!(helper, from)
-        helper.paths[from, to] = [RegimePath([from], condition)]
-        helper.path_found[from, to] = true
-        return true
+        isempty(condition) || (conditions[(from,)] = condition)
+        return _cache_pair_conditions!(helper, from, to, conditions)
     end
 
-    paths = RegimePath[]
-    _maybe_push_direct_path!(paths, helper, from, to)
+    _maybe_store_direct_path!(conditions, helper, from, to)
 
-    pass_by = intersect(helper.downstream[from], helper.upstream[to])
-    isempty(pass_by) && return _cache_pair_paths!(helper, from, to, paths)
+    successors = _bridge_successors(helper, from, to)
+    predecessors = _bridge_predecessors(helper, from, to)
+    if isempty(successors) || isempty(predecessors)
+        return _cache_pair_conditions!(helper, from, to, conditions)
+    end
 
-    successors = intersect(pass_by, helper.successors[from])
-    predecessors = intersect(pass_by, helper.predecessors[to])
-    isempty(successors) && error("Invariant violated: `pass_by` is non-empty but `pass_by ∩ successors[from]` is empty for (from=$(from), to=$(to)).")
-    isempty(predecessors) && error("Invariant violated: `pass_by` is non-empty but `pass_by ∩ predecessors[to]` is empty for (from=$(from), to=$(to)).")
-
-    n_solved_successors = sum(helper.path_found[successor, to] for successor in successors)
-    n_solved_predecessors = sum(helper.path_found[from, predecessor] for predecessor in predecessors)
+    n_solved_successors = count(successor -> _pair_is_cached(helper, successor, to), successors)
+    n_solved_predecessors = count(predecessor -> _pair_is_cached(helper, from, predecessor), predecessors)
     solved_successor_ratio = n_solved_successors / length(successors)
     solved_predecessor_ratio = n_solved_predecessors / length(predecessors)
 
@@ -742,46 +721,46 @@ function _find_pair_path_conditions!(
             for predecessor in predecessors
                 right_condition = _get_interface_prism!(helper, predecessor, to)
                 isempty(right_condition) && continue
-                if _find_pair_path_conditions!(helper, successor, predecessor)
-                    for middle_path in helper.paths[successor, predecessor]
-                        full_condition = _intersect_nonempty(left_condition, middle_path.condition, right_condition)
-                        isnothing(full_condition) && continue
-                        push!(paths, RegimePath([from; middle_path.path; to], full_condition))
-                    end
+                middle_conditions = _find_pair_path_conditions!(helper, successor, predecessor)
+                isempty(middle_conditions) && continue
+                for (middle_path, middle_condition) in middle_conditions
+                    full_condition = _intersect_nonempty(left_condition, middle_condition, right_condition)
+                    isnothing(full_condition) && continue
+                    conditions[_wrap_vertices(from, middle_path, to)] = full_condition
                 end
             end
         end
-        return _cache_pair_paths!(helper, from, to, paths)
+        return _cache_pair_conditions!(helper, from, to, conditions)
     end
 
     if solved_successor_ratio > solved_predecessor_ratio
         for successor in successors
-            if _find_pair_path_conditions!(helper, successor, to)
-                left_condition = _get_interface_prism!(helper, from, successor)
-                isempty(left_condition) && continue
-                for suffix_path in helper.paths[successor, to]
-                    full_condition = _intersect_nonempty(left_condition, suffix_path.condition)
-                    isnothing(full_condition) && continue
-                    push!(paths, RegimePath([from; suffix_path.path], full_condition))
-                end
+            suffix_conditions = _find_pair_path_conditions!(helper, successor, to)
+            isempty(suffix_conditions) && continue
+            left_condition = _get_interface_prism!(helper, from, successor)
+            isempty(left_condition) && continue
+            for (suffix_path, suffix_condition) in suffix_conditions
+                full_condition = _intersect_nonempty(left_condition, suffix_condition)
+                isnothing(full_condition) && continue
+                conditions[_prepend_vertex(from, suffix_path)] = full_condition
             end
         end
-        return _cache_pair_paths!(helper, from, to, paths)
+        return _cache_pair_conditions!(helper, from, to, conditions)
     end
 
     for predecessor in predecessors
-        if _find_pair_path_conditions!(helper, from, predecessor)
-            right_condition = _get_interface_prism!(helper, predecessor, to)
-            isempty(right_condition) && continue
-            for prefix_path in helper.paths[from, predecessor]
-                full_condition = _intersect_nonempty(prefix_path.condition, right_condition)
-                isnothing(full_condition) && continue
-                push!(paths, RegimePath([prefix_path.path; to], full_condition))
-            end
+        prefix_conditions = _find_pair_path_conditions!(helper, from, predecessor)
+        isempty(prefix_conditions) && continue
+        right_condition = _get_interface_prism!(helper, predecessor, to)
+        isempty(right_condition) && continue
+        for (prefix_path, prefix_condition) in prefix_conditions
+            full_condition = _intersect_nonempty(prefix_condition, right_condition)
+            isnothing(full_condition) && continue
+            conditions[_append_vertex(prefix_path, to)] = full_condition
         end
     end
 
-    return _cache_pair_paths!(helper, from, to, paths)
+    return _cache_pair_conditions!(helper, from, to, conditions)
 end
 
 """
@@ -790,8 +769,7 @@ end
 Solve all source-to-sink pair conditions stored in a helper, with progress.
 """
 function _find_all_path_conditions!(helper::SISOHelper)::SISOHelper
-    _trace_reachability!(helper)
-    pair_queries = [(source, sink) for source in helper.sources for sink in helper.sinks]
+    pair_queries = [(source, sink) for source in helper.problem.dag.sources for sink in helper.problem.dag.sinks]
     isempty(pair_queries) && return helper
 
     if length(pair_queries) == 1
@@ -807,36 +785,30 @@ function _find_all_path_conditions!(helper::SISOHelper)::SISOHelper
     return helper
 end
 
+get_path_conditions(helper::SISOHelper, from::Integer, to::Integer) = _find_pair_path_conditions!(helper, Int(from), Int(to))
+
 
 # ============================================================================
 # SISOPaths
 # ============================================================================
 
 mutable struct SISOPaths{T}
-    bn::Bnc{T}
-    qK_grh::SimpleDiGraph
-    change_qK_idx::Int
-    sources::Vector{Int}
-    sinks::Vector{Int}
-    paths_dict::Union{Nothing,Dict{Vector{Int},Int}}
+    problem::SISOProblem{T}
     rgm_paths::Vector{Vector{Int}}
-    condition_helper::Union{Nothing,SISOHelper}
+    path_index::Union{Nothing,Dict{SISOPathKey,Int}}
+    condition_helper::Union{Nothing,SISOHelper{T}}
     path_polys::Vector{Polyhedron}
     path_volume::Vector{Volume}
     path_volume_is_calc::BitVector
     path_polys_is_calc::BitVector
 
-    function SISOPaths(model::Bnc{T}, qK_grh, change_qK_idx, sources, sinks, rgm_paths) where {T}
+    function SISOPaths(problem::SISOProblem{T}, rgm_paths) where {T}
         rgm_paths_int = [Int.(path) for path in rgm_paths]
         n_paths = length(rgm_paths_int)
         return new{T}(
-            model,
-            qK_grh,
-            Int(change_qK_idx),
-            Int.(collect(sources)),
-            Int.(collect(sinks)),
-            nothing,
+            problem,
             rgm_paths_int,
+            nothing,
             nothing,
             Vector{Polyhedron}(undef, n_paths),
             Vector{Volume}(undef, n_paths),
@@ -851,29 +823,24 @@ end
 
 Return the model backing a SISO path object.
 """
-get_binding_network(grh::SISOPaths, args...) = grh.bn
+get_binding_network(grh::SISOPaths, args...) = get_binding_network(grh.problem)
+get_sources(grh::SISOPaths) = get_sources(grh.problem)
+get_sinks(grh::SISOPaths) = get_sinks(grh.problem)
+get_change_qK_idx(grh::SISOPaths) = get_change_qK_idx(grh.problem)
 
 function _build_paths_dict(rgm_paths::AbstractVector{<:AbstractVector{<:Integer}})
-    paths_dict = Dict{Vector{Int},Int}()
+    paths_dict = Dict{SISOPathKey,Int}()
     sizehint!(paths_dict, length(rgm_paths))
     for (i, path) in enumerate(rgm_paths)
-        paths_dict[Int.(path)] = i
+        paths_dict[_path_key(path)] = i
     end
     return paths_dict
 end
 
 function _ensure_paths_dict!(grh::SISOPaths)
-    isnothing(grh.paths_dict) || return grh.paths_dict
-    grh.paths_dict = _build_paths_dict(grh.rgm_paths)
-    return grh.paths_dict
-end
-
-function _connectome_matrix(g::SimpleDiGraph)::Matrix{Bool}
-    connectome = falses(nv(g), nv(g))
-    for edge in edges(g)
-        connectome[src(edge), dst(edge)] = true
-    end
-    return connectome
+    isnothing(grh.path_index) || return grh.path_index
+    grh.path_index = _build_paths_dict(grh.rgm_paths)
+    return grh.path_index
 end
 
 function _normalize_path_indices(
@@ -895,26 +862,9 @@ function _group_path_indices_by_endpoints(
     return collect(groups)
 end
 
-function _build_pair_condition_map(pair_paths::AbstractVector{RegimePath})
-    pair_map = Dict{Tuple{Vararg{Int}},Polyhedron}()
-    sizehint!(pair_map, length(pair_paths))
-    for regime_path in pair_paths
-        pair_map[Tuple(regime_path.path)] = regime_path.condition
-    end
-    return pair_map
-end
-
 function _ensure_condition_helper!(grh::SISOPaths)::SISOHelper
     if isnothing(grh.condition_helper)
-        helper = SISOHelper(
-            grh.bn,
-            grh.change_qK_idx;
-            connectome=_connectome_matrix(grh.qK_grh),
-        )
-        helper.sources = copy(grh.sources)
-        helper.sinks = copy(grh.sinks)
-        _trace_reachability!(helper; recompute_sources_sinks=false)
-        grh.condition_helper = helper
+        grh.condition_helper = SISOHelper(grh.problem)
     end
     return grh.condition_helper
 end
@@ -926,13 +876,10 @@ function _store_pair_polyhedra!(
     to::Int,
     idxs::AbstractVector{<:Integer},
 )::Nothing
-    _find_pair_path_conditions!(helper, from, to)
-    pair_paths = helper.paths[from, to]
-    pair_paths === nothing && error("No feasible condition found for requested path pair ($(from), $(to)).")
-
-    pair_map = _build_pair_condition_map(pair_paths)
+    pair_map = _find_pair_path_conditions!(helper, from, to)
+    isempty(pair_map) && error("No feasible condition found for requested path pair ($(from), $(to)).")
     for idx in idxs
-        key = Tuple(grh.rgm_paths[idx])
+        key = _path_key(grh.rgm_paths[idx])
         poly = get(pair_map, key, nothing)
         poly === nothing && error("Requested path $(collect(key)) is missing from the shared path-condition backend.")
         grh.path_polys[idx] = poly
@@ -1000,10 +947,13 @@ function SISOPaths(model::Bnc{T}, change_qK; rgm_paths=nothing) where {T}
         rgm_paths = _enumerate_paths(qK_grh; sources, sinks)
     else
         qK_grh = graph_from_paths(rgm_paths, n_regimes(model))
-        sources, sinks = get_sources_sinks(qK_grh)
+        sources_all, sinks_all = get_sources_sinks(qK_grh)
+        sources = sort!(collect(sources_all))
+        sinks = sort!(collect(sinks_all))
     end
 
-    return SISOPaths(model, qK_grh, change_qK_idx, sources, sinks, rgm_paths)
+    problem = _build_siso_problem(model, change_qK_idx, qK_grh, sources, sinks)
+    return SISOPaths(problem, rgm_paths)
 end
 
 """
@@ -1011,14 +961,14 @@ end
 
 Return the qK neighbor graph for a SISO path object.
 """
-get_neighbor_graph_qK(grh::SISOPaths; kwargs...) = grh.qK_grh
+get_neighbor_graph_qK(grh::SISOPaths; kwargs...) = get_SISO_graph(grh.problem)
 
 """
     get_SISO_graph(grh::SISOPaths) -> SimpleDiGraph
 
 Return the SISO graph stored in a `SISOPaths` object.
 """
-get_SISO_graph(grh::SISOPaths) = grh.qK_grh
+get_SISO_graph(grh::SISOPaths) = get_SISO_graph(grh.problem)
 
 """
     get_path(grh::SISOPaths, pth_idx; return_idx=false) -> Vector
@@ -1054,7 +1004,7 @@ Return the index for a SISO path specification.
 """
 function get_idx(grh::SISOPaths, pth::AbstractVector)
     idxs = get_idx.(Ref(get_binding_network(grh)), pth)
-    return _ensure_paths_dict!(grh)[idxs]
+    return _ensure_paths_dict!(grh)[_path_key(idxs)]
 end
 
 """
@@ -1160,7 +1110,7 @@ function get_expression_path(grh::SISOPaths, pth; observe_x=nothing)
     rgm_path = get_path(grh, pth; return_idx=true)
     rgm_nullities = get_nullities(bn, rgm_path)
 
-    change_qK_idx = grh.change_qK_idx
+    change_qK_idx = get_change_qK_idx(grh)
     observe_x_idx = isnothing(observe_x) ? (1:bn.n) : locate_sym_x.(Ref(bn), observe_x)
     rgm_interface = get_interface.(Ref(bn), rgm_path[1:end-1], rgm_path[2:end])
 
@@ -1326,11 +1276,11 @@ function get_RO_paths(
 )
     selected_idxs = _normalize_path_indices(model, pth_idx)
     rgm_paths = model.rgm_paths[selected_idxs]
-    observe_x_idx = locate_sym_x(model.bn, observe_x)
+    observe_x_idx = locate_sym_x(get_binding_network(model), observe_x)
     return get_RO_paths(
-        model.bn,
+        get_binding_network(model),
         rgm_paths;
-        change_qK=model.change_qK_idx,
+        change_qK=get_change_qK_idx(model),
         observe_x=observe_x_idx,
         kwargs...,
     )

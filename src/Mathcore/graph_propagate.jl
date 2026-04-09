@@ -401,7 +401,7 @@ function _prefill_affine_cache_core!(model::Bnc)
     grh = model.vertices_graph
     isnothing(grh) && error("Regime graph is not initialized.")
 
-    comps = connected_components(grh.x_grh)
+    comps = connected_components(get_neighbor_graph_x(grh))
     comp_of = zeros(Int, length(regimes))
     for cid in eachindex(comps)
         @inbounds for idx in comps[cid]

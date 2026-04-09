@@ -385,11 +385,9 @@ end
     helper = BindingAndCatalysis.SISOHelper(model, 1)
     BindingAndCatalysis._find_all_path_conditions!(helper)
     helper_path_polys = Dict{Tuple{Vararg{Int}},Any}()
-    for source in helper.sources, sink in helper.sinks
-        ps = helper.paths[source, sink]
-        ps === nothing && continue
-        for p in ps
-            helper_path_polys[Tuple(p.path)] = p.condition
+    for source in get_sources(helper), sink in get_sinks(helper)
+        for (path_key, poly) in BindingAndCatalysis.get_path_conditions(helper, source, sink)
+            helper_path_polys[path_key] = poly
         end
     end
 

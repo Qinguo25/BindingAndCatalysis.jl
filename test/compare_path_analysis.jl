@@ -54,14 +54,12 @@ function main()
     helper = BindingAndCatalysis.SISOHelper(model, 1)
     BindingAndCatalysis._find_all_path_conditions!(helper)
     helper_poly = nothing
-    for source in helper.sources, sink in helper.sinks
-        ps = helper.paths[source, sink]
-        ps === nothing && continue
-        for p in ps
-            if p.path == path
-                helper_poly = p.condition
-                break
-            end
+    target_key = Tuple(path)
+    for source in get_sources(helper), sink in get_sinks(helper)
+        pair_conditions = BindingAndCatalysis.get_path_conditions(helper, source, sink)
+        if haskey(pair_conditions, target_key)
+            helper_poly = pair_conditions[target_key]
+            break
         end
         helper_poly === nothing || break
     end

@@ -21,9 +21,9 @@ Plot a SISO path trajectory in x space colored by dominant regime.
 """
 function SISO_plot(SISOPaths::SISOPaths,pth_idx;rand_line=false, rand_ray=false, extend=4, kwargs...)
     pth_idx = get_idx(SISOPaths, pth_idx)
-    parameters = get_one_inner_point(SISOPaths.path_polys[pth_idx], rand_line=rand_line, rand_ray=rand_ray, extend=extend)
+    parameters = get_one_inner_point(get_polyhedron(SISOPaths, pth_idx), rand_line=rand_line, rand_ray=rand_ray, extend=extend)
     @show parameters
-    return SISO_plot(SISOPaths.bn, parameters, SISOPaths.change_qK_idx; kwargs...)
+    return SISO_plot(get_binding_network(SISOPaths), parameters, get_change_qK_idx(SISOPaths); kwargs...)
 end
 """
     SISO_plot(model::Bnc, parameters, change_idx; npoints=1000, start=-6, stop=6, colormap=:rainbow,
@@ -454,7 +454,7 @@ Draw a SISO path graph with direction labels.
 """
 function draw_graph(grh::SISOPaths;kwargs...)
     bn = get_binding_network(grh)
-    change_sym = qK_sym(bn)[grh.change_qK_idx]
+    change_sym = qK_sym(bn)[get_change_qK_idx(grh)]
     grh = get_neighbor_graph_qK(grh)
     edge_labels = ["+"* repr(change_sym) for _ in 1:ne(grh)]
     f,ax,p = draw_graph(bn, grh; edge_labels = edge_labels, kwargs...)
