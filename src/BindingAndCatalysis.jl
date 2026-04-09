@@ -633,7 +633,6 @@ include(joinpath(@__DIR__,"Catalysis_regime.jl"))
 include(joinpath(@__DIR__,"Bnc_regime.jl"))
 
 include(joinpath(@__DIR__,"regime_assign.jl"))
-include(joinpath(@__DIR__,"regime_graphs.jl"))
 include(joinpath(@__DIR__,"SISO.jl"))
 include(joinpath(@__DIR__,"symbolics.jl"))
 include(joinpath(@__DIR__,"visualize.jl"))
