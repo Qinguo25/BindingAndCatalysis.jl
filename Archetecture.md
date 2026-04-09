@@ -304,7 +304,7 @@ C^\theta \Pi \log x + C^\theta \log k + C_0^\theta \ge 0.
 因此 exact mode 目前是“binding-layer exact”，不是“整个 mixed pipeline 全 exact”。
 
 
-### 3.6 `Regimes`、`VertexGraph`、`SISOHelper` 和 `SISOPaths`
+### 3.6 `Regimes`、`VertexGraph`、`SISODAG`、`SISOProblem`、`SISOHelper` 和 `SISOPaths`
 
 `Regimes` 是一个轻量容器：
 
@@ -339,27 +339,46 @@ C^\theta \Pi \log x + C^\theta \log k + C_0^\theta \ge 0.
 
 这套设计把 graph cache 从“邻接表”提升成了“邻接表 + canonical interface pool”。
 
-在当前架构里，`VertexGraph` 负责“全局 regime 图缓存”，而 SISO 路径条件求解已经集中到 [src/SISO.jl](/home/joker/Realizibility_index/BindingAndCatalysis.jl/src/SISO.jl)：
+要注意一个最近的结构变化：
 
-- `SISOHelper` 是内部 memoized backend，不对外暴露
-- 它负责：
-  - 沿某个单独的 `change_qK` 坐标，把 `VertexGraph` 定向成 axis-aligned DAG
-  - 缓存 predecessor/successor、reachability、vertex prism、interface prism
-  - 按 source-sink pair 递归求解 path condition
-  - 把重复子问题折叠成 pair-level cache，而不是每条路径重复做几何交
+- `VertexGraph` 现在不再长期保存单独的 `x_grh` 字段
+- x-neighbor graph 由 `neighbors` 按需通过 `get_neighbor_graph_x(...)` 重建
+- 因此 `VertexGraph` 更像“最小必要邻接缓存”，而不是把每种图表示都各存一份
 
-`SISOPaths` 是对外的路径分析对象，也定义在 [src/SISO.jl](/home/joker/Realizibility_index/BindingAndCatalysis.jl/src/SISO.jl)。它保存：
+在当前架构里，`VertexGraph` 负责“全局 regime 图缓存”，而 SISO 路径条件求解已经集中到 [src/SISO.jl](/home/joker/Realizibility_index/BindingAndCatalysis.jl/src/SISO.jl)。这一层又被拆成 4 个层次：
 
-- `bn`
-- `qK_grh`
-- `change_qK_idx`
-- `sources`, `sinks`
-- `rgm_paths`
-- lazy 的 `paths_dict`
-- lazy 的 `condition_helper`
-- lazy 的 `polyhedra`
+- `SISODAG`
+  - 保存某个 `change_qK` 方向下的有向图
+  - 保存 `sources` / `sinks`
+  - 保存 reachability bitmatrix
+  - 它表达的是“图论问题本身”
 
-可以把它理解成“某一个坐标轴方向上的全路径分析结果容器”。调用 `get_polyhedra` / `get_volume` / `get_RO_paths` 时，底层都会复用同一个 `SISOHelper`，而不是再走一套独立实现。
+- `SISOProblem`
+  - 保存 `bn`
+  - 保存 `change_qK_idx`
+  - 保存 `dag::SISODAG`
+  - 它表达的是“某个模型、某个坐标轴方向下的一次 SISO 分析问题”
+
+- `SISOHelper`
+  - 是内部 memoized backend
+  - 只保存求解缓存，不再长期保存对外结果
+  - 当前主要缓存：
+    - `vertex_prisms`
+    - `interface_prisms`
+    - `pair_conditions`
+  - `pair_conditions[(from,to)]` 对应一个 `Dict(path_tuple => polyhedron)`，因此缓存粒度已经从“矩阵里挂 path 对象”收口成“按 source-sink pair 缓存条件映射”
+
+- `SISOPaths`
+  - 是对外的路径分析对象
+  - 现在只保存：
+    - `problem`
+    - `rgm_paths`
+    - lazy 的 `path_index`
+    - lazy 的 `condition_helper`
+    - `path_polys` / `path_volume` 及其状态位
+  - 它表达的是“某一个坐标轴方向上的全路径结果容器”
+
+这次重构的核心目标是把“图问题定义”、“递归求解缓存”、“对外路径结果”三层拆开，减少 `RegimePath`/helper/path container 之间的重复存储。调用 `get_polyhedra` / `get_volume` / `get_RO_paths` 时，底层都会复用同一个 `SISOHelper`，但外层不再把 helper 内部缓存结构直接暴露成长期数据模型。
 
 
 ### 3.7 `MatrixHelper` 和 `IntegrationHelper`
@@ -506,9 +525,9 @@ rgm = get_bnc_regime(model, bind_perm, cat_perm)
 当前路径分析的实际流水线是：
 
 1. `get_regimes_graph!(model; full=true)` 先保证 `VertexGraph` 和 qK interface direction 都已 materialize。
-2. `SISOPaths(model, change_qK)` 在 [src/SISO.jl](/home/joker/Realizibility_index/BindingAndCatalysis.jl/src/SISO.jl) 里把图沿单个坐标轴定向成 SISO DAG，并过滤 singular isolated regimes。
+2. `SISOPaths(model, change_qK)` 在 [src/SISO.jl](/home/joker/Realizibility_index/BindingAndCatalysis.jl/src/SISO.jl) 里先构造 `SISODAG`，再封装成 `SISOProblem`；这一层会沿单个坐标轴定向并过滤 singular isolated regimes。
 3. 如果没有手动传 `rgm_paths`，会先枚举所有 source-to-sink 路径；这一步现在带进度提示。
-4. `get_polyhedra(pths)` 会懒触发 `SISOHelper`，按 source-sink pair 批量求条件；vertex prism、interface prism、pair condition 都会缓存，并带进度提示。
+4. `get_polyhedra(pths)` 会懒触发 `SISOHelper`，按 source-sink pair 批量求条件；当前缓存是 `vertex prism + interface prism + pair_conditions[(from,to)]`，并带进度提示。
 5. `get_volume`、`get_expression_path`、`get_RO_paths`、`summary_RO_path` 都建立在这些 path polyhedra 之上。
 
 所以现在的“全路径条件”实现已经不再分散在多个文件里，而是统一收束到 `src/SISO.jl`。
@@ -635,6 +654,7 @@ rgm = get_bnc_regime(model, bind_perm, cat_perm)
   当前 graph/path backend 的主实现文件。它按层组织了：
   - `VertexGraph` 访问与 graph utility
   - axis-aligned SISO 有向图构造
+  - `SISODAG` / `SISOProblem`
   - polyhedron projection / prism helper
   - 内部 `SISOHelper`
   - 对外 `SISOPaths`
