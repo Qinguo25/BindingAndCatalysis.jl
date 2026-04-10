@@ -4,3 +4,4 @@ Examples/Manifest.toml
 .github/workflows/copilot-instructions.md
 test/unfinished_or_outdated_stuff/
 cddlib-master
+lrslib-main

@@ -34,6 +34,7 @@ import Base: summary,show
 
 export Bnc, update_catalysis!
 export ExactLogExpr, exact_log10, exact_log10_ratio
+export VRep, vrep, points, rays, lines
 
 #---------------------------plot dependency-----------------------------
 using Makie

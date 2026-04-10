@@ -102,11 +102,11 @@ Keyword `mode` controls how binding-regime affine coefficients are stored:
 - `:float`    uses floating-point `H` / `C_qK`
 - `:exact`    uses exact rational coefficients for `H` / `C_qK`
 """
-function find_all_regimes!(model::Bnc{T}; mode::Symbol=_affine_mode(model), H_mode::Symbol=mode) where T
+function find_all_regimes!(model::Bnc{T}; mode::Symbol=_affine_mode(model)) where T
 
     
     # Decide what type should we used to store H.
-    mode = _normalize_affine_mode(H_mode)
+    mode = _normalize_affine_mode(mode)
     is_bind_regimes_built(model) && model.affine_coeff_mode == mode && return nothing
     
     _remove_regime_data!(model)
@@ -1077,6 +1077,27 @@ end
 Return a point guaranteed to lie inside the polyhedron.
 """
 function get_one_inner_point(poly::T;rand_line=true,rand_ray=true,extend=3) where T<:Polyhedron
+    rep = NativePolyhedra.vrep(poly)
+    pts = points(rep)
+    if !isempty(pts)
+        Tcenter = foldl(promote_type, (typeof(x) for pt in pts for x in pt); init=Rational{Int})
+        center = Tcenter[zero(Tcenter) for _ in eachindex(pts[1])]
+        for pt in pts
+            @inbounds for j in eachindex(center)
+                center[j] += pt[j]
+            end
+        end
+        @inbounds for j in eachindex(center)
+            center[j] /= length(pts)
+        end
+        center in poly && return center
+        copy(first(pts)) in poly && return copy(first(pts))
+    end
+
+    if !isnothing(rep.anchor) && rep.anchor in poly
+        return copy(rep.anchor)
+    end
+
     point = NativePolyhedra.interior_point(poly)
     isnothing(point) && error("Could not find an interior point for the polyhedron.")
     return point

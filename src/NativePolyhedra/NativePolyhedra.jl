@@ -10,11 +10,15 @@ import Base: +, -, *, /, ==, hash, show, zero, iszero, convert, promote_rule, Fl
 
 export ExactLogExpr, exact_log10, exact_log10_ratio
 export Polyhedron, HRep, MixedMatHRep, hrep, polyhedron
+export VRep, vrep, points, rays, lines
 export HalfSpace, HyperPlane, intersect, eliminate, detecthlinearity!, removehredundancy!
 export dim, fulldim, hashyperplanes, hyperplanes, allhalfspaces, issubset
 export feasible_point, interior_point
 
+_invalidate_vrep_cache!(x) = nothing
+
 include("exact_types.jl")
 include("polyhedra_core.jl")
+include("vrep_core.jl")
 
 end

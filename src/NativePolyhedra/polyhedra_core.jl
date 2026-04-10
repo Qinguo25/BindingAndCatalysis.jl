@@ -142,6 +142,7 @@ end
 function detecthlinearity!(poly::Polyhedron)
     poly.empty && return poly
     poly.normalized && return poly
+    _invalidate_vrep_cache!(poly)
     nrows = size(poly.A, 1)
     nvars = fulldim(poly)
     paired = falses(nrows)
@@ -202,9 +203,121 @@ function _violates_zero_row(is_eq::Bool, β)
     return is_eq ? abs(rhs) > 1e-9 : rhs < -1e-9
 end
 
-function removehredundancy!(poly::Polyhedron)
+function _row_dense(poly::Polyhedron, i::Int)
+    return vec(Array(poly.A[i:i, :]))
+end
+
+function _subpoly_without_row(poly::Polyhedron, skip::Int)
+    keep = [i for i in 1:size(poly.A, 1) if i != skip]
+    linset = BitSet()
+    for (new_i, old_i) in enumerate(keep)
+        old_i in poly.linset && push!(linset, new_i)
+    end
+    return Polyhedron(poly.A[keep, :], poly.b[keep], linset, false, true)
+end
+
+function _prune_equality_basis!(poly::Polyhedron; tol::Float64=1e-9)
+    eq_idxs = sort!(collect(poly.linset))
+    length(eq_idxs) <= 1 && return poly
+
+    A = Matrix(poly.A)
+    selected = Int[]
+    selected_rank = 0
+
+    for idx in eq_idxs
+        trial = isempty(selected) ? [idx] : vcat(selected, idx)
+        aug = hcat(A[trial, :], poly.b[trial])
+        trial_rank = _matrix_rank(aug; tol=tol)
+        if trial_rank > selected_rank
+            push!(selected, idx)
+            selected_rank = trial_rank
+        end
+    end
+
+    keep_eq = Set(selected)
+    rows = SparseVector[]
+    bs = eltype(poly.b)[]
+    linrows = Bool[]
+    for i in 1:size(poly.A, 1)
+        if i in poly.linset
+            i in keep_eq || continue
+            push!(rows, poly.A[i, :])
+            push!(bs, poly.b[i])
+            push!(linrows, true)
+        else
+            push!(rows, poly.A[i, :])
+            push!(bs, poly.b[i])
+            push!(linrows, false)
+        end
+    end
+
+    rebuilt = _rebuild_polyhedron(rows, bs, linrows, fulldim(poly), false)
+    poly.A = rebuilt.A
+    poly.b = rebuilt.b
+    poly.linset = rebuilt.linset
+    poly.empty = false
+    poly.normalized = false
+    return poly
+end
+
+function _strong_reduce_constraints(poly::Polyhedron; tol::Float64=1e-7)
+    nrows = size(poly.A, 1)
+    nrows == 0 && return poly
+
+    keep = trues(nrows)
+    make_eq = falses(nrows)
+
+    for i in 1:nrows
+        row = _row_dense(poly, i)
+        β = poly.b[i]
+        subpoly = _subpoly_without_row(poly, i)
+
+        if i in poly.linset
+            status_pos, val_pos = _optimize_linear(subpoly, row, β)
+            status_neg, val_neg = _optimize_linear(subpoly, -row, -β)
+            if (status_pos == :empty || (status_pos == :ok && val_pos <= tol)) &&
+               (status_neg == :empty || (status_neg == :ok && val_neg <= tol))
+                keep[i] = false
+            end
+            continue
+        end
+
+        status, val = _optimize_linear(subpoly, row, β)
+        if status == :empty || (status == :ok && val <= tol)
+            keep[i] = false
+            continue
+        end
+
+        status_rev, val_rev = _optimize_linear(poly, -row, -β)
+        if status_rev == :ok && val_rev <= tol
+            make_eq[i] = true
+        end
+    end
+
+    rows = SparseVector[]
+    bs = eltype(poly.b)[]
+    linrows = Bool[]
+    for i in 1:nrows
+        keep[i] || continue
+        push!(rows, poly.A[i, :])
+        push!(bs, poly.b[i])
+        push!(linrows, (i in poly.linset) || make_eq[i])
+    end
+
+    rebuilt = _rebuild_polyhedron(rows, bs, linrows, fulldim(poly), false)
+    poly.A = rebuilt.A
+    poly.b = rebuilt.b
+    poly.linset = rebuilt.linset
+    poly.empty = false
+    poly.normalized = false
+    _prune_equality_basis!(poly; tol=tol)
+    return poly
+end
+
+function removehredundancy!(poly::Polyhedron; strong::Bool=true)
     poly.empty && return poly
     poly.normalized && return poly
+    _invalidate_vrep_cache!(poly)
     detecthlinearity!(poly)
 
     nrows = size(poly.A, 1)
@@ -251,6 +364,27 @@ function removehredundancy!(poly::Polyhedron)
     poly.linset = rebuilt.linset
     poly.empty = false
     poly.normalized = true
+
+    if strong && size(poly.A, 1) <= 128 && fulldim(poly) <= 12
+        poly.normalized = false
+        _strong_reduce_constraints(poly)
+        detecthlinearity!(poly)
+        _strong_reduce_constraints(poly)
+        detecthlinearity!(poly)
+        rebuilt = _rebuild_polyhedron(
+            [poly.A[i, :] for i in 1:size(poly.A, 1)],
+            poly.b,
+            [i in poly.linset for i in 1:size(poly.A, 1)],
+            nvars,
+            true,
+        )
+        poly.A = rebuilt.A
+        poly.b = rebuilt.b
+        poly.linset = rebuilt.linset
+        poly.empty = false
+        poly.normalized = true
+    end
+
     return poly
 end
 
@@ -556,11 +690,17 @@ function _eliminate_one(poly::Polyhedron, axis::Int; canonicalize::Bool=true)
     return poly_new
 end
 
-function eliminate(poly::Polyhedron, axis::Integer; canonicalize::Bool=true)
+function eliminate(poly::Polyhedron, axis::Integer; canonicalize::Bool=true, method::Symbol=:fourier)
+    method in (:fourier, :block, :auto) || throw(ArgumentError("Unknown elimination method $method."))
     return _eliminate_one(poly, Int(axis); canonicalize=canonicalize)
 end
 
-function eliminate(poly::Polyhedron, axes::BitSet; canonicalize::Bool=true)
+function eliminate(poly::Polyhedron, axes::BitSet; canonicalize::Bool=true, method::Symbol=:auto)
+    method in (:fourier, :block, :auto) || throw(ArgumentError("Unknown elimination method $method."))
+    isempty(axes) && return poly
+    if method !== :fourier && length(axes) > 1
+        return _block_eliminate(poly, axes; canonicalize=canonicalize)
+    end
     out = poly
     for axis in sort!(collect(axes); rev=true)
         out = _eliminate_one(out, axis; canonicalize=canonicalize)
@@ -610,12 +750,54 @@ function _optimize_linear(poly::Polyhedron, a::AbstractVector{<:Real}, β::Real)
     end
 end
 
+function _issubset_generators(poly::Polyhedron, a::AbstractVector{<:Real}, β; tol::Float64=1e-7)
+    rep = vrep(poly)
+
+    for pt in points(rep)
+        Float64(dot(a, pt) - β) <= tol || return false
+    end
+
+    for ray in rays(rep)
+        Float64(dot(a, ray)) <= tol || return false
+    end
+
+    for line in lines(rep)
+        abs(Float64(dot(a, line))) <= tol || return false
+    end
+
+    return true
+end
+
 function issubset(poly::Polyhedron, h::HalfSpace; tol::Float64=1e-7)
-    status, val = _optimize_linear(poly, h.a, h.β)
-    return status == :empty || (status == :ok && val <= tol)
+    isempty(poly) && return true
+    try
+        return _issubset_generators(poly, h.a, h.β; tol=tol)
+    catch
+        status, val = _optimize_linear(poly, h.a, h.β)
+        return status == :empty || (status == :ok && val <= tol)
+    end
 end
 
 function issubset(poly::Polyhedron, h::HyperPlane; tol::Float64=1e-7)
-    return issubset(poly, HalfSpace(h.a, h.β); tol=tol) &&
-           issubset(poly, HalfSpace(-h.a, -h.β); tol=tol)
+    isempty(poly) && return true
+    try
+        rep = vrep(poly)
+
+        for pt in points(rep)
+            abs(Float64(dot(h.a, pt) - h.β)) <= tol || return false
+        end
+
+        for ray in rays(rep)
+            abs(Float64(dot(h.a, ray))) <= tol || return false
+        end
+
+        for line in lines(rep)
+            abs(Float64(dot(h.a, line))) <= tol || return false
+        end
+
+        return true
+    catch
+        return issubset(poly, HalfSpace(h.a, h.β); tol=tol) &&
+               issubset(poly, HalfSpace(-h.a, -h.β); tol=tol)
+    end
 end
