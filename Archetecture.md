@@ -894,6 +894,16 @@ regular 情况下很多东西可直接通过矩阵逆得到；singular 情况下
 
 当前实现重点是让仓库主工作流可用并支持 exact mode。它的 API 设计参考了 cdd/lrs，但不是把两边的 C 实现逐行移植成 Julia。
 
+补充一点当前的后端策略：
+
+- `ExactLogExpr` 不能直接作为 cddlib 的 `mytype`。原因不是简单的 FFI 包装缺失，而是代数结构不匹配：cddlib 的核心算法要求底层标量对 `+,-,*,/,cmp` 封闭并形成可比较的数域；而 `ExactLogExpr` 目前只是“有理数 + 若干 `log10(p)` 的线性组合”，不对一般乘法封闭，比较也依赖 `Float64` 近似。
+- 因此目前采用的是 hybrid 路线：exact / symbolic 条件仍然保留在项目上层；需要高性能几何运算时，在 float mode 下通过内部 `CddBridge` 把 Native H-rep 暂时桥接到 `CDDLib.jl`，做完相交 / 投影后再转回项目内表示。
+- 当前已经接入的 float-mode bridge 主要有两段：
+  - `regimes.jl` 里的 singular `qK` 条件 affine-mapping projection
+  - `SISO/get_polyhedra` 里的 edge projection 和 suffix-DAG path-state intersection
+- 对 `SISO/get_polyhedra`，现在的策略是：exact mode 继续走 `NativePolyhedra`；float mode 则尽量让 path 构造阶段全程保留 cdd 对象，只在最终输出 path polyhedron 时再转回 Native。这样可以避免在大量 suffix states 上反复做 Native H-rep 相交和规约。
+- 这条桥接的目标是优先救回大例子的运行稳定性和速度，而不是把整个多面体 API 都重新切回外部后端。
+
 
 ## 11. 对开发者最有用的测试与示例
 

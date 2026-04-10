@@ -672,3 +672,16 @@ end
     @test summary_RO_path(pths; observe_x = 1, show_volume = false) === nothing
     @test first(show_expression_path(pths, 1, 1; log_space = false)) isa AbstractVector
 end
+
+@testset "SISO Exact Smoke" begin
+    N = [1 1 0 -1 0 0;
+         0 1 1 0 -1 0;
+         1 0 1 0 0 -1]
+    model = Bnc(N = N)
+    find_all_regimes!(model; mode = :exact)
+    pths = SISOPaths(model, 1)
+    polys = get_polyhedra(pths, 1:3)
+    @test length(polys) == 3
+    @test all(p -> p isa BindingAndCatalysis.Polyhedron, polys)
+    @test eltype(get_C0_qK(get_regime(model, 1))) == ExactLogExpr
+end

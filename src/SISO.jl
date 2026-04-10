@@ -123,6 +123,8 @@ function _ensure_edge_polyhedra!(grh::SISOPaths, edge_idxs::AbstractVector{<:Int
     end
     isempty(edge_idxs_to_calc) && return nothing
 
+    bn = get_binding_network(grh)
+    use_cdd = _can_use_cdd_fastpath(_affine_is_exact(bn))
     rgm_idxs = Int[]
     sizehint!(rgm_idxs, 2 * length(edge_idxs_to_calc))
     for edge_idx in edge_idxs_to_calc
@@ -137,8 +139,13 @@ function _ensure_edge_polyhedra!(grh::SISOPaths, edge_idxs::AbstractVector{<:Int
     @showprogress Threads.@threads for pos in eachindex(edge_idxs_to_calc)
         edge_idx = edge_idxs_to_calc[pos]
         u, v = grh.edge_keys[edge_idx]
-        p = intersect(grh.node_polys[u], grh.node_polys[v]; canonicalize=false)
-        grh.edge_polys[edge_idx] = eliminate(p, el_dim; canonicalize=false)
+        grh.edge_polys[edge_idx] =
+            if use_cdd
+                cdd_intersect_eliminate(grh.node_polys[u], grh.node_polys[v], el_dim; canonicalize=false)
+            else
+                p = intersect(grh.node_polys[u], grh.node_polys[v]; canonicalize=false)
+                eliminate(p, el_dim; canonicalize=false)
+            end
         grh.edge_polys_is_calc[edge_idx] = true
     end
 
@@ -150,11 +157,20 @@ function _build_path_polyhedron(
     path::AbstractVector{<:Integer},
     edge_idxs::AbstractVector{<:Integer},
 )::Polyhedron
+    use_cdd = _can_use_cdd_fastpath(_affine_is_exact(get_binding_network(grh)))
     if isempty(edge_idxs)
         _ensure_node_polyhedra!(grh, [Int(first(path))])
-        return eliminate(grh.node_polys[Int(first(path))], BitSet((grh.change_qK_idx,)); canonicalize=false) |> _clean_polyhedron!
+        return if use_cdd
+            cdd_eliminate(grh.node_polys[Int(first(path))], BitSet((grh.change_qK_idx,)); canonicalize=false)
+        else
+            eliminate(grh.node_polys[Int(first(path))], BitSet((grh.change_qK_idx,)); canonicalize=false) |> _clean_polyhedron!
+        end
     end
-    return intersect(grh.edge_polys[Int.(edge_idxs)]...; canonicalize=false) |> _clean_polyhedron!
+    return if use_cdd
+        cdd_intersect_many(grh.edge_polys[Int.(edge_idxs)]; canonicalize=false)
+    else
+        intersect(grh.edge_polys[Int.(edge_idxs)]...; canonicalize=false) |> _clean_polyhedron!
+    end
 end
 
 function _calc_polyhedra_for_paths_bulk_suffix_dag!(
@@ -163,6 +179,7 @@ function _calc_polyhedra_for_paths_bulk_suffix_dag!(
 )::Vector{Polyhedron}
     path_idxs = Int.(path_idxs)
     isempty(path_idxs) && return Polyhedron[]
+    use_cdd = _can_use_cdd_fastpath(_affine_is_exact(get_binding_network(grh)))
 
     edge_idxs = unique(vcat(grh.path_edge_idxs[path_idxs]...))
     _ensure_edge_polyhedra!(grh, edge_idxs)
@@ -224,6 +241,35 @@ function _calc_polyhedra_for_paths_bulk_suffix_dag!(
     end
 
     @info "Start building polyhedra for paths (total: $(length(path_idxs))) via suffix DAG with $(n_nodes) unique suffix states across $(max_depth + 1) layers"
+    if use_cdd
+        del_axes = sort!(collect(el_dim))
+        edge_cdd = Vector{Any}(undef, length(grh.edge_polys))
+        for edge_idx in edge_idxs
+            edge_cdd[edge_idx] = CddBridge._native_to_cdd(grh.edge_polys[edge_idx])
+        end
+        sink_cdd = Vector{Any}(undef, length(grh.node_polys))
+        for v in sink_vertices
+            sink_cdd[v] = PolyhedraExt.eliminate(CddBridge._native_to_cdd(grh.node_polys[v]), del_axes)
+        end
+
+        @showprogress dt=0.1 desc="Building polyhedra via suffix DAG" for depth in 0:max_depth
+            layer_nodes = nodes_by_depth[depth + 1]
+            isempty(layer_nodes) && continue
+            @info "Suffix DAG layer $(depth + 1)/$(max_depth + 1): $(length(layer_nodes)) states"
+
+            Threads.@threads for pos in eachindex(layer_nodes)
+                node = layer_nodes[pos]
+                poly_of[node] = if child_of[node] == 0
+                    sink_cdd[vertex_of[node]]
+                else
+                    Base.intersect(edge_cdd[edge_of[node]], poly_of[child_of[node]])
+                end
+                is_calc[node] = true
+            end
+        end
+        return [CddBridge._cdd_to_native(poly_of[node]; canonicalize=false) for node in path_nodes]
+    end
+
     @showprogress dt=0.1 desc="Building polyhedra via suffix DAG" for depth in 0:max_depth
         layer_nodes = nodes_by_depth[depth + 1]
         isempty(layer_nodes) && continue
@@ -257,6 +303,7 @@ function _calc_polyhedra_for_path(
 )::Vector{Union{Nothing, Polyhedron}}
 
     el_dim = BitSet((change_qK_idx,))
+    use_cdd = _can_use_cdd_fastpath(_affine_is_exact(model))
     #dict: node: polyhedron 
     node_polyhedra = let
                         unique_rgms = unique(vcat(paths...))
@@ -284,8 +331,13 @@ function _calc_polyhedra_for_path(
         @info "Start building polyhedra for edges (total: $(length(edges)))"
         @showprogress Threads.@threads  for i in eachindex(edges)
             (u, v) = edges[i]
-            p = intersect(node_polyhedra[u], node_polyhedra[v]; canonicalize=false)
-            edge_poly[i] = eliminate(p, el_dim; canonicalize=false)
+            edge_poly[i] =
+                if use_cdd
+                    cdd_intersect_eliminate(node_polyhedra[u], node_polyhedra[v], el_dim; canonicalize=false)
+                else
+                    p = intersect(node_polyhedra[u], node_polyhedra[v]; canonicalize=false)
+                    eliminate(p, el_dim; canonicalize=false)
+                end
         end
         edge_poly
     end

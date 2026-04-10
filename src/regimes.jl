@@ -41,6 +41,10 @@ function _affine_mapping_polyhedra(C,C0,M,M0)
     C_full = vcat(Eq, In)
     C0_full = vcat(M0, C0)
 
+    if !any(x -> x isa ExactLogExpr, C0_full)
+        return cdd_project_hrep(C_full, C0_full, n_qK, BitSet((n_qK + 1):(n_qK + n_x)))
+    end
+
     poly = get_polyhedron(C_full, C0_full, n_qK)
     poly_elim = eliminate(poly, BitSet((n_qK + 1):(n_qK + n_x)))
     return get_C_C0_nullity(poly_elim)

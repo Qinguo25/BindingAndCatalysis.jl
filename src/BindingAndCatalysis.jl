@@ -19,12 +19,16 @@ using DataStructures:Queue,enqueue!,dequeue!,isempty
 using NonlinearSolve
 using Statistics:quantile
 using Distributions:Uniform, Normal
+import CDDLib
+import Polyhedra as PolyhedraExt
 
 include(joinpath(@__DIR__, "ExactTypes.jl"))
 using .ExactTypes: ExactLogExpr, exact_log10, exact_log10_ratio
 
 include(joinpath(@__DIR__, "NativePolyhedra/NativePolyhedra.jl"))
 using .NativePolyhedra
+include(joinpath(@__DIR__, "CddBridge.jl"))
+using .CddBridge: cdd_intersect_eliminate, cdd_intersect_many, cdd_eliminate, cdd_project_hrep, _can_use_cdd_fastpath
 const Polyhedra = NativePolyhedra
 
 using Graphs
