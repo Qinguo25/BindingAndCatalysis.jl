@@ -31,11 +31,11 @@ function hrep(A::AbstractMatrix{<:Real}, b::AbstractVector{<:Real}, linset::BitS
     return HRep(sparse(TA.(A)), TB.(collect(b)), copy(linset))
 end
 
-hrep(poly::Polyhedron) = (_canonicalize!(poly); HRep(copy(poly.A), copy(poly.b), copy(poly.linset)))
+hrep(poly::Polyhedron) = (removehredundancy!(poly; strong=false); HRep(copy(poly.A), copy(poly.b), copy(poly.linset)))
 
-function polyhedron(rep::HRep, _backend=nothing)
+function polyhedron(rep::HRep, _backend=nothing; strong::Bool=false)
     poly = Polyhedron(copy(rep.A), copy(rep.b), copy(rep.linset), false, false)
-    removehredundancy!(poly)
+    removehredundancy!(poly; strong=strong)
     return poly
 end
 
@@ -364,6 +364,8 @@ function removehredundancy!(poly::Polyhedron; strong::Bool=true)
     poly.linset = rebuilt.linset
     poly.empty = false
     poly.normalized = true
+    _prune_equality_basis!(poly)
+    poly.normalized = true
 
     if strong && size(poly.A, 1) <= 128 && fulldim(poly) <= 12
         poly.normalized = false
@@ -476,11 +478,11 @@ function isempty(poly::Polyhedron)
     return false
 end
 
-dim(poly::Polyhedron) = (isempty(poly) ? -1 : (_canonicalize!(poly); fulldim(poly) - length(poly.linset)))
-hashyperplanes(poly::Polyhedron) = (_canonicalize!(poly); !isempty(poly.linset))
+dim(poly::Polyhedron) = (isempty(poly) ? -1 : (removehredundancy!(poly; strong=false); fulldim(poly) - length(poly.linset)))
+hashyperplanes(poly::Polyhedron) = (removehredundancy!(poly; strong=false); !isempty(poly.linset))
 
 function hyperplanes(poly::Polyhedron)
-    _canonicalize!(poly)
+    removehredundancy!(poly; strong=false)
     out = HyperPlane[]
     for i in sort!(collect(poly.linset))
         push!(out, HyperPlane(vec(Array(poly.A[i:i, :])), poly.b[i]))
@@ -488,8 +490,16 @@ function hyperplanes(poly::Polyhedron)
     return out
 end
 
+function hyperplanes(rep::HRep)
+    out = HyperPlane[]
+    for i in sort!(collect(rep.linset))
+        push!(out, HyperPlane(vec(Array(rep.A[i:i, :])), rep.b[i]))
+    end
+    return out
+end
+
 function allhalfspaces(rep::Union{HRep,Polyhedron})
-    rep isa Polyhedron && _canonicalize!(rep)
+    rep isa Polyhedron && removehredundancy!(rep; strong=false)
     out = HalfSpace[]
     for i in 1:size(rep.A, 1)
         i in rep.linset && continue

@@ -231,8 +231,8 @@ function _normalize_direction(v::AbstractVector)
     return collect(key)
 end
 
-function _split_constraints(poly::Polyhedron)
-    _canonicalize!(poly)
+function _split_constraints(poly::Polyhedron; strong::Bool=false)
+    removehredundancy!(poly; strong=strong)
     m = size(poly.A, 1)
     eq_idxs = sort!(collect(poly.linset))
     eq_mask = falses(m)
@@ -245,7 +245,7 @@ end
 
 function _enumerate_vertices(poly::Polyhedron; tol::Float64=1e-9)
     isempty(poly) && return Vector{Vector{Float64}}()
-    eq_idxs, ineq_idxs = _split_constraints(poly)
+    eq_idxs, ineq_idxs = _split_constraints(poly; strong=false)
     A = Matrix(poly.A)
     b = poly.b
     n = fulldim(poly)
@@ -297,7 +297,7 @@ function _solve_basis_vertex(A::AbstractMatrix, b::AbstractVector, basis_rows::V
 end
 
 function _find_start_basis(poly::Polyhedron; tol::Float64=1e-9)
-    eq_idxs, ineq_idxs = _split_constraints(poly)
+    eq_idxs, ineq_idxs = _split_constraints(poly; strong=false)
     A = Matrix(poly.A)
     b = poly.b
     n = fulldim(poly)
@@ -368,7 +368,7 @@ function _enumerate_pointed_generators_reverse_search(poly::Polyhedron; tol::Flo
     isnothing(start) && return nothing
 
     eq_basis, start_extra, _ = start
-    eq_idxs, ineq_idxs = _split_constraints(poly)
+    eq_idxs, ineq_idxs = _split_constraints(poly; strong=false)
     A = Matrix(poly.A)
     b = poly.b
     n = fulldim(poly)
@@ -487,7 +487,7 @@ function _enumerate_lineality(poly::Polyhedron; tol::Float64=1e-9)
 end
 
 function _ray_orientation(poly::Polyhedron, dir::AbstractVector; tol::Float64=1e-9)
-    eq_idxs, ineq_idxs = _split_constraints(poly)
+    eq_idxs, ineq_idxs = _split_constraints(poly; strong=false)
     A = poly.A
     for i in eq_idxs
         viol = Float64(_generic_dot(A[i, :], dir))
@@ -505,7 +505,7 @@ end
 
 function _enumerate_rays(poly::Polyhedron; tol::Float64=1e-9)
     isempty(poly) && return Vector{Vector{Float64}}()
-    eq_idxs, ineq_idxs = _split_constraints(poly)
+    eq_idxs, ineq_idxs = _split_constraints(poly; strong=false)
     A = Matrix(poly.A)
     n = fulldim(poly)
     rank_eq = isempty(eq_idxs) ? 0 : _matrix_rank(A[eq_idxs, :]; tol=tol)
@@ -593,7 +593,7 @@ function _vrep_dim(rep::VRep)
 end
 
 function vrep(poly::Polyhedron; tol::Float64=1e-9)
-    _canonicalize!(poly)
+    removehredundancy!(poly; strong=false)
     haskey(_VREP_CACHE, poly) && return _VREP_CACHE[poly]
     if isempty(poly)
         rep = VRep()
@@ -755,7 +755,7 @@ end
 hrep(rep::VRep) = hrep(polyhedron(rep))
 
 function _dual_normalization_polyhedron(poly::Polyhedron, del_axes::Vector{Int})
-    eq_idxs, ineq_idxs = _split_constraints(poly)
+    eq_idxs, ineq_idxs = _split_constraints(poly; strong=false)
     A = Matrix(poly.A)
     n_del = length(del_axes)
     Aineq_del = isempty(ineq_idxs) ? zeros(eltype(A), 0, n_del) : A[ineq_idxs, del_axes]
@@ -809,7 +809,7 @@ function _dual_normalization_polyhedron(poly::Polyhedron, del_axes::Vector{Int})
 end
 
 function _projected_constraint_from_dual_point(poly::Polyhedron, del_axes::Vector{Int}, u::AbstractVector)
-    eq_idxs, ineq_idxs = _split_constraints(poly)
+    eq_idxs, ineq_idxs = _split_constraints(poly; strong=false)
     A = Matrix(poly.A)
     b = poly.b
     keep_axes = [j for j in 1:fulldim(poly) if !(j in del_axes)]

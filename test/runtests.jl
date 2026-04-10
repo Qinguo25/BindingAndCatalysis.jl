@@ -822,21 +822,29 @@ end
     @test same_polyhedron(sampleh5_poly, NP.polyhedron(sampleh5_v))
 
     sampleh6_poly, _ = _polyhedron_from_polyhedra_file("src/cddlib-master/examples/sampleh6.ine")
+    NP.removehredundancy!(sampleh6_poly)
     @test NP.dim(sampleh6_poly) == 1
     @test length(NP.hyperplanes(sampleh6_poly)) == 2
     @test size(NP.hrep(sampleh6_poly).A, 1) == 4
 
     sampleh7_poly, _ = _polyhedron_from_polyhedra_file("src/cddlib-master/examples/sampleh7.ine")
+    NP.removehredundancy!(sampleh7_poly)
     @test size(NP.hrep(sampleh7_poly).A, 1) == 5
 
+    project_poly, project_parsed = _polyhedron_from_polyhedra_file("src/cddlib-master/examples/project1.ine")
+    project_expected, _ = _polyhedron_from_polyhedra_file("src/cddlib-master/examples/project1res.ine")
+    project_axes = _project_axes_from_option(project_parsed, NP.fulldim(project_poly))
+    project_fourier = NP.eliminate(project_poly, project_axes; method = :fourier)
+    project_block = NP.eliminate(project_poly, project_axes; method = :block)
+    @test same_polyhedron(project_expected, project_fourier)
+    @test same_polyhedron(project_expected, project_block)
+
     if get(ENV, "BNC_RUN_HEAVY_POLY_TESTS", "0") == "1"
-        project_poly, project_parsed = _polyhedron_from_polyhedra_file("src/cddlib-master/examples/project1.ine")
-        project_expected, _ = _polyhedron_from_polyhedra_file("src/cddlib-master/examples/project1res.ine")
-        project_axes = _project_axes_from_option(project_parsed, NP.fulldim(project_poly))
-        project_fourier = NP.eliminate(project_poly, project_axes; method = :fourier)
-        project_block = NP.eliminate(project_poly, project_axes; method = :block)
-        @test same_polyhedron(project_expected, project_fourier)
-        @test same_polyhedron(project_expected, project_block)
+        project2_poly, project2_parsed = _polyhedron_from_polyhedra_file("src/cddlib-master/examples/project2.ine")
+        project2_expected, _ = _polyhedron_from_polyhedra_file("src/cddlib-master/examples/project2res.ine")
+        project2_axes = _project_axes_from_option(project2_parsed, NP.fulldim(project2_poly))
+        project2_block = NP.eliminate(project2_poly, project2_axes; method = :block)
+        @test same_polyhedron(project2_expected, project2_block)
     end
 
     bug_poly, _ = _polyhedron_from_polyhedra_file("src/cddlib-master/examples/bug45.ine")

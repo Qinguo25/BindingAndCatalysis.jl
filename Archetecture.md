@@ -869,9 +869,11 @@ regular 情况下很多东西可直接通过矩阵逆得到；singular 情况下
 这里有两个实现细节要记住：
 
 - `Polyhedron` 现在带有 `normalized` 标志。很多内部路径会先做未 canonicalize 的 `intersect/eliminate`，最后再统一 `removehredundancy!`，这是为了避免 `SISO/get_polyhedra` 在路径构造时反复做昂贵清理。
+- `polyhedron(hrep(...))` 默认只做 light normalization，不会在构造时立刻跑完整 strong H-reduction。真正昂贵的 LP-based redundancy / implied-equality pass 只在显式 `removehredundancy!` 时触发。
 - `removehredundancy!` 不再只是删显式重复行。当前实现会先做符号级 dedup，再在中小规模 H-rep 上跑 LP-based redundancy / implied-equality pass，并对 equality 只保留一个独立 basis。
 - 多变量消元 `eliminate(poly, axes)` 默认会优先走 block elimination；单变量消元仍然走 Fourier elimination。
 - `vrep(poly)` 对 pointed 部分不再只靠全组合枚举 active-set；现在会先找一个起始 basis，再沿 basis 邻接关系遍历 generators。lineality 非空时，会先做 quotient，再在 quotient polyhedron 上做同样的 pointed 遍历。
+- `same_polyhedron` 现在先比较 H-rep canonical signature；只有签名不一致时才回退到 generator / LP 子集检查。这样 `project1` 这类 reference projection 的验证成本会显著降低，主要时间重新落回真实的 elimination 上。
 
 和 cdd/lrs 的概念对应关系大致是：
 
@@ -886,7 +888,7 @@ regular 情况下很多东西可直接通过矩阵逆得到；singular 情况下
 
 - [test/runtests.jl](/home/joker/Realizibility_index/BindingAndCatalysis.jl/test/runtests.jl)
   现在是最可靠的程序化回归入口，覆盖 binding、catalysis、mixed regime、notebook 的主流程，以及本地 `cddlib-master/examples` / `lrslib-main` 的一组 H/V/reference examples。
-  `project1` 这类更重的 projection regression 默认不跑；需要时可以用环境变量 `BNC_RUN_HEAVY_POLY_TESTS=1` 打开。
+  `project1` 现在纳入默认 regression；`project2` 这类更重的 projection regression 仍然通过环境变量 `BNC_RUN_HEAVY_POLY_TESTS=1` 打开。
 
 - [Examples/Minimal_example.ipynb](/home/joker/Realizibility_index/BindingAndCatalysis.jl/Examples/Minimal_example.ipynb)
   最适合交互式学习。
