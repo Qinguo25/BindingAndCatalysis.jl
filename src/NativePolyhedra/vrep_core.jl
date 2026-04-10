@@ -233,21 +233,16 @@ end
 
 function _split_constraints(poly::Polyhedron; strong::Bool=false)
     removehredundancy!(poly; strong=strong)
-    m = size(poly.A, 1)
-    eq_idxs = sort!(collect(poly.linset))
-    eq_mask = falses(m)
-    for i in eq_idxs
-        eq_mask[i] = true
-    end
-    ineq_idxs = [i for i in 1:m if !eq_mask[i]]
+    eq_idxs = _equality_indices(poly)
+    ineq_idxs = _inequality_indices(poly)
     return eq_idxs, ineq_idxs
 end
 
 function _enumerate_vertices(poly::Polyhedron; tol::Float64=1e-9)
     isempty(poly) && return Vector{Vector{Float64}}()
     eq_idxs, ineq_idxs = _split_constraints(poly; strong=false)
-    A = Matrix(poly.A)
-    b = poly.b
+    A = _constraint_dense_matrix(poly)
+    b = _constraint_rhs_vector(poly)
     n = fulldim(poly)
     rank_eq = isempty(eq_idxs) ? 0 : _matrix_rank(A[eq_idxs, :]; tol=tol)
     needed = n - rank_eq
@@ -298,8 +293,8 @@ end
 
 function _find_start_basis(poly::Polyhedron; tol::Float64=1e-9)
     eq_idxs, ineq_idxs = _split_constraints(poly; strong=false)
-    A = Matrix(poly.A)
-    b = poly.b
+    A = _constraint_dense_matrix(poly)
+    b = _constraint_rhs_vector(poly)
     n = fulldim(poly)
     eq_basis = _independent_row_subset(A, eq_idxs; tol=tol)
     extra_needed = n - length(eq_basis)
@@ -356,7 +351,7 @@ function _basis_edge_direction(
     dirs = _nullspace_basis(A[keep_rows, :]; tol=tol)
     length(dirs) == 1 || return nothing
     dir = collect(dirs[1])
-    coeff = _generic_dot(poly.A[leaving_row, :], dir)
+    coeff = _constraint_dot(poly.halfspaces[leaving_row], dir)
     abs(Float64(coeff)) <= tol && return nothing
     Float64(coeff) > 0 && (dir = -dir)
     return dir
@@ -369,8 +364,8 @@ function _enumerate_pointed_generators_reverse_search(poly::Polyhedron; tol::Flo
 
     eq_basis, start_extra, _ = start
     eq_idxs, ineq_idxs = _split_constraints(poly; strong=false)
-    A = Matrix(poly.A)
-    b = poly.b
+    A = _constraint_dense_matrix(poly)
+    b = _constraint_rhs_vector(poly)
     n = fulldim(poly)
 
     points_out = Vector{Vector}()
@@ -408,10 +403,11 @@ function _enumerate_pointed_generators_reverse_search(poly::Polyhedron; tol::Flo
             tmin = Inf
             for idx in ineq_idxs
                 idx in extra_set && continue
-                ajd = _generic_dot(poly.A[idx, :], dir)
+                hs = poly.halfspaces[idx]
+                ajd = _constraint_dot(hs, dir)
                 ajd_f = Float64(ajd)
                 ajd_f > tol || continue
-                slack = b[idx] - _generic_dot(poly.A[idx, :], x)
+                slack = _constraint_rhs(hs) - _constraint_dot(hs, x)
                 slack_f = Float64(slack)
                 slack_f >= -tol || continue
                 t = slack_f / ajd_f
@@ -473,7 +469,7 @@ end
 
 function _enumerate_lineality(poly::Polyhedron; tol::Float64=1e-9)
     isempty(poly) && return Vector{Vector{Float64}}()
-    Aall = Matrix(poly.A)
+    Aall = _constraint_dense_matrix(poly)
     dirs = _nullspace_basis(Aall; tol=tol)
     out = Vector{Vector}()
     seen = Set{Any}()
@@ -488,15 +484,14 @@ end
 
 function _ray_orientation(poly::Polyhedron, dir::AbstractVector; tol::Float64=1e-9)
     eq_idxs, ineq_idxs = _split_constraints(poly; strong=false)
-    A = poly.A
     for i in eq_idxs
-        viol = Float64(_generic_dot(A[i, :], dir))
+        viol = Float64(_constraint_dot(poly.halfspaces[i], dir))
         abs(viol) <= tol || return nothing
     end
     vals = Float64[]
     sizehint!(vals, length(ineq_idxs))
     for i in ineq_idxs
-        push!(vals, Float64(_generic_dot(A[i, :], dir)))
+        push!(vals, Float64(_constraint_dot(poly.halfspaces[i], dir)))
     end
     all(v -> v <= tol, vals) || return all(v -> v >= -tol, vals) ? -collect(dir) : nothing
     any(v -> v < -tol, vals) || return nothing
@@ -506,7 +501,7 @@ end
 function _enumerate_rays(poly::Polyhedron; tol::Float64=1e-9)
     isempty(poly) && return Vector{Vector{Float64}}()
     eq_idxs, ineq_idxs = _split_constraints(poly; strong=false)
-    A = Matrix(poly.A)
+    A = _constraint_dense_matrix(poly)
     n = fulldim(poly)
     rank_eq = isempty(eq_idxs) ? 0 : _matrix_rank(A[eq_idxs, :]; tol=tol)
     needed = n - 1 - rank_eq
@@ -620,12 +615,13 @@ function vrep(poly::Polyhedron; tol::Float64=1e-9)
         return rep
     end
 
-    Aall = Matrix(poly.A)
+    eq_idxs, _ = _split_constraints(poly; strong=false)
+    Aall = _constraint_dense_matrix(poly)
     Q = _rowspace_basis_matrix(Aall; tol=tol)
     k = size(Q, 2)
     anchor =
-        if all(iszero, poly.b)
-            T = eltype(poly.b)
+        if all(h -> iszero(_constraint_rhs(h)), poly.halfspaces)
+            T = _rhs_type(poly)
             T[zero(T) for _ in 1:fulldim(poly)]
         else
             feasible_point(poly)
@@ -633,8 +629,10 @@ function vrep(poly::Polyhedron; tol::Float64=1e-9)
     isnothing(anchor) && return VRep()
 
     Aq = Aall * Q
-    bq = poly.b .- Aall * anchor
-    poly_q = polyhedron(hrep(Aq, bq, copy(poly.linset)))
+    bq_raw = _constraint_rhs_vector(poly) .- Aall * anchor
+    Tq = isempty(bq_raw) ? Int : foldl(promote_type, (typeof(x) for x in bq_raw); init=eltype(Aq))
+    bq = Tq[x for x in bq_raw]
+    poly_q = polyhedron(hrep(Aq, bq, BitSet(eq_idxs)))
     gens_q = _enumerate_pointed_generators_reverse_search(poly_q; tol=tol)
     if isnothing(gens_q)
         pts_q = _enumerate_vertices(poly_q; tol=tol)
@@ -696,9 +694,11 @@ function _dual_polyhedron_from_vrep(rep::VRep)
     Btype = isempty(bs) ? Int : foldl(promote_type, map(typeof, bs); init=Int)
     rows_typed = SparseVector{Atype,Int}[SparseVector{Atype,Int}(r) for r in rows]
     bs_typed = Btype[b for b in bs]
-    A = _rebuild_polyhedron(rows_typed, bs_typed, linrows, d + 1, false).A
-    linset = BitSet(findall(identity, linrows))
-    return polyhedron(hrep(-A, fill(zero(Btype), length(bs_typed)), linset))
+    halfspaces = HalfSpace{Atype,Btype}[]
+    for i in eachindex(rows_typed)
+        push!(halfspaces, HalfSpace(HyperPlane(-collect(rows_typed[i]), zero(Btype)), linrows[i] ? 0 : 1))
+    end
+    return polyhedron(HRep{Atype,Btype}(halfspaces, d + 1))
 end
 
 function _hrep_from_dual_vrep(rep::VRep)
@@ -734,9 +734,11 @@ function _hrep_from_dual_vrep(rep::VRep)
     Btype = foldl(promote_type, map(typeof, bs); init=Int)
     rows_typed = SparseVector{Atype,Int}[SparseVector{Atype,Int}(r) for r in rows]
     bs_typed = Btype[b for b in bs]
-    A = _rebuild_polyhedron(rows_typed, bs_typed, linrows, d, false).A
-    linset = BitSet(findall(identity, linrows))
-    return hrep(A, bs_typed, linset)
+    halfspaces = HalfSpace{Atype,Btype}[]
+    for i in eachindex(rows_typed)
+        push!(halfspaces, HalfSpace(HyperPlane(collect(rows_typed[i]), bs_typed[i]), linrows[i] ? 0 : 1))
+    end
+    return HRep{Atype,Btype}(halfspaces, d)
 end
 
 function polyhedron(rep::VRep, _backend=nothing)
@@ -756,7 +758,7 @@ hrep(rep::VRep) = hrep(polyhedron(rep))
 
 function _dual_normalization_polyhedron(poly::Polyhedron, del_axes::Vector{Int})
     eq_idxs, ineq_idxs = _split_constraints(poly; strong=false)
-    A = Matrix(poly.A)
+    A = _constraint_dense_matrix(poly)
     n_del = length(del_axes)
     Aineq_del = isempty(ineq_idxs) ? zeros(eltype(A), 0, n_del) : A[ineq_idxs, del_axes]
     Aeq_del = isempty(eq_idxs) ? zeros(eltype(A), 0, n_del) : A[eq_idxs, del_axes]
@@ -810,8 +812,8 @@ end
 
 function _projected_constraint_from_dual_point(poly::Polyhedron, del_axes::Vector{Int}, u::AbstractVector)
     eq_idxs, ineq_idxs = _split_constraints(poly; strong=false)
-    A = Matrix(poly.A)
-    b = poly.b
+    A = _constraint_dense_matrix(poly)
+    b = _constraint_rhs_vector(poly)
     keep_axes = [j for j in 1:fulldim(poly) if !(j in del_axes)]
 
     n_ineq = length(ineq_idxs)

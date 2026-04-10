@@ -868,6 +868,15 @@ regular 情况下很多东西可直接通过矩阵逆得到；singular 情况下
 
 这里有两个实现细节要记住：
 
+- `HyperPlane` 仍然是基础几何对象：`a, β` 表示超平面 `dot(a, x) = β`。
+- `HalfSpace` 不再直接存 `a, β`，而是存 `p::HyperPlane` 加 `sign::Int8`。约定是：
+  `sign = 1` 表示 `dot(p.a, x) <= p.β`，
+  `sign = -1` 表示 `dot(p.a, x) >= p.β`，
+  `sign = 0` 表示 equality。
+- `HRep` 和 `Polyhedron` 现在的主存都是 `Vector{HalfSpace}`，并单独记录 ambient dimension；不再把 `A/b/linset` 作为主数据存进 struct。
+- 当前为了兼容外部调用和少量遗留接口，`HRep` / `Polyhedron` 还保留了按需展开的 `A` / `b` / `linset` 访问层。它们现在是由 `Vector{HalfSpace}` 动态导出的矩阵视图，而不是主存。
+- `NativePolyhedra` 内部的主路径已经尽量改成直接读 `halfspaces`：H-rep normalization、相交、成员测试、Fourier elimination、reverse-search 的 blocker/约束扫描、以及 dual/block elimination 的约束装配都不再把 `A/b/linset` 当作内部主表示；只有 rank/nullspace/QR 这类线性代数步骤才会临时 materialize 矩阵。
+
 - `Polyhedron` 现在带有 `normalized` 标志。很多内部路径会先做未 canonicalize 的 `intersect/eliminate`，最后再统一 `removehredundancy!`，这是为了避免 `SISO/get_polyhedra` 在路径构造时反复做昂贵清理。
 - `polyhedron(hrep(...))` 默认只做 light normalization，不会在构造时立刻跑完整 strong H-reduction。真正昂贵的 LP-based redundancy / implied-equality pass 只在显式 `removehredundancy!` 时触发。
 - `removehredundancy!` 不再只是删显式重复行。当前实现会先做符号级 dedup，再在中小规模 H-rep 上跑 LP-based redundancy / implied-equality pass，并对 equality 只保留一个独立 basis。

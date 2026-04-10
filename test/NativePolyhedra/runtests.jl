@@ -141,8 +141,12 @@ end
     )
     @test rep_raw isa NP.HRep
     @test rep_raw isa NP.MixedMatHRep
+    @test fieldnames(typeof(rep_raw)) == (:halfspaces, :ambient_dim)
+    @test fieldnames(NP.HalfSpace) == (:p, :sign)
+    @test fieldnames(NP.HyperPlane) == (:a, :β)
 
     poly_raw = NP.Polyhedron(copy(rep_raw.A), copy(rep_raw.b), copy(rep_raw.linset), false, false)
+    @test fieldnames(typeof(poly_raw)) == (:halfspaces, :ambient_dim, :empty, :normalized)
     NP.detecthlinearity!(poly_raw)
     NP.removehredundancy!(poly_raw)
     @test poly_raw isa NP.Polyhedron
