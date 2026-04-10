@@ -20,6 +20,9 @@ using NonlinearSolve
 using Statistics:quantile
 using Distributions:Uniform, Normal
 
+include(joinpath(@__DIR__, "ExactTypes.jl"))
+using .ExactTypes: ExactLogExpr, exact_log10, exact_log10_ratio
+
 include(joinpath(@__DIR__, "NativePolyhedra/NativePolyhedra.jl"))
 using .NativePolyhedra
 const Polyhedra = NativePolyhedra

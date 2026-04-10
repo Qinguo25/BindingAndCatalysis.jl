@@ -5,6 +5,7 @@ using SparseArrays
 using JuMP
 import Clarabel
 import MathOptInterface as MOI
+using ..ExactTypes: ExactLogExpr, exact_log10, exact_log10_ratio
 
 import Base: +, -, *, /, ==, hash, show, zero, iszero, convert, promote_rule, Float64, BigFloat, isless, ^, isempty, in, intersect, issubset, float, abs, abs2, real, conj, <, <=, >, >=
 
@@ -17,7 +18,6 @@ export feasible_point, interior_point
 
 _invalidate_vrep_cache!(x) = nothing
 
-include("exact_types.jl")
 include("polyhedra_core.jl")
 include("vrep_core.jl")
 

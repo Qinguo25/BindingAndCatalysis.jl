@@ -857,10 +857,10 @@ regular 情况下很多东西可直接通过矩阵逆得到；singular 情况下
 
 ### 10.9 `NativePolyhedra` 现在是项目内后端
 
-当前多面体后端在 [src/NativePolyhedra/NativePolyhedra.jl](/home/joker/Realizibility_index/BindingAndCatalysis.jl/src/NativePolyhedra/NativePolyhedra.jl)，分成 3 层：
+当前多面体后端在 [src/NativePolyhedra/NativePolyhedra.jl](/home/joker/Realizibility_index/BindingAndCatalysis.jl/src/NativePolyhedra/NativePolyhedra.jl)，exact 类型与多面体算法现在已经拆开：
 
-- [exact_types.jl](/home/joker/Realizibility_index/BindingAndCatalysis.jl/src/NativePolyhedra/exact_types.jl)
-  `ExactLogExpr` 以及 exact-log 常数运算
+- [ExactTypes.jl](/home/joker/Realizibility_index/BindingAndCatalysis.jl/src/ExactTypes.jl)
+  `ExactLogExpr` 以及 exact-log 常数运算；这是共享模块，不再放在 `NativePolyhedra/` 文件夹内
 - [polyhedra_core.jl](/home/joker/Realizibility_index/BindingAndCatalysis.jl/src/NativePolyhedra/polyhedra_core.jl)
   H-representation、相交、linearity/redundancy 清理、implicit-equality 检测、Fourier elimination、LP-based feasibility
 - [vrep_core.jl](/home/joker/Realizibility_index/BindingAndCatalysis.jl/src/NativePolyhedra/vrep_core.jl)
@@ -887,7 +887,10 @@ regular 情况下很多东西可直接通过矩阵逆得到；singular 情况下
 ## 11. 对开发者最有用的测试与示例
 
 - [test/runtests.jl](/home/joker/Realizibility_index/BindingAndCatalysis.jl/test/runtests.jl)
-  现在是最可靠的程序化回归入口，覆盖 binding、catalysis、mixed regime、notebook 的主流程，以及本地 `cddlib-master/examples` / `lrslib-main` 的一组 H/V/reference examples。
+  主包的程序化回归入口，覆盖 binding、catalysis、mixed regime、notebook 等主流程。
+
+- [test/NativePolyhedra/runtests.jl](/home/joker/Realizibility_index/BindingAndCatalysis.jl/test/NativePolyhedra/runtests.jl)
+  `NativePolyhedra` 的独立算法回归，包含 core API smoke 和本地 `cddlib-master/examples` / `lrslib-main` 的 H/V/reference examples。
   `project1` 现在纳入默认 regression；`project2` 这类更重的 projection regression 仍然通过环境变量 `BNC_RUN_HEAVY_POLY_TESTS=1` 打开。
 
 - [Examples/Minimal_example.ipynb](/home/joker/Realizibility_index/BindingAndCatalysis.jl/Examples/Minimal_example.ipynb)

@@ -1,3 +1,9 @@
+module ExactTypes
+
+import Base: +, -, *, /, ==, hash, show, zero, iszero, convert, promote_rule, Float64, BigFloat, isless, ^, float, abs, abs2, real, conj, <, <=, >, >=
+
+export ExactLogExpr, exact_log10, exact_log10_ratio
+
 struct ExactLogExpr <: Real
     constant::Rational{Int}
     coeffs::Dict{Int,Rational{Int}}
@@ -166,4 +172,6 @@ function show(io::IO, x::ExactLogExpr)
         end
     end
     print(io, out)
+end
+
 end
