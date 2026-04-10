@@ -57,7 +57,10 @@ function _ensure_paths_dict!(grh::SISOPaths)
     return grh.paths_dict
 end
 
-_clean_polyhedron!(p::Polyhedron) = (removehredundancy!(p); p)
+# For SISO path conditions we only need a canonical H-rep, not an LP-minimal one.
+# Using the light pass here matches cddlib's "canonicalize after projection" style
+# much better than running a full LP-based strong reduction on every path.
+_clean_polyhedron!(p::Polyhedron) = (removehredundancy!(p; strong=false); p)
 
 function _build_path_edge_index(rgm_paths::AbstractVector{<:AbstractVector{<:Integer}})
     total_refs = sum(max(length(path) - 1, 0) for path in rgm_paths)
@@ -88,10 +91,26 @@ end
 
 function _ensure_node_polyhedra!(grh::SISOPaths, rgm_idxs::AbstractVector{<:Integer})
     bn = get_binding_network(grh)
-    for idx in unique(Int.(rgm_idxs))
+    regimes = _bind_regimes_data(bn)
+    unique_idxs = unique(Int.(rgm_idxs))
+
+    function build_one!(idx::Int)
         if !grh.node_polys_is_calc[idx]
-            grh.node_polys[idx] = get_polyhedron(bn, idx)
+            rgm = regimes[idx]
+            _materialize_qK_conditions!(rgm)
+            grh.node_polys[idx] = get_polyhedron(rgm.C_qK, rgm.C0_qK, rgm.nullity; canonicalize=false)
             grh.node_polys_is_calc[idx] = true
+        end
+        return nothing
+    end
+
+    if Threads.nthreads() == 1
+        for idx in unique_idxs
+            build_one!(idx)
+        end
+    else
+        Threads.@threads for pos in eachindex(unique_idxs)
+            build_one!(unique_idxs[pos])
         end
     end
     return nothing
@@ -118,7 +137,7 @@ function _ensure_edge_polyhedra!(grh::SISOPaths, edge_idxs::AbstractVector{<:Int
     @showprogress Threads.@threads for pos in eachindex(edge_idxs_to_calc)
         edge_idx = edge_idxs_to_calc[pos]
         u, v = grh.edge_keys[edge_idx]
-        p = intersect(grh.node_polys[u], grh.node_polys[v])
+        p = intersect(grh.node_polys[u], grh.node_polys[v]; canonicalize=false)
         grh.edge_polys[edge_idx] = eliminate(p, el_dim; canonicalize=false)
         grh.edge_polys_is_calc[edge_idx] = true
     end

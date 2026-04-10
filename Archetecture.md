@@ -878,11 +878,13 @@ regular 情况下很多东西可直接通过矩阵逆得到；singular 情况下
 - `NativePolyhedra` 内部的主路径已经尽量改成直接读 `halfspaces`：H-rep normalization、相交、成员测试、Fourier elimination、reverse-search 的 blocker/约束扫描、以及 dual/block elimination 的约束装配都不再把 `A/b/linset` 当作内部主表示；只有 rank/nullspace/QR 这类线性代数步骤才会临时 materialize 矩阵。
 
 - `Polyhedron` 现在带有 `normalized` 标志。很多内部路径会先做未 canonicalize 的 `intersect/eliminate`，最后再统一 `removehredundancy!`，这是为了避免 `SISO/get_polyhedra` 在路径构造时反复做昂贵清理。
+- `NativePolyhedra` 现在在 `_stack_polyhedra` 和单变量 Fourier elimination 的非 canonicalize 路径上，也会先做一层 cheap dedup / zero-row pruning。这个层级对应 cdd 里常见的 sorted-unique / matrix-canonicalize 思路，用来避免把明显重复的 H-rep 继续向下游传播。
 - `polyhedron(hrep(...))` 默认只做 light normalization，不会在构造时立刻跑完整 strong H-reduction。真正昂贵的 LP-based redundancy / implied-equality pass 只在显式 `removehredundancy!` 时触发。
 - `removehredundancy!` 不再只是删显式重复行。当前实现会先做符号级 dedup，再在中小规模 H-rep 上跑 LP-based redundancy / implied-equality pass，并对 equality 只保留一个独立 basis。
 - 多变量消元 `eliminate(poly, axes)` 默认会优先走 block elimination；单变量消元仍然走 Fourier elimination。
 - `vrep(poly)` 对 pointed 部分不再只靠全组合枚举 active-set；现在会先找一个起始 basis，再沿 basis 邻接关系遍历 generators。lineality 非空时，会先做 quotient，再在 quotient polyhedron 上做同样的 pointed 遍历。
 - `same_polyhedron` 现在先比较 H-rep canonical signature；只有签名不一致时才回退到 generator / LP 子集检查。这样 `project1` 这类 reference projection 的验证成本会显著降低，主要时间重新落回真实的 elimination 上。
+- `SISO/get_polyhedra` 的热点已经从 path-suffix DAG 本身转移到 node polyhedron 的 qK 条件 materialization。当前实现里 `_ensure_node_polyhedra!` 会直接批量 materialize 所需 regime 的 `C_qK/C0_qK`，并在 `Threads.nthreads() > 1` 时并行构造 node polyhedra；单线程时则退回串行，避免额外调度开销。
 
 和 cdd/lrs 的概念对应关系大致是：
 

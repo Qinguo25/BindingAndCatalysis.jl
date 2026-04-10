@@ -441,6 +441,57 @@ function _violates_zero_row(is_eq::Bool, β)
     return is_eq ? abs(rhs) > 1e-9 : rhs < -1e-9
 end
 
+function _light_reduce_halfspaces(
+    halfspaces::AbstractVector{<:HalfSpace},
+    nvars::Int,
+)
+    eq_halfspaces = HalfSpace[]
+    ineq_halfspaces = HalfSpace[]
+    eq_seen = Set{Any}()
+    ineq_seen = Set{Any}()
+
+    for hs in halfspaces
+        idxs, _ = _constraint_entries(hs)
+        is_eq = _isequality(hs)
+        if isempty(idxs)
+            if _violates_zero_row(is_eq, _constraint_rhs(hs))
+                return nothing
+            end
+            continue
+        end
+
+        sig = _constraint_signature(hs)
+        key = is_eq ? _unsigned_signature(sig) : sig
+        target = is_eq ? eq_seen : ineq_seen
+        key in target && continue
+        push!(target, key)
+
+        if is_eq
+            push!(eq_halfspaces, HalfSpace(HyperPlane(_constraint_vector(hs), _constraint_rhs(hs)), 0))
+        else
+            push!(ineq_halfspaces, _copy_halfspace(hs))
+        end
+    end
+
+    return Polyhedron(vcat(eq_halfspaces, ineq_halfspaces), nvars, false, false)
+end
+
+function _light_reduce_polyhedron!(poly::Polyhedron)
+    reduced = _light_reduce_halfspaces(poly.halfspaces, fulldim(poly))
+    if isnothing(reduced)
+        rebuilt = Polyhedron(HalfSpace[], fulldim(poly), true, true)
+        _replace_polyhedron!(poly, rebuilt)
+        poly.empty = true
+        poly.normalized = true
+        return poly
+    end
+
+    _replace_polyhedron!(poly, reduced)
+    poly.empty = false
+    poly.normalized = false
+    return poly
+end
+
 function _row_dense(poly::Polyhedron, i::Int)
     return _constraint_vector(poly.halfspaces[i])
 end
@@ -544,38 +595,13 @@ function removehredundancy!(poly::Polyhedron; strong::Bool=true)
     _invalidate_vrep_cache!(poly)
     detecthlinearity!(poly)
 
-    nrows = _nconstraints(poly)
     nvars = fulldim(poly)
-    eq_halfspaces = HalfSpace[]
-    ineq_halfspaces = HalfSpace[]
-    eq_seen = Set{Any}()
-    ineq_seen = Set{Any}()
-
-    for i in 1:nrows
-        hs = poly.halfspaces[i]
-        idxs, vals = _constraint_entries(hs)
-        is_eq = _isequality(hs)
-        if isempty(idxs)
-            if _violates_zero_row(is_eq, _constraint_rhs(hs))
-                poly.empty = true
-                return poly
-            end
-            continue
-        end
-
-        sig = _constraint_signature(hs)
-        key = is_eq ? _unsigned_signature(sig) : sig
-        target = is_eq ? eq_seen : ineq_seen
-        key in target && continue
-        push!(target, key)
-        if is_eq
-            push!(eq_halfspaces, HalfSpace(HyperPlane(_constraint_vector(hs), _constraint_rhs(hs)), 0))
-        else
-            push!(ineq_halfspaces, _copy_halfspace(hs))
-        end
+    rebuilt = _light_reduce_halfspaces(poly.halfspaces, nvars)
+    if isnothing(rebuilt)
+        poly.empty = true
+        return poly
     end
-
-    rebuilt = Polyhedron(vcat(eq_halfspaces, ineq_halfspaces), nvars, false, true)
+    rebuilt.normalized = true
     _replace_polyhedron!(poly, rebuilt)
     poly.empty = false
     poly.normalized = true
@@ -742,7 +768,8 @@ function _stack_polyhedra(polys::AbstractVector{<:Polyhedron}; canonicalize::Boo
         append!(halfspaces, (_typed_halfspace(Atype, Btype, h) for h in poly.halfspaces))
     end
 
-    poly_new = Polyhedron(halfspaces, nvars, false, false)
+    poly_new = _light_reduce_halfspaces(halfspaces, nvars)
+    isnothing(poly_new) && return Polyhedron(HalfSpace[], nvars, true, true)
     canonicalize && removehredundancy!(poly_new)
     return poly_new
 end
@@ -869,7 +896,11 @@ function _eliminate_one(poly::Polyhedron, axis::Int; canonicalize::Bool=true)
     rows_typed = SparseVector{Atype,Int}[SparseVector{Atype,Int}(r) for r in out_rows]
     bs_typed = Btype[b for b in out_bs]
     poly_new = _rebuild_polyhedron(rows_typed, bs_typed, falses(length(rows_typed)), fulldim(poly) - 1, false)
-    canonicalize && removehredundancy!(poly_new)
+    if canonicalize
+        removehredundancy!(poly_new)
+    else
+        _light_reduce_polyhedron!(poly_new)
+    end
     return poly_new
 end
 

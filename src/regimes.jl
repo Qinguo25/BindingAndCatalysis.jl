@@ -994,15 +994,20 @@ get_nullity(poly::Polyhedron,args...;kwargs...) = get_C_C0_nullity(poly::Polyhed
 
 Construct a polyhedron from inequality constraints in qK space.
 """
-function get_polyhedron(C::AbstractMatrix{<:Real}, C0::AbstractVector{<:Real}, nullity::Integer=0)::Polyhedron 
+function get_polyhedron(
+    C::AbstractMatrix{<:Real},
+    C0::AbstractVector{<:Real},
+    nullity::Integer=0;
+    canonicalize::Bool=true,
+)::Polyhedron
     Csp = sparse(C)
     C0v = vec(copy(C0))
-    if nullity ==0
-        return polyhedron(hrep(-Csp, C0v))
+    rep = if nullity == 0
+        hrep(-Csp, C0v)
     else
-        linset = BitSet(1:nullity)
-        return polyhedron(hrep(-Csp, C0v, linset))
+        hrep(-Csp, C0v, BitSet(1:nullity))
     end
+    return canonicalize ? polyhedron(rep) : Polyhedron(copy(rep.halfspaces), rep.ambient_dim, false, false)
 end
 """
     get_polyhedron(args...) -> Polyhedron
