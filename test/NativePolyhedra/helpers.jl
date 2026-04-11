@@ -1,9 +1,11 @@
 const NP = BindingAndCatalysis.NativePolyhedra
+const _REPO_ROOT = normpath(joinpath(@__DIR__, "..", ".."))
 
 function _poly_example_path(rel::AbstractString)
     candidates = (
-        joinpath("src", "cddlib-master", "examples", rel),
-        joinpath("src", "cddlib-logarithmic-complete", "cddlib-logarithmic-complete", "examples", rel),
+        joinpath(_REPO_ROOT, "src", "cddlib-master", "examples", rel),
+        joinpath(_REPO_ROOT, "src", "cddlib-logarithmic-complete", "examples", rel),
+        joinpath(_REPO_ROOT, "src", "cddlib-logarithmic-complete", "cddlib-logarithmic-complete", "examples", rel),
     )
     for path in candidates
         isfile(path) && return path

@@ -334,10 +334,29 @@ vols = get_volumes(siso)
 
 职责：
 
-- 把项目内 polyhedron 临时桥接到 `CDDLib.jl`
-- exact-log 情况下桥接到 `cddlib-logarithmic-complete`
+- 把项目内 `(C, C0, nullity)` / `Polyhedron` 桥接到仓库内 vendored `cddlib`
+- float 情况下调用本地编译的 `projection` / `redcheck`
+- exact-log 情况下调用本地编译的 `projection_log` / `redcheck_log`
 
 这个模块只负责桥接，不应该被业务层直接依赖。
+
+约定上，`CddBridge` 的矩阵级 API 统一使用项目内语义：
+
+```math
+C x + C_0 \ge 0
+```
+
+而 `NativePolyhedra` 内部 halfspace 语义是：
+
+```math
+a x \le \beta
+```
+
+两者之间的换算是：
+
+```math
+a = -C,\qquad \beta = C_0.
+```
 
 
 ### 6.4 `PolyBackend`
@@ -356,13 +375,19 @@ vols = get_volumes(siso)
 由 facade 内部决定：
 
 - 走 `NativePolyhedra`
-- 走 float `CDDLib.jl`
-- 走 exact `cddlog`
+- 走本地编译的 float `cddlib`
+- 走本地编译的 exact `cddlog`
 
 这层的存在意义是两点：
 
 - 把“算法逻辑”和“后端选择”分开
 - 避免 `SISO.jl`、`regimes.jl`、`Bnc_regime.jl` 到处写 backend 分支
+
+当前策略是：
+
+- float mode 若本地 `cdd` 可用，则优先走 `CddBridge`
+- exact mode 若本地 `cddlog` 可用，则优先走 `CddBridge`
+- 否则回退到 `NativePolyhedra`
 
 
 ## 7. 源码地图

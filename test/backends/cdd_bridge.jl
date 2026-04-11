@@ -1,3 +1,5 @@
+using SparseArrays
+
 @testset "cddlog Exact Projection Regression" begin
     if isnothing(BindingAndCatalysis.CddBridge._cddlog_bindir())
         @test true
@@ -24,7 +26,26 @@
     end
 end
 
-@testset "CddBridge Conversion Is Read Only" begin
+@testset "local cdd Float Projection Regression" begin
+    if isnothing(BindingAndCatalysis.CddBridge._cdd_bindir())
+        @test true
+    else
+        C = sparse([1.0 0.0; -1.0 0.0; 0.0 1.0; 0.0 -1.0])
+        C0 = [1.0, 0.0, 1.0, 0.0]
+        Cproj, C0proj, nullity_proj = BindingAndCatalysis.CddBridge.cdd_project_hrep(C, C0, 0, BitSet([1]); canonicalize=true)
+        expected_proj = get_polyhedron(sparse(reshape([1.0, -1.0], 2, 1)), [1.0, 0.0], 0)
+        @test same_polyhedron(get_polyhedron(Cproj, C0proj, nullity_proj), expected_proj)
+        @test nullity_proj == 0
+
+        poly, parsed = _polyhedron_from_polyhedra_file(_poly_example_path("project1.ine"))
+        expected, _ = _polyhedron_from_polyhedra_file(_poly_example_path("project1res.ine"))
+        axes = _project_axes_from_option(parsed, BindingAndCatalysis.fulldim(poly))
+        out = BindingAndCatalysis.CddBridge.cdd_eliminate(poly, axes; canonicalize=true)
+        @test same_polyhedron(out, expected)
+    end
+end
+
+@testset "CddBridge Serialization Is Read Only" begin
     poly = BindingAndCatalysis.polyhedron(BindingAndCatalysis.hrep(
         [1 0; 1 0; -1 0; 0 1; 0 -1],
         [1.0, 1.0, 0.0, 1.0, 0.0],
@@ -33,8 +54,8 @@ end
     before_len = length(poly.halfspaces)
     before_norm = poly.normalized
 
-    cdd_poly = BindingAndCatalysis.CddBridge._native_to_cdd(poly)
-    roundtrip = BindingAndCatalysis.CddBridge._cdd_to_native(cdd_poly)
+    C, C0, nullity = BindingAndCatalysis.CddBridge._polyhedron_to_C_C0_nullity(poly)
+    roundtrip = BindingAndCatalysis.CddBridge._polyhedron_from_C_C0_nullity(C, C0, nullity)
 
     @test BindingAndCatalysis.NativePolyhedra.fulldim(roundtrip) == 2
     @test length(poly.halfspaces) == before_len
