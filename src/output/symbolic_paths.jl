@@ -149,18 +149,18 @@ function show_expression_path(grh::SISOPaths, pth; observe_x=nothing, kwargs...)
     return nothing
 end
 
-function show_expression_path(model::Bnc, rgm_path, change_qK_idx, observe_x_idx; log_space::Bool=false)::Tuple{Vector,Vector}
+function show_expression_path(model::Bnc, rgm_path, change_qK_idx, observe_x_idx; kwargs...)::Tuple{Vector,Vector}
     change_qK_idx = locate_sym([model.q_sym; model.K_sym], change_qK_idx)
     observe_x_idx = locate_sym(model.x_sym, observe_x_idx)
     have_volume_mask = _get_regimes_mask(model, rgm_path; singular=false)
     idx = findall(have_volume_mask)
     exprs = map(idx) do id
-        show_expression_x(model, rgm_path[id]; log_space=log_space)[observe_x_idx].rhs
+        show_expression_x(model, rgm_path[id]; kwargs...)[observe_x_idx].rhs
     end
     edges = map(@view idx[1:end-1]) do i
         rgm_from = rgm_path[i]
         rgm_to = rgm_path[i + 1]
-        show_interface(model, rgm_from, rgm_to; lhs_idx=change_qK_idx, log_space=log_space).rhs
+        show_interface(model, rgm_from, rgm_to; lhs_idx=change_qK_idx, kwargs...).rhs
     end
     return (exprs, edges)
 end

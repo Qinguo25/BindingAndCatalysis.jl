@@ -3,7 +3,7 @@ function show_condition_poly(
     C0::AbstractVector{<:Real},
     nullity::Integer=0;
     syms::AbstractVector{Num},
-    log_space::Bool=true,
+    log_space::Bool=false,
     asymptotic::Bool=false,
 )
     make_expr(Crow, C0v) = if log_space
@@ -42,7 +42,7 @@ function show_expression_mapping(
     C0::AbstractVector{<:Real},
     y,
     x;
-    log_space::Bool=true,
+    log_space::Bool=false,
     asymptotic::Bool=false,
 )::Vector{Equation}
     if log_space
@@ -82,7 +82,7 @@ function handle_log_weighted_sum(A::AbstractMatrix{<:Real}, x, b::Union{Nothing,
     return rst
 end
 
-function solve_sym_expr(a::AbstractVector{<:Real}, b::Real, x, idx; log_space::Bool=true)
+function solve_sym_expr(a::AbstractVector{<:Real}, b::Real, x, idx; log_space::Bool=false)
     a = copy(collect(a))
     x = copy(x)
     ai = popat!(a, idx)

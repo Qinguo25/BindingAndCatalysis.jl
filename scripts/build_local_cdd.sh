@@ -6,6 +6,10 @@ SRC_ROOT="$ROOT/src/cddlib-logarithmic-complete"
 OUT_ROOT="$ROOT/.build/cddlog"
 OUT_SRC="$OUT_ROOT/src"
 
+mkdir -p "$OUT_ROOT"
+# Clear stale autotools test artifacts from earlier source layouts.
+rm -f "$OUT_SRC"/*.log "$OUT_SRC"/*.trs "$OUT_SRC"/test-suite.log "$OUT_SRC"/Makefile
+
 if [[ -n "${CC:-}" ]]; then
   CC=${CC}
 elif command -v gcc >/dev/null 2>&1; then

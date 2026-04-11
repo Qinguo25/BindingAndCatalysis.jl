@@ -28,13 +28,13 @@ end
 show_expression_qcat(rgm::BncRegime; kwargs...) = _render_expression_from(get_qcat_F_F0(rgm), q_cat_sym(rgm), qssKk_sym(rgm); kwargs...)
 show_expression_qcat(model::Bnc, bind, cat; kwargs...) = show_expression_qcat(get_bnc_regime(model, bind, cat; check=true); kwargs...)
 
-show_dominant_condition(args...; log_space=false, kwargs...) = begin
+show_dominant_condition(args...; kwargs...) = begin
     bn = get_binding_network(args...)
-    _render_expression_from(get_P_P0(args...), q_sym(bn), x_sym(bn); log_space=log_space, kwargs...)
+    _render_expression_from(get_P_P0(args...), q_sym(bn), x_sym(bn);  kwargs...)
 end
 
 show_conservation(Bnc::Bnc) = Bnc.q_sym .~ Bnc.L * Bnc.x_sym
-show_equilibrium(Bnc::Bnc; log_space::Bool=true) = show_expression_mapping(Bnc.N, zeros(Int, Bnc.r), Bnc.K_sym, Bnc.x_sym; log_space=log_space)
+show_equilibrium(Bnc::Bnc; kwargs...) = show_expression_mapping(Bnc.N, zeros(Int, Bnc.r), Bnc.K_sym, Bnc.x_sym; kwargs...)
 
 function show_catalysis_dynamics(args...)
     cn = _require_catalysis_network(args...)
