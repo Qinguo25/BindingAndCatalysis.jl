@@ -3,6 +3,7 @@ Examples/Manifest.toml
 .vscode/
 .github/workflows/copilot-instructions.md
 test/unfinished_or_outdated_stuff/
+noback/
 cddlib-master
 lrslib-main
 .build/

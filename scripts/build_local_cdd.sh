@@ -18,7 +18,45 @@ else
   echo "[FAIL] no C compiler found. Set CC, or install gcc/cc/clang." >&2
   exit 1
 fi
-CFLAGS=${CFLAGS:--std=c11 -O2}
+CFLAGS=${CFLAGS:--std=c11 -O2 -Wno-unused-result -Wno-format-extra-args -Wno-discarded-qualifiers}
+
+if [[ -n "${GMP_CFLAGS:-}" ]]; then
+  GMP_CFLAGS=${GMP_CFLAGS}
+elif command -v pkg-config >/dev/null 2>&1 && pkg-config --exists gmp; then
+  GMP_CFLAGS=$(pkg-config --cflags gmp)
+else
+  GMP_CFLAGS=""
+fi
+
+if [[ -n "${GMP_LIBS:-}" ]]; then
+  GMP_LIBS=${GMP_LIBS}
+elif command -v pkg-config >/dev/null 2>&1 && pkg-config --exists gmp; then
+  GMP_LIBS=$(pkg-config --libs gmp)
+else
+  GMP_LIBS="-lgmp"
+fi
+
+check_gmp() {
+  local tmpdir
+  tmpdir=$(mktemp -d)
+  cat > "$tmpdir/gmp_probe.c" <<'EOF'
+#include <gmp.h>
+int main(void) {
+  mpz_t x;
+  mpz_init_set_ui(x, 1);
+  mpz_clear(x);
+  return 0;
+}
+EOF
+  if ! "$CC" $CFLAGS $GMP_CFLAGS "$tmpdir/gmp_probe.c" $GMP_LIBS -o "$tmpdir/gmp_probe" >/dev/null 2>&1; then
+    rm -rf "$tmpdir"
+    echo "[FAIL] GMP development files not found. Install libgmp-dev (Debian/Ubuntu), or set GMP_CFLAGS/GMP_LIBS." >&2
+    exit 1
+  fi
+  rm -rf "$tmpdir"
+}
+
+check_gmp
 
 COMMON_SRCS=(
   lib-src/cddcore.c
@@ -59,7 +97,7 @@ build_variant() {
 
   for src in "${COMMON_SRCS[@]}"; do
     obj="$outdir/$(basename "${src%.c}").o"
-    "$CC" $CFLAGS $cppflags -I"$SRC_ROOT/lib-src" -c "$SRC_ROOT/$src" -o "$obj"
+    "$CC" $CFLAGS $GMP_CFLAGS $cppflags -I"$SRC_ROOT/lib-src" -c "$SRC_ROOT/$src" -o "$obj"
   done
   ar rcs "$outdir/$libname" "$outdir"/*.o
 
@@ -68,14 +106,14 @@ build_variant() {
     if [[ "$mode" == "log" ]]; then
       exe_name="${prog}_log"
     fi
-    "$CC" $CFLAGS $cppflags -I"$SRC_ROOT/lib-src" "$SRC_ROOT/src/$prog.c" "$outdir/$libname" $libs -o "$outdir/$exe_name"
+    "$CC" $CFLAGS $GMP_CFLAGS $cppflags -I"$SRC_ROOT/lib-src" "$SRC_ROOT/src/$prog.c" "$outdir/$libname" $libs -o "$outdir/$exe_name"
   done
 }
 
 mkdir -p "$OUT_ROOT/default" "$OUT_ROOT/log" "$OUT_SRC"
 
 build_variant default "$OUT_ROOT/default" "" "-lm" libcdd.a
-build_variant log "$OUT_ROOT/log" "-DCDDLOGARITHMIC" "-lgmp -lm" libcddlog.a
+build_variant log "$OUT_ROOT/log" "-DCDDLOGARITHMIC" "$GMP_LIBS -lm" libcddlog.a
 
 rm -f "$OUT_SRC"/*
 cp "$OUT_ROOT/default"/adjacency "$OUT_SRC"/
@@ -105,6 +143,8 @@ cp "$OUT_ROOT/log"/scdd_log "$OUT_SRC"/
 cat > "$OUT_ROOT/BUILD_INFO.txt" <<EOF
 CC=$CC
 CFLAGS=$CFLAGS
+GMP_CFLAGS=$GMP_CFLAGS
+GMP_LIBS=$GMP_LIBS
 built_at=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 EOF
 
