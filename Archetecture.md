@@ -903,6 +903,12 @@ regular 情况下很多东西可直接通过矩阵逆得到；singular 情况下
   - `SISO/get_polyhedra` 里的 edge projection 和 suffix-DAG path-state intersection
 - 对 `SISO/get_polyhedra`，现在的策略是：exact mode 继续走 `NativePolyhedra`；float mode 则尽量让 path 构造阶段全程保留 cdd 对象，只在最终输出 path polyhedron 时再转回 Native。这样可以避免在大量 suffix states 上反复做 Native H-rep 相交和规约。
 - 这条桥接的目标是优先救回大例子的运行稳定性和速度，而不是把整个多面体 API 都重新切回外部后端。
+- 仓库里还放了一个单独验证过的 `cddlib-logarithmic-complete` 源码树，用于支持 `A` 为有理数、`b` 为 logarithmic expression 的 H-rep 运算。当前集成状态是：
+  - 项目内已经实现 `cddlog` bridge：把 `ExactLogExpr` 编码成 `log(...)/log(10)` 形式，调用 `projection_log`，再解析回项目内 H-rep。
+  - 这条 bridge 现在默认自动启用：只要本地存在 `.build/cddlog/src/projection_log`，并且输入满足当前支持的结构约束（`A` 为整数/有理数，常数列含 `ExactLogExpr`），exact elimination 就优先走 `cddlog`；如需禁用，可设 `BNC_DISABLE_CDDLOG=1`。
+  - 为了让这条路径能稳定处理项目里的 exact workload，`cddlib-logarithmic-complete` 里的 `projection_log` 做了一个针对无 lineality 情况的安全投影路径：按列重排后重复做 Fourier elimination，并且对 `0-row H-representation` 单独兜住，不再把“整空间”结果继续送进 `MatrixCanonicalize`。
+  - 当前状态下，这个魔改版 `cddlib` 已通过其原有的 `check-default.sh`、`check-logarithmic.sh`、`check-logarithmic-large.sh`，并新增覆盖了一个项目侧真实触发过的 `0-row projection` regression。
+  - 项目测试里也补了对应的 exact bridge 回归：直接验证 `cddlog_project_hrep` 和 `maybe_cddlog_eliminate` 在该输入上返回 `0 x d` 的 whole-space H-rep，而不是崩溃。
 
 
 ## 11. 对开发者最有用的测试与示例

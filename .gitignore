@@ -5,3 +5,4 @@ Examples/Manifest.toml
 test/unfinished_or_outdated_stuff/
 cddlib-master
 lrslib-main
+.build/

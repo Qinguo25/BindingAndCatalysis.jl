@@ -906,12 +906,16 @@ end
 
 function eliminate(poly::Polyhedron, axis::Integer; canonicalize::Bool=true, method::Symbol=:fourier)
     method in (:fourier, :block, :auto) || throw(ArgumentError("Unknown elimination method $method."))
+    external = _maybe_external_eliminate(poly, BitSet((Int(axis),)); canonicalize=canonicalize, method=method)
+    external === nothing || return external
     return _eliminate_one(poly, Int(axis); canonicalize=canonicalize)
 end
 
 function eliminate(poly::Polyhedron, axes::BitSet; canonicalize::Bool=true, method::Symbol=:auto)
     method in (:fourier, :block, :auto) || throw(ArgumentError("Unknown elimination method $method."))
     isempty(axes) && return poly
+    external = _maybe_external_eliminate(poly, axes; canonicalize=canonicalize, method=method)
+    external === nothing || return external
     if method !== :fourier && length(axes) > 1
         return _block_eliminate(poly, axes; canonicalize=canonicalize)
     end

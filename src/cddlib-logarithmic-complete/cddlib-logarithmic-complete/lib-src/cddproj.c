@@ -221,7 +221,12 @@ dd_MatrixPtr dd_FourierElimination(dd_MatrixPtr M,dd_ErrorType *error)
           M->matrix[posrowindex[ip]-1][d-1]);
         dd_set(Mnew->matrix[inew-1][j-1],temp2);
       }
+#if defined(CDDLOGARITHMIC)
+      if (M->numbtype!=dd_Logarithmic)
+        dd_Normalize(dnew,Mnew->matrix[inew-1]);
+#else
       dd_Normalize(dnew,Mnew->matrix[inew-1]);
+#endif
     }
   } 
 

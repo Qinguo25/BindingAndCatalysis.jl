@@ -95,11 +95,18 @@ int main(int argc, char *argv[])
   if (s>0 && s < d){
     for (j=1; j<=s; j++){
       M1=dd_FourierElimination(M2, &err);
+      if (err!=dd_NoError || M1==NULL) goto _L99;
       printf("\nRemove the variable %ld.  The resulting redundant system.\n",d-j);
       dd_WriteMatrix(stdout, M1);
 
-      dd_MatrixCanonicalize(&M1, &impl_linset, &redset, &newpos, &err);
-      if (err!=dd_NoError) goto _L99;
+      if (M1->rowsize>0){
+        dd_MatrixCanonicalize(&M1, &impl_linset, &redset, &newpos, &err);
+        if (err!=dd_NoError) goto _L99;
+      } else {
+        set_initialize(&redset, 1);
+        set_initialize(&impl_linset, 1);
+        newpos=(long*)calloc(1,sizeof(long));
+      }
 
       fprintf(stdout, "\nRedundant rows: ");
       set_fwrite(stdout, redset);

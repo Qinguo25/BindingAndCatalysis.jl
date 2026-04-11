@@ -39,3 +39,19 @@ require_grep "log(2/1) -1" "$TMPDIR/fourier4d.out"
 printf '1\n2\n3\n4\n' | "$top_builddir/src/projection_log" "$top_srcdir/examples/samplelog_box4d.ine" > "$TMPDIR/projection4d.out" 2>&1
 require_grep "H-representation" "$TMPDIR/projection4d.out"
 require_grep "log(2/1) -1" "$TMPDIR/projection4d.out"
+
+cat > "$TMPDIR/samplelog_zero_proj.ine" <<'EOF'
+H-representation
+begin
+ 6 7 logarithmic
+0 -1 1 0 0 0 0
+0 -1 0 1 0 0 0
+0 -1 0 0 1 0 0
+0 -2 0 1 1 -1 1
+0 -1 0 0 0 0 1
+0 -2 1 0 1 -1 1
+end
+EOF
+printf '1\n1\n' | "$top_builddir/src/projection_log" "$TMPDIR/samplelog_zero_proj.ine" > "$TMPDIR/projection_zero.out" 2>&1
+require_grep "H-representation" "$TMPDIR/projection_zero.out"
+require_grep "0 6 logarithmic" "$TMPDIR/projection_zero.out"

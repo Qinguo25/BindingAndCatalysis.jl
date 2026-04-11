@@ -55,6 +55,107 @@ dd_boolean SetWriteFile(FILE **f, dd_DataFileType fname)
   return success;
 }
 
+static dd_MatrixPtr dd_PermuteMatrixColumns(dd_MatrixPtr M, dd_colindex perm)
+{
+  dd_MatrixPtr Mperm=NULL;
+  dd_rowrange i,m;
+  dd_colrange j,d;
+
+  if (M==NULL || perm==NULL) return NULL;
+
+  m=M->rowsize;
+  d=M->colsize;
+  Mperm=dd_CreateMatrix(m, d);
+  dd_CopyArow(Mperm->rowvec, M->rowvec, d);
+  set_copy(Mperm->linset, M->linset);
+  Mperm->numbtype=M->numbtype;
+  Mperm->representation=M->representation;
+  Mperm->objective=M->objective;
+
+  for (i=1; i<=m; i++){
+    for (j=1; j<=d; j++){
+      dd_set(Mperm->matrix[i-1][j-1], M->matrix[i-1][perm[j]-1]);
+    }
+  }
+  for (j=1; j<=d; j++){
+    dd_set(Mperm->rowvec[j-1], M->rowvec[perm[j]-1]);
+  }
+  return Mperm;
+}
+
+static dd_MatrixPtr dd_ProjectByRepeatedFourier(dd_MatrixPtr M, dd_colset delset, dd_ErrorType *error)
+{
+  dd_MatrixPtr Mwork=NULL, Mnext=NULL;
+  dd_rowset redset=NULL, impl_linset=NULL;
+  dd_rowindex newpos=NULL;
+  dd_colindex perm=NULL;
+  dd_colrange j,d,k,delsize;
+
+  *error=dd_NoError;
+  if (M==NULL) return NULL;
+
+  d=M->colsize;
+  delsize=0;
+  perm=(long*)calloc(d+1, sizeof(long));
+  if (perm==NULL){
+    *error=dd_ImproperInputFormat;
+    return NULL;
+  }
+
+  perm[1]=1;  /* keep the constant column fixed */
+  k=1;
+  for (j=2; j<=d; j++){
+    if (!set_member(j, delset)){
+      k++;
+      perm[k]=j;
+    } else {
+      delsize++;
+    }
+  }
+  for (j=2; j<=d; j++){
+    if (set_member(j, delset)){
+      k++;
+      perm[k]=j;
+    }
+  }
+
+  Mwork=dd_PermuteMatrixColumns(M, perm);
+  if (Mwork==NULL){
+    *error=dd_ImproperInputFormat;
+    goto _L99;
+  }
+
+  for (j=1; j<=delsize; j++){
+    Mnext=dd_FourierElimination(Mwork, error);
+    dd_FreeMatrix(Mwork);
+    Mwork=NULL;
+    if (*error!=dd_NoError || Mnext==NULL) goto _L99;
+
+    if (Mnext->rowsize>0){
+      dd_MatrixCanonicalize(&Mnext, &impl_linset, &redset, &newpos, error);
+      if (*error!=dd_NoError) goto _L99;
+      set_free(redset); redset=NULL;
+      set_free(impl_linset); impl_linset=NULL;
+      free(newpos); newpos=NULL;
+    }
+
+    Mwork=Mnext;
+    Mnext=NULL;
+  }
+
+_L99:
+  if (redset!=NULL) set_free(redset);
+  if (impl_linset!=NULL) set_free(impl_linset);
+  if (newpos!=NULL) free(newpos);
+  if (perm!=NULL) free(perm);
+  if (*error!=dd_NoError){
+    if (Mnext!=NULL) dd_FreeMatrix(Mnext);
+    if (Mwork!=NULL) dd_FreeMatrix(Mwork);
+    return NULL;
+  }
+  return Mwork;
+}
+
 
 int main(int argc, char *argv[])
 {
@@ -98,14 +199,25 @@ int main(int argc, char *argv[])
     scanf("%ld",&t);
     set_addelem(delset, t+1);
   }
-  
-  M1=dd_BlockElimination(M, delset, &err);
+
+  if (set_card(M->linset)==0){
+    M1=dd_ProjectByRepeatedFourier(M, delset, &err);
+  } else {
+    M1=dd_BlockElimination(M, delset, &err);
+  }
+
+  if (err!=dd_NoError || M1==NULL) goto _L99;
 
   dd_WriteMatrix(stdout, M1);
 
-  dd_MatrixCanonicalize(&M1,&impl_linset,&redset,&newpos,&err);
-
-  if (err!=dd_NoError) goto _L99;
+  if (M1->rowsize>0){
+    dd_MatrixCanonicalize(&M1,&impl_linset,&redset,&newpos,&err);
+    if (err!=dd_NoError) goto _L99;
+  } else {
+    set_initialize(&redset, 1);
+    set_initialize(&impl_linset, 1);
+    newpos=(long*)calloc(1,sizeof(long));
+  }
 
   fprintf(stdout, "\nRedundant rows: ");
   set_fwrite(stdout, redset);

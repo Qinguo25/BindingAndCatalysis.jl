@@ -685,3 +685,29 @@ end
     @test all(p -> p isa BindingAndCatalysis.Polyhedron, polys)
     @test eltype(get_C0_qK(get_regime(model, 1))) == ExactLogExpr
 end
+
+@testset "cddlog Exact Projection Regression" begin
+    if isnothing(BindingAndCatalysis.CddBridge._cddlog_bindir())
+        @test true
+    else
+        C = sparse(Rational{Int}[
+            -1 1 0 0 0 0
+            -1 0 1 0 0 0
+            -1 0 0 1 0 0
+            -2 0 1 1 -1 1
+            -1 0 0 0 0 1
+            -2 1 0 1 -1 1
+        ])
+        C0 = fill(ExactLogExpr(0), 6)
+
+        Cproj, C0proj, nullity_proj = BindingAndCatalysis.CddBridge.cddlog_project_hrep(C, C0, 0, BitSet([1]))
+        @test size(Cproj) == (0, 5)
+        @test isempty(C0proj)
+        @test nullity_proj == 0
+
+        poly = BindingAndCatalysis.CddBridge._polyhedron_from_C_C0_nullity(C, C0, 0)
+        proj_poly = BindingAndCatalysis.CddBridge.maybe_cddlog_eliminate(poly, BitSet([1]); canonicalize = false)
+        @test proj_poly !== nothing
+        @test get_C_C0_nullity(proj_poly) == (spzeros(Rational{Int}, 0, 5), ExactLogExpr[], 0)
+    end
+end

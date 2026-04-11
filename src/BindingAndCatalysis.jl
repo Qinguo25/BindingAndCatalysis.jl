@@ -28,7 +28,8 @@ using .ExactTypes: ExactLogExpr, exact_log10, exact_log10_ratio
 include(joinpath(@__DIR__, "NativePolyhedra/NativePolyhedra.jl"))
 using .NativePolyhedra
 include(joinpath(@__DIR__, "CddBridge.jl"))
-using .CddBridge: cdd_intersect_eliminate, cdd_intersect_many, cdd_eliminate, cdd_project_hrep, _can_use_cdd_fastpath
+using .CddBridge: cdd_intersect_eliminate, cdd_intersect_many, cdd_eliminate, cdd_project_hrep, maybe_cddlog_eliminate, _can_use_cdd_fastpath
+NativePolyhedra.register_eliminate_hook!(maybe_cddlog_eliminate)
 const Polyhedra = NativePolyhedra
 
 using Graphs
