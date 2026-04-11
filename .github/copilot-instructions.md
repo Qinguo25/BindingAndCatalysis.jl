@@ -196,12 +196,12 @@ C^\theta \Pi \log x + C^\theta \log k + C_0^\theta \ge 0.
 `Bnc` 还记录 binding 层 affine 系数的存储模式：
 
 - `affine_coeff_mode = :float`：默认模式，`BindRegime.H` / `C_qK` 存 `Float64`
-- `affine_coeff_mode = :rational`：exact mode，`BindRegime.H` / `C_qK` 存 `Rational{Int}`
+- `affine_coeff_mode = :exact`：exact mode，`BindRegime.H` / `C_qK` 存 `Rational{Int}`
 
 这个 mode 只影响 binding 层的线性系数矩阵：
 
 - exact：`H`, `C_qK`
-- 仍保持 `Float64`：`P0`, `M0`, `H0`, `C0_x`, `C0_qK`
+- 仍保持 `Float64`：`P0`, `M0`, `H0`, `C0_x`, `C0_qK`，目前正在尝试使用自定义类型来保持 exact mode 下的数值稳定性
 
 
 ### 3.2 `BindRegime`
@@ -228,7 +228,7 @@ C^\theta \Pi \log x + C^\theta \log k + C_0^\theta \ge 0.
 现在还要额外记住：
 
 - `H` 和 `C_qK` 可以是 `Float64` 稀疏矩阵，也可以是 `Rational{Int}` 稀疏矩阵
-- `H0`、`C0_qK` 仍然是 `Float64`
+- `H0`、`C0_qK` 仍然是 `Float64`，目前 exact mode 还没有完全覆盖它们
 - `nullity > 1` 时不会定义 `H/H0`
 
 
@@ -298,7 +298,7 @@ C^\theta \Pi \log x + C^\theta \log k + C_0^\theta \ge 0.
 
 当前 mixed 层还有一个很重要的实现边界：
 
-- binding 层若使用 `H_mode = :rational`，`bind_rgm.H` / `bind_rgm.C_qK` 可以是 exact 的
+- binding 层若使用 `mode = :exact`，`bind_rgm.H` / `bind_rgm.C_qK` 可以是 exact 的
 - 一旦进入 `BncRegime` 组装、mixed consistency、stability screening 这类数值流程，会显式转回 `Float64`
 
 因此 exact mode 目前是“binding-layer exact”，不是“整个 mixed pipeline 全 exact”。
@@ -405,7 +405,7 @@ update_catalysis!(model; Γ=..., Π=..., k_sym=..., q_picked=...)
 ```julia
 find_all_regimes!(model)
 # 或
-find_all_regimes!(model; H_mode = :rational)
+find_all_regimes!(model; mode = :exact)
 ```
 
 这一步会：
@@ -413,7 +413,7 @@ find_all_regimes!(model; H_mode = :rational)
 - 从 `L` 的每一行 possible dominant choice 枚举 `perm`
 - 立刻用 `all_perms` 和 `model._L_helper` 构造 x-neighbor regime graph
 - 先只建立轻量的 `BindRegime` 容器对象
-- 根据 `H_mode` 决定 binding affine 系数存成 `Float64` 还是 `Rational{Int}`
+- 根据 `mode` 决定 binding affine 系数存成 `Float64` 还是 `Rational{Int}`
 - 然后进入 `_prefill_affine_cache!`：
   - 按 x-graph connected component 处理
   - 在每个 component 里挑 seed
@@ -428,13 +428,13 @@ find_all_regimes!(model; H_mode = :rational)
 
 - `_prefill_affine_cache_core!` 不会把全部 regime 的 nullity 重新显式算一遍；它保留“图上传播 + 高 nullity defer”的原逻辑
 - exact mode 下会优先找 `nullity == 0` 的 regular seed，再沿图传播回 singular regime；只有找不到 regular seed 时，才退回 exact singular fallback
-- 多线程传播工作区 `AffinePropagateWorkspace` 现在按 `Threads.maxthreadid()` 分配槽位，而不是 `Threads.nthreads()`，避免 notebook / task 调度下的线程槽越界
+- 多线程传播工作区 `AffinePropagateWorkspace` 按 `Threads.maxthreadid()` 分配槽位，而不是 `Threads.nthreads()`，避免 notebook / task 调度下的线程槽越界
 
 另外，exact mode 的边界是：
 
 - rank-1 propagation 会保持 `H` 与 `C_qK` 的 exact 性质
-- `H0` / `C0_qK` 继续走 `Float64`
-- `get_polyhedron(...)` 在真正交给 `Polyhedra.jl` / `CDDLib` 之前，会把 exact 系数转成 `Float64`
+- `H0` / `C0_qK` 继续走 `Float64`，在改
+- `get_polyhedron(...)` 在真正交给 `Polyhedra.jl` / `CDDLib` 之前，会把 exact 系数转成 `Float64`，在改
 
 
 ### 4.4 枚举 catalysis regimes
@@ -567,7 +567,7 @@ rgm = get_bnc_regime(model, bind_perm, cat_perm)
 ### 6.3 Binding 层
 
 - [src/regimes.jl](/home/joker/Realizibility_index/BindingAndCatalysis.jl/src/regimes.jl)
-  binding regime 的核心逻辑：初始化 `BindRegime`、计算 `P/M/H/C` 等对象、提供访问 API。`find_all_regimes!(...; H_mode=...)`、`_materialize_qK_conditions!`、以及 exact/float mode 切换逻辑都在这里。
+  binding regime 的核心逻辑：初始化 `BindRegime`、计算 `P/M/H/C` 等对象、提供访问 API。`find_all_regimes!(...; mode=...)`、`_materialize_qK_conditions!`、以及 exact/float mode 切换逻辑都在这里。
 
 - [src/regime_assign.jl](/home/joker/Realizibility_index/BindingAndCatalysis.jl/src/regime_assign.jl)
   给定 `x` 或 `qK`，判断当前点属于哪个 regime。
@@ -645,7 +645,7 @@ update_catalysis!(model; Γ=..., Π=..., q_picked=..., k_sym=...)
 ```julia
 find_all_regimes!(model)
 # 或
-find_all_regimes!(model; H_mode = :rational)
+find_all_regimes!(model; mode = :exact)
 rgm = get_regime(model, 1)
 rgms = get_regimes(model)
 ```
@@ -839,11 +839,12 @@ regular 情况下很多东西可直接通过矩阵逆得到；singular 情况下
 
 ### 10.8 exact mode 的边界要分清
 
-现在的 exact/rational 设计是分层的：
+现在的 exact 设计是分层的：
 
 - binding coefficient matrices：可以 exact
-- log offsets：继续 `Float64`
-- polyhedron / volume / mixed regime / stability：进入这些数值或外部库接口前会转成 `Float64`
+- log offsets：`H0` / `C0_qK` / `C0_qKk` / `C0_qssKk` 现在也可以保留 exact-log 类型
+- polyhedron backend：由项目内 `NativePolyhedra` 负责，不再依赖 `CDDLib.jl`
+- 纯数值积分、优化器接口、部分可视化辅助：仍然可能显式转成 `Float64`
 
 所以如果你在 debug 时看到：
 
@@ -854,10 +855,64 @@ regular 情况下很多东西可直接通过矩阵逆得到；singular 情况下
 这不是不一致，而是当前架构有意画出的边界。
 
 
+### 10.9 `NativePolyhedra` 现在是项目内多面体exact模式计算后端
+
+当前多面体后端在 [src/NativePolyhedra/NativePolyhedra.jl](/home/joker/Realizibility_index/BindingAndCatalysis.jl/src/NativePolyhedra/NativePolyhedra.jl)，exact 类型与多面体算法现在已经拆开：
+
+- [ExactTypes.jl](/home/joker/Realizibility_index/BindingAndCatalysis.jl/src/ExactTypes.jl)
+  `ExactLogExpr` 以及 exact-log 常数运算；这是共享模块，不再放在 `NativePolyhedra/` 文件夹内
+- [polyhedra_core.jl](/home/joker/Realizibility_index/BindingAndCatalysis.jl/src/NativePolyhedra/polyhedra_core.jl)
+  H-representation、相交、linearity/redundancy 清理、implicit-equality 检测、Fourier elimination、LP-based feasibility
+- [vrep_core.jl](/home/joker/Realizibility_index/BindingAndCatalysis.jl/src/NativePolyhedra/vrep_core.jl)
+  V-representation、H -> V 枚举、dual-cone block elimination、以及 `get_one_inner_point` 所依赖的 generator 视图
+
+这里有两个实现细节要记住：
+
+- `HyperPlane` 仍然是基础几何对象：`a, β` 表示超平面 `dot(a, x) = β`。
+- `HalfSpace` 不再直接存 `a, β`，而是存 `p::HyperPlane` 加 `sign::Int8`。约定是：
+  `sign = 1` 表示 `dot(p.a, x) <= p.β`，
+  `sign = -1` 表示 `dot(p.a, x) >= p.β`，
+  `sign = 0` 表示 equality。
+- `HRep` 和 `Polyhedron` 现在的主存都是 `Vector{HalfSpace}`，并单独记录 ambient dimension；不再把 `A/b/linset` 作为主数据存进 struct。
+- 当前为了兼容外部调用和少量遗留接口，`HRep` / `Polyhedron` 还保留了按需展开的 `A` / `b` / `linset` 访问层。它们现在是由 `Vector{HalfSpace}` 动态导出的矩阵视图，而不是主存。
+- `NativePolyhedra` 内部的主路径已经尽量改成直接读 `halfspaces`：H-rep normalization、相交、成员测试、Fourier elimination、reverse-search 的 blocker/约束扫描、以及 dual/block elimination 的约束装配都不再把 `A/b/linset` 当作内部主表示；只有 rank/nullspace/QR 这类线性代数步骤才会临时 materialize 矩阵。
+
+- `Polyhedron` 现在带有 `normalized` 标志。很多内部路径会先做未 canonicalize 的 `intersect/eliminate`，最后再统一 `removehredundancy!`，这是为了避免 `SISO/get_polyhedra` 在路径构造时反复做昂贵清理。
+- `NativePolyhedra` 现在在 `_stack_polyhedra` 和单变量 Fourier elimination 的非 canonicalize 路径上，也会先做一层 cheap dedup / zero-row pruning。这个层级对应 cdd 里常见的 sorted-unique / matrix-canonicalize 思路，用来避免把明显重复的 H-rep 继续向下游传播。
+- `polyhedron(hrep(...))` 默认只做 light normalization，不会在构造时立刻跑完整 strong H-reduction。真正昂贵的 LP-based redundancy / implied-equality pass 只在显式 `removehredundancy!` 时触发。
+- `removehredundancy!` 不再只是删显式重复行。当前实现会先做符号级 dedup，再在中小规模 H-rep 上跑 LP-based redundancy / implied-equality pass，并对 equality 只保留一个独立 basis。
+- 多变量消元 `eliminate(poly, axes)` 默认会优先走 block elimination；单变量消元仍然走 Fourier elimination。
+- `vrep(poly)` 对 pointed 部分不再只靠全组合枚举 active-set；现在会先找一个起始 basis，再沿 basis 邻接关系遍历 generators。lineality 非空时，会先做 quotient，再在 quotient polyhedron 上做同样的 pointed 遍历。
+- `same_polyhedron` 现在先比较 H-rep canonical signature；只有签名不一致时才回退到 generator / LP 子集检查。这样 `project1` 这类 reference projection 的验证成本会显著降低，主要时间重新落回真实的 elimination 上。
+- `SISO/get_polyhedra` 的热点已经从 path-suffix DAG 本身转移到 node polyhedron 的 qK 条件 materialization。当前实现里 `_ensure_node_polyhedra!` 会直接批量 materialize 所需 regime 的 `C_qK/C0_qK`，并在 `Threads.nthreads() > 1` 时并行构造 node polyhedra；单线程时则退回串行，避免额外调度开销。
+
+和 cdd/lrs 的概念对应关系大致是：
+
+- `hrep/polyhedron/intersect/removehredundancy!` 对应 cdd 的 H-rep 主工作流
+- `vrep(poly)` 提供项目内的 generator 视图；当前实现已经是 basis-neighbor traversal，但还不是 lrslib C 代码那套完整 dictionary/reverse-search/mplrs 并行框架
+- `eliminate(poly, axes)` 在多变量时走 dual-system block elimination，在单变量时走 Fourier-Motzkin
+
+当前实现重点是让仓库主工作流可用并支持 exact mode。它的 API 设计参考了 cdd/lrs，但不是把两边的 C 实现逐行移植成 Julia。
+
+补充一点当前的后端策略：
+
+- `ExactLogExpr` 不能直接作为 cddlib 的 `mytype`。原因不是简单的 FFI 包装缺失，而是代数结构不匹配：cddlib 的核心算法要求底层标量对 `+,-,*,/,cmp` 封闭并形成可比较的数域；而 `ExactLogExpr` 目前只是“有理数 + 若干 `log10(p)` 的线性组合”，不对一般乘法封闭，比较也依赖 `Float64` 近似。
+- 因此目前采用的是 hybrid 路线：exact / symbolic 条件仍然保留在项目上层；需要高性能几何运算时，在 float mode 下通过内部 `CddBridge` 把 Native H-rep 暂时桥接到 `CDDLib.jl`，做完相交 / 投影后再转回项目内表示。
+- 当前已经接入的 float-mode bridge 主要有两段：
+  - `regimes.jl` 里的 singular `qK` 条件 affine-mapping projection
+  - `SISO/get_polyhedra` 里的 edge projection 和 suffix-DAG path-state intersection
+- 对 `SISO/get_polyhedra`，现在的策略是：exact mode 继续走 `NativePolyhedra`；float mode 则尽量让 path 构造阶段全程保留 cdd 对象，只在最终输出 path polyhedron 时再转回 Native。这样可以避免在大量 suffix states 上反复做 Native H-rep 相交和规约。
+- 这条桥接的目标是优先救回大例子的运行稳定性和速度，而不是把整个多面体 API 都重新切回外部后端。
+
+
 ## 11. 对开发者最有用的测试与示例
 
 - [test/runtests.jl](/home/joker/Realizibility_index/BindingAndCatalysis.jl/test/runtests.jl)
-  现在是最可靠的程序化回归入口，覆盖 binding、catalysis、mixed regime，以及 notebook 的主流程。
+  主包的程序化回归入口，覆盖 binding、catalysis、mixed regime、notebook 等主流程。
+
+- [test/NativePolyhedra/runtests.jl](/home/joker/Realizibility_index/BindingAndCatalysis.jl/test/NativePolyhedra/runtests.jl)
+  `NativePolyhedra` 的独立算法回归，包含 core API smoke 和本地 `cddlib-master/examples` / `lrslib-main` 的 H/V/reference examples。
+  `project1` 现在纳入默认 regression；`project2` 这类更重的 projection regression 仍然通过环境变量 `BNC_RUN_HEAVY_POLY_TESTS=1` 打开。
 
 - [Examples/Minimal_example.ipynb](/home/joker/Realizibility_index/BindingAndCatalysis.jl/Examples/Minimal_example.ipynb)
   最适合交互式学习。

@@ -1,0 +1,10 @@
+prefix=@prefix@
+exec_prefix=@exec_prefix@
+libdir=@libdir@
+includedir=@includedir@
+
+Name: cddlog
+Description: C library implementing Double Description Method with exact logarithmic backend
+Version: @PACKAGE_VERSION@
+Libs: @CDD_LDFLAGS@ -L${libdir} -lcddlog -lgmp -lm
+Cflags: -I${includedir} -DCDDLOGARITHMIC

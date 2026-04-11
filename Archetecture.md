@@ -201,7 +201,7 @@ C^\theta \Pi \log x + C^\theta \log k + C_0^\theta \ge 0.
 这个 mode 只影响 binding 层的线性系数矩阵：
 
 - exact：`H`, `C_qK`
-- 仍保持 `Float64`：`P0`, `M0`, `H0`, `C0_x`, `C0_qK`
+- 仍保持 `Float64`：`P0`, `M0`, `H0`, `C0_x`, `C0_qK`，目前正在尝试使用自定义类型来保持 exact mode 下的数值稳定性
 
 
 ### 3.2 `BindRegime`
@@ -228,7 +228,7 @@ C^\theta \Pi \log x + C^\theta \log k + C_0^\theta \ge 0.
 现在还要额外记住：
 
 - `H` 和 `C_qK` 可以是 `Float64` 稀疏矩阵，也可以是 `Rational{Int}` 稀疏矩阵
-- `H0`、`C0_qK` 仍然是 `Float64`
+- `H0`、`C0_qK` 仍然是 `Float64`，目前 exact mode 还没有完全覆盖它们
 - `nullity > 1` 时不会定义 `H/H0`
 
 
@@ -428,13 +428,13 @@ find_all_regimes!(model; mode = :exact)
 
 - `_prefill_affine_cache_core!` 不会把全部 regime 的 nullity 重新显式算一遍；它保留“图上传播 + 高 nullity defer”的原逻辑
 - exact mode 下会优先找 `nullity == 0` 的 regular seed，再沿图传播回 singular regime；只有找不到 regular seed 时，才退回 exact singular fallback
-- 多线程传播工作区 `AffinePropagateWorkspace` 现在按 `Threads.maxthreadid()` 分配槽位，而不是 `Threads.nthreads()`，避免 notebook / task 调度下的线程槽越界
+- 多线程传播工作区 `AffinePropagateWorkspace` 按 `Threads.maxthreadid()` 分配槽位，而不是 `Threads.nthreads()`，避免 notebook / task 调度下的线程槽越界
 
 另外，exact mode 的边界是：
 
 - rank-1 propagation 会保持 `H` 与 `C_qK` 的 exact 性质
-- `H0` / `C0_qK` 继续走 `Float64`
-- `get_polyhedron(...)` 在真正交给 `Polyhedra.jl` / `CDDLib` 之前，会把 exact 系数转成 `Float64`
+- `H0` / `C0_qK` 继续走 `Float64`，在改
+- `get_polyhedron(...)` 在真正交给 `Polyhedra.jl` / `CDDLib` 之前，会把 exact 系数转成 `Float64`，在改
 
 
 ### 4.4 枚举 catalysis regimes
@@ -855,7 +855,7 @@ regular 情况下很多东西可直接通过矩阵逆得到；singular 情况下
 这不是不一致，而是当前架构有意画出的边界。
 
 
-### 10.9 `NativePolyhedra` 现在是项目内后端
+### 10.9 `NativePolyhedra` 现在是项目内多面体exact模式计算后端
 
 当前多面体后端在 [src/NativePolyhedra/NativePolyhedra.jl](/home/joker/Realizibility_index/BindingAndCatalysis.jl/src/NativePolyhedra/NativePolyhedra.jl)，exact 类型与多面体算法现在已经拆开：
 

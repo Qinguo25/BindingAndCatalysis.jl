@@ -1,0 +1,12 @@
+if LOGARITHMIC
+
+lib_LTLIBRARIES += libcddlog.la
+
+libcddlog_la_SOURCES = $(libcdd_la_SOURCES) cddlogarithmic.c
+libcddlog_la_CPPFLAGS = -DCDDLOGARITHMIC
+libcddlog_la_LDFLAGS = $(AM_LDFLAGS)
+libcddlog_la_LIBADD = -lgmp -lm
+
+pkginclude_HEADERS += cddlogarithmic.h
+
+endif

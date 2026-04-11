@@ -454,6 +454,7 @@ function calc_volume(rgms::AbstractVector{<:BindRegime};
     isempty(idxs) && return vals
 
     same_model = all(get_binding_network(rgm) === get_binding_network(rgms[1]) for rgm in rgms)
+    # if regimes are sharing the same model, we evaluate their volumes via classifier.
     if same_model && isnothing(rebase_mat) && !contain_overlap
         Bnc = get_binding_network(rgms[1])
         regime_ids = get_idx.(rgms[idxs])

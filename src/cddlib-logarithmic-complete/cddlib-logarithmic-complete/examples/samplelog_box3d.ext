@@ -1,0 +1,21 @@
+* cddlib: a double description library:Version 0.94n
+* compiled for symbolic log backend arithmetic.
+* Copyright (C) Komei Fukuda, fukuda@math.ethz.ch
+* roworder: lexmin
+ext_file: Generators
+V-representation
+begin
+ 8 4 logarithmic
+ 1 log(2/1) log(3/1) 0
+ 1 0 log(3/1) 0
+ 1 log(2/1) 0 0
+ 1 0 0 0
+ 1 0 0 log(5/1)
+ 1 log(2/1) 0 log(5/1)
+ 1 0 log(3/1) log(5/1)
+ 1 log(2/1) log(3/1) log(5/1)
+end
+* Computation started at Sat Apr 11 07:49:52 2026
+*             ended   at Sat Apr 11 07:49:52 2026
+* Total processor time = 0 seconds
+*                      = 0 h 0 m 0 s
