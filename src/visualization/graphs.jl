@@ -76,14 +76,38 @@ function get_edge_weight_vec(Bnc::Bnc, change_qK_idx)::Vector{Tuple{Edge,Dict{Sy
     return weight_vec
 end
 
-function find_proper_bounds_for_graph_plot(p; x_margin=0.1, y_margin=0.1)
+function find_proper_bounds_for_graph_plot(p; x_margin=0.1, y_margin=0.1, z_margin=0.1)
     coords = p.node_pos[]
+    isempty(coords) && return nothing
+    if length(coords[1]) == 3
+        xs = getindex.(coords, 1)
+        ys = getindex.(coords, 2)
+        zs = getindex.(coords, 3)
+        xmin, xmax = extrema(xs)
+        ymin, ymax = extrema(ys)
+        zmin, zmax = extrema(zs)
+        xspan = xmax - xmin
+        yspan = ymax - ymin
+        zspan = zmax - zmin
+        xspan == 0 && (xspan = 1)
+        yspan == 0 && (yspan = 1)
+        zspan == 0 && (zspan = 1)
+        xmin -= x_margin * xspan
+        xmax += x_margin * xspan
+        ymin -= y_margin * yspan
+        ymax += y_margin * yspan
+        zmin -= z_margin * zspan
+        zmax += z_margin * zspan
+        return (xmin, xmax, ymin, ymax, zmin, zmax)
+    end
     xs = first.(coords)
     ys = last.(coords)
     xmin, xmax = extrema(xs)
     ymin, ymax = extrema(ys)
     xspan = xmax - xmin
     yspan = ymax - ymin
+    xspan == 0 && (xspan = 1)
+    yspan == 0 && (yspan = 1)
     xmin -= x_margin * xspan
     xmax += x_margin * xspan
     ymin -= y_margin * yspan
@@ -91,12 +115,34 @@ function find_proper_bounds_for_graph_plot(p; x_margin=0.1, y_margin=0.1)
     return (xmin, xmax, ymin, ymax)
 end
 
-set_proper_bounds_for_graph_plot!(ax, p; kwargs...) = limits!(ax, find_proper_bounds_for_graph_plot(p; kwargs...)...)
+function set_proper_bounds_for_graph_plot!(ax::Axis, p; kwargs...)
+    bounds = find_proper_bounds_for_graph_plot(p; kwargs...)
+    isnothing(bounds) || limits!(ax, bounds...)
+    return nothing
+end
 
-function get_edge_labels(Bnc::Bnc; half::Bool=false, f=nothing)::Dict{Edge,String}
+function set_proper_bounds_for_graph_plot!(ax::Axis3, p; kwargs...)
+    bounds = find_proper_bounds_for_graph_plot(p; kwargs...)
+    isnothing(bounds) || limits!(ax, bounds...)
+    return nothing
+end
+
+_render_graph_symbolic(expr) = replace(sprint(show, MIME"text/plain"(), expr), '\n' => ' ')
+
+function _edge_interface_label(Bnc::Bnc, from, to; log_space::Bool=false, lhs_idx::Union{Nothing,Integer}=nothing)
+    C, C0 = get_interface(Bnc, from, to)
+    if isnothing(lhs_idx) || abs(C[lhs_idx]) <= 1e-10
+        cond = show_condition_poly(C, C0, 0; syms=qK_sym(Bnc), log_space=log_space)
+        return _render_graph_symbolic(cond)
+    end
+    eq = solve_sym_expr(C, C0, qK_sym(Bnc), lhs_idx; log_space=log_space)
+    return string(_render_graph_symbolic(eq.lhs), " > ", _render_graph_symbolic(eq.rhs))
+end
+
+function get_edge_labels(Bnc::Bnc; half::Bool=false, f=nothing, log_space::Bool=false, lhs_idx::Union{Nothing,Integer}=nothing)::Dict{Edge,String}
     vg = get_regimes_graph!(Bnc; full=true)
     labels = Dict{Edge,String}()
-    render = isnothing(f) ? (from, to) -> get_change_dir_qK(Bnc, from, to) |> x -> sym_direction(Bnc, x) : f
+    render = isnothing(f) ? (from, to) -> _edge_interface_label(Bnc, from, to; log_space=log_space, lhs_idx=lhs_idx) : f
     for (i, edges) in enumerate(vg.neighbors)
         get_nullity(Bnc, i) > 1 && continue
         for e in edges
@@ -109,18 +155,29 @@ function get_edge_labels(Bnc::Bnc; half::Bool=false, f=nothing)::Dict{Edge,Strin
     return labels
 end
 
-@inline _resolve_graph_layout(grh::AbstractGraph, layout) = layout isa AbstractVector ? Point2f.(layout) : Point2f.(layout(grh))
+@inline _point_type(plot_dim::Integer) = plot_dim == 3 ? Point3f : Point2f
+_default_graph_layout(plot_dim::Integer) = Spring(; dim=plot_dim)
 
-function get_node_positions(model::Bnc; layout=Spring(; dim=2), kwargs...)
-    return _resolve_graph_layout(get_neighbor_graph_x(model), layout)
+function _resolve_graph_layout(grh::AbstractGraph, layout; plot_dim::Integer=2)
+    P = _point_type(plot_dim)
+    return layout isa AbstractVector ? P.(layout) : P.(layout(grh))
 end
 
-function get_node_positions(grh::AbstractGraph; layout=Spring(; dim=2), kwargs...)
-    return _resolve_graph_layout(grh, layout)
+function get_node_positions(model::Bnc; layout=nothing, plot_dim::Integer=2, kwargs...)
+    layout = isnothing(layout) ? _default_graph_layout(plot_dim) : layout
+    return _resolve_graph_layout(get_neighbor_graph_x(model), layout; plot_dim=plot_dim)
+end
+
+function get_node_positions(grh::AbstractGraph; layout=nothing, plot_dim::Integer=2, kwargs...)
+    layout = isnothing(layout) ? _default_graph_layout(plot_dim) : layout
+    return _resolve_graph_layout(grh, layout; plot_dim=plot_dim)
 end
 
 get_node_positions(p) = p.node_pos[]
-set_node_positions(p, new_pos) = (p.node_pos[] = Point2f.(new_pos))
+function set_node_positions(p, new_pos)
+    P = isempty(p.node_pos[]) ? Point2f : typeof(first(p.node_pos[]))
+    p.node_pos[] = P.(new_pos)
+end
 
 function get_node_colors(model, regimes=nothing; singular_color="#CCCCFF", asymptotic_color="#FFCCCC", regular_color="#CCFFCC")::Vector{String}
     all_regimes = isnothing(regimes) ? get_regimes(model; return_idx=true) : regimes
@@ -168,7 +225,7 @@ function _filter_edge_labels_for_nodes(edge_labels, grh::AbstractGraph, keep_nod
     if edge_labels isa Dict
         labels = Dict{Edge,Any}()
         for (e, lbl) in edge_labels
-            (e.src in keep_set && e.dst in keep_set) || continue
+            (e.src in keep_set && e.dst in keep_set && has_edge(grh, e.src, e.dst)) || continue
             labels[Edge(old_to_new[e.src], old_to_new[e.dst])] = lbl
         end
         return labels
@@ -184,6 +241,11 @@ function _filter_edge_labels_for_nodes(edge_labels, grh::AbstractGraph, keep_nod
     end
 end
 
+@inline function _hide_isolated_nodes(grh::AbstractGraph, nodes::AbstractVector{<:Integer}; hide::Bool=false)
+    hide || return collect(Int.(nodes))
+    return [Int(i) for i in nodes if degree(grh, i) > 0]
+end
+
 function _materialize_node_sizes(raw_node_size, node_indices::AbstractVector{<:Integer})
     if raw_node_size isa AbstractDict
         return [raw_node_size[i] for i in node_indices]
@@ -195,12 +257,26 @@ end
 
 draw_graph(model; kwargs...) = draw_graph(get_binding_network(model), get_neighbor_graph_qK(model); kwargs...)
 
-function draw_graph(grh::SISOPaths; layout=Spring(; dim=2), kwargs...)
+function draw_graph(
+    grh::SISOPaths;
+    layout=nothing,
+    edge_labels=nothing,
+    use_x_space_neighbor_layout::Bool=true,
+    plot_dim::Integer=2,
+    kwargs...,
+)
     bn = get_binding_network(grh)
-    change_sym = qK_sym(bn)[grh.change_qK_idx]
     qk_grh = get_neighbor_graph_qK(grh)
-    edge_labels = ["+" * repr(change_sym) for _ in 1:ne(qk_grh)]
-    return draw_graph(bn, qk_grh; edge_labels=edge_labels, layout=layout, kwargs...)
+    edge_labels = isnothing(edge_labels) ? get_edge_labels(bn; lhs_idx=grh.change_qK_idx, log_space=false) : edge_labels
+    return draw_graph(
+        bn,
+        qk_grh;
+        edge_labels=edge_labels,
+        layout=layout,
+        use_x_space_neighbor_layout=use_x_space_neighbor_layout,
+        plot_dim=plot_dim,
+        kwargs...,
+    )
 end
 
 function draw_graph(
@@ -213,40 +289,56 @@ function draw_graph(
     node_labels=nothing,
     node_colors=nothing,
     add_rgm_idx::Bool=true,
+    use_x_space_neighbor_layout::Bool=true,
+    hide_isolated_nodes::Bool=false,
+    edge_label_log_space::Bool=false,
+    edge_label_lhs_idx::Union{Nothing,Integer}=nothing,
+    plot_dim::Integer=2,
     hide_nullity_ge_2::Bool=false,
     figsize=(1000, 1000),
-    layout=Spring(; dim=2),
+    layout=nothing,
     kwargs...,
 )
+    plot_dim in (2, 3) || throw(ArgumentError("plot_dim must be 2 or 3."))
     grh = isnothing(grh) ? get_neighbor_graph_qK(model) : grh
     full_grh = grh
+    layout_grh_full = use_x_space_neighbor_layout ? get_neighbor_graph_x(model) : full_grh
+    layout = isnothing(layout) ? _default_graph_layout(plot_dim) : layout
+    P = _point_type(plot_dim)
 
-    edge_labels = isnothing(edge_labels) ? get_edge_labels(model) : edge_labels
-    posi = isnothing(node_posi) ? get_node_positions(grh; layout=layout) : Point2f.(node_posi)
+    edge_labels = isnothing(edge_labels) ? get_edge_labels(model; log_space=edge_label_log_space, lhs_idx=edge_label_lhs_idx) : edge_labels
     node_labels = isnothing(node_labels) ? get_node_labels(model) : collect(node_labels)
     node_colors = isnothing(node_colors) ? get_node_colors(model) : collect(node_colors)
     raw_node_size = isnothing(node_size) ? get_node_size(model; default_node_size=default_node_size) : node_size
 
-    keep_nodes = _node_subset_by_nullity(model; hide_nullity_ge_2=hide_nullity_ge_2)
+    keep_nodes = _node_subset_by_nullity(model; hide_nullity_ge_2=hide_nullity_ge_2) |> x -> _hide_isolated_nodes(full_grh, x; hide=hide_isolated_nodes)
     node_indices = if length(keep_nodes) < nv(grh)
         grh, _ = induced_subgraph(grh, keep_nodes)
+        layout_grh, _ = induced_subgraph(layout_grh_full, keep_nodes)
         edge_labels = _filter_edge_labels_for_nodes(edge_labels, full_grh, keep_nodes)
-        posi = posi[keep_nodes]
+        posi = isnothing(node_posi) ? get_node_positions(layout_grh; layout=layout, plot_dim=plot_dim) : P.(node_posi)[keep_nodes]
         node_labels = node_labels[keep_nodes]
         node_colors = node_colors[keep_nodes]
         keep_nodes
     else
+        edge_labels isa Dict && (edge_labels = _filter_edge_labels_for_nodes(edge_labels, full_grh, collect(1:nv(full_grh))))
+        posi = isnothing(node_posi) ? get_node_positions(layout_grh_full; layout=layout, plot_dim=plot_dim) : P.(node_posi)
         collect(1:length(node_labels))
     end
     node_size_vec = _materialize_node_sizes(raw_node_size, node_indices)
+    regime_idx_texts = "#" .* string.(node_indices)
 
     f = Figure(size=figsize)
-    ax = Axis(
-        f[1, 1],
-        title="Dominant mode of " * strip_before_bracket(repr(model.q_sym)),
-        titlealign=:right,
-        titlegap=2,
-    )
+    ax = if plot_dim == 3
+        Axis3(f[1, 1], title="Dominant mode of " * strip_before_bracket(repr(model.q_sym)))
+    else
+        Axis(
+            f[1, 1],
+            title="Dominant mode of " * strip_before_bracket(repr(model.q_sym)),
+            titlealign=:right,
+            titlegap=2,
+        )
+    end
 
     p = graphplot!(
         ax,
@@ -254,18 +346,25 @@ function draw_graph(
         node_color=node_colors,
         elabels=edge_labels,
         node_size=node_size_vec,
-        ilabels=node_labels,
+        ilabels=plot_dim == 3 ? nothing : node_labels,
         layout=posi,
         arrow_size=20,
         arrow_shift=0.8,
         edge_color=(:black, 0.7),
         kwargs...,
     )
-    hidedecorations!(ax)
-    hidespines!(ax)
+    if ax isa Axis
+        hidedecorations!(ax)
+        hidespines!(ax)
+    end
     set_proper_bounds_for_graph_plot!(ax, p)
 
-    add_rgm_idx && add_nodes_text!(ax, p)
+    if plot_dim == 3
+        add_nodes_text!(ax, p, node_labels; align=(:center, :center), offset=(0, 0))
+        add_rgm_idx && add_nodes_text!(ax, p, regime_idx_texts; align=(:center, :bottom), offset=(0, 10))
+    else
+        add_rgm_idx && add_nodes_text!(ax, p, regime_idx_texts)
+    end
     return f, ax, p
 end
 

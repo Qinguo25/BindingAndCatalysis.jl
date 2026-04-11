@@ -9,7 +9,7 @@ export get_C_C0_x, get_C_x, get_C0_x
 export get_C_C0_nullity_qK, get_C_C0_qK, get_C_qK, get_C0_qK
 export get_C_C0_nullity, get_C_C0, get_C, get_C0
 export check_feasibility_with_constraint, feasible_vertieces_with_constraint
-export get_polyhedron, get_volume
+export get_polyhedron, get_volume, get_polyhedra
 export is_neighbor, get_interface, get_change_dir
 export get_function
 
@@ -1013,7 +1013,10 @@ Convenience wrapper that pulls constraints from a vertex or model.
 """
 get_polyhedron(args...)=get_polyhedron(get_C_C0_nullity_qK(args...)...)
 
-
+function get_polyhedra(model::Bnc, vtxs::Union{AbstractVector{T},Nothing}=nothing; kwargs...) where T 
+    vtxs = isnothing(vtxs) ? get_regimes(model;kwargs...) : vtxs
+    get_polyhedron.(Ref(model), vtxs)
+end
 """
     get_intersect(bnc, vtx1, vtx2) -> Polyhedron
 
