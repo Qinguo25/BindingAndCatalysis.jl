@@ -928,7 +928,7 @@ function slice_polyhedron(poly::Polyhedron; fixed_idx::AbstractVector{<:Integer}
     
     ps = get_hyperplane.(fixed_idx)
     poly = intersect(poly, ps...)
-    return eliminate(poly, BitSet(fixed_idx))
+    return backend_eliminate(poly, BitSet(fixed_idx); prefer_fastpath=backend_prefers_fastpath(poly))
 end
 
 _f64(x) = Float64.(collect(x))

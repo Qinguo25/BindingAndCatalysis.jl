@@ -40,14 +40,7 @@ function _affine_mapping_polyhedra(C,C0,M,M0)
 
     C_full = vcat(Eq, In)
     C0_full = vcat(M0, C0)
-
-    if !any(x -> x isa ExactLogExpr, C0_full)
-        return cdd_project_hrep(C_full, C0_full, n_qK, BitSet((n_qK + 1):(n_qK + n_x)))
-    end
-
-    poly = get_polyhedron(C_full, C0_full, n_qK)
-    poly_elim = eliminate(poly, BitSet((n_qK + 1):(n_qK + n_x)))
-    return get_C_C0_nullity(poly_elim)
+    return backend_project_hrep(C_full, C0_full, n_qK, BitSet((n_qK + 1):(n_qK + n_x)))
 end
 
 
@@ -648,7 +641,7 @@ function get_interface_qK(Bnc, from, to)::Tuple{SparseVector{Float64,Int}, Float
     grh = get_regimes_graph!(Bnc; full=true)
     edge = get_edge(grh, from, to; full=true)
     if edge === nothing
-        @info "no directly edge found, judge using Polyhedra.jl, could be problematic if you concerning changing direction"
+        @info "No direct regime-graph edge found; falling back to direct interface reconstruction."
         return get_interface_direct(Bnc, from, to)
     elseif !_edge_has_qK_interface(edge)
         @error("Vertices $get_perm(Bnc, from) and $get_perm(Bnc, to) are neighbors in x space but not in qK space")

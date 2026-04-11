@@ -898,6 +898,10 @@ regular 情况下很多东西可直接通过矩阵逆得到；singular 情况下
 
 - `ExactLogExpr` 不能直接作为 cddlib 的 `mytype`。原因不是简单的 FFI 包装缺失，而是代数结构不匹配：cddlib 的核心算法要求底层标量对 `+,-,*,/,cmp` 封闭并形成可比较的数域；而 `ExactLogExpr` 目前只是“有理数 + 若干 `log10(p)` 的线性组合”，不对一般乘法封闭，比较也依赖 `Float64` 近似。
 - 因此目前采用的是 hybrid 路线：exact / symbolic 条件仍然保留在项目上层；需要高性能几何运算时，在 float mode 下通过内部 `CddBridge` 把 Native H-rep 暂时桥接到 `CDDLib.jl`，做完相交 / 投影后再转回项目内表示。
+- 业务代码现在不再直接碰 `CDDLib.jl` / `Polyhedra.jl` / `CddBridge` 的细节。后端选择统一收口在 [src/PolyBackend.jl](/home/joker/Realizibility_index/BindingAndCatalysis.jl/src/PolyBackend.jl)：
+  - `SISO.jl`、`regimes.jl`、`Bnc_regime.jl`、`visualize.jl` 只调用 `backend_eliminate`、`backend_intersect_eliminate`、`backend_intersect_many`、`backend_project_hrep` 这类 facade。
+  - `PolyBackend` 内部再决定走 `NativePolyhedra`、float `CDDLib.jl`，还是 exact `cddlog` bridge。
+  - 这样 `NativePolyhedra` 重新保持为纯算法模块，不再通过 hook 反向依赖外部后端策略。
 - 当前已经接入的 float-mode bridge 主要有两段：
   - `regimes.jl` 里的 singular `qK` 条件 affine-mapping projection
   - `SISO/get_polyhedra` 里的 edge projection 和 suffix-DAG path-state intersection

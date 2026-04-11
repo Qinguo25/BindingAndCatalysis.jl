@@ -174,7 +174,7 @@ function _calc_C_qKk_catalysis_only_singular(bind_rgm::BindRegime, cat_rgm::Cata
 
     p = get_polyhedron(C, C0, n_qK)
     delset = BitSet((n_qK + n_v + 1):(n_qK + n_v + n_x))
-    p2 = eliminate(p, delset)
+    p2 = backend_eliminate(p, delset; prefer_fastpath=backend_prefers_fastpath(_affine_is_exact(bind_rgm.network)))
 
     return get_C_C0_nullity(p2)
 end
@@ -505,7 +505,7 @@ function _calc_C_qKk_cat_singular(bind_rgm::BindRegime, cat_rgm::CatalysisRegime
 
     p = get_polyhedron(C, C0, n_qK)
     delset = BitSet((n_qK + n_v + 1):(n_qK + n_v + n_x))
-    p2 = eliminate(p, delset)
+    p2 = backend_eliminate(p, delset; prefer_fastpath=backend_prefers_fastpath(_affine_is_exact(bind_rgm.network)))
 
     return get_C_C0_nullity(p2)
 end
@@ -620,7 +620,7 @@ function _calc_C_qKk_ss_singular(bind_rgm::BindRegime, cat_rgm::CatalysisRegime)
     n_eq = d_ss + r + r_cat
     p = get_polyhedron(C, C0, n_eq)
     delset = BitSet((d_ss + r + n_v + 1):(d_ss + r + n_v + n_x))
-    p2 = eliminate(p, delset)
+    p2 = backend_eliminate(p, delset; prefer_fastpath=backend_prefers_fastpath(_affine_is_exact(bn)))
 
     return get_C_C0_nullity(p2)
 end

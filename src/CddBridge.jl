@@ -18,10 +18,26 @@ function _native_to_cdd(poly::NativePolyhedra.Polyhedron)
         b = Float64[-1.0]
         return Polyhedra.polyhedron(Polyhedra.hrep(A, b), _CDD_FLOAT_LIB)
     end
-    rep = NativePolyhedra.hrep(poly)
-    A = Matrix{Float64}(rep.A)
-    b = isempty(rep.b) ? Float64[] : Float64[x for x in rep.b]
-    return Polyhedra.polyhedron(Polyhedra.hrep(A, b, rep.linset), _CDD_FLOAT_LIB)
+
+    # Do not call `NativePolyhedra.hrep(poly)` here.
+    # That path canonicalizes in place and is not safe when multiple threads
+    # convert the same shared node polyhedron concurrently during SISO edge work.
+    halfspaces = copy(poly.halfspaces)
+    m = length(halfspaces)
+    A = Matrix{Float64}(undef, m, n)
+    b = Vector{Float64}(undef, m)
+    linset = BitSet()
+
+    for (i, hs) in enumerate(halfspaces)
+        row = NativePolyhedra._constraint_vector(hs)
+        @inbounds for j in 1:n
+            A[i, j] = Float64(row[j])
+        end
+        b[i] = Float64(NativePolyhedra._constraint_rhs(hs))
+        NativePolyhedra._isequality(hs) && push!(linset, i)
+    end
+
+    return Polyhedra.polyhedron(Polyhedra.hrep(A, b, linset), _CDD_FLOAT_LIB)
 end
 
 function _cdd_to_native(poly; canonicalize::Bool=false)

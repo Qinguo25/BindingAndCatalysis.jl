@@ -17,10 +17,6 @@ export dim, fulldim, hashyperplanes, hyperplanes, allhalfspaces, issubset
 export feasible_point, interior_point
 
 _invalidate_vrep_cache!(x) = nothing
-const _external_eliminate_hook = Ref{Any}(nothing)
-register_eliminate_hook!(f) = (_external_eliminate_hook[] = f)
-_maybe_external_eliminate(poly, axes; canonicalize::Bool=true, method::Symbol=:auto) =
-    isnothing(_external_eliminate_hook[]) ? nothing : _external_eliminate_hook[](poly, axes; canonicalize=canonicalize, method=method)
 
 include("polyhedra_core.jl")
 include("vrep_core.jl")

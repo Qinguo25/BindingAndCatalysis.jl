@@ -19,8 +19,6 @@ using DataStructures:Queue,enqueue!,dequeue!,isempty
 using NonlinearSolve
 using Statistics:quantile
 using Distributions:Uniform, Normal
-import CDDLib
-import Polyhedra as PolyhedraExt
 
 include(joinpath(@__DIR__, "ExactTypes.jl"))
 using .ExactTypes: ExactLogExpr, exact_log10, exact_log10_ratio
@@ -28,9 +26,8 @@ using .ExactTypes: ExactLogExpr, exact_log10, exact_log10_ratio
 include(joinpath(@__DIR__, "NativePolyhedra/NativePolyhedra.jl"))
 using .NativePolyhedra
 include(joinpath(@__DIR__, "CddBridge.jl"))
-using .CddBridge: cdd_intersect_eliminate, cdd_intersect_many, cdd_eliminate, cdd_project_hrep, maybe_cddlog_eliminate, _can_use_cdd_fastpath
-NativePolyhedra.register_eliminate_hook!(maybe_cddlog_eliminate)
-const Polyhedra = NativePolyhedra
+include(joinpath(@__DIR__, "PolyBackend.jl"))
+using .PolyBackend: backend_prefers_fastpath, backend_intersect_eliminate, backend_intersect_many, backend_eliminate, backend_project_hrep, backend_prepare_fastpath, backend_fast_eliminate, backend_fast_intersect, backend_from_fastpath
 
 using Graphs
 import Printf

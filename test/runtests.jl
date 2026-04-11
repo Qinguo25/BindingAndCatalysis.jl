@@ -711,3 +711,20 @@ end
         @test get_C_C0_nullity(proj_poly) == (spzeros(Rational{Int}, 0, 5), ExactLogExpr[], 0)
     end
 end
+
+@testset "CddBridge Conversion Is Read Only" begin
+    poly = BindingAndCatalysis.polyhedron(BindingAndCatalysis.hrep(
+        [1 0; 1 0; -1 0; 0 1; 0 -1],
+        [1.0, 1.0, 0.0, 1.0, 0.0],
+    ); strong = false)
+    poly.normalized = false
+    before_len = length(poly.halfspaces)
+    before_norm = poly.normalized
+
+    cdd_poly = BindingAndCatalysis.CddBridge._native_to_cdd(poly)
+    roundtrip = BindingAndCatalysis.CddBridge._cdd_to_native(cdd_poly)
+
+    @test BindingAndCatalysis.NativePolyhedra.fulldim(roundtrip) == 2
+    @test length(poly.halfspaces) == before_len
+    @test poly.normalized == before_norm
+end
