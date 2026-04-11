@@ -1,0 +1,176 @@
+mutable struct SISOPaths{T}
+    bn::Bnc{T}
+    qK_grh::SimpleDiGraph
+    change_qK_idx::T
+
+    sources::Vector{Int}
+    sinks::Vector{Int}
+    paths_dict::Union{Nothing,Dict{Vector{Int},Int}}
+    rgm_paths::Vector{Vector{Int}}
+    path_edge_idxs::Vector{Vector{Int}}
+    edge_keys::Vector{Tuple{Int,Int}}
+
+    node_polys::Vector{Polyhedron}
+    node_polys_is_calc::BitVector
+    edge_polys::Vector{Polyhedron}
+    edge_polys_is_calc::BitVector
+
+    path_polys::Vector{Polyhedron}
+    path_volume::Vector{Volume}
+
+    path_volume_is_calc::BitVector
+    path_polys_is_calc::BitVector
+
+    function SISOPaths(model::Bnc{T}, qK_grh, change_qK_idx, sources, sinks, rgm_paths) where T
+        edge_keys, path_edge_idxs = _build_path_edge_index(rgm_paths)
+        node_polys = Vector{Polyhedron}(undef, n_regimes(model))
+        node_polys_is_calc = falses(length(node_polys))
+        edge_polys = Vector{Polyhedron}(undef, length(edge_keys))
+        edge_polys_is_calc = falses(length(edge_keys))
+        path_polys = Vector{Polyhedron}(undef, length(rgm_paths))
+        path_volume = Vector{Volume}(undef, length(rgm_paths))
+        path_volume_is_calc = falses(length(rgm_paths))
+        path_polys_is_calc = falses(length(rgm_paths))
+        new{T}(
+            model,
+            qK_grh,
+            change_qK_idx,
+            sources,
+            sinks,
+            nothing,
+            rgm_paths,
+            path_edge_idxs,
+            edge_keys,
+            node_polys,
+            node_polys_is_calc,
+            edge_polys,
+            edge_polys_is_calc,
+            path_polys,
+            path_volume,
+            path_volume_is_calc,
+            path_polys_is_calc,
+        )
+    end
+end
+
+function _build_paths_dict(rgm_paths::AbstractVector{<:AbstractVector{<:Integer}})
+    paths_dict = Dict{Vector{Int},Int}()
+    sizehint!(paths_dict, length(rgm_paths))
+    for (i, p) in enumerate(rgm_paths)
+        paths_dict[p] = i
+    end
+    return paths_dict
+end
+
+function _ensure_paths_dict!(grh::SISOPaths)
+    isnothing(grh.paths_dict) || return grh.paths_dict
+    grh.paths_dict = _build_paths_dict(grh.rgm_paths)
+    return grh.paths_dict
+end
+
+function _build_path_edge_index(rgm_paths::AbstractVector{<:AbstractVector{<:Integer}})
+    total_refs = sum(max(length(path) - 1, 0) for path in rgm_paths)
+    edge_keys = Tuple{Int,Int}[]
+    sizehint!(edge_keys, total_refs)
+    edge_dict = Dict{Tuple{Int,Int},Int}()
+    path_edge_idxs = Vector{Vector{Int}}(undef, length(rgm_paths))
+
+    for (path_idx, path) in enumerate(rgm_paths)
+        n_edges = max(length(path) - 1, 0)
+        idxs = Vector{Int}(undef, n_edges)
+        @inbounds for i in 1:n_edges
+            u = Int(path[i])
+            v = Int(path[i + 1])
+            a, b = u < v ? (u, v) : (v, u)
+            edge_key = (a, b)
+            edge_idx = get!(edge_dict, edge_key) do
+                push!(edge_keys, edge_key)
+                length(edge_keys)
+            end
+            idxs[i] = edge_idx
+        end
+        path_edge_idxs[path_idx] = idxs
+    end
+
+    return edge_keys, path_edge_idxs
+end
+
+@inline function _normalize_siso_path_selection(
+    grh::SISOPaths,
+    pth_idx::Union{AbstractVector,Nothing},
+)
+    return isnothing(pth_idx) ? collect(1:length(grh.rgm_paths)) : Int.(get_idx.(Ref(grh), pth_idx))
+end
+
+@inline function _path_indices_to_calculate(
+    is_calc::BitVector,
+    pth_idx::AbstractVector{<:Integer};
+    recalculate::Bool=false,
+)
+    idxs = Int.(pth_idx)
+    return recalculate ? idxs : filter(i -> !is_calc[i], idxs)
+end
+
+get_neighbor_graph_qK(grh::SISOPaths; kwargs...) = grh.qK_grh
+get_SISO_graph(grh::SISOPaths) = grh.qK_grh
+get_SISO_graph(model::Bnc, change_qK) = get_SISO_graph(get_regimes_graph!(model; full=true), change_qK)
+
+function get_SISO_graph(grh::VertexGraph, change_qK)::SimpleDiGraph
+    bn = get_binding_network(grh)
+    change_qK_idx = locate_sym_qK(bn, change_qK)
+    _ensure_full_regimes_graph!(grh)
+
+    n = length(grh.neighbors)
+    g = SimpleDiGraph(n)
+    for (i, edges) in enumerate(grh.neighbors)
+        get_nullity(bn, i) > 1 && continue
+        for e in edges
+            if !_edge_has_qK_interface(e) || e.to < i
+                continue
+            end
+            val = _edge_qK_interface(grh, e)[1][change_qK_idx]
+            if val > 1e-6
+                add_edge!(g, i, e.to)
+            elseif val < -1e-6
+                add_edge!(g, e.to, i)
+            end
+        end
+    end
+
+    return g
+end
+
+function SISOPaths(model::Bnc{T}, change_qK; rgm_paths=nothing) where {T}
+    change_qK_idx = locate_sym_qK(model, change_qK)
+
+    if rgm_paths === nothing
+        qK_grh = get_SISO_graph(model, change_qK)
+        sources, sinks = get_sources_sinks(model, qK_grh)
+        rgm_paths = _enumerate_paths(qK_grh; sources, sinks)
+    else
+        qK_grh = graph_from_paths(rgm_paths, n_regimes(model))
+        sources, sinks = get_sources_sinks(qK_grh)
+    end
+
+    return SISOPaths(model, qK_grh, change_qK_idx, sources, sinks, rgm_paths)
+end
+
+function get_path(grh::SISOPaths, pth_idx::Integer; return_idx::Bool=false)
+    rgm_idxs = grh.rgm_paths[pth_idx]
+    return return_idx ? rgm_idxs : get_perm.(Ref(get_binding_network(grh)), rgm_idxs)
+end
+
+function get_path(grh::SISOPaths, pth::AbstractVector; return_idx::Bool=false)
+    bn = get_binding_network(grh)
+    return return_idx ? get_idx.(Ref(bn), pth) : get_perm.(Ref(bn), pth)
+end
+
+get_binding_network(grh::SISOPaths, args...) = grh.bn
+get_C_C0_nullity_qK(grh::SISOPaths, pth_idx) = get_polyhedron(grh, pth_idx) |> get_C_C0_nullity
+
+get_idx(grh::SISOPaths, pth::AbstractVector) = let
+    bn = get_binding_network(grh)
+    idxs = get_idx.(Ref(bn), pth)
+    _ensure_paths_dict!(grh)[idxs]
+end
+get_idx(grh::SISOPaths, pth::Integer) = pth
