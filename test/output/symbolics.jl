@@ -20,3 +20,12 @@
     )
     @test all(s -> !occursin(".0", s), cat_exprs)
 end
+
+@testset "Exact SISO Rational Symbolics" begin
+    model = Bnc(N = [2 1 -1])
+    find_all_regimes!(model; mode = :exact)
+    siso = SISOPaths(model, 1)
+    cond = string(only(show_condition(siso, 1; log_space = false)))
+    @test !occursin("0.25", cond)
+    @test occursin("4", cond) || occursin("//4", cond)
+end

@@ -58,19 +58,36 @@ show_expression_mapping(C::AbstractVector{<:Real}, C0::Real, args...; kwargs...)
 @inline _render_condition_from(data::Tuple, syms; kwargs...) = show_condition_poly(data...; syms=syms, kwargs...)
 @inline _render_expression_from(data::Tuple, y, x; kwargs...) = show_expression_mapping(data..., y, x; kwargs...)
 
+function _exact_integer_power(base::Integer, exp::Rational{<:Integer})
+    denominator(exp) == 1 || return nothing
+    e = Int(numerator(exp))
+    b = big(base)
+    return e >= 0 ? (b ^ e) // 1 : 1 // (b ^ (-e))
+end
+
 function _exact_exp10_factor(b::ExactLogExpr)
-    out = one(Int)
+    out = one(BigInt) // one(BigInt)
     if !iszero(b.constant)
-        out *= 10 ^ b.constant
+        term = _exact_integer_power(10, b.constant)
+        isnothing(term) && return 10 ^ Float64(b)
+        out *= term
     end
     for (p, c) in sort!(collect(b.coeffs); by=first)
-        out *= p ^ c
+        term = _exact_integer_power(p, c)
+        isnothing(term) && return 10 ^ Float64(b)
+        out *= term
     end
     return out
 end
 
 _exp10_factor(b::ExactLogExpr) = _exact_exp10_factor(b)
-_exp10_factor(b::Real) = 10^b
+_exp10_factor(b::Integer) = _exact_integer_power(10, Int(b)//1)
+function _exp10_factor(b::Rational{<:Integer})
+    term = _exact_integer_power(10, Int(numerator(b)) // Int(denominator(b)))
+    return isnothing(term) ? 10^Float64(b) : term
+end
+_exp10_factor(b::AbstractFloat) = 10^b
+_exp10_factor(b::Real) = 10^Float64(b)
 
 function handle_log_weighted_sum(A::AbstractMatrix{<:Real}, x, b::Union{Nothing,AbstractVector{<:Real}}=nothing)::Vector{Num}
     rows = size(A, 1)
