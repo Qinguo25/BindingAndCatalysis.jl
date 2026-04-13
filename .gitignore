@@ -2,5 +2,9 @@ Manifest.toml
 Examples/Manifest.toml
 .vscode/
 .github/workflows/copilot-instructions.md
-test/unfinished_or_outdated_stuff/
+unfinished_or_outdated_stuff/
 cddlib-master
+noback/
+.build/
+src/cddlib*
+src/lrs*
