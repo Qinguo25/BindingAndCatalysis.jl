@@ -84,6 +84,40 @@
     end
 end
 
+@testset "Minimal Binding-Catalysis qssKk Example" begin
+    L = [
+        0 1 1
+        1 0 1
+    ]
+    N = [1 1 -1]
+    model = Bnc(L = L, N = N, x_sym = [:E, :S, :C], q_sym = [:tS, :tE], K_sym = [:K])
+    update_catalysis!(
+        model;
+        Γ = [1 -1],
+        Π = [0 0 1; 0 1 0],
+        q_picked = [:tS],
+        k_sym = [:β, :γ],
+    )
+
+    find_all_regimes!(model; mode = :exact)
+    find_catalysis_regimes!(model)
+    match_regimes!(model)
+
+    @test n_regimes(model) == 4
+    @test n_regimes(get_catalysis_network(model)) == 1
+
+    mixed = get_bnc_regime(model, 1, 1; check = true)
+    @test get_binding_perm(mixed) == [2, 1]
+    @test get_catalysis_perm(mixed) == [1, 2]
+    @test string.(BindingAndCatalysis.qssKk_sym(mixed)) == ["tE", "K", "β", "γ"]
+    @test string.(show_condition_qssKk(mixed; log_space = false)) == ["tE*β ~ K*γ", "K > tE"]
+
+    C_qssKk, C0_qssKk, nlt_qssKk = get_C_C0_nullity_qssKk(mixed)
+    @test Matrix(C_qssKk) == Rational{Int}[1 -1 1 -1; -1 1 0 0]
+    @test C0_qssKk == ExactLogExpr[0, 0]
+    @test nlt_qssKk == 1
+end
+
 @testset "Catalysis Exact Mixed Mode" begin
     model = minimal_catalysis_model()
     find_all_regimes!(model; mode = :exact)

@@ -286,7 +286,16 @@ get_binding_network(grh::VertexGraph,args...) = grh.bn
 
 Return the x-space neighbor graph for a vertex graph.
 """
-get_neighbor_graph_x(grh::VertexGraph) = grh.x_grh
+function get_neighbor_graph_x(grh::VertexGraph)
+    n = length(grh.neighbors)
+    g = SimpleGraph(n)
+    for (i, edges) in enumerate(grh.neighbors)
+        for e in edges
+            add_edge!(g, i, e.to)
+        end
+    end
+    return g
+end
 """
     get_neighbor_graph_x(bnc::Bnc) -> SimpleGraph
 
@@ -336,7 +345,6 @@ Alias for `get_neighbor_graph_qK`.
 get_neighbor_graph(args...; kwargs...) = get_neighbor_graph_qK(args...; kwargs...)
 
     
-
 
 
 

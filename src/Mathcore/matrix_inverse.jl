@@ -760,8 +760,14 @@ function _bareiss_det_big(A::AbstractMatrix{<:Integer})::BigInt
 
     @inbounds for k in 1:(n - 1)
         if B[k, k] == 0
-            swap = findfirst(i -> B[i, k] != 0, (k + 1):n)
-            swap === nothing && return BigInt(0)
+            swap = 0
+            for i in (k + 1):n
+                if B[i, k] != 0
+                    swap = i
+                    break
+                end
+            end
+            swap == 0 && return BigInt(0)
             B[k, :], B[swap, :] = B[swap, :], B[k, :]
             sign = -sign
         end
