@@ -57,7 +57,9 @@ end
 end
 
 @inline function _cleanup_affine_vector!(v::AbstractVector{T}, tol::Float64) where {T<:Real}
-    tol > 0 && droptol!(v, tol)
+    if T <: AbstractFloat
+        tol > 0 && droptol!(v, tol)
+    end
     return v
 end
 
@@ -286,7 +288,7 @@ function _initialize_regular_seed_affine!(
 
     rgm.nullity = 0
     rgm.H = H
-    rgm.H0 = vec(Float64.(-(H * rgm.M0)))
+    rgm.H0 = vec(-(H * rgm.M0))
     return nothing
 end
 
@@ -553,7 +555,7 @@ function _finalize_deferred_affine_and_nullity!(
         nlt == 1 || continue
 
         rgm.H = H
-        rgm.H0 = vec(Float64.(-(H * rgm.M0)))
+        rgm.H0 = vec(-(H * rgm.M0))
     end
 
     return nothing

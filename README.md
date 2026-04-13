@@ -16,7 +16,10 @@ For local development:
 using Pkg
 Pkg.develop(path="/path/to/BindingAndCatalysis.jl")
 Pkg.instantiate()
+Pkg.build()
 ```
+
+`Pkg.build()` 会尝试编译仓库内 vendored 的 `cddlib` 变体到 `.build/cddlog/src`。如果本机没有可用的 C 编译器，包仍然可以使用，但多面体投影/消元会回退到 `NativePolyhedra` 后端。
 
 To work with the examples, activate the Examples environment:
 
@@ -24,6 +27,7 @@ To work with the examples, activate the Examples environment:
 using Pkg
 Pkg.activate("Examples")
 Pkg.instantiate()
+Pkg.build()
 ```
 
 ## Quick start

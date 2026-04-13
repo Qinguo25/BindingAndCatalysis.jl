@@ -1,0 +1,10 @@
+prefix=/usr/local
+exec_prefix=${prefix}
+libdir=${exec_prefix}/lib
+includedir=${prefix}/include
+
+Name: cddlog
+Description: C library implementing Double Description Method with exact logarithmic backend
+Version: 0.94n
+Libs:  -L${libdir} -lcddlog -lgmp -lm
+Cflags: -I${includedir} -DCDDLOGARITHMIC

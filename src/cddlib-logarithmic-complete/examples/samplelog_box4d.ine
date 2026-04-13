@@ -1,0 +1,12 @@
+H-representation
+begin
+ 8 5 logarithmic
+ 0 1 0 0 0
+ log(2/1) -1 0 0 0
+ 0 0 1 0 0
+ log(3/1) 0 -1 0 0
+ 0 0 0 1 0
+ log(5/1) 0 0 -1 0
+ 0 0 0 0 1
+ log(7/1) 0 0 0 -1
+end

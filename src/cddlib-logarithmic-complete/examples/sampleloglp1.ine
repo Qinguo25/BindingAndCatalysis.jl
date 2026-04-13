@@ -1,0 +1,10 @@
+* sampleloglp1.ine
+* maximize x subject to 0 <= x <= log(2)
+H-representation
+begin
+ 2 2 logarithmic
+ 0 1
+ log(2/1) -1
+end
+maximize
+ 0 1

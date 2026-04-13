@@ -1,0 +1,5 @@
+include("helpers.jl")
+include("api_smoke.jl")
+include("exact_mode.jl")
+include("reference_examples.jl")
+include("projection_and_redundancy.jl")

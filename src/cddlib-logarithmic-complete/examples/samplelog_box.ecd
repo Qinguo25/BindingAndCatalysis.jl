@@ -1,0 +1,8 @@
+ecd_file: Incidence of generators and inequalities
+begin
+  4    5
+ 1 2 : 1 3 
+ 2 2 : 2 3 
+ 3 2 : 1 4 
+ 4 2 : 2 4 
+end

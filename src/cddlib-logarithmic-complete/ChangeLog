@@ -1,0 +1,366 @@
+=================
+cddlib Change Log
+=================
+
+.. current developments
+
+v0.94n
+====================
+
+**Added:**
+
+* Parameter names in function declarations.
+
+**Fixed:**
+
+* Fix potential dd_MatrixCanonicalize segfault.
+* The cddlib.pc file now has correct linkage to cddlib (the non-gmp version).
+  To link against the gmp version, you can use the new cddgmp.pc file.
+  For instance::
+
+    pkg-config cddlib --cflags --libs
+
+  will fetch all compiler and link flags for the non-gmp version of cddlib,
+  and::
+
+    pkg-config cddgmp --cflags --libs
+
+  will get them for the gmp version of cddlib.
+* Copy certificate and handle errors correctly in dd_SRedundant
+  for the V-representation code path
+* cddlib is now thread-safe. We protect static variables with `_Thread_local` directives in the implementation, as provided by the C11 standard of the C language and supported by all supported recent compilers without adding any extra flags.
+
+
+
+v0.94m
+====================
+
+**Fixed:**
+
+* Fix and error, where a non-redundant linearity could be considered redundant.
+* Fix an optimization error in ViaShooting code so that the linear programs are now much smaller.
+* Fixed memory leaks in the redundancy code.
+* Updated version number in dd_DDVERSION define.
+
+
+
+v0.94l
+====================
+
+**Fixed:**
+
+* `extern C` block in cdd.h header for C++ (thanks to @jengelh)
+
+
+
+v0.94k
+====================
+- header files are now installed to PREFIX/include/cddlib to avoid clashes
+  with other libraries.
+- configuration file for pkg-config added: assuming cddlib installed in
+  <prefix> known to pkg-config, "pkg-config --cflags cddlib" etc will
+  work. (Otherwise, one would need PKG_CONFIG_PATH=<prefix>/lib/pkgconfig).
+
+v0.94jg
+====================
+- Thanks to Julian Rüth, modernized autotooling, mirrored
+  code on GitHub, introduced cddexec as a replacement of
+  cdd_both_reps that many distributions packaged, made
+  randomization portable. Thanks to Matthias C. M. Troffaes, fixed
+  representation type in dd_MatrixAppendTo.
+
+v094ig
+====================
+- The missing definition of dd_set_d function in the case of
+  -DGMPRATIONAL flag is used.  The only change is in cddmp.h.
+  The use of this function is explained in testcdd2.c program.
+  This function is useful when input is mostly float (real).
+  Even such a case, running on the rational exact arithmetic
+  might be helpful to debug the floating point computation.
+
+v094hg
+====================
+- Thanks to Mathieu Dutour, one minor bug has been fixed.
+
+v094gg
+====================
+- Thanks to both Anders Jensen and Mathieu Dutour
+  a few memory leaks in cddlib.c and cddlp.c have been
+  fixed.  Also, some patches sent by Jerry James have
+  been applied.  These were for making the library
+  shared and more compatible for C++ compilers.
+
+v094fg
+====================
+- Thanks to Sven Verdoolaege's fixes,
+  the "configure" script now uses "gcc" as the default
+  compiler, rather than "g++" in earlier releases,
+  and the libraries can be linked properly with
+  both C and C++ programs.
+
+v094eg
+====================
+- A bug of reporting a wrong (sign) certificate of
+  an infeasible LP is fixed.  This bug reported by
+  Charles Geyer, occurs if the exact GMP version of
+  the dd_LPSolve is used with minimization. A bug of
+  reporting infeasibility of a feasible LP with
+  column non-full rank LP is fixed.  This bug was reported
+  by Sven Verdoolaege.
+
+v094dg
+====================
+- A bug of reporting a wrong unbounded direction vector of
+  a dual inconsistent LP is fixed.  This bug occurs only
+  if the exact GMP version of the dd_LPSolve is used.
+  For example, this error may occur in scdd_gmp.  This
+  error was reported by Lars Schewe.
+
+v094cg
+====================
+- A bug for reading a rational number of length longer
+  than 255 characters have been fixed. This was reported
+  by Ruriko Yoshida. Now the longest
+  number is controlled by dd_wordlenmax defined in
+  cddtypes.h .  The longest line is also controlled by
+  dd_linelenmax .  These are currently fixed to
+  1024 and 4096.  Larger numbers and lines can be
+  handled by modifying these numbers and recompilation.
+
+v094bg
+====================
+- A bug for the representation conversion, reported by
+  Michal Kvasnica, was fixed.  The earlier 094* versions
+  prematurely terminate the conversion when the number
+  of rows is equal to the number of columns in the input.
+  This means the earlier 094* do not compute correctly
+  for simplices, for example.
+
+v094ag
+====================
+- A bug of dd_LPSolve is fixed.  This bug, reported by
+  Dima Pasechnik, due to a mishandling of cycling of LP
+  algorithms, is fixed.
+
+v094g
+====================
+- dd_MatrixCanonicalize has been added.  This reduces
+  matrix M to a minimal representation by computing
+  all implicit linearity rows and all redundant rows.
+  It applies lexicographic sorting of rows to remove
+  duplicates before applying redundancy removal.
+  This function combines the two computations together
+  in more efficient manner than before.
+  See the new redcheck.c for its use.  Several basic
+  operations for matrices have been added, such as
+  dd_MatrixRowsRemove and dd_MatrixRowsRemove2.
+
+  The representation conversion dd_DDMatrix2Poly now
+  handles the empty H-polyhedra properly, by calling
+  an LP-based emptiness checker before running the double
+  description algorithm.
+
+  New functions finding specific points in H-polyhedra
+  are added.  dd_ExistsRestrictedFace is a general inequality
+  system solver with specified equations, inequalities and
+  strict inequalities.   dd_FindRelativeInterior finds
+  a point in the relative interior of a polyhedron.
+
+
+v093dg
+====================
+- The problem of outputting the running log has been corrected.
+  This problem and a solution was communicated by Charles Geyer.
+  Now, a new global dd_boolean variable dd_log (= dd_FALSE by default)
+  controls log output.  An scdd/lcdd bug of terminating with segmentation
+  fault when an input polyhedron is numerically delicate has been
+  corrected.  This bug was reported by Stefan Volkwein.
+
+v093cg
+====================
+- A bug of Phase I of the dual simplex method in floating-point
+  arithmetics is fixed.  The problem (bus error) occurred when input data
+  is not appropriate for floating-point arithmetics.  The problem
+  occurs even for the GMP executables as the exact LP solver first
+  tries to detect the terminal basis with float-point arithmetics.
+
+v093bg
+====================
+- The nonterminating problem of the LP solver has been fixed.
+  This was due to a cycling of the criss-cross method in
+  floating-point arithmetics, that is extremely rare.
+  Also, the phase I of the dual simplex method has been
+  modified.  The auxiliary LP is perhaps less likely to
+  be degenerate.
+
+v093ag
+====================
+- The LP basis finding procedure dd_FindLPBasis2 has been
+  updated.  The functions dd_Matrix2WeakAdjacency, dd_SRedundant and
+  dd_SRedundantRows are added.  The manual has been updated.
+
+v093g
+====================
+- dd_LPSolve with GMP now runs first with floating point arithmetics
+  and checks with GMP the correctness of the result. New functions dd_Matrix2Adjacency,
+  dd_FourierElimination, dd_BlockElimination, dd_DDMatrix2Poly2 are added.
+  Some minor memory leak problems are fixed. (Thanks to the excellent
+  memory debugger valgrind on linux.)
+
+v092bg
+====================
+- An illegal memory access for EqualityIndex reported by
+  Thao Dang is fixed.  Another bug of lcdd_gmp which takes
+  "real" data and return a false result is fixed.  It now warns
+  that input is not correct for the exact arithmetic lcdd_gmp.
+  This error was reported by Andras Salamon.
+
+v092ag
+====================
+- Joerg Rambau kindly created an autoconf distribution of
+  cddlib-092.  This version 092a is made from Rambau's
+  version with a slight modification.  For the moment,
+  the Mathematica cdd interface, cddmathlink (in src-mathlink),
+  still needs to be handled in the conventional manner by
+  editing Makefile.
+
+v092g
+====================
+- the default value of dd_almostzero is now set to 1.0E-7
+  instead of 1.0E-6.  New functions are added for checking
+  redundancy of H- and V- representations such as
+  dd_Redundant, dd_RedundantRows, dd_ImplicitLinearity,
+  dd_ImplicitLinearityRows, and dd_RayShooting.
+  Also some basic operations on dd_MatrixPtr have been added such as
+  dd_MatrixAppendTo, dd_MatrixRowRemove, dd_MatrixSubmatrix.
+
+  The names of enumeration type variables have been modified.
+  Now all names have prefix "dd_", e.g. Rational, Integer are
+  now dd_Rational and dd_Integer.  This applies to TRUE and FALSE,
+  which are now dd_TRUE and dd_FALSE.
+
+v091dg
+====================
+- Memory leak in dd_FreeLPData and dd_FreeLPSolution are
+  fixed.
+
+v091cg
+====================
+- Bug to terminate before the completion of computation
+  (to produce a segmentation fault) is fixed.  This
+  bug was reported by Hugh Anderson.
+
+v091bg
+====================
+- Numerous memory leak bugs with GMP exact arithmetic,
+  reported by Marc Pfetsch, are fixed.  Also, a minor
+  bug of cddlib to terminate with core dump, reported by
+  Hugh Anderson, is fixed.  The messages printed to
+  the standard output "stdout" are now sent to "stderr".
+  This was suggested by Ingo Schurr.
+
+v091ag
+====================
+- Memory leak problems when GMP is used are fixed for
+  dd_InitializeAmatrix, dd_CreateMatrix and
+  dd_Larger.  These bugs, reported by Marc Pfetsch,
+  can be fatal if GMP is used and the functions are
+  called many times.  It has no effect for floating-point
+  arithmetic computation.
+
+v091g
+====================
+- Memory leak in FreeDDMemory (cddcore.c)
+  is fixed.  This bug, which might cause a serious problem,
+  was reported by Shawn Rusaw.  Also, a bug reported by
+  Istvan Csabai on dynamic row ordering is fixed.  This
+  problem is most likely not affecting anyone, since the
+  dynamic row ordering option is not available via the
+  publicly released documentations.  David Avis contributed
+  a sample cddlib code, lcdd.c, which runs like his convex
+  hull code, lrs.  In particular, it is useful to generate
+  standard output stream for piping in unix.
+
+v090eg
+====================
+- A bug of reading very large integer values incorrectly
+  is fixed.  The previous versions were truncating very large
+  integer values to a number representable by long integer.
+
+v090dg
+====================
+- Serious bugs of dd_CopyOutput, dd_CopyInequalities are fixed.
+  This bug is found by Istvan Csabai.  Earlier versions 090*
+  output wrong H-representations whenever the RHS constants
+  are not nonnegative, even though the computation runs
+  correctly internally.
+
+v090cg
+====================
+- set_intialize is modified so that it allocates a smallest space even when
+  a nonpositive length is requested.
+  The bug of not outputting the origin is fixed
+  when input is homogeneous inequality system and the cone contains
+  no extreme rays.  Note that cddlib does not output this vertex
+  when the homogeneous cone has extreme rays, since cddlib outputs
+  a minimal representation.
+
+- A new function dd_DDInputAppend is added.
+
+- dd_DDMatrix2Poly replaces (and combines) the two old functions
+  dd_Matrix2Poly and dd_DoubleDescription.
+
+- dd_LPSolutionLoad is renamed as dd_CopyLPSolution.
+
+v090bg
+====================
+- Thanks to Shawn Rusaw's great help, I could detect and fix many
+  memory related problems (memory leak, out-of-bounds, etc).
+  Also, when input is not regular (nonfull or containing line),
+  cddlib did not generate adjacency/incidence properly and
+  this version should work more correctly.
+
+v090ag
+====================
+- a small bug fix in cddarith.c.  The bug is reported by Shawn Rusaw.
+
+v090g
+====================
+- Major revision over the previous versions.  It can be now compiled
+  with GMP rational (-DGMPRATIONAL) as well as the standard C double.
+  cdd and lp codes are merged and easily called together.  Many functions
+  and data types are modified and renamed.  It comes with a simple
+  cdd/cdd+-type standalne program scdd which does the standard
+  representation conversion (*.ine <-> *.ext) and outputs all four
+  types of auxiliary files (*.icd, *.iad, *.ecd, *ead).  Although it
+  lacks some functions such as preprojection of cdd+, scdd is potentially
+  the most powerful cdd ever since it runs in the two arithmetics and
+  it can handle any input.
+
+  Because of the better readability and the overhead of employing
+  function calls to do GMP arithmetic, the speed is little slower than
+  cdd+-076 on both arithmetics C double and GMP rational.
+
+v086g
+====================
+- A bug fixed in dd_LexSmaller that affercted the lexicographic
+  ordering of input data.  This fix is essential for efficiency.
+  Also several memory leaks have been fixed.  Many of these bugs
+  were found by Mr. Masanori Sato of Tokyo Institute of Technology.
+  Never released.
+
+v085g
+====================
+- It can read rational data.  Several minor bugs have been fixed.
+  The new makefile creates cdd and dplex library archives
+  libcdd.a and libdplex.a for unix systems.
+
+v080g
+====================
+- The first C-library version of cdd.  It is stilll very primitive
+  and has no documentation.  See README.libcdd.   Unlike the existing
+  versions of cdd/cdd+, cddlib can deal with essentially any input,
+  namely, non-full-dimensional convex hull problems and
+  vertex-free extreme point (i.e. generator) listing problems.  Also
+  it comes with MathLink program cddmathlink that can be called from
+  Mathematica to perform cdd operations.

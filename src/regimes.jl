@@ -9,7 +9,7 @@ export get_C_C0_x, get_C_x, get_C0_x
 export get_C_C0_nullity_qK, get_C_C0_qK, get_C_qK, get_C0_qK
 export get_C_C0_nullity, get_C_C0, get_C, get_C0
 export check_feasibility_with_constraint, feasible_vertieces_with_constraint
-export get_polyhedron, get_volume
+export get_polyhedron, get_volume, get_polyhedra
 export is_neighbor, get_interface, get_change_dir
 export get_function
 
@@ -31,17 +31,16 @@ function _calc_C_C0_qK_singular(Bnc::Bnc, vtx)
 end
 
 function _affine_mapping_polyhedra(C,C0,M,M0)
-    # n = Bnc.n
-    poly_x = hrep(-C,C0) |> x->polyhedron(x,CDDLib.Library())
-    poly_elim = M * poly_x  # If for convenience, one can write `translate(M * poly_x, M0)`, and then C0qK = b
-    rlt = MixedMatHRep(hrep(poly_elim))
-    A, b, linset = (rlt.A, rlt.b, rlt.linset)
-    # @show linset
-    @assert linset == BitSet(1:maximum(linset)) "linear rows are not the first top n rows, code fix is needed"
-    # perm = [collect(linset) ; [i for i in 1:size(A,1) if i ∉ linset]]
-    CqK = sparse(-A) |> x->droptol!(x,1e-10)
-    C0qK = (b+A*M0)
-    return CqK, C0qK, linset
+    n_qK = size(M, 1)
+    n_x = size(M, 2)
+    n_ineq = size(C, 1)
+
+    Eq = hcat(-spdiagm(0 => ones(Int, n_qK)), M)
+    In = hcat(spzeros(eltype(C), n_ineq, n_qK), C)
+
+    C_full = vcat(Eq, In)
+    C0_full = vcat(M0, C0)
+    return backend_project_hrep(C_full, C0_full, n_qK, BitSet((n_qK + 1):(n_qK + n_x)))
 end
 
 
@@ -88,7 +87,7 @@ end
 # ------------------------------------------------------------------------------
 
 
-find_bind_regimes!(model::Bnc{T}; H_mode::Symbol=_affine_mode(model)) where T = find_all_regimes!(model; H_mode=H_mode)
+find_bind_regimes!(model::Bnc{T}; mode::Symbol=_affine_mode(model)) where T = find_all_regimes!(model; mode=mode)
 """
     find_all_regimes!(bnc::Bnc) -> Vector{Vector{Int}}
 
@@ -96,19 +95,19 @@ Compute and cache all regime permutations, the x-neighbor graph, and regime
 objects. Low-nullity (`0/1`) affine data are inferred directly from the graph;
 only deferred high-nullity perms are sent to `_calc_nullity`.
 
-Keyword `H_mode` controls how binding-regime affine coefficients are stored:
+Keyword `mode` controls how binding-regime affine coefficients are stored:
 - `:float`    uses floating-point `H` / `C_qK`
-- `:rational` uses exact rational coefficients for `H` / `C_qK`
+- `:exact`    uses exact rational coefficients for `H` / `C_qK`
 """
-function find_all_regimes!(model::Bnc{T}; H_mode::Symbol=_affine_mode(model)) where T
+function find_all_regimes!(model::Bnc{T}; mode::Symbol=_affine_mode(model)) where T
 
     
     # Decide what type should we used to store H.
-    H_mode = _normalize_affine_mode(H_mode)
-    is_bind_regimes_built(model) && model.affine_coeff_mode == H_mode && return nothing
+    mode = _normalize_affine_mode(mode)
+    is_bind_regimes_built(model) && model.affine_coeff_mode == mode && return nothing
     
     _remove_regime_data!(model)
-    model.affine_coeff_mode = H_mode
+    model.affine_coeff_mode = mode
 
     
     @info "---------------------Start finding all regimes--------------------"
@@ -201,7 +200,7 @@ function _materialize_qK_conditions!(rgm::BindRegime)
             dropzeros!(C_qK)
         end
         rgm.C_qK = C_qK
-        rgm.C0_qK = Float64.(rgm.C0_x + rgm.C_x * rgm.H0)
+        rgm.C0_qK = rgm.C0_x + rgm.C_x * rgm.H0
     else
         rgm.C_qK, rgm.C0_qK, _ = _calc_C_C0_qK_singular(rgm.network, rgm.perm)
     end
@@ -546,7 +545,7 @@ get_C0_qK(args...) = get_C_C0_nullity_qK(args...)[2]
 
 Return the nullity of a vertex.
 """
-get_nullity(args...) = get_regime(args...; inv_info=true).nullity
+get_nullity(args...) = get_regime(args...; inv_info=false).nullity
 
 """
     get_H_H0(args...) -> (SparseMatrixCSC, Vector)
@@ -642,7 +641,7 @@ function get_interface_qK(Bnc, from, to)::Tuple{SparseVector{Float64,Int}, Float
     grh = get_regimes_graph!(Bnc; full=true)
     edge = get_edge(grh, from, to; full=true)
     if edge === nothing
-        @info "no directly edge found, judge using Polyhedra.jl, could be problematic if you concerning changing direction"
+        @info "No direct regime-graph edge found; falling back to direct interface reconstruction."
         return get_interface_direct(Bnc, from, to)
     elseif !_edge_has_qK_interface(edge)
         @error("Vertices $get_perm(Bnc, from) and $get_perm(Bnc, to) are neighbors in x space but not in qK space")
@@ -785,11 +784,11 @@ end
 
 
 function _get_mask(model::Bnc,vtxs::AbstractVector{T};kwargs...)::Vector{Bool} where T
-    rgms = get_regime.(Ref(model), vtxs)
+    rgms = get_regime.(Ref(model), vtxs;inv_info=false)
     return _get_mask(rgms; kwargs...)
 end
 function filter_regimes(model::Bnc, vtxs::AbstractVector{T}; kwargs...)::Vector{T} where T
-    rgms = get_regime.(Ref(model), vtxs)
+    rgms = get_regime.(Ref(model), vtxs;inv_info=false)
     return filter_regimes(rgms; kwargs...)
 end
 
@@ -964,7 +963,7 @@ end
 Extract `(C, C0, nullity)` from a polyhedron in H-representation.
 """
 function get_C_C0_nullity(poly::Polyhedron) #Have to make sure the polyhedron has been already detecthlinearity.
-    p = MixedMatHRep(hrep(poly))
+    p = hrep(poly)
     C = -p.A
     C0 = p.b
     nullity = begin
@@ -992,15 +991,20 @@ get_nullity(poly::Polyhedron,args...;kwargs...) = get_C_C0_nullity(poly::Polyhed
 
 Construct a polyhedron from inequality constraints in qK space.
 """
-function get_polyhedron(C::AbstractMatrix{<:Real}, C0::AbstractVector{<:Real}, nullity::Integer=0)::Polyhedron 
-    Cf = Matrix(Float64.(C))
-    C0f = vec(Float64.(C0))
-    if nullity ==0
-        return hrep(-Cf, C0f) |> x-> polyhedron(x,CDDLib.Library())
+function get_polyhedron(
+    C::AbstractMatrix{<:Real},
+    C0::AbstractVector{<:Real},
+    nullity::Integer=0;
+    canonicalize::Bool=true,
+)::Polyhedron
+    Csp = sparse(C)
+    C0v = vec(copy(C0))
+    rep = if nullity == 0
+        hrep(-Csp, C0v)
     else
-        linset = BitSet(1:nullity)
-        return hrep(-Cf, C0f, linset) |> x-> polyhedron(x,CDDLib.Library())
+        hrep(-Csp, C0v, BitSet(1:nullity))
     end
+    return canonicalize ? polyhedron(rep) : Polyhedron(copy(rep.halfspaces), rep.ambient_dim, false, false)
 end
 """
     get_polyhedron(args...) -> Polyhedron
@@ -1009,7 +1013,10 @@ Convenience wrapper that pulls constraints from a vertex or model.
 """
 get_polyhedron(args...)=get_polyhedron(get_C_C0_nullity_qK(args...)...)
 
-
+function get_polyhedra(model::Bnc, vtxs::Union{AbstractVector{T},Nothing}=nothing; kwargs...) where T 
+    vtxs = isnothing(vtxs) ? get_regimes(model;kwargs...) : vtxs
+    get_polyhedron.(Ref(model), vtxs)
+end
 """
     get_intersect(bnc, vtx1, vtx2) -> Polyhedron
 
@@ -1039,7 +1046,7 @@ Compute the interface hyperplane directly from polyhedral intersection.
 function get_interface_direct(Bnc::Bnc, from, to)::Tuple{SparseVector{Float64,Int}, Float64}
     p = get_intersect(Bnc, from, to)
     hplanes = hyperplanes(p)
-    # @show hplanes
+    isempty(hplanes) && return spzeros(Float64, fulldim(p)), 0.0
     hp = collect(hplanes)[end]
     a = droptol!(sparse(hp.a), 1e-10)
     b = -hp.β
@@ -1075,23 +1082,30 @@ end
 Return a point guaranteed to lie inside the polyhedron.
 """
 function get_one_inner_point(poly::T;rand_line=true,rand_ray=true,extend=3) where T<:Polyhedron
-    vrep_poly = MixedMatVRep(vrep(poly))
-    point = [mean(p) for p in eachcol(vrep_poly.V)]
-    ray_avg = zeros(size(point,1))
-    for (i, ray) in enumerate(eachrow(vrep_poly.R))
-        if i ∉ vrep_poly.Rlinset
-            norm_ray = norm(ray)
-            sigma = rand_ray ? (rand()+0.5)*extend : extend
-            ray_avg .+= (ray ./ norm_ray .* sigma )
-        else
-            if rand_line
-                norm_ray = norm(ray)
-                sigma = (rand()-0.5)*extend
-                ray_avg .+= (ray ./ norm_ray * sigma)
+    rep = NativePolyhedra.vrep(poly)
+    pts = points(rep)
+    if !isempty(pts)
+        Tcenter = foldl(promote_type, (typeof(x) for pt in pts for x in pt); init=Rational{Int})
+        center = Tcenter[zero(Tcenter) for _ in eachindex(pts[1])]
+        for pt in pts
+            @inbounds for j in eachindex(center)
+                center[j] += pt[j]
             end
         end
+        @inbounds for j in eachindex(center)
+            center[j] /= length(pts)
+        end
+        center in poly && return center
+        copy(first(pts)) in poly && return copy(first(pts))
     end
-    return (point.+ ray_avg)
+
+    if !isnothing(rep.anchor) && rep.anchor in poly
+        return copy(rep.anchor)
+    end
+
+    point = NativePolyhedra.interior_point(poly)
+    isnothing(point) && error("Could not find an interior point for the polyhedron.")
+    return point
 end
 """
     get_one_inner_point(args...; kwargs...) -> Vector
