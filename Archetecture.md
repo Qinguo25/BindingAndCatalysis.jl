@@ -365,14 +365,24 @@ a = -C,\qquad \beta = C_0.
 
 这是当前的 backend facade。
 
-业务代码只应调用：
+业务层主要通过以下 facade 进入多面体后端：
 
 - `backend_eliminate`
 - `backend_intersect_eliminate`
 - `backend_intersect_many`
 - `backend_project_hrep`
 
-由 facade 内部决定：
+此外，`SISO` 的 bulk path-condition 构造还使用了一组 fastpath helper：
+
+- `backend_prefers_fastpath`
+- `backend_prepare_fastpath`
+- `backend_fast_eliminate`
+- `backend_fast_intersect`
+- `backend_from_fastpath`
+
+其中前四个是为了减少 bulk DAG 里重复的后端切换和 canonicalization 开销，`backend_from_fastpath` 负责把 fastpath 结果收回到项目内 `Polyhedron` 语义。
+
+由 facade 内部决定是否：
 
 - 走 `NativePolyhedra`
 - 走本地编译的 float `cddlib`
@@ -385,9 +395,20 @@ a = -C,\qquad \beta = C_0.
 
 当前策略是：
 
-- float mode 若本地 `cdd` 可用，则优先走 `CddBridge`
-- exact mode 若本地 `cddlog` 可用，则优先走 `CddBridge`
-- 否则回退到 `NativePolyhedra`
+- float mode:
+  - bulk `SISO` fastpath 若本地 `cdd` 可用，则优先走 vendored `cdd`
+  - 失败或不可用时回退到 `NativePolyhedra`
+- exact mode:
+  - 不启用 `SISO` 的 float-style fastpath
+  - 但在 `backend_eliminate` / `backend_project_hrep` 内会 opportunistically 尝试 `cddlog`
+  - `cddlog` 不可用或失败时回退到 `NativePolyhedra`
+
+本地 vendored 后端的编译入口在：
+
+- `deps/build.jl`
+- `scripts/build_local_cdd.sh`
+
+运行时若本地后端不可用，`PolyBackend` 会发出一次 warning，然后自动回退。
 
 
 ## 7. 源码地图
@@ -430,8 +451,16 @@ a = -C,\qquad \beta = C_0.
 
 - `src/regime_graphs.jl`
 - `src/SISO.jl`
+- `src/siso/`
 - `src/Mathcore/perm_graph_core.jl`
 - `src/Mathcore/graph_propagate.jl`
+
+`src/SISO.jl` 现在只是入口壳，具体拆在：
+
+- `src/siso/core.jl`
+- `src/siso/polyhedra.jl`
+- `src/siso/reaction_order.jl`
+- `src/siso/display.jl`
 
 
 ### 7.5 数学核心与辅助
@@ -457,6 +486,7 @@ a = -C,\qquad \beta = C_0.
 - `src/symbolics.jl`
 - `src/output/`
 - `src/visualize.jl`
+- `src/visualization/`
 - `src/old_api.jl`
 
 `src/symbolics.jl` 现在只保留公共 API 入口，内部拆在 `src/output/`：
@@ -465,6 +495,13 @@ a = -C,\qquad \beta = C_0.
 - `symbolic_renderers.jl`
 - `symbolic_api.jl`
 - `symbolic_paths.jl`
+
+`src/visualize.jl` 同样只是入口壳，具体拆在 `src/visualization/`：
+
+- `graphs.jl`
+- `siso_plot.jl`
+- `rop.jl`
+- `poly_slices.jl`
 
 
 ## 8. 当前重要设计边界
@@ -551,12 +588,12 @@ vols = get_volumes(siso)
 
 - 改 binding 数学对象：`src/regimes.jl`
 - 改 catalysis regime：`src/Catalysis_regime.jl`
-- 改 mixed consistency：`src/Bnc_regime.jl`
+- 改 mixed consistency：`src/Bnc_regime.jl`, `src/mixed/`
 - 改 `x ↔ qK` 数值求解：`src/qK_x_mapping.jl`
-- 改 graph / path：`src/regime_graphs.jl`, `src/SISO.jl`
+- 改 graph / path：`src/regime_graphs.jl`, `src/SISO.jl`, `src/siso/`
 - 改 polyhedron backend：`src/PolyBackend.jl`, `src/CddBridge.jl`, `src/NativePolyhedra/`
-- 改 symbolic 输出：`src/symbolics.jl`
-- 改可视化：`src/visualize.jl`
+- 改 symbolic 输出：`src/symbolics.jl`, `src/output/`
+- 改可视化：`src/visualize.jl`, `src/visualization/`
 - 改旧 notebook 兼容：`src/old_api.jl`
 
 
@@ -584,11 +621,20 @@ vols = get_volumes(siso)
 - `test/NativePolyhedra/runtests.jl`
   多面体算法回归。
 
+- `test/backends/cdd_bridge.jl`
+  vendored `cdd` / `cddlog` 桥接回归。
+
+- `test/siso/workflows.jl`
+  路径枚举、bulk path condition 和 `SISO` 工作流回归。
+
 - `Examples/Minimal_example.ipynb`
   最小交互式 smoke。
 
-- `test/work_summary_and_suggestions.md`
-  最近几轮修改留下的设计备注。
+- `test/support/setup.jl`
+  维护测试时最常用的模型工厂。
+
+- `noback/singular_path_condition_exploration.md`
+  一份近期的探索性结论，记录了 singular regime 从 path 中删除时图结构与几何条件之间的差异。
 
 
 ## 13. 总结
