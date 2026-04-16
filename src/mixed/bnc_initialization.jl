@@ -86,12 +86,12 @@ function _init_regular_bnc_regime!(vtx::BncRegime, perm, rowctx)
     C_qKk_ss, C0_qKk_ss = _calc_C_qKk_ss_regular(vtx.bind_rgm, vtx.catalysis_rgm, H_ssk, H0_ssk)
 
     vtx.H = H_ssk
-    vtx.H0 = H0_ssk
+    vtx.H0 = _materialize_real_vector(H0_ssk)
     vtx.C_qKk_cat = C_qKk_cat
-    vtx.C0_qKk_cat = C0_qKk_cat
+    vtx.C0_qKk_cat = _materialize_real_vector(C0_qKk_cat)
     vtx.nlt_qKk_cat = nlt_qKk_cat
     vtx.C_qKk_ss = C_qKk_ss
-    vtx.C0_qKk_ss = C0_qKk_ss
+    vtx.C0_qKk_ss = _materialize_real_vector(C0_qKk_ss)
     return nothing
 end
 
@@ -123,12 +123,12 @@ function _init_singular_bnc_regime!(vtx::BncRegime, perm, rowctx)
     C_qKk_ss, C0_qKk_ss, _ = _calc_C_qKk_ss_singular(vtx.bind_rgm, vtx.catalysis_rgm)
 
     vtx.H = H_ssk
-    vtx.H0 = H0_ssk
+    vtx.H0 = _materialize_real_vector(H0_ssk)
     vtx.C_qKk_cat = C_qKk_cat
-    vtx.C0_qKk_cat = C0_qKk_cat
+    vtx.C0_qKk_cat = _materialize_real_vector(C0_qKk_cat)
     vtx.nlt_qKk_cat = nlt_qKk_cat
     vtx.C_qKk_ss = C_qKk_ss
-    vtx.C0_qKk_ss = C0_qKk_ss
+    vtx.C0_qKk_ss = _materialize_real_vector(C0_qKk_ss)
     return nothing
 end
 

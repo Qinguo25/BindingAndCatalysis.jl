@@ -24,6 +24,8 @@ function show_condition_poly(
         end
     end
 
+    size(C, 1) == 0 && return Num[]
+
     if nullity == 0
         return make_cond(make_expr(C, C0), :uneq)
     else

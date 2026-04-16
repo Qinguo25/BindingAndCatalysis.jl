@@ -334,7 +334,7 @@ vols = get_volumes(siso)
 
 职责：
 
-- 把项目内 `(C, C0, nullity)` / `Polyhedron` 桥接到仓库内 vendored `cddlib`
+- 把项目内 `(C, C0, nullity)` / `Polyhedron` 桥接到本地构建的 `cddlib`
 - float 情况下调用本地编译的 `projection` / `redcheck`
 - exact-log 情况下调用本地编译的 `projection_log` / `redcheck_log`
 
@@ -396,14 +396,14 @@ a = -C,\qquad \beta = C_0.
 当前策略是：
 
 - float mode:
-  - bulk `SISO` fastpath 若本地 `cdd` 可用，则优先走 vendored `cdd`
+  - bulk `SISO` fastpath 若本地 `cdd` 可用，则优先走本地构建的 `cdd`
   - 失败或不可用时回退到 `NativePolyhedra`
 - exact mode:
   - 不启用 `SISO` 的 float-style fastpath
   - 但在 `backend_eliminate` / `backend_project_hrep` 内会 opportunistically 尝试 `cddlog`
   - `cddlog` 不可用或失败时回退到 `NativePolyhedra`
 
-本地 vendored 后端的编译入口在：
+本地 `cdd` / `cddlog` 后端的源码默认来自 `Artifacts.toml` 里固定版本的 `cddlib-logarithmic` source artifact。编译入口在：
 
 - `deps/build.jl`
 - `scripts/build_local_cdd.sh`
@@ -622,7 +622,7 @@ vols = get_volumes(siso)
   多面体算法回归。
 
 - `test/backends/cdd_bridge.jl`
-  vendored `cdd` / `cddlog` 桥接回归。
+  本地 `cdd` / `cddlog` 桥接回归。
 
 - `test/siso/workflows.jl`
   路径枚举、bulk path condition 和 `SISO` 工作流回归。

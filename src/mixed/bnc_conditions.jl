@@ -19,7 +19,7 @@ function _calc_C_qKk_catalysis_only_regular(bind_rgm::BindRegime, cat_rgm::Catal
     C0θ = get_C0(cat_rgm)
     C = hcat(CΠ * H, Cθ)
     C0 = CΠ * H0 + C0θ
-    return C, vec(C0), 0
+    return C, _materialize_real_vector(C0), 0
 end
 
 function _calc_C_qKk_catalysis_only_singular(bind_rgm::BindRegime, cat_rgm::CatalysisRegime)
@@ -91,6 +91,12 @@ function _steady_state_offsets(vtx::BncRegime, r_v::Int, N_ss)
     return P0_ss, M0_ss
 end
 
+function _materialize_real_vector(v)
+    vv = vec(v)
+    T = isempty(vv) ? Int : foldl(promote_type, map(typeof, vv); init=Int)
+    return T[convert(T, x) for x in vv]
+end
+
 function _expand_Hss_to_qssKk(H_ss, H0_ss, Pθ, P0θ)
     r_v = size(Pθ, 1)
     split = size(H_ss, 2) - r_v
@@ -98,7 +104,7 @@ function _expand_Hss_to_qssKk(H_ss, H0_ss, Pθ, P0θ)
     H_right = H_ss[:, split + 1:end]
     H_ssk = hcat(H_left, -(H_right * Pθ))
     H0_ssk = H0_ss - H_right * P0θ
-    return H_ssk, vec(H0_ssk)
+    return H_ssk, _materialize_real_vector(H0_ssk)
 end
 
 function _calc_C_qKk_cat_regular(bind_rgm::BindRegime, cat_rgm::CatalysisRegime)
@@ -115,7 +121,7 @@ function _calc_C_qKk_cat_regular(bind_rgm::BindRegime, cat_rgm::CatalysisRegime)
     C = vcat(C1, C2)
     C0 = vcat(C0_qK, CΠ * H0 + C0θ)
 
-    return C, C0, 0
+    return C, _materialize_real_vector(C0), 0
 end
 
 function _calc_C_qKk_cat_singular(bind_rgm::BindRegime, cat_rgm::CatalysisRegime)
@@ -174,7 +180,7 @@ function _calc_C_qKk_ss_regular(
     @views C_cat[:, end - n_v + 1:end] .+= Cθ
     C0_cat = CΠ * H0_ssk + C0θ
 
-    return vcat(C_bind, C_cat), vcat(C0_bind, C0_cat)
+    return vcat(C_bind, C_cat), _materialize_real_vector(vcat(C0_bind, C0_cat))
 end
 
 function _calc_C_qKk_ss_singular(bind_rgm::BindRegime, cat_rgm::CatalysisRegime)

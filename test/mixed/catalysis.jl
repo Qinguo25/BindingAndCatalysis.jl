@@ -110,12 +110,14 @@ end
     @test get_binding_perm(mixed) == [2, 1]
     @test get_catalysis_perm(mixed) == [1, 2]
     @test string.(BindingAndCatalysis.qssKk_sym(mixed)) == ["tE", "K", "β", "γ"]
-    @test string.(show_condition_qssKk(mixed; log_space = false)) == ["tE*β ~ K*γ", "K > tE"]
+    if BindingAndCatalysis.CddBridge._cddlog_available()
+        @test string.(show_condition_qssKk(mixed; log_space = false)) == ["tE*β ~ K*γ", "K > tE"]
 
-    C_qssKk, C0_qssKk, nlt_qssKk = get_C_C0_nullity_qssKk(mixed)
-    @test Matrix(C_qssKk) == Rational{Int}[1 -1 1 -1; -1 1 0 0]
-    @test C0_qssKk == ExactLogExpr[0, 0]
-    @test nlt_qssKk == 1
+        C_qssKk, C0_qssKk, nlt_qssKk = get_C_C0_nullity_qssKk(mixed)
+        @test Matrix(C_qssKk) == Rational{Int}[1 -1 1 -1; -1 1 0 0]
+        @test C0_qssKk == ExactLogExpr[0, 0]
+        @test nlt_qssKk == 1
+    end
 end
 
 @testset "Catalysis Exact Mixed Mode" begin

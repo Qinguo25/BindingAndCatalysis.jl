@@ -2,9 +2,30 @@
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
-SRC_ROOT="$ROOT/src/cddlib-logarithmic-complete"
+if [[ $# -ge 1 ]]; then
+  SRC_ROOT="$1"
+elif [[ -n "${BNC_CDDLOG_SOURCE_DIR:-}" ]]; then
+  SRC_ROOT="$BNC_CDDLOG_SOURCE_DIR"
+else
+  echo "[FAIL] source directory not provided. Set BNC_CDDLOG_SOURCE_DIR or run deps/build.jl." >&2
+  exit 1
+fi
 OUT_ROOT="$ROOT/.build/cddlog"
 OUT_SRC="$OUT_ROOT/src"
+
+if [[ ! -d "$SRC_ROOT" ]]; then
+  echo "[FAIL] source directory not found: $SRC_ROOT" >&2
+  exit 1
+fi
+if [[ ! -f "$SRC_ROOT/lib-src/cddcore.c" ]]; then
+  mapfile -t subdirs < <(find "$SRC_ROOT" -mindepth 1 -maxdepth 1 -type d | sort)
+  if [[ ${#subdirs[@]} -eq 1 && -f "${subdirs[0]}/lib-src/cddcore.c" ]]; then
+    SRC_ROOT="${subdirs[0]}"
+  else
+    echo "[FAIL] source directory does not look like cddlib-logarithmic: $SRC_ROOT" >&2
+    exit 1
+  fi
+fi
 
 mkdir -p "$OUT_ROOT"
 # Clear stale autotools test artifacts from earlier source layouts.
@@ -145,6 +166,7 @@ cp "$OUT_ROOT/log"/redundancies_clarkson_log "$OUT_SRC"/
 cp "$OUT_ROOT/log"/scdd_log "$OUT_SRC"/
 
 cat > "$OUT_ROOT/BUILD_INFO.txt" <<EOF
+SRC_ROOT=$SRC_ROOT
 CC=$CC
 CFLAGS=$CFLAGS
 GMP_CFLAGS=$GMP_CFLAGS

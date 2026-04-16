@@ -1,12 +1,54 @@
 const NP = BindingAndCatalysis.NativePolyhedra
+using Pkg.Artifacts: artifact_hash, artifact_exists, artifact_path
 const _REPO_ROOT = normpath(joinpath(@__DIR__, "..", ".."))
+const _ARTIFACTS_TOML = joinpath(_REPO_ROOT, "Artifacts.toml")
+
+function _normalize_cddlog_source_root(root::AbstractString)
+    isdir(root) || return nothing
+    if isfile(joinpath(root, "lib-src", "cddcore.c"))
+        return root
+    end
+    subdirs = filter(name -> isdir(joinpath(root, name)), readdir(root))
+    if length(subdirs) == 1
+        nested = joinpath(root, only(subdirs))
+        if isfile(joinpath(nested, "lib-src", "cddcore.c"))
+            return nested
+        end
+    end
+    return nothing
+end
+
+function _cddlog_source_roots()
+    roots = String[]
+
+    if haskey(ENV, "BNC_CDDLOG_SOURCE_DIR")
+        src_root = _normalize_cddlog_source_root(ENV["BNC_CDDLOG_SOURCE_DIR"])
+        src_root !== nothing && push!(roots, src_root)
+    end
+
+    if isfile(_ARTIFACTS_TOML)
+        try
+            hash = artifact_hash("cddlog_source", _ARTIFACTS_TOML)
+            if hash !== nothing && artifact_exists(hash)
+                src_root = _normalize_cddlog_source_root(artifact_path(hash))
+                src_root !== nothing && push!(roots, src_root)
+            end
+        catch
+        end
+    end
+
+    append!(roots, [
+        joinpath(_REPO_ROOT, "src", "cddlib-master"),
+    ])
+
+    return unique(filter(isdir, roots))
+end
 
 function _poly_example_path(rel::AbstractString)
-    candidates = (
-        joinpath(_REPO_ROOT, "src", "cddlib-master", "examples", rel),
-        joinpath(_REPO_ROOT, "src", "cddlib-logarithmic-complete", "examples", rel),
-        joinpath(_REPO_ROOT, "src", "cddlib-logarithmic-complete", "cddlib-logarithmic-complete", "examples", rel),
-    )
+    candidates = String[]
+    for root in _cddlog_source_roots()
+        push!(candidates, joinpath(root, "examples", rel))
+    end
     for path in candidates
         isfile(path) && return path
     end

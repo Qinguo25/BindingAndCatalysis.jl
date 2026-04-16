@@ -4,7 +4,7 @@ using ..NativePolyhedra
 using ..CddBridge
 using ..ExactTypes: ExactLogExpr
 using Logging: @warn
-using SparseArrays: sparse
+using SparseArrays: sparse, spzeros
 
 const _backend_warn_lock = ReentrantLock()
 const _warned_missing_local_cdd = Ref(false)
@@ -22,6 +22,18 @@ function _warn_missing_local_backend!(which::Symbol)
 end
 
 @inline _poly_is_exact(poly::NativePolyhedra.Polyhedron) = any(h -> h.p.β isa ExactLogExpr, poly.halfspaces)
+
+function _empty_hrep_result(C::AbstractMatrix, C0::AbstractVector, dim::Integer)
+    coeffs = spzeros(eltype(sparse(C)), 1, dim)
+    rhs = if CddBridge._is_exact_rhs(C0)
+        ExactLogExpr[-1]
+    elseif CddBridge._has_float_data(C, C0)
+        Float64[-1.0]
+    else
+        Rational{Int}[-1//1]
+    end
+    return coeffs, rhs, 0
+end
 
 function backend_prefers_fastpath(is_exact::Bool)
     is_exact && return false
@@ -99,6 +111,7 @@ function backend_project_hrep(
     catch
         poly = CddBridge._polyhedron_from_C_C0_nullity(sparse(C), C0, nullity)
         poly_elim = backend_eliminate(poly, BitSet(delset); canonicalize=true, prefer_fastpath=false)
+        poly_elim.empty && return _empty_hrep_result(C, C0, NativePolyhedra.fulldim(poly_elim))
         return CddBridge._polyhedron_to_C_C0_nullity(poly_elim)
     end
 end
