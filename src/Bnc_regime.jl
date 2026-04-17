@@ -6,7 +6,7 @@ export get_C_C0_qssKk, get_C0_qssKk, get_C_qssKk, get_C_C0_nullity_qssKk
 export get_H_bd, get_qcat_F_F0
 export judge_stability!, is_stable
 
-include(joinpath(@__DIR__, "mixed/bnc_core.jl"))
-include(joinpath(@__DIR__, "mixed/bnc_conditions.jl"))
-include(joinpath(@__DIR__, "mixed/bnc_initialization.jl"))
-include(joinpath(@__DIR__, "mixed/bnc_display.jl"))
+include(joinpath(@__DIR__, "mixed_regime/bnc_core.jl"))
+include(joinpath(@__DIR__, "mixed_regime/bnc_conditions.jl"))
+include(joinpath(@__DIR__, "mixed_regime/bnc_initialization.jl"))
+include(joinpath(@__DIR__, "mixed_regime/bnc_display.jl"))

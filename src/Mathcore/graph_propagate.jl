@@ -36,10 +36,10 @@ function _sparse_outer(
     return sparse(I, J, V, nrow, ncol)
 end
 
-@inline _is_float_eltype(::Type{T}) where {T<:Real} = T <: AbstractFloat
+
 
 @inline function _cleanup_affine_sparse!(A::SparseMatrixCSC{T,Int}, tol::Float64) where {T<:Real}
-    if _is_float_eltype(T)
+    if T <: AbstractFloat
         tol > 0 && droptol!(A, tol)
     else
         dropzeros!(A)
@@ -48,7 +48,7 @@ end
 end
 
 @inline function _cleanup_affine_sparse!(v::SparseVector{T,Int}, tol::Float64) where {T<:Real}
-    if _is_float_eltype(T)
+    if T <: AbstractFloat
         tol > 0 && droptol!(v, tol)
     else
         dropzeros!(v)
@@ -469,7 +469,7 @@ end
 
 function _process_component_from_seed_scan!(
     regimes::Vector{BindRegime},
-    grh::VertexGraph,
+    grh::RegimeGraph,
     comp::Vector{Int},
     ws::AffinePropagateWorkspace,
     state::SeedAnalysisState;
@@ -563,7 +563,7 @@ end
 
 function _propagate_from_regular_seed!(
     regimes::Vector{BindRegime},
-    grh::VertexGraph,
+    grh::RegimeGraph,
     ws::AffinePropagateWorkspace,
     seed::Int;
     frontier_parallel_threshold::Int=256,
@@ -641,7 +641,7 @@ function _propagate_from_regular_seed!(
     return discovered
 end
 
-@inline function propagate_regime!(rgm1::BindRegime, rgm2::BindRegime, edge::VertexEdge)
+@inline function propagate_regime!(rgm1::BindRegime, rgm2::BindRegime, edge::RegimeEdge)
     H_to, H0_to, nlt_to, _, _ = _rank1_step_update_from_regular(
         rgm1.H,
         rgm1.H0,

@@ -1,16 +1,12 @@
 export judge_dstable
 
-# using SparseArrays
-# using LinearAlgebra
+using SparseArrays
+using LinearAlgebra
 import JuMP
 import MathOptInterface as MOI
 import Arpack
 import Clarabel
 
-# 可选：
-# import MosekTools
-# import MathOptChordalDecomposition as MOCD
-# import SCS
 
 @inline tri_index(i::Int, j::Int) = (j * (j - 1)) ÷ 2 + i  # 要求 i <= j
 

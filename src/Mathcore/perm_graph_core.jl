@@ -1,10 +1,10 @@
 
 """
-    VertexEdge
+    RegimeEdge
 
 Edge metadata connecting neighboring vertices in a regime graph.
 """
-mutable struct VertexEdge
+mutable struct RegimeEdge
     to::Int
     i ::Int # different row index
     c_c0_x_idx::Int
@@ -12,13 +12,15 @@ mutable struct VertexEdge
     qK_interface_idx::Int
     qK_interface_sign::Int8
 
-    function VertexEdge(to::Int, i::Int, c_c0_x_idx::Int, c_c0_x_sign::Int8)
+    function RegimeEdge(to::Int, i::Int, c_c0_x_idx::Int, c_c0_x_sign::Int8)
         return new(to, i, c_c0_x_idx, c_c0_x_sign, 0, 0)
     end
 
 end
 
-@inline _edge_has_qK_interface(edge::VertexEdge) =
+
+
+@inline _edge_has_qK_interface(edge::RegimeEdge) =
     edge.qK_interface_idx != 0
 
 
@@ -31,15 +33,15 @@ end
 
 # Adjacency list + optional caches
 """
-    VertexGraph
+    RegimeGraph
 
 Adjacency structure for vertices with optional caches for change directions.
 """
-mutable struct VertexGraph{Tv}
+mutable struct RegimeGraph{Tv}
     bn::Union{AbstractBnc, Nothing}
-    neighbors::Vector{Vector{VertexEdge}}
+    neighbors::Vector{Vector{RegimeEdge}}
 
-    edge_pos::Vector{Dict{Int, Int}}  # (u,v) -> (u,edge_pos[u][v]) to locate the VertexEdge.
+    edge_pos::Vector{Dict{Int, Int}}  # (u,v) -> (u,edge_pos[u][v]) to locate the RegimeEdge.
 
     qK_interface_pool::Vector{RegimeHyperplane}
     x_interface_pool::Vector{Hyperplane_perm{Tv}}
@@ -47,7 +49,7 @@ mutable struct VertexGraph{Tv}
     qK_classifier_full::Any
     qK_classifier_asymptotic::Any
 
-    function VertexGraph(L_helper::MatrixHelper{Tv}, neighbors::Vector{Vector{VertexEdge}}) where {Tv}
+    function RegimeGraph(L_helper::MatrixHelper{Tv}, neighbors::Vector{Vector{RegimeEdge}}) where {Tv}
         
         edge_pos = let
             edge_pos = Vector{Dict{Int,Int}}(undef, length(neighbors))
@@ -76,24 +78,26 @@ mutable struct VertexGraph{Tv}
     end
 end
 
-Base.display(io::IO, grh::VertexGraph) = print(io, "VertexGraph with $(length(grh.neighbors)) vertices and $(sum(length.(grh.neighbors))) edges")
-Base.show(io::IO, grh::VertexGraph) = print(io, "VertexGraph with $(length(grh.neighbors)) vertices and $(sum(length.(grh.neighbors))) edges")
+
+
+Base.display(io::IO, grh::RegimeGraph) = print(io, "RegimeGraph with $(length(grh.neighbors)) vertices and $(sum(length.(grh.neighbors))) edges")
+Base.show(io::IO, grh::RegimeGraph) = print(io, "RegimeGraph with $(length(grh.neighbors)) vertices and $(sum(length.(grh.neighbors))) edges")
 
 
 #-----------------------------------------------------------------------------------------------
 #This is graph associated functions for Bnc models and archetyple behaviors associated code
 #-----------------------------------------------------------------------------------------------
 """
-    _calc_regimes_graph(bnc::Bnc, perms) -> VertexGraph
+    _calc_regimes_graph(bnc::Bnc, perms) -> RegimeGraph
 
-Build a `VertexGraph` from regime permutations, connecting regimes that differ
+Build a `RegimeGraph` from regime permutations, connecting regimes that differ
 in exactly one row.
 """
 function _calc_regimes_graph(helper::MatrixHelper, perms::Vector{<:AbstractVector{T}}) where {T<:Integer}
     # n = helper.n
     n_vtxs = length(perms)
     d = length(perms[1])
-    thread_edges = [Vector{Tuple{Int, VertexEdge}}() for _ in 1:Threads.maxthreadid()]
+    thread_edges = [Vector{Tuple{Int, RegimeEdge}}() for _ in 1:Threads.maxthreadid()]
 
     # 按行分桶：key 为去掉该行后的签名（Tuple），值为该签名下的 (regime idx, row choice)
     @showprogress for i in 1:d
@@ -129,25 +133,25 @@ function _calc_regimes_graph(helper::MatrixHelper, perms::Vector{<:AbstractVecto
                     j_from == j_to && continue
 
                     hp_id = choiceineq_between(helper, i, j_to, j_from)
-                    push!(local_edges, (from_idx, VertexEdge(to_idx, i, hp_id.hid, hp_id.sign)))
-                    push!(local_edges, (to_idx, VertexEdge(from_idx, i, hp_id.hid, -hp_id.sign)))
+                    push!(local_edges, (from_idx, RegimeEdge(to_idx, i, hp_id.hid, hp_id.sign)))
+                    push!(local_edges, (to_idx, RegimeEdge(from_idx, i, hp_id.hid, -hp_id.sign)))
                 end
             end
         end
     end
 
-    all_edges = reduce(vcat, thread_edges; init=Tuple{Int, VertexEdge}[])
-    neighbors = [Vector{VertexEdge}() for _ in 1:n_vtxs]
+    all_edges = reduce(vcat, thread_edges; init=Tuple{Int, RegimeEdge}[])
+    neighbors = [Vector{RegimeEdge}() for _ in 1:n_vtxs]
     for (from, e) in all_edges
         push!(neighbors[from], e)
     end
-    return VertexGraph(helper, neighbors)
+    return RegimeGraph(helper, neighbors)
 end
 #=============================================================================================#
 #          Calc qK-space change directions for edges with nullity <= 1 regimes This part is pure AI
 #=============================================================================================#
 
-function _edge_qK_interface(grh::VertexGraph, edge::VertexEdge)
+function _edge_qK_interface(grh::RegimeGraph, edge::RegimeEdge)
     edge.qK_interface_idx == 0 && return nothing
 
     hp = grh.qK_interface_pool[edge.qK_interface_idx]
@@ -160,7 +164,7 @@ end
 
 
 
-# function _materialize_edge_qK_interface!(grh::VertexGraph, edge::VertexEdge)
+# function _materialize_edge_qK_interface!(grh::RegimeGraph, edge::RegimeEdge)
 #     return edge
 # end
 
@@ -255,7 +259,7 @@ function _canonicalize_qK_interface(
 end
 
 function _intern_qK_interface!(
-    grh::VertexGraph,
+    grh::RegimeGraph,
     key_to_id::Dict,
     dir::SparseVector,
     intersect::Real;
@@ -277,11 +281,11 @@ end
 
 
 """
-    _fulfill_regimes_graph!(vtx_graph::VertexGraph) -> nothing
+    _fulfill_regimes_graph!(vtx_graph::RegimeGraph) -> nothing
 
 Compute qK-space change directions for edges in the vertex graph.
 """
-function _fulfill_regimes_graph!(vtx_graph::VertexGraph)
+function _fulfill_regimes_graph!(vtx_graph::RegimeGraph)
     Bnc = vtx_graph.bn
     regimes = _bind_regimes_data(Bnc)
     empty!(vtx_graph.qK_interface_pool)

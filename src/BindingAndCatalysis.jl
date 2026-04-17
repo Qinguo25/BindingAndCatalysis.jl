@@ -540,7 +540,7 @@ mutable struct Bnc{T} <: AbstractBnc # T is the int type to save all the indices
     BncRegimes::Union{Any, Nothing}
 
     #The following are computed when building graphs.
-    vertices_graph::Union{Any,Nothing} # Using Any for placeholder for VertexGraph
+    vertices_graph::Union{Any,Nothing} # Using Any for placeholder for RegimeGraph
     # _vertices_Nρ_inv_dict::Dict{Vector{T}, Tuple{SparseMatrixCSC{Float64, Int},T}} # cache the N_inv for each vertex permutation
     _vertices_Nρ_inv_dict :: Union{Any,Nothing}
     _regimes_affine_ready::Bool

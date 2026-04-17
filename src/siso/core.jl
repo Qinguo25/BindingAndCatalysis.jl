@@ -115,7 +115,7 @@ get_neighbor_graph_qK(grh::SISOPaths; kwargs...) = grh.qK_grh
 get_SISO_graph(grh::SISOPaths) = grh.qK_grh
 get_SISO_graph(model::Bnc, change_qK) = get_SISO_graph(get_regimes_graph!(model; full=true), change_qK)
 
-function get_SISO_graph(grh::VertexGraph, change_qK)::SimpleDiGraph
+function get_SISO_graph(grh::RegimeGraph, change_qK)::SimpleDiGraph
     bn = get_binding_network(grh)
     change_qK_idx = locate_sym_qK(bn, change_qK)
     _ensure_full_regimes_graph!(grh)

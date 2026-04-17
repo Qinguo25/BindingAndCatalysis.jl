@@ -209,11 +209,11 @@ M = \begin{bmatrix} P \\ N \end{bmatrix}.
 - `H_bd`：稳定性筛选矩阵，不是坐标映射
 
 
-### 4.5 `Regimes` 与 `VertexGraph`
+### 4.5 `Regimes` 与 `RegimeGraph`
 
 `Regimes` 是 regime 容器。
 
-`VertexGraph` 是 binding regime graph cache。它不只是图结构，还包含：
+`RegimeGraph` 是 binding regime graph cache。它不只是图结构，还包含：
 
 - 邻接关系
 - edge metadata
@@ -290,7 +290,7 @@ vols = get_volumes(siso)
 
 内部顺序是：
 
-1. 构造或补全 `VertexGraph`
+1. 构造或补全 `RegimeGraph`
 2. 根据 graph 枚举路径
 3. 为路径计算 node / edge / path polyhedra
 4. 用 Monte Carlo 估体积
@@ -437,9 +437,9 @@ a = -C,\qquad \beta = C_0.
 
 - `src/Catalysis_regime.jl`
 - `src/Bnc_regime.jl`
-- `src/mixed/`
+- `src/mixed_regime/`
 
-`src/Bnc_regime.jl` 现在只是 mixed 层入口壳，实际实现按职责拆在 `src/mixed/`：
+`src/Bnc_regime.jl` 现在只是 mixed 层入口壳，实际实现按职责拆在 `src/mixed_regime/`：
 
 - `bnc_core.jl`
 - `bnc_conditions.jl`
@@ -588,7 +588,7 @@ vols = get_volumes(siso)
 
 - 改 binding 数学对象：`src/regimes.jl`
 - 改 catalysis regime：`src/Catalysis_regime.jl`
-- 改 mixed consistency：`src/Bnc_regime.jl`, `src/mixed/`
+- 改 mixed consistency：`src/Bnc_regime.jl`, `src/mixed_regime/`
 - 改 `x ↔ qK` 数值求解：`src/qK_x_mapping.jl`
 - 改 graph / path：`src/regime_graphs.jl`, `src/SISO.jl`, `src/siso/`
 - 改 polyhedron backend：`src/PolyBackend.jl`, `src/CddBridge.jl`, `src/NativePolyhedra/`
@@ -645,7 +645,7 @@ vols = get_volumes(siso)
 Bnc
  -> BindRegime / CatalysisRegime
  -> BncRegime
- -> VertexGraph / SISOPaths
+ -> RegimeGraph / SISOPaths
  -> polyhedron / volume / symbolic / stability outputs
 ```
 

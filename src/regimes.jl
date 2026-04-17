@@ -48,11 +48,11 @@ end
 
 #------------------Helper functions -------------------------------------------
 """
-    _regime_graph_to_sparse(g::VertexGraph; weight_fn=e->1) -> SparseMatrixCSC
+    _regime_graph_to_sparse(g::RegimeGraph; weight_fn=e->1) -> SparseMatrixCSC
 
-Convert a `VertexGraph` to a sparse adjacency matrix.
+Convert a `RegimeGraph` to a sparse adjacency matrix.
 """
-function _regime_graph_to_sparse(G::VertexGraph; weight_fn = e -> 1)
+function _regime_graph_to_sparse(G::RegimeGraph; weight_fn = e -> 1)
     n = length(G.neighbors)
     sample_edge = nothing
     for edges in G.neighbors
@@ -345,7 +345,7 @@ Return the qK-space adjacency matrix of the vertex graph.
 """
 function get_regimes_neighbor_mat_qK(Bnc::Bnc)
     grh = get_regimes_graph!(Bnc;full=true)
-    f(x::VertexEdge) = _edge_has_qK_interface(x) ? 1 : 0
+    f(x::RegimeEdge) = _edge_has_qK_interface(x) ? 1 : 0
     spmat = _regime_graph_to_sparse(grh; weight_fn = f)
     return spmat
 end
