@@ -3,6 +3,7 @@ module PolyBackend
 using ..NativePolyhedra
 using ..CddBridge
 using ..ExactTypes: ExactLogExpr
+using SparseArrays: sparse
 
 @inline _poly_is_exact(poly::NativePolyhedra.Polyhedron) = any(h -> h.p.β isa ExactLogExpr, poly.halfspaces)
 
@@ -21,7 +22,14 @@ function backend_intersect_eliminate(
     canonicalize::Bool=false,
     prefer_fastpath::Bool=false,
 )
-    return CddBridge.cdd_intersect_eliminate(poly1, poly2, delset; canonicalize=canonicalize)
+    if prefer_fastpath
+        try
+            return CddBridge.cdd_intersect_eliminate(poly1, poly2, delset; canonicalize=canonicalize)
+        catch
+        end
+    end
+    poly = NativePolyhedra.intersect(poly1, poly2; canonicalize=false)
+    return backend_eliminate(poly, delset; canonicalize=canonicalize, prefer_fastpath=prefer_fastpath)
 end
 
 function backend_intersect_many(
@@ -29,7 +37,13 @@ function backend_intersect_many(
     canonicalize::Bool=false,
     prefer_fastpath::Bool=false,
 )
-    return CddBridge.cdd_intersect_many(polys; canonicalize=canonicalize)
+    if prefer_fastpath
+        try
+            return CddBridge.cdd_intersect_many(polys; canonicalize=canonicalize)
+        catch
+        end
+    end
+    return NativePolyhedra.intersect(polys...; canonicalize=canonicalize)
 end
 
 function backend_eliminate(
@@ -40,7 +54,22 @@ function backend_eliminate(
     method::Symbol=:auto,
 )
     method === :auto || nothing
-    return CddBridge.cdd_eliminate(poly, delset; canonicalize=canonicalize)
+
+    if prefer_fastpath
+        try
+            return CddBridge.cdd_eliminate(poly, delset; canonicalize=canonicalize)
+        catch
+        end
+    end
+
+    if _poly_is_exact(poly)
+        try
+            return CddBridge.cdd_eliminate(poly, delset; canonicalize=canonicalize)
+        catch
+        end
+    end
+
+    return NativePolyhedra.eliminate(poly, delset; canonicalize=canonicalize, method=method)
 end
 
 function backend_project_hrep(
@@ -49,7 +78,13 @@ function backend_project_hrep(
     nullity::Integer,
     delset,
 )
-    return CddBridge.cdd_project_hrep(C, C0, nullity, delset; canonicalize=true)
+    try
+        return CddBridge.cdd_project_hrep(C, C0, nullity, delset; canonicalize=true)
+    catch
+        poly = CddBridge._polyhedron_from_C_C0_nullity(sparse(C), C0, nullity)
+        poly_elim = backend_eliminate(poly, BitSet(delset); canonicalize=true, prefer_fastpath=false)
+        return CddBridge._polyhedron_to_C_C0_nullity(poly_elim)
+    end
 end
 
 function backend_prepare_fastpath(
@@ -68,12 +103,12 @@ function backend_fast_eliminate(
 end
 
 function backend_fast_intersect(poly1, poly2; prefer_fastpath::Bool=false)
-    return CddBridge.cdd_intersect_many([poly1, poly2]; canonicalize=false)
+    return NativePolyhedra.intersect(poly1, poly2; canonicalize=false)
 end
 
 function backend_from_fastpath(poly; canonicalize::Bool=false, prefer_fastpath::Bool=false)
     if canonicalize
-        return CddBridge._cdd_canonicalize_poly(poly)
+        NativePolyhedra.removehredundancy!(poly; strong=false)
     end
     return poly
 end

@@ -52,7 +52,9 @@ end
             Rational{Int}[1 0; -1 0; 0 1; 0 -1],
             ExactLogExpr[exact_log10(2), ExactLogExpr(0), exact_log10(3), ExactLogExpr(0)],
         ))
-        @test_throws ErrorException BindingAndCatalysis.backend_eliminate(exact_poly, BitSet([1]); prefer_fastpath=false)
+        expected = BindingAndCatalysis.NativePolyhedra.eliminate(exact_poly, BitSet([1]); canonicalize=true)
+        actual = BindingAndCatalysis.backend_eliminate(exact_poly, BitSet([1]); prefer_fastpath=false)
+        @test same_polyhedron(actual, expected)
     end
 end
 
