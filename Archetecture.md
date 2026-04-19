@@ -384,11 +384,7 @@ a = -C,\qquad \beta = C_0.
 
 其中前四个是为了减少 bulk DAG 里重复的后端切换和 canonicalization 开销，`backend_from_fastpath` 负责把 fastpath 结果收回到项目内 `Polyhedron` 语义。
 
-由 facade 内部决定是否：
-
-- 走 `NativePolyhedra`
-- 走本地编译的 float `cddlib`
-- 走本地编译的 exact `cddlog`
+当前 facade 只负责把业务层请求转给本地编译的 `cdd/cddlog`，不再在运行时切换到 `NativePolyhedra`。
 
 这层的存在意义是两点：
 
@@ -398,19 +394,17 @@ a = -C,\qquad \beta = C_0.
 当前策略是：
 
 - float mode:
-  - bulk `SIMO` fastpath 若本地 `cdd` 可用，则优先走本地构建的 `cdd`
-  - 失败或不可用时回退到 `NativePolyhedra`
+  - bulk `SIMO` fastpath 走本地构建的 `cdd`
 - exact mode:
   - 不启用 `SIMO` 的 float-style fastpath
-  - 但在 `backend_eliminate` / `backend_project_hrep` 内会 opportunistically 尝试 `cddlog`
-  - `cddlog` 不可用或失败时回退到 `NativePolyhedra`
+  - `backend_eliminate` / `backend_project_hrep` 直接走本地构建的 `cddlog`
 
 本地 `cdd` / `cddlog` 后端的源码默认来自 `Artifacts.toml` 里固定版本的 `cddlib-logarithmic` source artifact。编译入口在：
 
 - `deps/build.jl`
 - `scripts/build_local_cdd.sh`
 
-运行时若本地后端不可用，`PolyBackend` 会发出一次 warning，然后自动回退。
+运行时若本地后端不可用，`PolyBackend` 会直接报错；`Pkg.build()` 也不会再静默降级。
 
 
 ## 7. 源码地图

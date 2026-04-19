@@ -170,6 +170,120 @@ end
     @test length(H0s) == model.n
 end
 
+@testset "Nullity-1 Singular X Range" begin
+    model = Bnc(N = [2 1 -1])
+    find_all_regimes!(model; mode = :exact)
+    rgm_idx = only(filter(i -> get_nullity(model, i) == 1, get_regimes(model; return_idx = true)))
+
+    xr = get_singular_x_range(model, rgm_idx; observe_x = 1, log_space = false)
+    @test xr isa SingularXRange
+    @test isempty(xr.equalities)
+    @test length(xr.lower_bounds) == 1
+    @test length(xr.upper_bounds) == 1
+
+    xr_dom = get_singular_x_range(model, rgm_idx; observe_x = 3, log_space = false)
+    @test length(xr_dom.equalities) == 2
+    qK_anchor = get_one_inner_point(get_polyhedron(model, rgm_idx))
+    ev_x1 = BindingAndCatalysis._evaluate_singular_x_range(xr, qK_anchor, model; input_logspace = true)
+    ev = BindingAndCatalysis._evaluate_singular_x_range(xr_dom, qK_anchor, model; input_logspace = true)
+    @test ev_x1.consistent
+    @test ev_x1.lower <= ev_x1.upper + 1e-8
+    @test isapprox(ev.lower, ev.upper; atol = 1e-6)
+
+    shown = show_expression_x_range(model, rgm_idx; observe_x = 1, log_space = false)
+    @test shown == "max((K₁^(1//2))) < x₁ < min(q₁)"
+    @test show_expression_x_range(model, rgm_idx; observe_x = 2, log_space = false) ==
+        "max((((1//2)*K₁) / q₁)) < x₂ < min(((1//2)*q₁))"
+    @test show_expression_x_range(model, rgm_idx; observe_x = 3, log_space = false) == "x₃ ~ q₂"
+end
+
+@testset "Higher-Nullity Singular X Range Projection" begin
+    N = [
+        1 2 1 -1 0 0 0
+        1 1 1 0 -1 0 0
+        0 0 1 1 0 -1 0
+        2 1 0 0 1 0 -1
+    ]
+    L = BindingAndCatalysis.L_from_N(N)
+    model = Bnc(N = N, L = L)
+    find_all_regimes!(model; mode = :float)
+
+    rgm_idx = first(filter(i -> get_nullity(model, i) == 2, get_regimes(model; return_idx = true)))
+    xr = get_singular_x_range(model, rgm_idx; observe_x = 1, log_space = false)
+    @test xr isa SingularXRange
+    @test xr.projected_nullity >= 0
+
+    qK_anchor = get_one_inner_point(get_polyhedron(model, rgm_idx))
+    ev = BindingAndCatalysis._evaluate_singular_x_range(xr, qK_anchor, model; input_logspace = true)
+    @test ev.consistent
+    @test ev.lower <= ev.upper + 1e-8
+end
+
+@testset "Graph Plus q Bounds Are Not Equivalent" begin
+    function _singular_component(model::Bnc, rgm_idx::Int)
+        seen = Set([rgm_idx])
+        queue = [rgm_idx]
+        while !isempty(queue)
+            cur = popfirst!(queue)
+            for nb in get_neighbors(model, cur; singular = true, return_idx = true)
+                get_nullity(model, nb) == 1 || continue
+                if nb ∉ seen
+                    push!(seen, nb)
+                    push!(queue, nb)
+                end
+            end
+        end
+        return collect(seen)
+    end
+
+    function _graph_plus_q_numeric_bounds(model::Bnc, rgm_idx::Int, observe_x_idx::Int, logqK_anchor)
+        xr = get_singular_x_range(model, rgm_idx; observe_x = observe_x_idx, log_space = false)
+        direct = BindingAndCatalysis._evaluate_singular_x_range(xr, logqK_anchor, model; input_logspace = true)
+
+        lowers = Float64[]
+        uppers = Float64[]
+        for srgm in _singular_component(model, rgm_idx)
+            for nb in get_neighbors(model, srgm; singular = false, return_idx = true)
+                H, H0 = get_H_H0(model, nb)
+                val = LinearAlgebra.dot(Array(H[observe_x_idx, :]), logqK_anchor) + H0[observe_x_idx]
+                val = Float64(val)
+                val <= direct.lower + 1e-7 && push!(lowers, val)
+                val >= direct.upper - 1e-7 && push!(uppers, val)
+            end
+        end
+        for q_idx in BindingAndCatalysis._q_totals_containing_x(model, observe_x_idx)
+            val = Float64(logqK_anchor[q_idx])
+            val <= direct.lower + 1e-7 && push!(lowers, val)
+            val >= direct.upper - 1e-7 && push!(uppers, val)
+        end
+
+        return (
+            direct = direct,
+            lower = isempty(lowers) ? -Inf : maximum(lowers),
+            upper = isempty(uppers) ? Inf : minimum(uppers),
+        )
+    end
+
+    N = [
+        1 2 1 -1 0 0 0
+        1 1 1 0 -1 0 0
+        0 0 1 1 0 -1 0
+        2 1 0 0 1 0 -1
+    ]
+    L = BindingAndCatalysis.L_from_N(N)
+    Lnew = copy(L)
+    Lnew[1, :] .= L[1, :] .+ L[2, :]
+    model = Bnc(N = N, L = Lnew)
+    find_all_regimes!(model; mode = :float)
+
+    rgm_idx = only(filter(i -> get_nullity(model, i) == 1 && get_perm(model, i) == [2, 2, 7], get_regimes(model; return_idx = true)))
+    logqK_anchor = get_one_inner_point(get_polyhedron(model, rgm_idx))
+    rst = _graph_plus_q_numeric_bounds(model, rgm_idx, 1, logqK_anchor)
+
+    @test isapprox(rst.upper, rst.direct.upper; atol = 1e-6, rtol = 1e-6)
+    @test rst.lower < rst.direct.lower - 1e-3
+end
+
 @testset "Rational H Mode" begin
     model = minimal_model()
     find_all_regimes!(model; mode = :exact)

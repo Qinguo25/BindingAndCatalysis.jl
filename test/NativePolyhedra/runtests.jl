@@ -1,3 +1,4 @@
+include(joinpath(@__DIR__, "..", "support", "setup.jl"))
 include("helpers.jl")
 include("api_smoke.jl")
 include("exact_mode.jl")

@@ -6,6 +6,8 @@ using SparseArrays
 
 const _DEFAULT_LOCAL_CDD_BINDIR = joinpath(dirname(@__DIR__), ".build", "cddlog", "src")
 
+const _LOCAL_CDD_BUILD_HINT = "Run `Pkg.build()` after installing gcc/cc/clang and libgmp-dev, or point `BNC_CDDLOG_SOURCE_DIR` at a local cddlib-logarithmic source tree."
+
 @inline _local_cdd_disabled() = get(ENV, "BNC_DISABLE_LOCAL_CDD", "0") == "1"
 
 function _local_cdd_bindir(; require_log::Bool=false)
@@ -36,10 +38,27 @@ _cddlog_bindir() = _local_cdd_bindir(require_log=true)
 _cdd_available() = !isnothing(_cdd_bindir())
 _cddlog_available() = !isnothing(_cddlog_bindir())
 
+function _require_local_cdd!()
+    bindir = _cdd_bindir()
+    isnothing(bindir) && error("Local cdd backend is required but not available. $(_LOCAL_CDD_BUILD_HINT)")
+    return bindir
+end
+
+function _require_local_cddlog!()
+    bindir = _cddlog_bindir()
+    isnothing(bindir) && error("Local cddlog backend is required but not available. $(_LOCAL_CDD_BUILD_HINT)")
+    return bindir
+end
+
 @inline _can_use_cdd_fastpath(is_exact::Bool) = !is_exact && _cdd_available()
 
 @inline _supports_cddlog(poly::NativePolyhedra.Polyhedron) = any(h -> h.p.β isa ExactLogExpr, poly.halfspaces) &&
     all(h -> all(x -> x isa Rational{Int} || x isa Integer, h.p.a), poly.halfspaces)
+
+function _require_cddlog_support!(poly::NativePolyhedra.Polyhedron)
+    _supports_cddlog(poly) && return nothing
+    error("Local cddlog backend only supports exact polyhedra with rational coefficients and `ExactLogExpr` right-hand sides.")
+end
 
 @inline _is_exact_rhs(C0::AbstractVector) = any(x -> x isa ExactLogExpr, C0)
 
@@ -349,8 +368,7 @@ function _tool_bindir(toolname::AbstractString)
 end
 
 function _run_cdd_hrep_tool(toolname::AbstractString, C::AbstractMatrix{<:Real}, C0::AbstractVector, nullity::Integer; stdin_text::AbstractString="")
-    bindir = _tool_bindir(toolname)
-    isnothing(bindir) && error("Local cdd tool '$toolname' is not available.")
+    bindir = endswith(toolname, "_log") ? _require_local_cddlog!() : _require_local_cdd!()
     tool = joinpath(bindir, toolname)
     isfile(tool) || error("Missing local cdd tool: $tool")
 
@@ -391,6 +409,7 @@ function cdd_project_hrep(
         return Ccopy, collect(C0), Int(nullity)
     end
 
+    _is_exact_rhs(C0) ? _require_local_cddlog!() : _require_local_cdd!()
     toolname = _is_exact_rhs(C0) ? "projection_log" : "projection"
     stdin_text = string(length(axes), "\n", join(axes, "\n"), "\n")
     stdout_text = _run_cdd_hrep_tool(toolname, C, C0, nullity; stdin_text=stdin_text)
@@ -415,6 +434,12 @@ function cdd_eliminate(
 )
     out_dim = NativePolyhedra.fulldim(poly) - length(delset)
     poly.empty && return _empty_polyhedron(out_dim)
+    if any(h -> h.p.β isa ExactLogExpr, poly.halfspaces)
+        _require_local_cddlog!()
+        _require_cddlog_support!(poly)
+    else
+        _require_local_cdd!()
+    end
     C, C0, nullity = _polyhedron_to_C_C0_nullity(poly)
     Cproj, C0proj, nproj = cdd_project_hrep(C, C0, nullity, delset; canonicalize=canonicalize)
     return _polyhedron_from_C_C0_nullity(Cproj, C0proj, nproj)
@@ -436,17 +461,6 @@ function cdd_intersect_many(
 )
     combined = _combine_polyhedra(polys)
     return canonicalize ? _cdd_canonicalize_poly(combined) : combined
-end
-
-function maybe_cddlog_eliminate(poly::NativePolyhedra.Polyhedron, axes::BitSet; canonicalize::Bool=true, method::Symbol=:auto)
-    _cddlog_available() || return nothing
-    _supports_cddlog(poly) || return nothing
-
-    try
-        return cdd_eliminate(poly, axes; canonicalize=canonicalize)
-    catch
-        return nothing
-    end
 end
 
 end

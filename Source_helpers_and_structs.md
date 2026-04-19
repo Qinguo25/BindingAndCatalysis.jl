@@ -89,7 +89,7 @@
 
 | 文件 | 主要数据结构 | 辅助函数 / 角色 | 备注 |
 | --- | --- | --- | --- |
-| `src/PolyBackend.jl` | 无新增 struct | `_warn_missing_local_backend!`, `_empty_hrep_result` | 后端选择 facade，业务代码应优先经由这里 |
+| `src/PolyBackend.jl` | 无新增 struct | `backend_eliminate`, `backend_intersect_many`, `backend_project_hrep`, `backend_from_fastpath` | `cdd/cddlog` facade，业务代码应优先经由这里 |
 | `src/CddBridge.jl` | 无新增 struct | `_local_cdd_bindir`, `_cdd_numbertype`, `_polyhedron_to_C_C0_nullity`, `_write_cdd_hrep`, `_parse_cdd_hrep`, `_canonicalize_hrep` | 本地 `cdd/cddlog` bridge |
 | `src/ExactTypes.jl` | `ExactLogExpr` | `_factor_positive_integer` | exact 常数类型 |
 | `src/NativePolyhedra/NativePolyhedra.jl` | 无新增 struct | 模块入口与 cache invalidation stub | 薄入口 |

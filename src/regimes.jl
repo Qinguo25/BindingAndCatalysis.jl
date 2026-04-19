@@ -1028,7 +1028,7 @@ function get_intersect(Bnc,vtx1,vtx2)::Polyhedron
     p2 = get_polyhedron(Bnc, vtx2)
     dim2 = dim(p2)
 
-    p = intersect(p1,p2)
+    p = backend_intersect_many([p1, p2]; canonicalize=true, prefer_fastpath=backend_prefers_fastpath(p1))
     detecthlinearity!(p)
     # @show dim1, dim2, dim(p)
     if dim(p)< max(dim1,dim2)-1
@@ -1123,7 +1123,7 @@ Check whether a vertex/polyhedron remains feasible under extra constraints.
 function check_feasibility_with_constraint(args...;C::AbstractMatrix{<:Real},C0::AbstractVector{<:Real},nullity::Int=0)
     poly_additional = get_polyhedron(C,C0,nullity)
     poly = get_polyhedron(args...)
-    ins = intersect(poly,poly_additional)
+    ins = backend_intersect_many([poly, poly_additional]; canonicalize=true, prefer_fastpath=backend_prefers_fastpath(poly))
     @info "The dimension of the intersected polyhedra is $(dim(ins))"
     return !isempty(ins)
 end

@@ -1,7 +1,7 @@
 # For SIMO path conditions we only need a canonical H-rep, not an LP-minimal one.
 # Using the light pass here matches cddlib's "canonicalize after projection" style
 # much better than running a full LP-based strong reduction on every path.
-_clean_polyhedron!(p::Polyhedron) = (removehredundancy!(p; strong=false); p)
+_clean_polyhedron!(p::Polyhedron) = backend_from_fastpath(p; canonicalize=true)
 
 function _ensure_node_polyhedra!(grh::SIMOPaths, rgm_idxs::AbstractVector{<:Integer})
     bn = get_binding_network(grh)
@@ -199,7 +199,11 @@ function _calc_polyhedra_for_paths_bulk_suffix_dag!(
                     prefer_fastpath=false,
                 )
             else
-                intersect(grh.edge_polys[edge_of[node]], poly_of[child_of[node]]::Polyhedron; canonicalize=false)
+                backend_intersect_many(
+                    [grh.edge_polys[edge_of[node]], poly_of[child_of[node]]::Polyhedron];
+                    canonicalize=false,
+                    prefer_fastpath=false,
+                )
             end
             poly_of[node] = poly
             is_calc[node] = true
@@ -240,8 +244,13 @@ function _calc_polyhedra_for_path(
                 prefer_fastpath=prefer_fastpath,
             )
         else
-            p = intersect(node_polyhedra[u], node_polyhedra[v]; canonicalize=false)
-            backend_eliminate(p, el_dim; canonicalize=false, prefer_fastpath=false)
+            backend_intersect_eliminate(
+                node_polyhedra[u],
+                node_polyhedra[v],
+                el_dim;
+                canonicalize=false,
+                prefer_fastpath=false,
+            )
         end
     end
 
@@ -265,7 +274,11 @@ function _calc_polyhedra_for_path(
                 ) |> _clean_polyhedron!
             end
         else
-            out[i] = intersect(edge_poly[edge_paths[i]]...; canonicalize=false) |> _clean_polyhedron!
+            out[i] = backend_intersect_many(
+                edge_poly[edge_paths[i]];
+                canonicalize=false,
+                prefer_fastpath=false,
+            ) |> _clean_polyhedron!
         end
     end
     return out

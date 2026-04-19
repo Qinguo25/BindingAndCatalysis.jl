@@ -1,6 +1,8 @@
-using Pkg.Artifacts: artifact_hash, artifact_path
-using Pkg.Artifacts
-using Pkg
+"@stdlib" ∉ LOAD_PATH && push!(LOAD_PATH, "@stdlib")
+
+import Pkg
+import Pkg.Artifacts
+using Pkg.Artifacts: ensure_artifact_installed, artifact_hash, artifact_path
 
 root = normpath(joinpath(@__DIR__, ".."))
 script = joinpath(root, "scripts", "build_local_cdd.sh")
@@ -44,7 +46,7 @@ function _resolve_cddlog_source_root()
     end
 
     isfile(artifacts_toml) || error("Artifacts.toml is missing at $artifacts_toml")
-    Pkg.Artifacts.ensure_artifact_installed(artifact_name, artifacts_toml; quiet_download=false)
+    ensure_artifact_installed(artifact_name, artifacts_toml; quiet_download=false)
     hash = artifact_hash(artifact_name, artifacts_toml)
     hash === nothing && error("Artifact '$artifact_name' is not defined in $artifacts_toml")
     src_root = _normalize_cddlog_source_root(artifact_path(hash))
@@ -59,10 +61,11 @@ elseif _have_required_tools(bindir, required) && get(ENV, "BNC_FORCE_REBUILD_CDD
 else
     try
         src_root = _resolve_cddlog_source_root()
-        run(setenv(`bash $script`, "BNC_CDDLOG_SOURCE_DIR" => src_root))
+        run(addenv(`bash $script`, "BNC_CDDLOG_SOURCE_DIR" => src_root))
         _have_required_tools(bindir, required) || error("Local cdd build finished but expected tools are missing in $bindir")
         @info "Local cdd backend build completed." bindir src_root
     catch err
-        @warn "Local cdd backend build failed; runtime will fall back to NativePolyhedra where needed. Install gcc/cc/clang and libgmp-dev, then rerun `Pkg.build()`." exception=(err, catch_backtrace())
+        @error "Local cdd backend build failed. Install gcc/cc/clang and libgmp-dev, then rerun `Pkg.build()`." exception=(err, catch_backtrace())
+        rethrow(err)
     end
 end

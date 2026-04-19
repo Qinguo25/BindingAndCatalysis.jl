@@ -19,7 +19,7 @@ Pkg.instantiate()
 Pkg.build()
 ```
 
-`Pkg.build()` 默认会通过 [Artifacts.toml](Artifacts.toml) 下载固定版本的 `cddlib-logarithmic` 源码，并编译到 `.build/cddlog/src`。如果本机没有可用的 C 编译器或 GMP 开发头文件，包仍然可以使用，但多面体投影/消元会回退到 `NativePolyhedra` 后端。如果你想覆盖这个来源，可以在 build 前设置：
+`Pkg.build()` 默认会通过 [Artifacts.toml](Artifacts.toml) 下载固定版本的 `cddlib-logarithmic` 源码，并编译到 `.build/cddlog/src`。当前仓库只保留本地编译的 `cdd/cddlog` 作为多面体计算后端，所以如果本机没有可用的 C 编译器或 GMP 开发头文件，`Pkg.build()` 会直接失败。你可以在 build 前设置：
 
 ```bash
 export BNC_CDDLOG_SOURCE_DIR=/path/to/local/cddlib-logarithmic
@@ -33,6 +33,8 @@ Pkg.activate("Examples")
 Pkg.instantiate()
 Pkg.build()
 ```
+
+`NativePolyhedra` 仍然作为仓库内的独立模块保留，用于数据结构、独立算法实验和单独测试，但默认业务路径不再把它作为运行时 fallback backend。
 
 ## Quick start
 
