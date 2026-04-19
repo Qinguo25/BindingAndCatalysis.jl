@@ -188,9 +188,17 @@ function _initialize_regime!(vtx::BindRegime)::BindRegime
     return vtx
 end
 
-function _materialize_qK_conditions!(rgm::BindRegime)
+function _materialize_qK_conditions_impl!(rgm::BindRegime, qk_locks::Union{Nothing,AbstractVector{ReentrantLock}}=nothing)
     _initialize_regime!(rgm)
     (!isnothing(rgm.C_qK) && !isnothing(rgm.C0_qK)) && return nothing
+
+    if !isnothing(qk_locks)
+        lock(qk_locks[rgm.idx]) do
+            (!isnothing(rgm.C_qK) && !isnothing(rgm.C0_qK)) && return nothing
+            _materialize_qK_conditions_impl!(rgm, nothing)
+        end
+        return nothing
+    end
 
     if rgm.nullity == 0
         C_qK = sparse(rgm.C_x * rgm.H)
@@ -202,10 +210,53 @@ function _materialize_qK_conditions!(rgm::BindRegime)
         rgm.C_qK = C_qK
         rgm.C0_qK = rgm.C0_x + rgm.C_x * rgm.H0
     else
-        rgm.C_qK, rgm.C0_qK, _ = _calc_C_C0_qK_singular(rgm.network, rgm.perm)
+        C_qK, C0_qK, nlt = _calc_C_C0_qK_from_lower_nullity_neighbors(rgm, qk_locks)
+        if nlt == rgm.nullity
+            rgm.C_qK = C_qK
+            rgm.C0_qK = C0_qK
+        else
+            rgm.C_qK, rgm.C0_qK, _ = _calc_C_C0_qK_singular(rgm.network, rgm.perm)
+        end
     end
 
     return nothing
+end
+
+_materialize_qK_conditions!(rgm::BindRegime) = _materialize_qK_conditions_impl!(rgm, nothing)
+_materialize_qK_conditions!(rgm::BindRegime, qk_locks::AbstractVector{ReentrantLock}) =
+    _materialize_qK_conditions_impl!(rgm, qk_locks)
+
+function _calc_C_C0_qK_from_lower_nullity_neighbors(
+    rgm::BindRegime,
+    qk_locks::Union{Nothing,AbstractVector{ReentrantLock}}=nothing,
+)
+    target_nullity = rgm.nullity
+    target_nullity > 0 || return spzeros(Rational{Int}, 0, rgm.network.d + rgm.network.r), ExactLogExpr[], 0
+
+    neighbor_idxs = filter(idx -> get_nullity(rgm.network, idx) < target_nullity,
+        get_neighbors(rgm; singular=target_nullity - 1, return_idx=true),
+    )
+    isempty(neighbor_idxs) && return spzeros(Rational{Int}, 0, rgm.network.d + rgm.network.r), ExactLogExpr[], 0
+
+    regimes = _bind_regimes_data(rgm.network)
+    C_blocks = Vector{SparseMatrixCSC}(undef, length(neighbor_idxs))
+    C0_blocks = Vector{Vector}(undef, length(neighbor_idxs))
+
+    for (pos, idx) in enumerate(neighbor_idxs)
+        nbr = regimes[idx]
+        if isnothing(qk_locks)
+            _materialize_qK_conditions!(nbr)
+        else
+            _materialize_qK_conditions!(nbr, qk_locks)
+        end
+        C_blocks[pos] = nbr.C_qK
+        C0_blocks[pos] = nbr.C0_qK
+    end
+
+    C = reduce(vcat, C_blocks)
+    C0 = reduce(vcat, C0_blocks)
+    poly = backend_build_polyhedron(C, C0, 0; canonicalize=true)
+    return get_C_C0_nullity(poly)
 end
 
 """
@@ -216,6 +267,33 @@ Ensure a `BindRegime` has `H/H0` and qK constraints computed and cached.
 function _fill_all_info!(vtx::BindRegime)
     _initialize_regime!(vtx)
     _materialize_qK_conditions!(vtx)
+    return nothing
+end
+
+function _prefill_qK_conditions!(
+    model::Bnc,
+    regime_idxs::AbstractVector{<:Integer};
+    threaded::Bool=Threads.nthreads() > 1 && length(regime_idxs) >= 8,
+)
+    find_all_regimes!(model)
+    regimes = _bind_regimes_data(model)
+
+    if threaded
+        Threads.@threads for pos in eachindex(regime_idxs)
+            _materialize_qK_conditions!(regimes[Int(regime_idxs[pos])])
+        end
+    elseif _affine_is_exact(model) && Threads.nthreads() == 1 && length(regime_idxs) >= 8
+        qk_locks = [ReentrantLock() for _ in 1:length(regimes)]
+        asyncmap(regime_idxs; ntasks=min(length(regime_idxs), max(2, min(Sys.CPU_THREADS, 4)))) do idx_any
+            _materialize_qK_conditions!(regimes[Int(idx_any)], qk_locks)
+            return nothing
+        end
+    else
+        for idx_any in regime_idxs
+            _materialize_qK_conditions!(regimes[Int(idx_any)])
+        end
+    end
+
     return nothing
 end
 
@@ -393,8 +471,7 @@ function get_volumes(Bnc::Bnc,vtxs::Union{AbstractVector,Nothing}=nothing;
            get_regime(Bnc,idx; inv_info=true)
         end
         
-        vtx_data = @view _bind_regimes_data(Bnc)[vtxs_to_calc]
-        rlts = calc_volume(vtx_data; rebase_mat=rebase_mat, kwargs...)
+        rlts = _calc_bind_regime_volumes(Bnc, vtxs_to_calc; rebase_mat=rebase_mat, kwargs...)
         for (i,idx) in enumerate(vtxs_to_calc)
             vtx = get_regime(Bnc,idx; inv_info=false)
             vtx.volume = rlts[i]
@@ -1007,15 +1084,57 @@ function get_polyhedron(
     return canonicalize ? polyhedron(rep) : Polyhedron(copy(rep.halfspaces), rep.ambient_dim, false, false)
 end
 """
-    get_polyhedron(args...) -> Polyhedron
+    get_polyhedron(args...; kwargs...) -> Polyhedron
 
 Convenience wrapper that pulls constraints from a vertex or model.
 """
-get_polyhedron(args...)=get_polyhedron(get_C_C0_nullity_qK(args...)...)
+get_polyhedron(args...; kwargs...)=get_polyhedron(get_C_C0_nullity_qK(args...)...; kwargs...)
 
-function get_polyhedra(model::Bnc, vtxs::Union{AbstractVector{T},Nothing}=nothing; kwargs...) where T 
-    vtxs = isnothing(vtxs) ? get_regimes(model;kwargs...) : vtxs
-    get_polyhedron.(Ref(model), vtxs)
+function get_polyhedra(
+    model::Bnc,
+    vtxs::Union{AbstractVector{T},Nothing}=nothing;
+    canonicalize::Bool=!_affine_is_exact(model),
+    show_progress::Bool=Base.isinteractive() && !_affine_is_exact(model),
+    kwargs...,
+) where T
+    selected = isnothing(vtxs) ? get_regimes(model; kwargs...) : vtxs
+    isempty(selected) && return Polyhedron[]
+    show_progress = show_progress && length(selected) > 1
+    selected_idxs = [get_idx(model, vtx) for vtx in selected]
+    threaded = Threads.nthreads() > 1 && length(selected_idxs) >= 8 && !show_progress
+
+    _prefill_qK_conditions!(model, selected_idxs; threaded=threaded)
+    regimes = _bind_regimes_data(model)
+
+    out = Vector{Polyhedron}(undef, length(selected))
+
+    build_one(i) = begin
+        rgm = regimes[selected_idxs[i]]
+        out[i] = if canonicalize && rgm.nullity > 0
+            CddBridge._polyhedron_from_C_C0_nullity(rgm.C_qK, rgm.C0_qK, rgm.nullity)
+        else
+            get_polyhedron(rgm.C_qK, rgm.C0_qK, rgm.nullity; canonicalize=canonicalize)
+        end
+        return nothing
+    end
+
+    if show_progress || !threaded
+        if show_progress
+            @showprogress desc="Building polyhedra" for i in eachindex(selected)
+                build_one(i)
+            end
+        else
+            for i in eachindex(selected)
+                build_one(i)
+            end
+        end
+    else
+        Threads.@threads for i in eachindex(selected)
+            build_one(i)
+        end
+    end
+
+    return out
 end
 """
     get_intersect(bnc, vtx1, vtx2) -> Polyhedron
@@ -1028,7 +1147,7 @@ function get_intersect(Bnc,vtx1,vtx2)::Polyhedron
     p2 = get_polyhedron(Bnc, vtx2)
     dim2 = dim(p2)
 
-    p = backend_intersect_many([p1, p2]; canonicalize=true, prefer_fastpath=backend_prefers_fastpath(p1))
+    p = intersect(p1,p2)
     detecthlinearity!(p)
     # @show dim1, dim2, dim(p)
     if dim(p)< max(dim1,dim2)-1
@@ -1123,7 +1242,7 @@ Check whether a vertex/polyhedron remains feasible under extra constraints.
 function check_feasibility_with_constraint(args...;C::AbstractMatrix{<:Real},C0::AbstractVector{<:Real},nullity::Int=0)
     poly_additional = get_polyhedron(C,C0,nullity)
     poly = get_polyhedron(args...)
-    ins = backend_intersect_many([poly, poly_additional]; canonicalize=true, prefer_fastpath=backend_prefers_fastpath(poly))
+    ins = intersect(poly,poly_additional)
     @info "The dimension of the intersected polyhedra is $(dim(ins))"
     return !isempty(ins)
 end

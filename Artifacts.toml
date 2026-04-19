@@ -1,6 +1,0 @@
-[cddlog_source]
-git-tree-sha1 = "96ef89544d023f55e8f457e837a20641a53ae619"
-
-    [[cddlog_source.download]]
-    url = "https://github.com/Qinguo25/cddlib-logarithmic/archive/refs/tags/1.0.0-beta.tar.gz"
-    sha256 = "30eb48077e73e2d0475a175dabec7f23f1ef2acdfd6462d5bdab499433a1c004"

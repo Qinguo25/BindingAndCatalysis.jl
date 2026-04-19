@@ -1,6 +1,6 @@
-include(joinpath(@__DIR__, "..", "support", "setup.jl"))
+include("../support/setup.jl")
 include("helpers.jl")
 include("api_smoke.jl")
 include("exact_mode.jl")
-isfile(joinpath(@__DIR__, "reference_examples.jl")) && include("reference_examples.jl")
+include("reference_examples.jl")
 include("projection_and_redundancy.jl")

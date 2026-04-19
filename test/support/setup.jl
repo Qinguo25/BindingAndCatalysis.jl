@@ -63,6 +63,15 @@ function notebook_model2()
     return Bnc(N = N)
 end
 
+function cdn3_small_model()
+    N = [
+        1 1 0 -1 0 0
+        0 1 1 0 -1 0
+        1 0 1 0 0 -1
+    ]
+    return Bnc(N = N)
+end
+
 function clique5_binding_model()
     N = [
         1 1 0 0 0 -1 0 0 0 0 0 0 0 0 0

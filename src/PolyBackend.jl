@@ -70,8 +70,6 @@ function backend_eliminate(
     prefer_fastpath::Bool=false,
     method::Symbol=:auto,
 )
-    method === :auto || nothing
-
     if prefer_fastpath
         try
             return CddBridge.cdd_eliminate(poly, delset; canonicalize=canonicalize)

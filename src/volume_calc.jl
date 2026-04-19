@@ -1,5 +1,80 @@
 export calc_volume
 
+@inline function _bind_volume_route(
+    Bnc::Bnc,
+    regime_ids::AbstractVector{<:Integer};
+    asymptotic::Bool=true,
+    contain_overlap::Bool=false,
+    rebase_mat::Union{AbstractMatrix{<:Real},Nothing}=nothing,
+)
+    return isnothing(rebase_mat) && !contain_overlap ? :classifier : :polyhedra
+end
+
+function _select_regular_bind_regimes(
+    Bnc::Bnc,
+    regime_ids::AbstractVector{<:Integer};
+    asymptotic::Bool=true,
+)
+    vertices = _bind_regimes_data(Bnc)
+    positions = Int[]
+    selected_ids = Int[]
+    sizehint!(positions, length(regime_ids))
+    sizehint!(selected_ids, length(regime_ids))
+
+    for (pos, idx_any) in enumerate(regime_ids)
+        idx = Int(idx_any)
+        rgm = vertices[idx]
+        if rgm.nullity == 0 && (!asymptotic || rgm.is_asymptotic)
+            push!(positions, pos)
+            push!(selected_ids, idx)
+        end
+    end
+
+    return positions, selected_ids
+end
+
+function _calc_bind_regime_volumes(
+    Bnc::Bnc,
+    regime_ids::AbstractVector{<:Integer};
+    asymptotic::Bool=true,
+    contain_overlap::Bool=false,
+    rebase_mat::Union{AbstractMatrix{<:Real},Nothing}=nothing,
+    kwargs...,
+)
+    vals = [Volume(0.0, 0.0) for _ in eachindex(regime_ids)]
+    positions, selected_ids = _select_regular_bind_regimes(Bnc, regime_ids; asymptotic=asymptotic)
+    isempty(selected_ids) && return vals
+
+    if _bind_volume_route(
+        Bnc,
+        selected_ids;
+        asymptotic=asymptotic,
+        contain_overlap=contain_overlap,
+        rebase_mat=rebase_mat,
+    ) === :classifier
+        vals[positions] .= _calc_volume_via_classifier(
+            Bnc,
+            selected_ids;
+            asymptotic_only=asymptotic,
+            kwargs...,
+        )
+        return vals
+    end
+
+    rgms = @view _bind_regimes_data(Bnc)[selected_ids]
+    C_C0s = rgms .|> get_C_C0
+    Cs = getindex.(C_C0s, 1)
+    C0s = asymptotic ? [zeros(size(rep[2])) for rep in C_C0s] : getindex.(C_C0s, 2)
+    vals[positions] .= calc_volume(
+        Cs,
+        C0s;
+        contain_overlap=contain_overlap,
+        rebase_mat=rebase_mat,
+        kwargs...,
+    )
+    return vals
+end
+
 """
     calc_volume(Cs, C0s; kwargs...) -> Vector{Volume}
 
@@ -454,17 +529,17 @@ function calc_volume(rgms::AbstractVector{<:BindRegime};
     isempty(idxs) && return vals
 
     same_model = all(get_binding_network(rgm) === get_binding_network(rgms[1]) for rgm in rgms)
-    # if regimes are sharing the same model, we evaluate their volumes via classifier.
-    if same_model && isnothing(rebase_mat) && !contain_overlap
+    if same_model
         Bnc = get_binding_network(rgms[1])
-        regime_ids = get_idx.(rgms[idxs])
-        vals[idxs] .= _calc_volume_via_classifier(
+        regime_ids = get_idx.(rgms)
+        return _calc_bind_regime_volumes(
             Bnc,
             regime_ids;
-            asymptotic_only=asymptotic,
+            asymptotic=asymptotic,
+            contain_overlap=contain_overlap,
+            rebase_mat=rebase_mat,
             kwargs...,
         )
-        return vals
     end
 
     C_C0s = rgms[idxs] .|> get_C_C0

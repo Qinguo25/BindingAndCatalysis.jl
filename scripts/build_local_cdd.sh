@@ -2,30 +2,9 @@
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
-if [[ $# -ge 1 ]]; then
-  SRC_ROOT="$1"
-elif [[ -n "${BNC_CDDLOG_SOURCE_DIR:-}" ]]; then
-  SRC_ROOT="$BNC_CDDLOG_SOURCE_DIR"
-else
-  echo "[FAIL] source directory not provided. Set BNC_CDDLOG_SOURCE_DIR or run deps/build.jl." >&2
-  exit 1
-fi
+SRC_ROOT="$ROOT/src/cddlib-logarithmic-complete"
 OUT_ROOT="$ROOT/.build/cddlog"
 OUT_SRC="$OUT_ROOT/src"
-
-if [[ ! -d "$SRC_ROOT" ]]; then
-  echo "[FAIL] source directory not found: $SRC_ROOT" >&2
-  exit 1
-fi
-if [[ ! -f "$SRC_ROOT/lib-src/cddcore.c" ]]; then
-  mapfile -t subdirs < <(find "$SRC_ROOT" -mindepth 1 -maxdepth 1 -type d | sort)
-  if [[ ${#subdirs[@]} -eq 1 && -f "${subdirs[0]}/lib-src/cddcore.c" ]]; then
-    SRC_ROOT="${subdirs[0]}"
-  else
-    echo "[FAIL] source directory does not look like cddlib-logarithmic: $SRC_ROOT" >&2
-    exit 1
-  fi
-fi
 
 mkdir -p "$OUT_ROOT"
 # Clear stale autotools test artifacts from earlier source layouts.
@@ -61,45 +40,6 @@ else
   GMP_LIBS="-lgmp"
 fi
 
-find_gmp_from_julia_env() {
-  local header=""
-  local libdir=""
-  local path
-
-  shopt -s nullglob
-  for path in \
-    "${HOME:-}"/.julia/conda/3/x86_64/include/gmp.h \
-    "${HOME:-}"/.julia/conda/3/x86_64/pkgs/gmp-*/include/gmp.h \
-    "${HOME:-}"/.julia/artifacts/*/include/gmp.h; do
-    if [[ -f "$path" ]]; then
-      header="$path"
-      break
-    fi
-  done
-
-  for path in \
-    "${HOME:-}"/.julia/conda/3/x86_64/lib/libgmp.so \
-    "${HOME:-}"/.julia/conda/3/x86_64/pkgs/gmp-*/lib/libgmp.so \
-    "${HOME:-}"/.julia/artifacts/*/lib/libgmp.so; do
-    if [[ -f "$path" ]]; then
-      libdir=$(dirname "$path")
-      break
-    fi
-  done
-  shopt -u nullglob
-
-  if [[ -n "$header" && -n "$libdir" ]]; then
-    GMP_CFLAGS="-I$(dirname "$header")"
-    GMP_LIBS="-L$libdir -Wl,-rpath,$libdir -lgmp"
-    return 0
-  fi
-  return 1
-}
-
-if [[ "$GMP_CFLAGS" == "" || "$GMP_LIBS" == "-lgmp" ]]; then
-  find_gmp_from_julia_env || true
-fi
-
 check_gmp() {
   local tmpdir
   tmpdir=$(mktemp -d)
@@ -126,14 +66,11 @@ COMMON_SRCS=(
   lib-src/cddcore.c
   lib-src/cddio.c
   lib-src/cddlib.c
+  lib-src/cddlogarithmic.c
   lib-src/cddlp.c
   lib-src/cddmp.c
   lib-src/cddproj.c
   lib-src/setoper.c
-)
-
-LOG_ONLY_SRCS=(
-  lib-src/cddlogarithmic.c
 )
 
 PROGS=(
@@ -156,20 +93,13 @@ build_variant() {
   local cppflags=$3
   local libs=$4
   local libname=$5
-  local sources=("${COMMON_SRCS[@]}")
-
-  if [[ "$mode" == "log" ]]; then
-    for src in "${LOG_ONLY_SRCS[@]}"; do
-      [[ -f "$SRC_ROOT/$src" ]] && sources+=("$src")
-    done
-  fi
 
   mkdir -p "$outdir"
   rm -f "$outdir"/*.o "$outdir/$libname" "$outdir"/adjacency* "$outdir"/allfaces* "$outdir"/cddexec* \
     "$outdir"/fourier* "$outdir"/lcdd* "$outdir"/projection* "$outdir"/redcheck* "$outdir"/redexter* \
     "$outdir"/redundancies* "$outdir"/scdd*
 
-  for src in "${sources[@]}"; do
+  for src in "${COMMON_SRCS[@]}"; do
     obj="$outdir/$(basename "${src%.c}").o"
     "$CC" $CFLAGS $GMP_CFLAGS $cppflags -I"$SRC_ROOT/lib-src" -c "$SRC_ROOT/$src" -o "$obj"
   done
@@ -215,7 +145,6 @@ cp "$OUT_ROOT/log"/redundancies_clarkson_log "$OUT_SRC"/
 cp "$OUT_ROOT/log"/scdd_log "$OUT_SRC"/
 
 cat > "$OUT_ROOT/BUILD_INFO.txt" <<EOF
-SRC_ROOT=$SRC_ROOT
 CC=$CC
 CFLAGS=$CFLAGS
 GMP_CFLAGS=$GMP_CFLAGS

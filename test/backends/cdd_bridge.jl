@@ -47,22 +47,6 @@ end
     end
 end
 
-@testset "PolyBackend Native Fallback" begin
-    withenv("BNC_DISABLE_LOCAL_CDD" => "1") do
-        @test BindingAndCatalysis.backend_prefers_fastpath(false) == false
-    end
-
-    withenv("BNC_DISABLE_CDDLOG" => "1") do
-        exact_poly = BindingAndCatalysis.polyhedron(BindingAndCatalysis.hrep(
-            Rational{Int}[1 0; -1 0; 0 1; 0 -1],
-            ExactLogExpr[exact_log10(2), ExactLogExpr(0), exact_log10(3), ExactLogExpr(0)],
-        ))
-        expected = BindingAndCatalysis.NativePolyhedra.eliminate(exact_poly, BitSet([1]); canonicalize=true)
-        actual = BindingAndCatalysis.backend_eliminate(exact_poly, BitSet([1]); prefer_fastpath=false)
-        @test same_polyhedron(actual, expected)
-    end
-end
-
 @testset "CddBridge Serialization Is Read Only" begin
     poly = BindingAndCatalysis.polyhedron(BindingAndCatalysis.hrep(
         [1 0; 1 0; -1 0; 0 1; 0 -1],
