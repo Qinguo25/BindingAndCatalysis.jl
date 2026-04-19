@@ -4,8 +4,8 @@ function summary_regime(rgm::BncRegime)
     println("Binding / catalysis conditions in (x, k):")
     display.(show_condition_xk(rgm; kind=:binding, log_space=false))
     display.(show_condition_xk(rgm; kind=:catalysis, log_space=false))
-    println("Combined consistency in (q_ss, K, k):")
-    display.(show_condition_qssKk(rgm; log_space=false))
+    println("Combined consistency in (w, K, k):")
+    display.(show_condition_wKk(rgm; log_space=false))
     return nothing
 end
 

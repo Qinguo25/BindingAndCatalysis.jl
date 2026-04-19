@@ -1,22 +1,22 @@
 """
-    SISO_plot(pths::SISOPaths, pth_idx; rand_line=false, rand_ray=false, extend=4, kwargs...) -> Figure
+    SIMO_plot(pths::SIMOPaths, pth_idx; rand_line=false, rand_ray=false, extend=4, kwargs...) -> Figure
 
-Plot a SISO path trajectory in x space colored by dominant regime.
+Plot a SIMO path trajectory in x space colored by dominant regime.
 """
-function SISO_plot(pths::SISOPaths, pth_idx; rand_line=false, rand_ray=false, extend=4, kwargs...)
+function SIMO_plot(pths::SIMOPaths, pth_idx; rand_line=false, rand_ray=false, extend=4, kwargs...)
     pth_idx = get_idx(pths, pth_idx)
     parameters = get_one_inner_point(get_polyhedron(pths, pth_idx); rand_line=rand_line, rand_ray=rand_ray, extend=extend)
     @show parameters
-    return SISO_plot(pths.bn, parameters, pths.change_qK_idx; kwargs...)
+    return SIMO_plot(pths.bn, parameters, pths.change_qK_idx; kwargs...)
 end
 
 """
-    SISO_plot(model::Bnc, parameters, change_idx; npoints=1000, start=-6, stop=6, colormap=:rainbow,
+    SIMO_plot(model::Bnc, parameters, change_idx; npoints=1000, start=-6, stop=6, colormap=:rainbow,
         size=(800, 600), observe_x=nothing, add_archeatype_lines=false, asymptotic_only=false) -> Figure
 
 Plot x trajectories for a single changing qK coordinate.
 """
-function SISO_plot(
+function SIMO_plot(
     model::Bnc,
     parameters,
     change_idx;

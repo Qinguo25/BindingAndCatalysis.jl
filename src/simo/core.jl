@@ -1,4 +1,4 @@
-mutable struct SISOPaths{T}
+mutable struct SIMOPaths{T}
     bn::Bnc{T}
     qK_grh::SimpleDiGraph
     change_qK_idx::T
@@ -21,7 +21,7 @@ mutable struct SISOPaths{T}
     path_volume_is_calc::BitVector
     path_polys_is_calc::BitVector
 
-    function SISOPaths(model::Bnc{T}, qK_grh, change_qK_idx, sources, sinks, rgm_paths) where T
+    function SIMOPaths(model::Bnc{T}, qK_grh, change_qK_idx, sources, sinks, rgm_paths) where T
         edge_keys, path_edge_idxs = _build_path_edge_index(rgm_paths)
         node_polys = Vector{Polyhedron}(undef, n_regimes(model))
         node_polys_is_calc = falses(length(node_polys))
@@ -62,7 +62,7 @@ function _build_paths_dict(rgm_paths::AbstractVector{<:AbstractVector{<:Integer}
     return paths_dict
 end
 
-function _ensure_paths_dict!(grh::SISOPaths)
+function _ensure_paths_dict!(grh::SIMOPaths)
     isnothing(grh.paths_dict) || return grh.paths_dict
     grh.paths_dict = _build_paths_dict(grh.rgm_paths)
     return grh.paths_dict
@@ -95,8 +95,8 @@ function _build_path_edge_index(rgm_paths::AbstractVector{<:AbstractVector{<:Int
     return edge_keys, path_edge_idxs
 end
 
-@inline function _normalize_siso_path_selection(
-    grh::SISOPaths,
+@inline function _normalize_simo_path_selection(
+    grh::SIMOPaths,
     pth_idx::Union{AbstractVector,Nothing},
 )
     return isnothing(pth_idx) ? collect(1:length(grh.rgm_paths)) : Int.(get_idx.(Ref(grh), pth_idx))
@@ -111,11 +111,11 @@ end
     return recalculate ? idxs : filter(i -> !is_calc[i], idxs)
 end
 
-get_neighbor_graph_qK(grh::SISOPaths; kwargs...) = grh.qK_grh
-get_SISO_graph(grh::SISOPaths) = grh.qK_grh
-get_SISO_graph(model::Bnc, change_qK) = get_SISO_graph(get_regimes_graph!(model; full=true), change_qK)
+get_neighbor_graph_qK(grh::SIMOPaths; kwargs...) = grh.qK_grh
+get_SIMO_graph(grh::SIMOPaths) = grh.qK_grh
+get_SIMO_graph(model::Bnc, change_qK) = get_SIMO_graph(get_regimes_graph!(model; full=true), change_qK)
 
-function get_SISO_graph(grh::RegimeGraph, change_qK)::SimpleDiGraph
+function get_SIMO_graph(grh::RegimeGraph, change_qK)::SimpleDiGraph
     bn = get_binding_network(grh)
     change_qK_idx = locate_sym_qK(bn, change_qK)
     _ensure_full_regimes_graph!(grh)
@@ -140,11 +140,11 @@ function get_SISO_graph(grh::RegimeGraph, change_qK)::SimpleDiGraph
     return g
 end
 
-function SISOPaths(model::Bnc{T}, change_qK; rgm_paths=nothing) where {T}
+function SIMOPaths(model::Bnc{T}, change_qK; rgm_paths=nothing) where {T}
     change_qK_idx = locate_sym_qK(model, change_qK)
 
     if rgm_paths === nothing
-        qK_grh = get_SISO_graph(model, change_qK)
+        qK_grh = get_SIMO_graph(model, change_qK)
         sources, sinks = get_sources_sinks(model, qK_grh)
         rgm_paths = _enumerate_paths(qK_grh; sources, sinks)
     else
@@ -152,25 +152,25 @@ function SISOPaths(model::Bnc{T}, change_qK; rgm_paths=nothing) where {T}
         sources, sinks = get_sources_sinks(qK_grh)
     end
 
-    return SISOPaths(model, qK_grh, change_qK_idx, sources, sinks, rgm_paths)
+    return SIMOPaths(model, qK_grh, change_qK_idx, sources, sinks, rgm_paths)
 end
 
-function get_path(grh::SISOPaths, pth_idx::Integer; return_idx::Bool=false)
+function get_path(grh::SIMOPaths, pth_idx::Integer; return_idx::Bool=false)
     rgm_idxs = grh.rgm_paths[pth_idx]
     return return_idx ? rgm_idxs : get_perm.(Ref(get_binding_network(grh)), rgm_idxs)
 end
 
-function get_path(grh::SISOPaths, pth::AbstractVector; return_idx::Bool=false)
+function get_path(grh::SIMOPaths, pth::AbstractVector; return_idx::Bool=false)
     bn = get_binding_network(grh)
     return return_idx ? get_idx.(Ref(bn), pth) : get_perm.(Ref(bn), pth)
 end
 
-get_binding_network(grh::SISOPaths, args...) = grh.bn
-get_C_C0_nullity_qK(grh::SISOPaths, pth_idx) = get_polyhedron(grh, pth_idx) |> get_C_C0_nullity
+get_binding_network(grh::SIMOPaths, args...) = grh.bn
+get_C_C0_nullity_qK(grh::SIMOPaths, pth_idx) = get_polyhedron(grh, pth_idx) |> get_C_C0_nullity
 
-get_idx(grh::SISOPaths, pth::AbstractVector) = let
+get_idx(grh::SIMOPaths, pth::AbstractVector) = let
     bn = get_binding_network(grh)
     idxs = get_idx.(Ref(bn), pth)
     _ensure_paths_dict!(grh)[idxs]
 end
-get_idx(grh::SISOPaths, pth::Integer) = pth
+get_idx(grh::SIMOPaths, pth::Integer) = pth

@@ -97,14 +97,14 @@ function _materialize_real_vector(v)
     return T[convert(T, x) for x in vv]
 end
 
-function _expand_Hss_to_qssKk(H_ss, H0_ss, Pθ, P0θ)
+function _expand_Hw_to_wKk(H_w, H0_w, Pθ, P0θ)
     r_v = size(Pθ, 1)
-    split = size(H_ss, 2) - r_v
-    H_left = H_ss[:, 1:split]
-    H_right = H_ss[:, split + 1:end]
-    H_ssk = hcat(H_left, -(H_right * Pθ))
-    H0_ssk = H0_ss - H_right * P0θ
-    return H_ssk, _materialize_real_vector(H0_ssk)
+    split = size(H_w, 2) - r_v
+    H_left = H_w[:, 1:split]
+    H_right = H_w[:, split + 1:end]
+    H_wKk = hcat(H_left, -(H_right * Pθ))
+    H0_wKk = H0_w - H_right * P0θ
+    return H_wKk, _materialize_real_vector(H0_wKk)
 end
 
 function _calc_C_qKk_cat_regular(bind_rgm::BindRegime, cat_rgm::CatalysisRegime)
@@ -161,11 +161,11 @@ function _calc_C_qKk_cat(bind_rgm::BindRegime, cat_rgm::CatalysisRegime)
     end
 end
 
-function _calc_C_qKk_ss_regular(
+function _calc_C_wKk_regular(
     bind_rgm::BindRegime,
     cat_rgm::CatalysisRegime,
-    H_ssk,
-    H0_ssk,
+    H_wKk,
+    H0_wKk,
 )
     C_x_bind, C0_x_bind = get_C_C0_x(bind_rgm)
     CΠ = get_CΠ(cat_rgm)
@@ -173,17 +173,17 @@ function _calc_C_qKk_ss_regular(
     C0θ = get_C0(cat_rgm)
 
     n_v = size(Cθ, 2)
-    C_bind = C_x_bind * H_ssk
-    C0_bind = C0_x_bind + C_x_bind * H0_ssk
+    C_bind = C_x_bind * H_wKk
+    C0_bind = C0_x_bind + C_x_bind * H0_wKk
 
-    C_cat = copy(CΠ * H_ssk)
+    C_cat = copy(CΠ * H_wKk)
     @views C_cat[:, end - n_v + 1:end] .+= Cθ
-    C0_cat = CΠ * H0_ssk + C0θ
+    C0_cat = CΠ * H0_wKk + C0θ
 
     return vcat(C_bind, C_cat), _materialize_real_vector(vcat(C0_bind, C0_cat))
 end
 
-function _calc_C_qKk_ss_singular(bind_rgm::BindRegime, cat_rgm::CatalysisRegime)
+function _calc_C_wKk_singular(bind_rgm::BindRegime, cat_rgm::CatalysisRegime)
     bn = bind_rgm.network
     r_v = size(cat_rgm.P, 1)
 
@@ -199,26 +199,26 @@ function _calc_C_qKk_ss_singular(bind_rgm::BindRegime, cat_rgm::CatalysisRegime)
     Cθ = get_C_k(cat_rgm)
     C0θ = get_C0(cat_rgm)
 
-    d_ss = size(P_ss, 1)
+    d_w = size(P_ss, 1)
     r = size(N, 1)
     n_v = size(Pθ, 2)
     n_x = size(P_ss, 2)
     r_cat = size(Pθ, 1)
 
-    Eq_qss = hcat(-_spI(Int, d_ss), _zeros_like(P_ss, d_ss, r + n_v), P_ss)
-    Eq_K = hcat(_zeros_like(N, r, d_ss), -_spI(Int, r), _zeros_like(N, r, n_v), N)
-    Eq_cat = hcat(_zeros_like(PΠ, r_cat, d_ss + r), Pθ, PΠ)
-    In_bind = hcat(_zeros_like(C_x_bind, size(C_x_bind, 1), d_ss + r + n_v), C_x_bind)
-    In_cat = hcat(_zeros_like(CΠ, size(CΠ, 1), d_ss + r), Cθ, CΠ)
+    Eq_w = hcat(-_spI(Int, d_w), _zeros_like(P_ss, d_w, r + n_v), P_ss)
+    Eq_K = hcat(_zeros_like(N, r, d_w), -_spI(Int, r), _zeros_like(N, r, n_v), N)
+    Eq_cat = hcat(_zeros_like(PΠ, r_cat, d_w + r), Pθ, PΠ)
+    In_bind = hcat(_zeros_like(C_x_bind, size(C_x_bind, 1), d_w + r + n_v), C_x_bind)
+    In_cat = hcat(_zeros_like(CΠ, size(CΠ, 1), d_w + r), Cθ, CΠ)
 
-    C = vcat(Eq_qss, Eq_K, Eq_cat, In_bind, In_cat)
+    C = vcat(Eq_w, Eq_K, Eq_cat, In_bind, In_cat)
     C0 = vcat(P0_ss, zeros(eltype(P0_ss), r), P0θ, C0_x_bind, C0θ)
 
     return _project_bnc_singular_condition(
         bn,
         C,
         C0,
-        d_ss + r + r_cat,
-        BitSet((d_ss + r + n_v + 1):(d_ss + r + n_v + n_x)),
+        d_w + r + r_cat,
+        BitSet((d_w + r + n_v + 1):(d_w + r + n_v + n_x)),
     )
 end

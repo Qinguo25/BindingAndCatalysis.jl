@@ -15,17 +15,17 @@
     regular = first(filter(r -> r.nlt == 0, get_bnc_regimes(cat_model)))
     cat_exprs = vcat(
         string.(show_expression_qcat(regular; log_space = false)),
-        string.(show_condition_qssKk(regular; log_space = false)),
+        string.(show_condition_wKk(regular; log_space = false)),
         string.(show_condition_qKk(regular; log_space = false)),
     )
     @test all(s -> !occursin(".0", s), cat_exprs)
 end
 
-@testset "Exact SISO Rational Symbolics" begin
+@testset "Exact SIMO Rational Symbolics" begin
     model = Bnc(N = [2 1 -1])
     find_all_regimes!(model; mode = :exact)
-    siso = SISOPaths(model, 1)
-    cond = string(only(show_condition(siso, 1; log_space = false)))
+    simo = SIMOPaths(model, 1)
+    cond = string(only(show_condition(simo, 1; log_space = false)))
     @test !occursin("0.25", cond)
     @test occursin("4", cond) || occursin("//4", cond)
 end

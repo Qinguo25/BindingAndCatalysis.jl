@@ -7,6 +7,8 @@
 3. 一条典型 workflow 如何从输入走到输出。
 4. 改某类功能时应该先看哪里。
 
+如果需要看 `src/` 内部 helper / 数据结构盘点，以及哪些逻辑已经开始重复、适合继续抽象，补充材料见 [Source_helpers_and_structs.md](./Source_helpers_and_structs.md)。
+
 
 ## 1. 项目一句话
 
@@ -18,7 +20,7 @@
 然后在 regime level 做：
 
 - dominance regime 枚举
-- 条件从 `x`、`(q,K)`、`(q_ss,K,k)` 等坐标之间搬运
+- 条件从 `x`、`(q,K)`、`(w,K,k)` 等坐标之间搬运
 - 邻接图、路径、体积、稳定性分析
 
 
@@ -95,7 +97,7 @@ M = \begin{bmatrix} P \\ N \end{bmatrix}.
 然后把两边的条件搬运到两个最常用坐标：
 
 - `(q,K,k)`
-- `(q_ss,K,k)`，其中 `q_ss = (w, q_para)`
+- `(w,K,k)`，其中 `w = [w_old; q_para]`
 
 这一步本质上是：
 
@@ -132,7 +134,7 @@ M = \begin{bmatrix} P \\ N \end{bmatrix}.
 - `show_condition_qKk`
 
 
-### 3.3 `(q_ss,K,k)`
+### 3.3 `(w,K,k)`
 
 用途：
 
@@ -142,7 +144,7 @@ M = \begin{bmatrix} P \\ N \end{bmatrix}.
 
 常见 API：
 
-- `show_condition_qssKk`
+- `show_condition_wKk`
 - `show_expression_qcat`
 
 
@@ -198,14 +200,14 @@ M = \begin{bmatrix} P \\ N \end{bmatrix}.
 - `bind_rgm`
 - `catalysis_rgm`
 - `(q,K,k)` consistency
-- `(q_ss,K,k)` consistency
+- `(w,K,k)` consistency
 - steady-state reduced mapping
 - `H_bd` 和稳定性相关对象
 
 要特别区分：
 
 - `bind_rgm.H`：`(q,K) -> x`
-- `bnc_rgm.H`：`(q_ss,K,k) -> x`
+- `bnc_rgm.H`：`(w,K,k) -> x`
 - `H_bd`：稳定性筛选矩阵，不是坐标映射
 
 
@@ -220,16 +222,16 @@ M = \begin{bmatrix} P \\ N \end{bmatrix}.
 - x-space shared hyperplane pool
 - qK-space shared hyperplane pool
 
-这层是后续 `SISOPaths`、regime assignment、体积估计的基础。
+这层是后续 `SIMOPaths`、regime assignment、体积估计的基础。
 
 
-### 4.6 `SISOPaths`
+### 4.6 `SIMOPaths`
 
-`SISOPaths` 是“固定一条 q/K 方向，只看单参数变化路径”的工作对象。
+`SIMOPaths` 是“固定一条 q/K 方向，跟踪这条单参数变化下所有 `x` 输出”的工作对象。
 
 它缓存：
 
-- SISO graph
+- SIMO graph
 - source / sink
 - all regime paths
 - node / edge / path polyhedra
@@ -268,7 +270,7 @@ find_catalysis_regimes!(model)
 match_regimes!(model)
 bnc_rgm = get_bnc_regime(model, bind_perm, cat_perm)
 show_condition_qKk(bnc_rgm)
-show_condition_qssKk(bnc_rgm)
+show_condition_wKk(bnc_rgm)
 ```
 
 内部顺序是：
@@ -283,9 +285,9 @@ show_condition_qssKk(bnc_rgm)
 
 ```julia
 grh = get_regimes_graph!(model; full=true)
-siso = SISOPaths(model, 1)
-polys = get_polyhedra(siso)
-vols = get_volumes(siso)
+simo = SIMOPaths(model, 1)
+polys = get_polyhedra(simo)
+vols = get_volumes(simo)
 ```
 
 内部顺序是：
@@ -372,7 +374,7 @@ a = -C,\qquad \beta = C_0.
 - `backend_intersect_many`
 - `backend_project_hrep`
 
-此外，`SISO` 的 bulk path-condition 构造还使用了一组 fastpath helper：
+此外，`SIMO` 的 bulk path-condition 构造还使用了一组 fastpath helper：
 
 - `backend_prefers_fastpath`
 - `backend_prepare_fastpath`
@@ -391,15 +393,15 @@ a = -C,\qquad \beta = C_0.
 这层的存在意义是两点：
 
 - 把“算法逻辑”和“后端选择”分开
-- 避免 `SISO.jl`、`regimes.jl`、`Bnc_regime.jl` 到处写 backend 分支
+- 避免 `SIMO.jl`、`regimes.jl`、`Bnc_regime.jl` 到处写 backend 分支
 
 当前策略是：
 
 - float mode:
-  - bulk `SISO` fastpath 若本地 `cdd` 可用，则优先走本地构建的 `cdd`
+  - bulk `SIMO` fastpath 若本地 `cdd` 可用，则优先走本地构建的 `cdd`
   - 失败或不可用时回退到 `NativePolyhedra`
 - exact mode:
-  - 不启用 `SISO` 的 float-style fastpath
+  - 不启用 `SIMO` 的 float-style fastpath
   - 但在 `backend_eliminate` / `backend_project_hrep` 内会 opportunistically 尝试 `cddlog`
   - `cddlog` 不可用或失败时回退到 `NativePolyhedra`
 
@@ -450,17 +452,17 @@ a = -C,\qquad \beta = C_0.
 ### 7.4 图和路径
 
 - `src/regime_graphs.jl`
-- `src/SISO.jl`
-- `src/siso/`
+- `src/SIMO.jl`
+- `src/simo/`
 - `src/Mathcore/perm_graph_core.jl`
 - `src/Mathcore/graph_propagate.jl`
 
-`src/SISO.jl` 现在只是入口壳，具体拆在：
+`src/SIMO.jl` 现在只是入口壳，具体拆在：
 
-- `src/siso/core.jl`
-- `src/siso/polyhedra.jl`
-- `src/siso/reaction_order.jl`
-- `src/siso/display.jl`
+- `src/simo/core.jl`
+- `src/simo/polyhedra.jl`
+- `src/simo/reaction_order.jl`
+- `src/simo/display.jl`
 
 
 ### 7.5 数学核心与辅助
@@ -499,7 +501,7 @@ a = -C,\qquad \beta = C_0.
 `src/visualize.jl` 同样只是入口壳，具体拆在 `src/visualization/`：
 
 - `graphs.jl`
-- `siso_plot.jl`
+- `simo_plot.jl`
 - `rop.jl`
 - `poly_slices.jl`
 
@@ -570,7 +572,7 @@ show_condition_x(rgm)
 show_condition_qK(rgm)
 show_condition_xk(cat)
 show_condition_qKk(bnc)
-show_condition_qssKk(bnc)
+show_condition_wKk(bnc)
 ```
 
 
@@ -578,9 +580,9 @@ show_condition_qssKk(bnc)
 
 ```julia
 grh = get_regimes_graph!(model; full=true)
-siso = SISOPaths(model, 1)
-polys = get_polyhedra(siso)
-vols = get_volumes(siso)
+simo = SIMOPaths(model, 1)
+polys = get_polyhedra(simo)
+vols = get_volumes(simo)
 ```
 
 
@@ -590,7 +592,7 @@ vols = get_volumes(siso)
 - 改 catalysis regime：`src/Catalysis_regime.jl`
 - 改 mixed consistency：`src/Bnc_regime.jl`, `src/mixed_regime/`
 - 改 `x ↔ qK` 数值求解：`src/qK_x_mapping.jl`
-- 改 graph / path：`src/regime_graphs.jl`, `src/SISO.jl`, `src/siso/`
+- 改 graph / path：`src/regime_graphs.jl`, `src/SIMO.jl`, `src/simo/`
 - 改 polyhedron backend：`src/PolyBackend.jl`, `src/CddBridge.jl`, `src/NativePolyhedra/`
 - 改 symbolic 输出：`src/symbolics.jl`, `src/output/`
 - 改可视化：`src/visualize.jl`, `src/visualization/`
@@ -606,7 +608,7 @@ vols = get_volumes(siso)
 3. `src/BindingAndCatalysis.jl`
 4. `src/regimes.jl`
 5. `src/Mathcore/perm_graph_core.jl`
-6. `src/SISO.jl`
+6. `src/SIMO.jl`
 7. `src/Catalysis_regime.jl`
 8. `src/Bnc_regime.jl`
 9. `src/PolyBackend.jl`
@@ -624,8 +626,8 @@ vols = get_volumes(siso)
 - `test/backends/cdd_bridge.jl`
   本地 `cdd` / `cddlog` 桥接回归。
 
-- `test/siso/workflows.jl`
-  路径枚举、bulk path condition 和 `SISO` 工作流回归。
+- `test/simo/workflows.jl`
+  路径枚举、bulk path condition 和 `SIMO` 工作流回归。
 
 - `Examples/Minimal_example.ipynb`
   最小交互式 smoke。
@@ -645,7 +647,7 @@ vols = get_volumes(siso)
 Bnc
  -> BindRegime / CatalysisRegime
  -> BncRegime
- -> RegimeGraph / SISOPaths
+ -> RegimeGraph / SIMOPaths
  -> polyhedron / volume / symbolic / stability outputs
 ```
 

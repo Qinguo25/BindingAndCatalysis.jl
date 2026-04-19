@@ -1,4 +1,4 @@
-export get_regimes_graph!, SISOPaths, get_polyhedra, get_polyhedron, get_SISO_graph
+export get_regimes_graph!, SIMOPaths, get_polyhedra, get_polyhedron, get_SIMO_graph
 export get_path, get_edge, get_intersect
 export get_neighbor_graph_x, get_neighbor_graph_qK, get_neighbor_graph
 export get_sources, get_sinks, get_sources_sinks
@@ -343,7 +343,5 @@ get_neighbor_graph_qK(Bnc::Bnc; kwargs...) = get_neighbor_graph_qK(get_regimes_g
 Alias for `get_neighbor_graph_qK`.
 """
 get_neighbor_graph(args...; kwargs...) = get_neighbor_graph_qK(args...; kwargs...)    
-
-
 
 

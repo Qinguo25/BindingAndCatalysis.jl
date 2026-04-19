@@ -79,19 +79,19 @@ end
 function _init_regular_bnc_regime!(vtx::BncRegime, perm, rowctx)
     C_qKk_cat, C0_qKk_cat, nlt_qKk_cat = _calc_C_qKk_cat(vtx.bind_rgm, vtx.catalysis_rgm)
 
-    H_ss, H0_ss = rowctx.affine_by_perm[Tuple(Int.(perm))]
+    H_w, H0_w = rowctx.affine_by_perm[Tuple(Int.(perm))]
     Pθ = vtx.catalysis_rgm.P
     P0θ = get_P0(vtx.catalysis_rgm)
-    H_ssk, H0_ssk = _expand_Hss_to_qssKk(H_ss, H0_ss, Pθ, P0θ)
-    C_qKk_ss, C0_qKk_ss = _calc_C_qKk_ss_regular(vtx.bind_rgm, vtx.catalysis_rgm, H_ssk, H0_ssk)
+    H_wKk, H0_wKk = _expand_Hw_to_wKk(H_w, H0_w, Pθ, P0θ)
+    C_wKk, C0_wKk = _calc_C_wKk_regular(vtx.bind_rgm, vtx.catalysis_rgm, H_wKk, H0_wKk)
 
-    vtx.H = H_ssk
-    vtx.H0 = _materialize_real_vector(H0_ssk)
+    vtx.H = H_wKk
+    vtx.H0 = _materialize_real_vector(H0_wKk)
     vtx.C_qKk_cat = C_qKk_cat
     vtx.C0_qKk_cat = _materialize_real_vector(C0_qKk_cat)
     vtx.nlt_qKk_cat = nlt_qKk_cat
-    vtx.C_qKk_ss = C_qKk_ss
-    vtx.C0_qKk_ss = _materialize_real_vector(C0_qKk_ss)
+    vtx.C_wKk = C_wKk
+    vtx.C0_wKk = _materialize_real_vector(C0_wKk)
     return nothing
 end
 
@@ -115,20 +115,20 @@ end
 function _init_singular_bnc_regime!(vtx::BncRegime, perm, rowctx)
     C_qKk_cat, C0_qKk_cat, nlt_qKk_cat = _calc_C_qKk_cat(vtx.bind_rgm, vtx.catalysis_rgm)
 
-    H_ray, H0_ss = rowctx.affine_by_perm[Tuple(Int.(perm))]
+    H_w, H0_w = rowctx.affine_by_perm[Tuple(Int.(perm))]
     Pθ = get_P(vtx.catalysis_rgm)
     P0θ = get_P0(vtx.catalysis_rgm)
-    H_ssk, H0_ssk = _expand_Hss_to_qssKk(H_ray, H0_ss, Pθ, P0θ)
+    H_wKk, H0_wKk = _expand_Hw_to_wKk(H_w, H0_w, Pθ, P0θ)
 
-    C_qKk_ss, C0_qKk_ss, _ = _calc_C_qKk_ss_singular(vtx.bind_rgm, vtx.catalysis_rgm)
+    C_wKk, C0_wKk, _ = _calc_C_wKk_singular(vtx.bind_rgm, vtx.catalysis_rgm)
 
-    vtx.H = H_ssk
-    vtx.H0 = _materialize_real_vector(H0_ssk)
+    vtx.H = H_wKk
+    vtx.H0 = _materialize_real_vector(H0_wKk)
     vtx.C_qKk_cat = C_qKk_cat
     vtx.C0_qKk_cat = _materialize_real_vector(C0_qKk_cat)
     vtx.nlt_qKk_cat = nlt_qKk_cat
-    vtx.C_qKk_ss = C_qKk_ss
-    vtx.C0_qKk_ss = _materialize_real_vector(C0_qKk_ss)
+    vtx.C_wKk = C_wKk
+    vtx.C0_wKk = _materialize_real_vector(C0_wKk)
     return nothing
 end
 

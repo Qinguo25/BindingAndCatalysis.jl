@@ -382,7 +382,7 @@ mutable struct CatalysisRegime{F<:Real} <:AbstractRegime
 end
 
 # for BncRegime, the x /xk conditions are already within bind_rgm or catalysis_rgm, 
-# H_ss, H_0ss, C_qKk_ss, C_0qKk_ss
+# H_w, H0_w, C_wKk, C0_wKk
 # C_qKk_cat, C_0qKk_cat, 
 # C_xk_ss
 
@@ -412,9 +412,9 @@ mutable struct BncRegime <:AbstractRegime
     C0_qKk_cat::Union{AbstractVector{<:Real}, Nothing}
     nlt_qKk_cat::Int
 
-    ## q_ss, K, k base
-    C_qKk_ss::Union{AbstractMatrix{<:Real}, Nothing}
-    C0_qKk_ss::Union{AbstractVector{<:Real}, Nothing}
+    ## w, K, k base
+    C_wKk::Union{AbstractMatrix{<:Real}, Nothing}
+    C0_wKk::Union{AbstractVector{<:Real}, Nothing}
     function BncRegime(bind_rgm, catalysis_rgm)
         PΠ = get_PΠ(catalysis_rgm)
         H = get_H(bind_rgm)
@@ -451,8 +451,8 @@ mutable struct CatalysisData <:AbstractBnc
     # Derived parameters
     r_v::Int # number of independent catalysis reactions
     n_v::Int # number of flux
-    d_w::Int # number of dependent conserved quantities.
-    d_para::Int # number of parameter total concentrations
+    d_w::Int # total number of reduced conserved quantities collected into w
+    a_w::Int # split row: L_w[1:a_w, :] is old dependent-part, L_w[a_w+1:end, :] is former parameter part
 
     # symbols of k
     k_sym::Vector{Num}
@@ -479,8 +479,8 @@ mutable struct CatalysisData <:AbstractBnc
         L_Γ, pivits = left_nullspace_integer(Γ)
 
         r_v = length(pivits)
-        d_w = size(L_Γ,2)
-        d_para = bn.d - r_v
+        a_w = size(L_Γ,2)
+        d_w = bn.d - r_v
 
         # reorder and fix the binding network
         no_pivits = setdiff(1:d_wv, pivits)
@@ -498,7 +498,7 @@ mutable struct CatalysisData <:AbstractBnc
         _S_helper = _build_matrix_helper(S_pos_neg)
 
         new(bn, Γ, Π, S, L_Γ,
-            r_v, nv, d_w, d_para,    
+            r_v, nv, d_w, a_w,
             k_sym, _S_sparse, _Π_sparse,
             S_pos_neg, _S_helper, nothing)
     end
@@ -653,7 +653,7 @@ include(joinpath(@__DIR__,"Bnc_regime.jl"))
 
 include(joinpath(@__DIR__,"regime_assign.jl"))
 include(joinpath(@__DIR__,"regime_graphs.jl"))
-include(joinpath(@__DIR__,"SISO.jl"))
+include(joinpath(@__DIR__,"SIMO.jl"))
 include(joinpath(@__DIR__,"symbolics.jl"))
 include(joinpath(@__DIR__,"visualize.jl"))
 include(joinpath(@__DIR__,"old_api.jl"))

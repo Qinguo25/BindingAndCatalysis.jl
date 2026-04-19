@@ -258,7 +258,7 @@ end
 draw_graph(model; kwargs...) = draw_graph(get_binding_network(model), get_neighbor_graph_qK(model); kwargs...)
 
 function draw_graph(
-    grh::SISOPaths;
+    grh::SIMOPaths;
     layout=nothing,
     edge_labels=nothing,
     use_x_space_neighbor_layout::Bool=true,

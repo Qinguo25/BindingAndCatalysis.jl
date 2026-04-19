@@ -1,4 +1,4 @@
-function show_regime_path(grh::SISOPaths, pth)
+function show_regime_path(grh::SIMOPaths, pth)
     pth_idx = get_idx(grh, pth)
     path = get_path(grh, pth_idx; return_idx=true)
     volume = grh.path_volume_is_calc[pth_idx] ? grh.path_volume[pth_idx] : nothing
@@ -6,7 +6,7 @@ function show_regime_path(grh::SISOPaths, pth)
     return nothing
 end
 
-function summary(grh::SISOPaths; show_volume::Bool=true, prefix::AbstractString="#", kwargs...)
+function summary(grh::SIMOPaths; show_volume::Bool=true, prefix::AbstractString="#", kwargs...)
     paths = grh.rgm_paths
     if show_volume
         vols = get_volumes(grh; kwargs...)
@@ -18,7 +18,7 @@ function summary(grh::SISOPaths; show_volume::Bool=true, prefix::AbstractString=
 end
 
 function summary_RO_path(
-    grh::SISOPaths;
+    grh::SIMOPaths;
     observe_x,
     show_volume::Bool=true,
     deduplicate::Bool=true,
@@ -43,9 +43,9 @@ function summary_RO_path(
     return nothing
 end
 
-function Base.display(grh::SISOPaths)
-    println("SISOPaths object with $(length(grh.rgm_paths)) paths for qK coordinate index $(grh.change_qK_idx)")
+function Base.display(grh::SIMOPaths)
+    println("SIMOPaths object with $(length(grh.rgm_paths)) paths for qK coordinate index $(grh.change_qK_idx)")
     return nothing
 end
 
-Base.show(io::IO, grh::SISOPaths) = print(io, "SISOPaths object with $(length(grh.rgm_paths)) paths for qK coordinate index $(grh.change_qK_idx)")
+Base.show(io::IO, grh::SIMOPaths) = print(io, "SIMOPaths object with $(length(grh.rgm_paths)) paths for qK coordinate index $(grh.change_qK_idx)")

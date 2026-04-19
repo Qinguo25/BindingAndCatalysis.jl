@@ -99,7 +99,7 @@ print_paths(paths::AbstractVector{<:AbstractVector}; volumes=nothing, ids=nothin
 print_path(path::AbstractVector; id=nothing, volume=nothing, kwargs...) =
     print_paths(_normalize_rows([path]; ids=id === nothing ? nothing : [id], volumes=volume === nothing ? nothing : [volume]); kwargs...)
 
-function show_expression_path(grh::SISOPaths, pth; observe_x=nothing, kwargs...)
+function show_expression_path(grh::SIMOPaths, pth; observe_x=nothing, kwargs...)
     pth_idx = get_idx(grh, pth)
     bn = get_binding_network(grh)
     observe_x_idx = isnothing(observe_x) ? (1:bn.n) : locate_sym_x.(Ref(bn), observe_x)
@@ -165,5 +165,5 @@ function show_expression_path(model::Bnc, rgm_path, change_qK_idx, observe_x_idx
     return (exprs, edges)
 end
 
-show_expression_path(grh::SISOPaths, pth_idx, observe_x; kwargs...) =
+show_expression_path(grh::SIMOPaths, pth_idx, observe_x; kwargs...) =
     show_expression_path(get_binding_network(grh), grh.rgm_paths[pth_idx], grh.change_qK_idx, observe_x; kwargs...)

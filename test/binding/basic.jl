@@ -132,23 +132,23 @@ end
     @test ins isa Real
     @test sym_direction(model, dir) isa String
 
-    siso = SISOPaths(model, :tS)
-    @test !isempty(siso.rgm_paths)
+    simo = SIMOPaths(model, :tS)
+    @test !isempty(simo.rgm_paths)
 
     p1_idx = 1
-    p1 = get_path(siso, p1_idx)
-    p1_idx_path = get_path(siso, p1_idx; return_idx = true)
-    @test get_idx(siso, p1) == p1_idx
-    @test get_idx(siso, p1_idx_path) == p1_idx
-    @test get_path(siso, p1; return_idx = true) == p1_idx_path
+    p1 = get_path(simo, p1_idx)
+    p1_idx_path = get_path(simo, p1_idx; return_idx = true)
+    @test get_idx(simo, p1) == p1_idx
+    @test get_idx(simo, p1_idx_path) == p1_idx
+    @test get_path(simo, p1; return_idx = true) == p1_idx_path
 
-    path_poly = get_polyhedron(siso, p1_idx)
-    path_vol = get_volume(siso, p1_idx)
+    path_poly = get_polyhedron(simo, p1_idx)
+    path_vol = get_volume(simo, p1_idx)
     @test get_nullity(path_poly) >= 0
     @test path_vol.mean >= 0
-    @test !isempty(show_condition(siso, p1_idx; log_space = false))
+    @test !isempty(show_condition(simo, p1_idx; log_space = false))
 
-    ro_path = get_RO_path(siso, p1_idx; observe_x = :E)
+    ro_path = get_RO_path(simo, p1_idx; observe_x = :E)
     @test !isempty(ro_path)
     @test format_arrow(ro_path) isa String
 

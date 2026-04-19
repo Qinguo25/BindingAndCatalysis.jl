@@ -1,4 +1,4 @@
-function get_expression_path(grh::SISOPaths, pth; observe_x=nothing)
+function get_expression_path(grh::SIMOPaths, pth; observe_x=nothing)
     bn = get_binding_network(grh)
     rgm_pth = get_path(grh, pth; return_idx=true)
     rgm_nlt = get_nullities(bn, rgm_pth)
@@ -137,8 +137,8 @@ function get_RO_paths(
     return ord_for_each_paths
 end
 
-function get_RO_paths(model::SISOPaths, pth_idx::Union{Nothing,AbstractVector}=nothing; observe_x, kwargs...)
-    path_idxs = _normalize_siso_path_selection(model, pth_idx)
+function get_RO_paths(model::SIMOPaths, pth_idx::Union{Nothing,AbstractVector}=nothing; observe_x, kwargs...)
+    path_idxs = _normalize_simo_path_selection(model, pth_idx)
     rgm_paths = get_path.(Ref(model), path_idxs; return_idx=true)
     observe_x_idx = locate_sym_x(model.bn, observe_x)
     return get_RO_paths(
@@ -150,4 +150,4 @@ function get_RO_paths(model::SISOPaths, pth_idx::Union{Nothing,AbstractVector}=n
     )
 end
 
-get_RO_path(model::SISOPaths, pth_idx, args...; kwargs...) = get_RO_paths(model, [get_idx(model, pth_idx)], args...; kwargs...)[1]
+get_RO_path(model::SIMOPaths, pth_idx, args...; kwargs...) = get_RO_paths(model, [get_idx(model, pth_idx)], args...; kwargs...)[1]

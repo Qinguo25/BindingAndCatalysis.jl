@@ -1,7 +1,7 @@
 @testset "Larger RO Path Workflow" begin
     model = notebook_model2()
-    pths = SISOPaths(model, 1)
-    pths_single = SISOPaths(notebook_model2(), 1)
+    pths = SIMOPaths(model, 1)
+    pths_single = SIMOPaths(notebook_model2(), 1)
 
     grouped = group_sum([[1, 2], [1, 2], [2, 3]], fill(nothing, 3))
     @test length(grouped) == 2
@@ -24,26 +24,26 @@
     @test all(BindingAndCatalysis.same_polyhedron.(bulk_polys, single_polys))
 end
 
-@testset "SISO Export Smoke" begin
+@testset "SIMO Export Smoke" begin
     model = notebook_model2()
-    pths = SISOPaths(model, 1)
-    @test get_SISO_graph(model, 1) == get_SISO_graph(pths)
+    pths = SIMOPaths(model, 1)
+    @test get_SIMO_graph(model, 1) == get_SIMO_graph(pths)
     @test get_neighbor_graph(pths) == get_neighbor_graph_qK(pths)
-    sources = get_sources(get_SISO_graph(pths))
-    sinks = get_sinks(get_SISO_graph(pths))
-    @test sources == first(get_sources_sinks(get_SISO_graph(pths)))
-    @test sinks == last(get_sources_sinks(get_SISO_graph(pths)))
+    sources = get_sources(get_SIMO_graph(pths))
+    sinks = get_sinks(get_SIMO_graph(pths))
+    @test sources == first(get_sources_sinks(get_SIMO_graph(pths)))
+    @test sinks == last(get_sources_sinks(get_SIMO_graph(pths)))
     @test summary_RO_path(pths; observe_x = 1, show_volume = false) === nothing
     @test first(show_expression_path(pths, 1, 1; log_space = false)) isa AbstractVector
 end
 
-@testset "SISO Exact Smoke" begin
+@testset "SIMO Exact Smoke" begin
     N = [1 1 0 -1 0 0;
          0 1 1 0 -1 0;
          1 0 1 0 0 -1]
     model = Bnc(N = N)
     find_all_regimes!(model; mode = :exact)
-    pths = SISOPaths(model, 1)
+    pths = SIMOPaths(model, 1)
     polys = get_polyhedra(pths, 1:3)
     @test length(polys) == 3
     @test all(p -> p isa BindingAndCatalysis.Polyhedron, polys)

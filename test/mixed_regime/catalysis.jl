@@ -4,7 +4,7 @@
 
     @test cn !== nothing
     @test all(isequal.(q_cat_sym(model), model.q_sym[1:cn.r_v]))
-    @test all(isequal.(q_ss_sym(model), [w_sym(model); q_para_sym(model)]))
+    @test all(isequal.(w_sym(model), model.q_sym[cn.r_v + 1:model.d]))
     @test all(isequal.(k_sym(model), cn.k_sym))
 
     find_catalysis_regimes!(model)
@@ -26,8 +26,8 @@
 
     dyn_full = show_catalysis_dynamics(model)
     dyn_reduced = show_reduced_catalysis_dynamics(model)
-    @test length(dyn_full) == cn.r_v + cn.d_w + cn.d_para
-    @test length(dyn_reduced) == cn.r_v + cn.d_w + cn.d_para
+    @test length(dyn_full) == cn.r_v + cn.d_w
+    @test length(dyn_reduced) == cn.r_v + cn.d_w
     @test length(show_condition_xk(cat_rgm)) == size(C_xk_cat, 1)
 
     match_regimes!(model)
@@ -51,17 +51,17 @@
     @test length(C0_qKk) == size(C_qKk, 1)
     @test nlt_qKk >= 0
 
-    C_qssKk, C0_qssKk, nlt_qssKk = get_C_C0_nullity_qssKk(mixed)
-    @test size(C_qssKk, 2) == (cn.d_w + cn.d_para) + model.r + cn.n_v
-    @test length(C0_qssKk) == size(C_qssKk, 1)
-    @test nlt_qssKk >= 0
+    C_wKk, C0_wKk, nlt_wKk = get_C_C0_nullity_wKk(mixed)
+    @test size(C_wKk, 2) == cn.d_w + model.r + cn.n_v
+    @test length(C0_wKk) == size(C_wKk, 1)
+    @test nlt_wKk >= 0
 
     @test !isempty(show_condition_xk(mixed; kind = :binding))
     @test !isempty(show_condition_xk(mixed; kind = :catalysis))
     @test !isempty(show_condition_qKk(mixed; kind = :binding))
     @test show_condition_qKk(mixed; kind = :catalysis) isa AbstractVector
     @test !isempty(show_condition_qKk(mixed))
-    @test !isempty(show_condition_qssKk(mixed))
+    @test !isempty(show_condition_wKk(mixed))
     @test !isempty(show_consistency_condition(mixed))
 
     regular = first(filter(r -> r.nlt == 0, get_bnc_regimes(model)))
@@ -84,7 +84,7 @@
     end
 end
 
-@testset "Minimal Binding-Catalysis qssKk Example" begin
+@testset "Minimal Binding-Catalysis wKk Example" begin
     L = [
         0 1 1
         1 0 1
@@ -109,14 +109,14 @@ end
     mixed = get_bnc_regime(model, 1, 1; check = true)
     @test get_binding_perm(mixed) == [2, 1]
     @test get_catalysis_perm(mixed) == [1, 2]
-    @test string.(BindingAndCatalysis.qssKk_sym(mixed)) == ["tE", "K", "β", "γ"]
+    @test string.(BindingAndCatalysis.wKk_sym(mixed)) == ["tE", "K", "β", "γ"]
     if BindingAndCatalysis.CddBridge._cddlog_available()
-        @test string.(show_condition_qssKk(mixed; log_space = false)) == ["tE*β ~ K*γ", "K > tE"]
+        @test string.(show_condition_wKk(mixed; log_space = false)) == ["tE*β ~ K*γ", "K > tE"]
 
-        C_qssKk, C0_qssKk, nlt_qssKk = get_C_C0_nullity_qssKk(mixed)
-        @test Matrix(C_qssKk) == Rational{Int}[1 -1 1 -1; -1 1 0 0]
-        @test C0_qssKk == ExactLogExpr[0, 0]
-        @test nlt_qssKk == 1
+        C_wKk, C0_wKk, nlt_wKk = get_C_C0_nullity_wKk(mixed)
+        @test Matrix(C_wKk) == Rational{Int}[1 -1 1 -1; -1 1 0 0]
+        @test C0_wKk == ExactLogExpr[0, 0]
+        @test nlt_wKk == 1
     end
 end
 
@@ -131,9 +131,9 @@ end
 
     @test eltype(get_H0(mixed)) == ExactLogExpr
     @test eltype(get_C0_qKk(mixed)) == ExactLogExpr
-    @test eltype(get_C0_qssKk(mixed)) == ExactLogExpr
+    @test eltype(get_C0_wKk(mixed)) == ExactLogExpr
     @test !isempty(show_condition_qKk(mixed))
-    @test !isempty(show_condition_qssKk(mixed))
+    @test !isempty(show_condition_wKk(mixed))
     @test !isempty(show_expression_qcat(regular))
 end
 
@@ -192,5 +192,5 @@ end
     @test Matrix(C_cat_qKk) ≈ C_expected
     @test C0_cat_qKk ≈ C0_expected
     @test !isempty(show_condition_qKk(mixed_regular; kind = :catalysis))
-    @test !isempty(show_condition_qssKk(mixed_regular))
+    @test !isempty(show_condition_wKk(mixed_regular))
 end

@@ -1,9 +1,9 @@
-# For SISO path conditions we only need a canonical H-rep, not an LP-minimal one.
+# For SIMO path conditions we only need a canonical H-rep, not an LP-minimal one.
 # Using the light pass here matches cddlib's "canonicalize after projection" style
 # much better than running a full LP-based strong reduction on every path.
 _clean_polyhedron!(p::Polyhedron) = (removehredundancy!(p; strong=false); p)
 
-function _ensure_node_polyhedra!(grh::SISOPaths, rgm_idxs::AbstractVector{<:Integer})
+function _ensure_node_polyhedra!(grh::SIMOPaths, rgm_idxs::AbstractVector{<:Integer})
     bn = get_binding_network(grh)
     regimes = _bind_regimes_data(bn)
     unique_idxs = unique(Int.(rgm_idxs))
@@ -30,7 +30,7 @@ function _ensure_node_polyhedra!(grh::SISOPaths, rgm_idxs::AbstractVector{<:Inte
     return nothing
 end
 
-function _ensure_edge_polyhedra!(grh::SISOPaths, edge_idxs::AbstractVector{<:Integer})
+function _ensure_edge_polyhedra!(grh::SIMOPaths, edge_idxs::AbstractVector{<:Integer})
     edge_idxs_unique = unique(Int.(edge_idxs))
     edge_idxs_to_calc = filter(idx -> !grh.edge_polys_is_calc[idx], edge_idxs_unique)
     isempty(edge_idxs_to_calc) && return nothing
@@ -65,7 +65,7 @@ function _ensure_edge_polyhedra!(grh::SISOPaths, edge_idxs::AbstractVector{<:Int
 end
 
 function _build_path_polyhedron(
-    grh::SISOPaths,
+    grh::SIMOPaths,
     path::AbstractVector{<:Integer},
     edge_idxs::AbstractVector{<:Integer},
 )::Polyhedron
@@ -86,7 +86,7 @@ function _build_path_polyhedron(
 end
 
 function _calc_polyhedra_for_paths_bulk_suffix_dag!(
-    grh::SISOPaths,
+    grh::SIMOPaths,
     path_idxs::AbstractVector{<:Integer},
 )::Vector{Polyhedron}
     path_idxs = Int.(path_idxs)
@@ -280,8 +280,8 @@ function _calc_polyhedra_for_path(
     return _calc_polyhedra_for_path(model, [Int.(path)], change_qK_idx)[1]
 end
 
-function get_polyhedra(grh::SISOPaths, pth_idx::Union{AbstractVector,Nothing}=nothing)::Vector{Polyhedron}
-    path_idxs = _normalize_siso_path_selection(grh, pth_idx)
+function get_polyhedra(grh::SIMOPaths, pth_idx::Union{AbstractVector,Nothing}=nothing)::Vector{Polyhedron}
+    path_idxs = _normalize_simo_path_selection(grh, pth_idx)
     path_idxs_to_calc = _path_indices_to_calculate(grh.path_polys_is_calc, path_idxs)
 
     if !isempty(path_idxs_to_calc)
@@ -301,10 +301,10 @@ function get_polyhedra(grh::SISOPaths, pth_idx::Union{AbstractVector,Nothing}=no
     return grh.path_polys[path_idxs]
 end
 
-get_polyhedron(grh::SISOPaths, pth) = get_polyhedra(grh, [get_idx(grh, pth)])[1]
+get_polyhedron(grh::SIMOPaths, pth) = get_polyhedra(grh, [get_idx(grh, pth)])[1]
 
-function _resolve_siso_rebase_mat(
-    grh::SISOPaths;
+function _resolve_simo_rebase_mat(
+    grh::SIMOPaths;
     rebase_K::Bool=false,
     rebase_mat=nothing,
 )
@@ -321,18 +321,18 @@ function _resolve_siso_rebase_mat(
 end
 
 function get_volumes(
-    grh::SISOPaths,
+    grh::SIMOPaths,
     pth_idx::Union{AbstractVector,Nothing}=nothing;
     rebase_K=false,
     rebase_mat=nothing,
     recalculate=false,
     kwargs...,
 )
-    path_idxs = _normalize_siso_path_selection(grh, pth_idx)
+    path_idxs = _normalize_simo_path_selection(grh, pth_idx)
     path_idxs_to_calculate = _path_indices_to_calculate(grh.path_volume_is_calc, path_idxs; recalculate=recalculate)
 
     if !isempty(path_idxs_to_calculate)
-        resolved_rebase_mat = _resolve_siso_rebase_mat(grh; rebase_K=rebase_K, rebase_mat=rebase_mat)
+        resolved_rebase_mat = _resolve_simo_rebase_mat(grh; rebase_K=rebase_K, rebase_mat=rebase_mat)
         polys = get_polyhedra(grh, path_idxs_to_calculate)
         rlts = calc_volume(polys; rebase_mat=resolved_rebase_mat, kwargs...)
         for (i, idx) in enumerate(path_idxs_to_calculate)
@@ -343,4 +343,4 @@ function get_volumes(
     return grh.path_volume[path_idxs]
 end
 
-get_volume(grh::SISOPaths, pth; kwargs...) = get_volumes(grh, [get_idx(grh, pth)]; kwargs...)[1]
+get_volume(grh::SIMOPaths, pth; kwargs...) = get_volumes(grh, [get_idx(grh, pth)]; kwargs...)[1]

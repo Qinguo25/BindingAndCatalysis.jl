@@ -14,19 +14,12 @@ end
 function w_sym(args...)
     bn = get_binding_network(args...)
     cn = _require_catalysis_network(args...)
-    return bn.q_sym[cn.r_v + 1:cn.r_v + cn.d_w]
+    return bn.q_sym[cn.r_v + 1:bn.d]
 end
 
-function q_para_sym(args...)
-    bn = get_binding_network(args...)
-    cn = _require_catalysis_network(args...)
-    return bn.q_sym[cn.r_v + cn.d_w + 1:bn.d]
-end
-
-q_ss_sym(args...) = [w_sym(args...); q_para_sym(args...)]
 @inline xk_sym(args...) = [x_sym(args...); k_sym(args...)]
 @inline qKk_sym(args...) = [q_sym(args...); K_sym(args...); k_sym(args...)]
-@inline qssKk_sym(args...) = [q_ss_sym(args...); K_sym(args...); k_sym(args...)]
+@inline wKk_sym(args...) = [w_sym(args...); K_sym(args...); k_sym(args...)]
 
 @inline _time_sym() = Symbolics.variable(:t)
 @inline _d_dt(syms) = Symbolics.Differential(_time_sym()).(syms)
@@ -37,7 +30,7 @@ function _flux_sym(args...)
     return k_sym(args...) .* flux_monomials
 end
 
-q_sym(grh::SISOPaths, args...) = begin
+q_sym(grh::SIMOPaths, args...) = begin
     bn = get_binding_network(grh)
     if grh.change_qK_idx <= bn.d
         deleteat!(copy(bn.q_sym), grh.change_qK_idx)
@@ -46,7 +39,7 @@ q_sym(grh::SISOPaths, args...) = begin
     end
 end
 
-K_sym(grh::SISOPaths, args...) = begin
+K_sym(grh::SIMOPaths, args...) = begin
     bn = get_binding_network(grh)
     if grh.change_qK_idx > bn.d
         deleteat!(copy(bn.K_sym), grh.change_qK_idx - bn.d)

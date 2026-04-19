@@ -65,7 +65,9 @@ end
 @inline _catalysis_regimes_asymptotic_flag(model::CatalysisData) = getfield.(_catalysis_regimes_data(model), :is_asymptotic)
 @inline _catalysis_regimes_initialized(model::CatalysisData) = BitVector(.!isnothing.(getfield.(_catalysis_regimes_data(model), :P_pos_neg)))
 function Base.getproperty(model::CatalysisData, sym::Symbol)
-    if sym === :vertices_perm
+    if sym === :d_para
+        return getfield(model, :d_w) - getfield(model, :a_w)
+    elseif sym === :vertices_perm
         return _catalysis_regimes_perm(model)
     elseif sym === :vertices_perm_dict
         return _catalysis_regimes_perm_dict(model)
@@ -80,6 +82,7 @@ function Base.getproperty(model::CatalysisData, sym::Symbol)
 end
 function Base.propertynames(model::CatalysisData, private::Bool=false)
     names = Symbol[fieldnames(typeof(model))...,
+        :d_para,
         :vertices_perm,
         :vertices_perm_dict,
         :vertices_asymptotic_flag,

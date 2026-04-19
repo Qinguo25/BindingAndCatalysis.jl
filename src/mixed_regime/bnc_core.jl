@@ -172,19 +172,19 @@ end
 get_C_qKk(rgm::BncRegime, kind::Symbol=:combined) = get_C_C0_nullity_qKk(rgm, kind)[1]
 get_C0_qKk(rgm::BncRegime, kind::Symbol=:combined) = get_C_C0_nullity_qKk(rgm, kind)[2]
 
-function get_C_C0_nullity_qssKk(rgm::BncRegime)
-    return rgm.C_qKk_ss, rgm.C0_qKk_ss, rgm.nlt
+function get_C_C0_nullity_wKk(rgm::BncRegime)
+    return rgm.C_wKk, rgm.C0_wKk, rgm.nlt
 end
 
-function get_C_C0_qssKk(rgm::BncRegime)
-    C, C0, _ = get_C_C0_nullity_qssKk(rgm)
+function get_C_C0_wKk(rgm::BncRegime)
+    C, C0, _ = get_C_C0_nullity_wKk(rgm)
     return C, C0
 end
-get_C_qssKk(rgm::BncRegime) = get_C_C0_nullity_qssKk(rgm)[1]
-get_C0_qssKk(rgm::BncRegime) = get_C_C0_nullity_qssKk(rgm)[2]
+get_C_wKk(rgm::BncRegime) = get_C_C0_nullity_wKk(rgm)[1]
+get_C0_wKk(rgm::BncRegime) = get_C_C0_nullity_wKk(rgm)[2]
 
 function get_qcat_F_F0(rgm::BncRegime)
-    rgm.nlt == 0 || error("The reduced steady-state system is singular, so q_cat has no affine expression in (q_ss, K, k).")
+    rgm.nlt == 0 || error("The reduced steady-state system is singular, so q_cat has no affine expression in (w, K, k).")
     r_v = size(rgm.catalysis_rgm.P, 1)
     P_cat = rgm.bind_rgm.P[1:r_v, :]
     P0_cat = rgm.bind_rgm.P0[1:r_v]

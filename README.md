@@ -5,7 +5,7 @@ BindingAndCatalysis.jl models equilibrium binding networks and catalysis-driven 
 - construct binding networks from stoichiometry or conservation laws
 - enumerate regimes (vertices) defined by dominant species
 - map between concentration space (`x`) and total/binding-constant space (`qK`)
-- analyze regime graphs and SISO (single-input/single-output) paths
+- analyze regime graphs and SIMO (single-input/multi-output) paths
 - visualize regimes, regime interfaces, and trajectories
 
 ## Installation
@@ -70,7 +70,7 @@ get_H_H0(vtx)
 get_C_C0_nullity(vtx)
 ```
 
-### Regime graphs and SISO paths
+### Regime graphs and SIMO paths
 
 ```julia
 vtx_grh = get_vertices_graph!(model, full=true)
@@ -78,8 +78,8 @@ vtx_grh = get_vertices_graph!(model, full=true)
 # qK neighbor graph
 qk_graph = get_neighbor_graph_qK(model)
 
-# single-input/single-output paths
-paths = SISOPaths(model, :tS)
+# single-input/multi-output paths
+paths = SIMOPaths(model, :tS)
 summary(paths; show_volume=false)
 show_expression_path(paths, 1; log_space=false)
 ```
@@ -100,7 +100,7 @@ The best end-to-end tutorial is in [`Examples/Minimal_example.ipynb`](Examples/M
 - regime enumeration and classification
 - regime graph visualization and interfaces
 - numerical mapping between `qK` and `x`
-- more advanced SISO path analysis
+- more advanced SIMO path analysis
 
 To run the notebook, make sure Jupyter is configured with Julia via IJulia.jl. Follow the official IJulia documentation to install and register the Julia kernel: <https://julialang.github.io/IJulia.jl/stable/>. When installing Julia for the first time, you may want to add a multi-threaded Jupyter kernel so the notebook can take advantage of multiple CPU threads. For example:
 
