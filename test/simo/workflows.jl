@@ -13,12 +13,14 @@
     @test pths.rgm_paths == pths_single.rgm_paths
 
     ro1 = get_RO_path(pths, 1; observe_x = 1)
+    ro_multi = get_RO_path(pths, 1; observe_x = [1, 2])
     ro_paths_1 = get_RO_paths(pths; observe_x = 1)
     ro_paths_2 = get_RO_paths(pths; observe_x = 2, deduplicate = true)
     bulk_polys = get_polyhedra(pths)
     single_polys = [get_polyhedron(pths_single, i) for i in eachindex(pths_single.rgm_paths)]
 
     @test !isempty(ro1)
+    @test size(ro_multi, 2) == 2
     @test length(ro_paths_1) == length(pths.rgm_paths)
     @test length(ro_paths_2) == length(pths.rgm_paths)
     @test all(BindingAndCatalysis.same_polyhedron.(bulk_polys, single_polys))
@@ -35,6 +37,13 @@ end
     @test sinks == last(get_sources_sinks(get_SIMO_graph(pths)))
     @test summary_RO_path(pths; observe_x = 1, show_volume = false) === nothing
     @test first(show_expression_path(pths, 1, 1; log_space = false)) isa AbstractVector
+    expr_rows, edge_rows = show_expression_path(pths, 1, [1, 2]; log_space = false)
+    @test length(expr_rows) == length(get_path(pths, 1; return_idx = true))
+    @test first(expr_rows) isa AbstractVector
+    @test length(first(expr_rows)) == 2
+    @test length(edge_rows) == length(expr_rows) - 1
+    fig = SIMO_plot(pths, 1:2; observe_x = [1, 2], npoints = 32, show_regime_colorbar = false)
+    @test fig isa BindingAndCatalysis.Makie.Figure
 end
 
 @testset "SIMO Exact Smoke" begin

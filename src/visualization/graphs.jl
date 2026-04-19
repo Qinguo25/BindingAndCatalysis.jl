@@ -79,40 +79,22 @@ end
 function find_proper_bounds_for_graph_plot(p; x_margin=0.1, y_margin=0.1, z_margin=0.1)
     coords = p.node_pos[]
     isempty(coords) && return nothing
-    if length(coords[1]) == 3
-        xs = getindex.(coords, 1)
-        ys = getindex.(coords, 2)
-        zs = getindex.(coords, 3)
-        xmin, xmax = extrema(xs)
-        ymin, ymax = extrema(ys)
-        zmin, zmax = extrema(zs)
-        xspan = xmax - xmin
-        yspan = ymax - ymin
-        zspan = zmax - zmin
-        xspan == 0 && (xspan = 1)
-        yspan == 0 && (yspan = 1)
-        zspan == 0 && (zspan = 1)
-        xmin -= x_margin * xspan
-        xmax += x_margin * xspan
-        ymin -= y_margin * yspan
-        ymax += y_margin * yspan
-        zmin -= z_margin * zspan
-        zmax += z_margin * zspan
-        return (xmin, xmax, ymin, ymax, zmin, zmax)
+
+    dim = length(first(coords))
+    @assert dim == 2 || dim == 3
+
+    margins = (x_margin, y_margin, z_margin)
+
+    bounds = ntuple(dim) do i
+        vals = getindex.(coords, i)
+        lo, hi = extrema(vals)
+        span = hi - lo
+        iszero(span) && (span = one(span))
+        m = margins[i] * span
+        (lo - m, hi + m)
     end
-    xs = first.(coords)
-    ys = last.(coords)
-    xmin, xmax = extrema(xs)
-    ymin, ymax = extrema(ys)
-    xspan = xmax - xmin
-    yspan = ymax - ymin
-    xspan == 0 && (xspan = 1)
-    yspan == 0 && (yspan = 1)
-    xmin -= x_margin * xspan
-    xmax += x_margin * xspan
-    ymin -= y_margin * yspan
-    ymax += y_margin * yspan
-    return (xmin, xmax, ymin, ymax)
+
+    return Tuple(Iterators.flatten(bounds))
 end
 
 function set_proper_bounds_for_graph_plot!(ax::Axis, p; kwargs...)

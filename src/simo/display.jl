@@ -33,6 +33,8 @@ function summary_RO_path(
         keep_singular=keep_singular,
         keep_nonasymptotic=keep_nonasymptotic,
     )
+    !isempty(ord_pth) && ord_pth[1] isa AbstractMatrix &&
+        error("summary_RO_path currently supports a single observed x. Use get_RO_paths(...) directly for multi-x data.")
 
     volumes = show_volume ? get_volumes(grh; kwargs...) : fill(nothing, length(grh.rgm_paths))
     rsts = group_sum(ord_pth, volumes)

@@ -1,40 +1,34 @@
-function get_expression_path(grh::SIMOPaths, pth; observe_x=nothing)
-    bn = get_binding_network(grh)
-    rgm_pth = get_path(grh, pth; return_idx=true)
-    rgm_nlt = get_nullities(bn, rgm_pth)
-
-    change_qK_idx = grh.change_qK_idx
-    observe_x_idx = isnothing(observe_x) ? (1:bn.n) : locate_sym_x.(Ref(bn), observe_x)
-    rgm_interface = get_interface.(Ref(bn), rgm_pth[1:end-1], rgm_pth[2:end])
-
-    H_H0 = Vector{Any}(undef, length(rgm_pth))
-    for i in eachindex(rgm_pth)
-        rgm = rgm_pth[i]
-        nlt = rgm_nlt[i]
-        if nlt == 0
-            H, H0 = get_H_H0(bn, rgm)
-            H_H0[i] = (H[observe_x_idx, :], H0[observe_x_idx])
-        elseif nlt == 1
-            H = get_H(bn, rgm)
-            H_H0[i] = (H[observe_x_idx, change_qK_idx], nothing)
-        else
-            error("Nullity > 1 is not supported for expression path.")
-        end
+@inline function _normalize_simo_observe_x(model::Bnc, observe_x)
+    idxs = if isnothing(observe_x)
+        collect(1:model.n)
+    elseif observe_x isa AbstractVector
+        Int.(locate_sym_x.(Ref(model), observe_x))
+    else
+        [Int(locate_sym_x(model, observe_x))]
     end
-    return H_H0, rgm_interface
+    return idxs, x_sym(model)[idxs], !(observe_x isa AbstractVector) && !isnothing(observe_x)
 end
 
-function _calc_RO_for_single_path(model, path::AbstractVector{<:Integer}, change_qK_idx, observe_x_idx)::Vector{<:Real}
-    r_ord = Vector{Float64}(undef, length(path))
+function _calc_RO_for_single_path(
+    model::Bnc,
+    path::AbstractVector{<:Integer},
+    change_qK_idx::Integer,
+    observe_x_idx::AbstractVector{<:Integer},
+)::Matrix{Float64}
+    out = Matrix{Float64}(undef, length(path), length(observe_x_idx))
     for i in eachindex(path)
-        if !is_singular(model, path[i])
-            r_ord[i] = round(Float64(get_H(model, path[i])[observe_x_idx, change_qK_idx]); digits=3)
-        else
-            ord = get_H(model, path[i])[observe_x_idx, change_qK_idx]
-            r_ord[i] = abs(ord) < 1e-6 ? NaN : Float64(ord) * Inf
+        rgm_idx = Int(path[i])
+        H = get_H(model, rgm_idx)
+        for (j, x_idx) in enumerate(observe_x_idx)
+            if !is_singular(model, rgm_idx)
+                out[i, j] = round(Float64(H[x_idx, change_qK_idx]); digits=3)
+            else
+                ord = H[x_idx, change_qK_idx]
+                out[i, j] = abs(ord) < 1e-6 ? NaN : Float64(ord) * Inf
+            end
         end
     end
-    return r_ord
+    return out
 end
 
 function _dedup(ord_path::AbstractVector{T})::Vector{T} where T<:Real
@@ -63,20 +57,31 @@ function _dedup(ord_path::AbstractVector{T})::Vector{T} where T<:Real
     return out
 end
 
+function _dedup_rows(ord_path::AbstractMatrix{<:Real})
+    size(ord_path, 1) <= 1 && return copy(ord_path)
+    keep = Int[1]
+    for i in 2:size(ord_path, 1)
+        prev = @view ord_path[keep[end], :]
+        curr = @view ord_path[i, :]
+        all(isequal.(curr, prev)) || push!(keep, i)
+    end
+    return ord_path[keep, :]
+end
+
 function get_RO_path(
     model::Bnc,
     rgm_idx_shift_pth::AbstractVector;
     change_qK,
-    observe_x,
+    observe_x=nothing,
     deduplicate::Bool=false,
     keep_singular::Bool=true,
     keep_nonasymptotic::Bool=true,
-)::Vector{<:Real}
+)
     rgm_idx_shift_pth = get_idx.(Ref(model), rgm_idx_shift_pth)
+    observe_x_idx, _, scalar_observe = _normalize_simo_observe_x(model, observe_x)
 
     ord_path = let
         change_qK_idx = locate_sym_qK(model, change_qK)
-        observe_x_idx = locate_sym_x(model, observe_x)
         _calc_RO_for_single_path(model, rgm_idx_shift_pth, change_qK_idx, observe_x_idx)
     end
 
@@ -86,9 +91,15 @@ function get_RO_path(
         singular=keep_singular ? nothing : false,
         asymptotic=keep_nonasymptotic ? nothing : true,
     )
-    ord_path = ord_path[mask]
+    ord_path = ord_path[mask, :]
 
-    return deduplicate ? _dedup(ord_path) : ord_path
+    ord_path = if deduplicate
+        scalar_observe ? _dedup(vec(ord_path[:, 1])) : _dedup_rows(ord_path)
+    else
+        scalar_observe ? vec(ord_path[:, 1]) : ord_path
+    end
+
+    return ord_path
 end
 
 function _ensure_ro_regimes_materialized!(
@@ -120,11 +131,11 @@ function get_RO_paths(
     rgm_paths::AbstractVector{<:AbstractVector},
     args...;
     kwargs...,
-)::Vector{Vector{<:Real}}
+)
     rgm_idx_for_each_paths = rgm_paths .|> x -> get_idx.(Ref(model), x)
     _ensure_ro_regimes_materialized!(model, rgm_idx_for_each_paths)
 
-    ord_for_each_paths = Vector{Vector{<:Real}}(undef, length(rgm_idx_for_each_paths))
+    ord_for_each_paths = Vector{Any}(undef, length(rgm_idx_for_each_paths))
     if Threads.nthreads() == 1 || length(rgm_idx_for_each_paths) <= 1
         for i in eachindex(rgm_idx_for_each_paths)
             ord_for_each_paths[i] = get_RO_path(model, rgm_idx_for_each_paths[i], args...; kwargs...)
@@ -137,15 +148,14 @@ function get_RO_paths(
     return ord_for_each_paths
 end
 
-function get_RO_paths(model::SIMOPaths, pth_idx::Union{Nothing,AbstractVector}=nothing; observe_x, kwargs...)
+function get_RO_paths(model::SIMOPaths, pth_idx::Union{Nothing,AbstractVector}=nothing; observe_x=nothing, kwargs...)
     path_idxs = _normalize_simo_path_selection(model, pth_idx)
     rgm_paths = get_path.(Ref(model), path_idxs; return_idx=true)
-    observe_x_idx = locate_sym_x(model.bn, observe_x)
     return get_RO_paths(
         model.bn,
         rgm_paths;
         change_qK=model.change_qK_idx,
-        observe_x=observe_x_idx,
+        observe_x=observe_x,
         kwargs...,
     )
 end

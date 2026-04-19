@@ -99,71 +99,98 @@ print_paths(paths::AbstractVector{<:AbstractVector}; volumes=nothing, ids=nothin
 print_path(path::AbstractVector; id=nothing, volume=nothing, kwargs...) =
     print_paths(_normalize_rows([path]; ids=id === nothing ? nothing : [id], volumes=volume === nothing ? nothing : [volume]); kwargs...)
 
-function show_expression_path(grh::SIMOPaths, pth; observe_x=nothing, kwargs...)
-    pth_idx = get_idx(grh, pth)
-    bn = get_binding_network(grh)
-    observe_x_idx = isnothing(observe_x) ? (1:bn.n) : locate_sym_x.(Ref(bn), observe_x)
-    change_qK_idx = grh.change_qK_idx
-    xsym = x_sym(bn)[observe_x_idx]
-    qKsym = qK_sym(bn)
-    change_sym = qKsym[change_qK_idx]
-
+@inline function _simo_marker_vars()
     continuous, upward, downward = :→, :↑, :↓
-    vars = @variables $continuous, $upward, $downward
+    return @variables $continuous, $upward, $downward
+end
 
-    H_H0, rgm_interface = get_expression_path(grh, pth_idx; observe_x=observe_x_idx)
+@inline function _simo_singular_marker(coeff::Real, vars)
+    if abs(coeff) < 1e-6
+        return vars[1]
+    else
+        return coeff > 0 ? vars[2] : vars[3]
+    end
+end
 
-    expr_sym = let
-        exprs = Vector{Any}(undef, length(H_H0))
-        for (i, (H_row, H0_val)) in enumerate(H_H0)
-            exprs[i] = if isnothing(H0_val)
-                let
-                    a = Vector{Num}(undef, size(H_row, 1))
-                    for j in eachindex(a)
-                        a[j] = if abs(H_row[j]) < 1e-6
-                            vars[1]
-                        else
-                            H_row[j] > 0 ? vars[2] : vars[3]
-                        end
-                    end
-                    a
-                end
-            else
-                show_expression_mapping(H_row, H0_val, xsym, qKsym; kwargs...)
+function _path_expression_rows(
+    model::Bnc,
+    rgm_path::AbstractVector{<:Integer},
+    change_qK_idx::Integer,
+    observe_x_idx::AbstractVector{<:Integer};
+    log_space::Bool=false,
+)
+    change_qK_idx = locate_sym_qK(model, change_qK_idx)
+    observe_x_idx = Int.(locate_sym_x.(Ref(model), observe_x_idx))
+    xsym = x_sym(model)[observe_x_idx]
+    vars = _simo_marker_vars()
+
+    expr_rows = Vector{Vector{Any}}(undef, length(rgm_path))
+    for (i, rgm_idx_raw) in enumerate(rgm_path)
+        rgm_idx = get_idx(model, rgm_idx_raw)
+        expr_rows[i] = if get_nullity(model, rgm_idx) == 0
+            collect(show_expression_x(model, rgm_idx; log_space=log_space)[observe_x_idx])
+        elseif get_nullity(model, rgm_idx) == 1
+            H = get_H(model, rgm_idx)
+            row = Vector{Any}(undef, length(observe_x_idx))
+            for (j, x_idx) in enumerate(observe_x_idx)
+                lhs = log_space ? log10(xsym[j]) : xsym[j]
+                row[j] = lhs ~ _simo_singular_marker(H[x_idx, change_qK_idx], vars)
             end
-        end
-        exprs
-    end
-
-    interface = rgm_interface .|> x -> solve_sym_expr(x..., qKsym, change_qK_idx; kwargs...)
-    for i in eachindex(expr_sym)
-        if i == 1
-            display(change_sym < interface[1].rhs)
-        elseif i == length(expr_sym)
-            display(change_sym > interface[end].rhs)
+            row
         else
-            display((change_sym > interface[i - 1].rhs) & (change_sym < interface[i].rhs))
+            error("Nullity > 1 is not supported for expression path.")
         end
-        display(expr_sym[i])
     end
-    return nothing
+
+    boundary_exprs = Vector{Any}(undef, max(length(rgm_path) - 1, 0))
+    for i in eachindex(boundary_exprs)
+        boundary_exprs[i] = show_interface(
+            model,
+            rgm_path[i],
+            rgm_path[i + 1];
+            lhs_idx=change_qK_idx,
+            log_space=log_space,
+        )
+    end
+
+    return expr_rows, boundary_exprs
 end
 
-function show_expression_path(model::Bnc, rgm_path, change_qK_idx, observe_x_idx; kwargs...)::Tuple{Vector,Vector}
-    change_qK_idx = locate_sym([model.q_sym; model.K_sym], change_qK_idx)
-    observe_x_idx = locate_sym(model.x_sym, observe_x_idx)
-    have_volume_mask = _get_regimes_mask(model, rgm_path; singular=false)
-    idx = findall(have_volume_mask)
-    exprs = map(idx) do id
-        show_expression_x(model, rgm_path[id]; kwargs...)[observe_x_idx].rhs
-    end
-    edges = map(@view idx[1:end-1]) do i
-        rgm_from = rgm_path[i]
-        rgm_to = rgm_path[i + 1]
-        show_interface(model, rgm_from, rgm_to; lhs_idx=change_qK_idx, kwargs...).rhs
-    end
-    return (exprs, edges)
+function get_expression_path(
+    model::Bnc,
+    rgm_path::AbstractVector,
+    change_qK_idx;
+    observe_x=nothing,
+    log_space::Bool=false,
+)
+    observe_x_idx, _, scalar_observe = _normalize_simo_observe_x(model, observe_x)
+    expr_rows, boundary_exprs = _path_expression_rows(
+        model,
+        Int.(get_idx.(Ref(model), rgm_path)),
+        change_qK_idx,
+        observe_x_idx;
+        log_space=log_space,
+    )
+    return scalar_observe ? (first.(expr_rows), boundary_exprs) : (expr_rows, boundary_exprs)
 end
+
+function get_expression_path(grh::SIMOPaths, pth; observe_x=nothing, kwargs...)
+    pth_idx = get_idx(grh, pth)
+    rgm_path = get_path(grh, pth_idx; return_idx=true)
+    return get_expression_path(
+        get_binding_network(grh),
+        rgm_path,
+        grh.change_qK_idx;
+        observe_x=observe_x,
+        kwargs...,
+    )
+end
+
+show_expression_path(grh::SIMOPaths, pth; observe_x=nothing, kwargs...) =
+    get_expression_path(grh, pth; observe_x=observe_x, kwargs...)
+
+show_expression_path(model::Bnc, rgm_path, change_qK_idx, observe_x; kwargs...) =
+    get_expression_path(model, rgm_path, change_qK_idx; observe_x=observe_x, kwargs...)
 
 show_expression_path(grh::SIMOPaths, pth_idx, observe_x; kwargs...) =
-    show_expression_path(get_binding_network(grh), grh.rgm_paths[pth_idx], grh.change_qK_idx, observe_x; kwargs...)
+    get_expression_path(grh, pth_idx; observe_x=observe_x, kwargs...)

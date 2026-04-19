@@ -635,8 +635,8 @@ vols = get_volumes(simo)
 - `test/support/setup.jl`
   维护测试时最常用的模型工厂。
 
-- `noback/singular_path_condition_exploration.md`
-  一份近期的探索性结论，记录了 singular regime 从 path 中删除时图结构与几何条件之间的差异。
+<!-- - `noback/singular_path_condition_exploration.md`
+  一份近期的探索性结论，记录了 singular regime 从 path 中删除时图结构与几何条件之间的差异。 -->
 
 
 ## 13. 总结
