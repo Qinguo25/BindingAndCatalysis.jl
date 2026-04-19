@@ -1,0 +1,101 @@
+# Build _log variations of the main binaries.
+# Keep testlogarithmic as a check-only program.
+
+if LOGARITHMIC
+
+log_ldflags = ../lib-src/libcddlog.la -lgmp -lm
+log_cppflags = $(AM_CPPFLAGS) -DCDDLOGARITHMIC
+
+bin_PROGRAMS += scdd_log
+scdd_log_SOURCES = scdd.c
+scdd_log_LDADD = $(log_ldflags)
+scdd_log_CPPFLAGS = $(log_cppflags)
+
+bin_PROGRAMS += lcdd_log
+lcdd_log_SOURCES = lcdd.c
+lcdd_log_LDADD = $(log_ldflags)
+lcdd_log_CPPFLAGS = $(log_cppflags)
+
+bin_PROGRAMS += fourier_log
+fourier_log_SOURCES = fourier.c
+fourier_log_LDADD = $(log_ldflags)
+fourier_log_CPPFLAGS = $(log_cppflags)
+
+bin_PROGRAMS += redcheck_log
+redcheck_log_SOURCES = redcheck.c
+redcheck_log_LDADD = $(log_ldflags)
+redcheck_log_CPPFLAGS = $(log_cppflags)
+
+bin_PROGRAMS += projection_log
+projection_log_SOURCES = projection.c
+projection_log_LDADD = $(log_ldflags)
+projection_log_CPPFLAGS = $(log_cppflags)
+
+bin_PROGRAMS += adjacency_log
+adjacency_log_SOURCES = adjacency.c
+adjacency_log_LDADD = $(log_ldflags)
+adjacency_log_CPPFLAGS = $(log_cppflags)
+
+bin_PROGRAMS += allfaces_log
+allfaces_log_SOURCES = allfaces.c
+allfaces_log_LDADD = $(log_ldflags)
+allfaces_log_CPPFLAGS = $(log_cppflags)
+
+check_PROGRAMS += testshoot_log
+testshoot_log_SOURCES = testshoot.c
+testshoot_log_LDADD = $(log_ldflags)
+testshoot_log_CPPFLAGS = $(log_cppflags)
+
+check_PROGRAMS += testcdd1_log
+testcdd1_log_SOURCES = testcdd1.c
+testcdd1_log_LDADD = $(log_ldflags)
+testcdd1_log_CPPFLAGS = $(log_cppflags)
+
+check_PROGRAMS += testcdd2_log
+testcdd2_log_SOURCES = testcdd2.c
+testcdd2_log_LDADD = $(log_ldflags)
+testcdd2_log_CPPFLAGS = $(log_cppflags)
+
+check_PROGRAMS += testlp1_log
+testlp1_log_SOURCES = testlp1.c
+testlp1_log_LDADD = $(log_ldflags)
+testlp1_log_CPPFLAGS = $(log_cppflags)
+
+check_PROGRAMS += testlp2_log
+testlp2_log_SOURCES = testlp2.c
+testlp2_log_LDADD = $(log_ldflags)
+testlp2_log_CPPFLAGS = $(log_cppflags)
+
+check_PROGRAMS += testlp3_log
+testlp3_log_SOURCES = testlp3.c
+testlp3_log_LDADD = $(log_ldflags)
+testlp3_log_CPPFLAGS = $(log_cppflags)
+
+bin_PROGRAMS += cddexec_log
+cddexec_log_SOURCES = cddexec.c
+cddexec_log_LDADD = $(log_ldflags)
+cddexec_log_CPPFLAGS = $(log_cppflags)
+
+noinst_PROGRAMS += redundancies_log
+redundancies_log_SOURCES = redundancies.c
+redundancies_log_LDADD = $(log_ldflags)
+redundancies_log_CPPFLAGS = $(log_cppflags)
+
+noinst_PROGRAMS += redundancies_clarkson_log
+redundancies_clarkson_log_SOURCES = redundancies_clarkson.c
+redundancies_clarkson_log_LDADD = $(log_ldflags)
+redundancies_clarkson_log_CPPFLAGS = $(log_cppflags)
+
+noinst_PROGRAMS += redexter_log
+redexter_log_SOURCES = redexter.c
+redexter_log_LDADD = $(log_ldflags)
+redexter_log_CPPFLAGS = $(log_cppflags)
+
+check_PROGRAMS += testlogarithmic
+TESTS += testlogarithmic check-logarithmic.sh check-logarithmic-large.sh
+
+testlogarithmic_SOURCES = testlogarithmic.c
+testlogarithmic_LDADD = $(log_ldflags)
+testlogarithmic_CPPFLAGS = $(log_cppflags)
+
+endif
