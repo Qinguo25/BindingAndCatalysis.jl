@@ -38,8 +38,13 @@ import Random
 import Base: summary,show
 
 export Bnc, update_catalysis!
+export NativePolyhedra
 export ExactLogExpr, exact_log10, exact_log10_ratio
+export Polyhedron, HRep, MixedMatHRep, hrep, polyhedron
 export VRep, vrep, points, rays, lines
+export HalfSpace, HyperPlane, intersect, eliminate, detecthlinearity!, removehredundancy!
+export dim, fulldim, hashyperplanes, hyperplanes, allhalfspaces, issubset
+export feasible_point, interior_point
 
 #---------------------------plot dependency-----------------------------
 using Makie
