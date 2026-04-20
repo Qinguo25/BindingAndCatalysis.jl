@@ -70,21 +70,6 @@ end
     return indegree(qK_grh, v) == 0 && outdegree(qK_grh, v) == 0 && get_nullity(model, v) > 0
 end
 
-function _filter_simo_rgm_paths(
-    model::Bnc,
-    qK_grh::AbstractGraph,
-    rgm_paths::AbstractVector{<:AbstractVector{<:Integer}},
-)::Vector{Vector{Int}}
-    out = Vector{Vector{Int}}()
-    sizehint!(out, length(rgm_paths))
-    for path in rgm_paths
-        if length(path) == 1 && _is_isolated_singular_simo_regime(model, qK_grh, only(path))
-            continue
-        end
-        push!(out, Int.(path))
-    end
-    return out
-end
 
 
 function SIMOPaths(model::Bnc{T}, change_qK; rgm_paths=nothing) where {T}
@@ -99,12 +84,16 @@ function SIMOPaths(model::Bnc{T}, change_qK; rgm_paths=nothing) where {T}
         sources, sinks = get_sources_sinks(qK_grh)
     end
 
-    rgm_paths = _filter_simo_rgm_paths(model, qK_grh, rgm_paths)
+    filter!(rgm_paths) do path
+        length(path) > 1 || get_nullity(model, only(path)) == 0
+    end
+
     if isempty(rgm_paths)
         sources = Int[]
         sinks = Int[]
     else
-        sources, sinks = sources_sinks_from_paths(rgm_paths)
+        sources = unique(Int(first(p)) for p in paths)
+        sinks = unique(Int(last(p)) for p in paths)
     end
 
     return SIMOPaths(model, qK_grh, change_qK_idx, sources, sinks, rgm_paths)

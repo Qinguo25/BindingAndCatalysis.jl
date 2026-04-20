@@ -1,28 +1,17 @@
-const _FLOAT_POLY_LIB = Ref{Any}(nothing)
+const POLY_BACK_END = CDDLib.Library(:float)
 
-@inline function _float_poly_library()
-    lib = _FLOAT_POLY_LIB[]
-    if isnothing(lib)
-        lib = CDDLib.Library(:float)
-        _FLOAT_POLY_LIB[] = lib
-    end
-    return lib
-end
 
-@inline _floatify_poly_scalar(x::Real) = Float64(x)
-@inline _floatify_poly_vector(v::AbstractVector) = Float64.(collect(v))
-@inline _floatify_poly_matrix(A::AbstractMatrix) = sparse(Float64.(sparse(A)))
 
 function _build_polyhedron_from_C_C0(
     C::AbstractMatrix{<:Real},
     C0::AbstractVector,
     nullity::Integer=0;
-    canonicalize::Bool=true,
+    canonicalize::Bool=false,
 )::Polyhedron
-    A = -_floatify_poly_matrix(C)
-    b = _floatify_poly_vector(C0)
+    A = Matrix(-Float64.(C))
+    b = collect(Float64.(C0))
     rep = nullity == 0 ? hrep(A, b) : hrep(A, b, BitSet(1:nullity))
-    poly = polyhedron(rep, _float_poly_library())
+    poly = polyhedron(rep, POLY_BACK_END)
     canonicalize && removehredundancy!(poly)
     return poly
 end
@@ -41,7 +30,7 @@ end
 function _poly_eliminate(
     poly::Polyhedron,
     delset;
-    canonicalize::Bool=true,
+    canonicalize::Bool=false,
 )::Polyhedron
     axes = BitSet(Int.(collect(delset)))
     out = isempty(axes) ? poly : eliminate(poly, axes)
@@ -55,7 +44,7 @@ function _poly_intersect_many(
 )::Polyhedron
     isempty(polys) && throw(ArgumentError("Need at least one polyhedron."))
     poly = if length(polys) == 1
-        polyhedron(hrep(first(polys)), _float_poly_library())
+        polyhedron(hrep(first(polys)), POLY_BACK_END)
     else
         reduce(intersect, polys)
     end

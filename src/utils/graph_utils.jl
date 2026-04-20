@@ -1,4 +1,173 @@
 """
+    get_sources(g::AbstractGraph) -> Set{Int}
+
+Return source vertices with zero indegree.
+"""
+get_sources(g::AbstractGraph) = Set(v for v in vertices(g) if indegree(g, v) == 0)
+"""
+    get_sinks(g::AbstractGraph) -> Set{Int}
+
+Return sink vertices with zero outdegree.
+"""
+get_sinks(g::AbstractGraph)   = Set(v for v in vertices(g) if outdegree(g, v) == 0)
+"""
+    get_sources_sinks(g::AbstractGraph) -> (Set{Int}, Set{Int})
+
+Return sources and sinks for a graph.
+"""
+get_sources_sinks(g::AbstractGraph) = (get_sources(g), get_sinks(g))
+
+"""
+    get_sources_sinks(model::Bnc, g::AbstractGraph) -> (Vector{Int}, Vector{Int})
+
+Return sources and sinks while excluding singular regimes.
+"""
+function get_sources_sinks(model::Bnc, g::AbstractGraph)
+    sources_all = get_sources(g) 
+    sinks_all   = get_sinks(g) 
+    common_vs = intersect(sources_all, sinks_all)
+    filter!(common_vs) do v
+        get_nullity(model, v) > 0
+    end
+    sources = setdiff(sources_all, common_vs)
+    sinks = setdiff(sinks_all, common_vs)
+    return (collect(sources), collect(sinks))
+end
+
+# 只遍历子图：sources 可达 & 能到 sinks
+"""
+    _reachable_from_sources(g::AbstractGraph, sources) -> Vector{Bool}
+
+Return a boolean mask of vertices reachable from sources.
+"""
+function _reachable_from_sources(g::AbstractGraph, sources::AbstractVector{Int})
+    n = nv(g)
+    seen = falses(n)
+    stack = Int[]
+    for s in sources
+        if !seen[s]
+            seen[s] = true
+            push!(stack, s)
+            while !isempty(stack)
+                v = pop!(stack)
+                for nb in outneighbors(g, v)
+                    if !seen[nb]
+                        seen[nb] = true
+                        push!(stack, nb)
+                    end
+                end
+            end
+        end
+    end
+    return seen
+end
+
+"""
+    _can_reach_sinks(g::AbstractGraph, sinks) -> Vector{Bool}
+
+Return a boolean mask of vertices that can reach sinks.
+"""
+function _can_reach_sinks(g::AbstractGraph, sinks::AbstractVector{Int})
+    n = nv(g)
+    seen = falses(n)
+    stack = Int[]
+    for t in sinks
+        if !seen[t]
+            seen[t] = true
+            push!(stack, t)
+            while !isempty(stack)
+                v = pop!(stack)
+                for nb in inneighbors(g, v)   # 反向走
+                    if !seen[nb]
+                        seen[nb] = true
+                        push!(stack, nb)
+                    end
+                end
+            end
+        end
+    end
+    return seen
+end
+
+"""
+    _enumerate_paths(g; sources, sinks) -> Vector{Vector{Int}}
+
+Enumerate all paths in a DAG from `sources` to `sinks`.
+"""
+function _enumerate_paths(
+    g::AbstractGraph;
+    sources::AbstractVector{Int},
+    sinks::AbstractVector{Int},
+)::Vector{Vector{Int}}
+
+    @info "sources: $sources"
+    @info "sinks: $sinks"
+    n = nv(g)
+
+    # 剪枝：只处理相关子图
+    fromS = _reachable_from_sources(g, sources)
+    toT   = _can_reach_sinks(g, sinks)
+    active = fromS .& toT
+
+    is_sink = falses(n)
+    @inbounds for t in sinks
+        is_sink[t] = true
+    end
+
+    # 拓扑排序（DAG）
+    topo = topological_sort_by_dfs(g)   # Graphs.jl
+    # memo[v] = Vector{Vector{Int}} 或 nothing
+    memo = Vector{Union{Nothing, Vector{Vector{Int}}}}(undef, n)
+    fill!(memo, nothing)
+
+    @info "Start enumerating paths from sources to sinks. This may take a while if there are many paths."
+    # 逆拓扑：先算子节点，再算父节点
+
+    @info "Total vertices to process in topological order: $(length(topo))"
+    @showprogress for v in Iterators.reverse(topo)
+        active[v] || continue
+
+        if is_sink[v]
+            memo[v] = Vector{Vector{Int}}(undef, 1)
+            memo[v][1] = [v]
+            continue
+        end
+
+        # 收集所有 nb 的路径，并在前面加 v
+        acc = Vector{Vector{Int}}()
+        # 你也可以在这里做 sizehint!（需要先统计 path 数量，会多一次循环；看你取舍）
+        for nb in outneighbors(g, v)
+            active[nb] || continue
+            paths_nb = memo[nb]
+            paths_nb === nothing && continue
+            for p in paths_nb
+                L = length(p)
+                np = Vector{Int}(undef, L + 1)
+                np[1] = v
+                @inbounds copyto!(np, 2, p, 1, L)
+                push!(acc, np)
+            end
+        end
+
+        memo[v] = isempty(acc) ? nothing : acc
+    end
+
+    # 汇总 sources 的结果
+    @info "Finished enumerating paths. Now collecting paths from sources. Total sources: $(length(sources))"
+    out = Vector{Vector{Int}}()
+    @showprogress for s in sources
+        active[s] || continue
+        ps = memo[s]
+        ps === nothing && continue
+        append!(out, ps)
+    end
+
+    sort!(out)
+    return out
+end
+
+
+"""
     graph_from_paths(paths; nv=nothing) -> SimpleDiGraph
 
 Construct a directed graph from a collection of vertex paths.
@@ -15,16 +184,6 @@ function graph_from_paths(paths::AbstractVector{<:AbstractVector{<:Integer}}, nv
     return grh
 end
 
-"""
-    sources_sinks_from_paths(paths) -> (Vector{Int}, Vector{Int})
-
-Return unique source and sink vertices for a collection of paths.
-"""
-function sources_sinks_from_paths(paths::AbstractVector{<:AbstractVector{<:Integer}})::Tuple{Vector{Int}, Vector{Int}}
-    sources = unique(Int(first(p)) for p in paths)
-    sinks = unique(Int(last(p)) for p in paths)
-    return sources, sinks
-end
 
 """
     vector_difference(v1, v2) -> Vector
