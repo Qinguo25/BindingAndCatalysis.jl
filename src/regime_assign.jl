@@ -40,15 +40,15 @@ function _classifier_candidates(
     asymptotic_only::Bool=false,
 )
     sides = let
-        sides = Vector{Int8}(undef, length(C_qKs))
+        sides = Vector{Int8}(undef, length(classifier.dirs))
         
         if asymptotic_only
-            @inbounds for i in eachindex(C_qKs)
-                sides[i] = _hyperplane_side(dot(C_qKs[i], logqK), tol)
+            @inbounds for i in eachindex(classifier.dirs)
+                sides[i] = _hyperplane_side(dot(classifier.dirs[i], logqK), tol)
             end
         else 
-            @inbounds for i in eachindex(C_qKs)
-                sides[i] = _hyperplane_side(dot(C_qKs[i], logqK) + C0_qKs[i], tol)
+            @inbounds for i in eachindex(classifier.dirs)
+                sides[i] = _hyperplane_side(dot(classifier.dirs[i], logqK) + classifier.bias[i], tol)
             end
         end
 
@@ -72,10 +72,7 @@ function _classifier_candidates(
     return classifier.regime_ids[findall(alive)],  sides
 end
 
-
-```
-shrink a classifier to only the candidates.
-```
+# shrink a classifier to only the candidates.
 function _restrict_classifier(
     classifier::QKHyperplaneClassifier,
     candidate_ids::AbstractVector{<:Integer},
@@ -92,10 +89,7 @@ function _restrict_classifier(
     )
 end
 
-
-```
-Get the hyperplane id and sign info from RegimeGraph.
-```
+# Get the hyperplane id and sign info from RegimeGraph.
 function _get_regime_qK_hyperplane_id_signs(grh::RegimeGraph, regime)
     Bnc = get_binding_network(grh)
     idx = get_idx(Bnc, regime)
@@ -141,8 +135,8 @@ function _build_qK_hyperplane_classifier(
     hid_to_pos = Dict(hid => pos for (pos, hid) in enumerate(compact_hids))
 
     pool = grh.qK_interface_pool
-    dirs = [pool[hid].change_dir_qK for hid in compact_hids]
-    bias = [pool[hid].intersect_qK for hid in compact_hids]
+    dirs = [SparseVector{Float64,Int}(pool[hid].change_dir_qK) for hid in compact_hids]
+    bias = Float64[Float64(pool[hid].intersect_qK) for hid in compact_hids]
 
     n_hps = length(compact_hids)
     allow_pos = [trues(n_regimes) for _ in 1:n_hps]
@@ -167,11 +161,12 @@ end
 
 function _get_qK_hyperplane_classifier(Bnc::Bnc)
     grh = get_regimes_graph!(Bnc; full=true)
+    classifier = grh.qK_classifier_full
     if isnothing(classifier)
         classifier = _build_qK_hyperplane_classifier(grh)
         grh.qK_classifier_full = classifier
     end
-    return grh.qK_classifier_full
+    return classifier
 end
 
 
@@ -203,7 +198,12 @@ function assign_regime_qK(
     logqK = input_logspace ? qK : log10.(qK)
     classifier = _get_qK_hyperplane_classifier(Bnc)
 
-    candidate_ids, _ = _classifier_candidates(classifier, logqK; tol=abs(eps), asymptotic_only= asymptotic_only)
+    candidate_ids, sig = _classifier_candidates(
+        classifier,
+        logqK;
+        tol=abs(eps),
+        asymptotic_only=asymptotic_only,
+    )
 
     if length(candidate_ids) == 1
         idx = Int(candidate_ids[1])

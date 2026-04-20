@@ -66,6 +66,7 @@ end
 @inline _rank1_target_is_singular(a::Rational, atol::Float64) = a == -one(a)
 @inline _rank1_target_is_singular(a::Real, atol::Float64) = abs(1 + Float64(a)) <= atol
 
+
 function _rank1_step_update_from_regular(
     H::SparseMatrixCSC{Tc,Int},
     H0::AbstractVector{<:Real},
@@ -96,6 +97,7 @@ function _rank1_step_update_from_regular(
 
     return H_to, H0_to, nlt_to, c_qK, c0_qK
 end
+
 
 """
     _lowrank_update_H_H0(H, H0, U, V, δ0; kwargs...)

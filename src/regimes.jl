@@ -438,13 +438,13 @@ function get_volumes(Bnc::Bnc,vtxs::Union{AbstractVector,Nothing}=nothing;
 
     all_vtxs = isnothing(vtxs) ? get_regimes(Bnc;return_idx=true) : [get_idx(Bnc, vtx) for vtx in vtxs]
 
-    vtxs_to_calc = 
-        if recalculate
-            all_vtxs
-        else
-            vertices = _bind_regimes_data(Bnc)
-            filter(i -> isnothing(vertices[i].volume), all_vtxs)
-        end
+        vtxs_to_calc = 
+            if recalculate
+                all_vtxs
+            else
+                vertices = _bind_regimes_data(Bnc)
+                filter(i -> isnothing(vertices[i].volume), all_vtxs)
+            end
     
     if !isempty(vtxs_to_calc)
 

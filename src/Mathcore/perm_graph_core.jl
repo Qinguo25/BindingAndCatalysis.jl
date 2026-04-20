@@ -186,7 +186,7 @@ function _intern_qK_interface!(
     dropzeros!(c_qK)
     nnz(c_qK) == 0 && return 0, Int8(0)
 
-    dir_inner, key, c_qK, c0_qK = _canonicalize_qK_interface!(c_qK, c0_qK)
+    dir_inner, key, c_qK, c0_qK = _canonicalize_qK_interface(c_qK, c0_qK)
 
     hid = get!(key_to_id, key) do
         push!(pool, RegimeHyperplane(c_qK, c0_qK))
