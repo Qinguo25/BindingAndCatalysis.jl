@@ -14,8 +14,6 @@ export calc_volume
     return center, margin
 end
 
-
-
 # 把采样参数整理成统一的配置对象。
 function _prepare_sampling_config(
     sampler::Symbol, # should be :gaussian or :uniform_box
@@ -66,6 +64,11 @@ end
     return x
 end
 
+
+
+#=====================================================================================#
+# Volume calculation for direct C,C0
+#=====================================================================================#
 
 # 检查一个点是否满足线性不等式约束。
 @inline function _satisfies_constraints(
@@ -210,65 +213,6 @@ function _accumulate_polyhedron_hits!(
 end
 
 
-
-@inline function _bind_volume_route(
-    Bnc::Bnc,
-    regime_ids::AbstractVector{<:Integer};
-    asymptotic::Bool=true,
-    contain_overlap::Bool=false,
-    rebase_mat::Union{AbstractMatrix{<:Real},Nothing}=nothing,
-)
-    return contain_overlap ? :polyhedra : :classifier
-end
-
-function _calc_bind_regime_volumes(
-    Bnc::Bnc,
-    regime_ids::AbstractVector{<:Integer};
-    asymptotic::Bool=true,
-    contain_overlap::Bool=false,
-    rebase_mat::Union{AbstractMatrix{<:Real},Nothing}=nothing,
-    kwargs...,
-)
-    vals = zeros(Volume, length(regime_ids))
-    selected_ids, selected_mask = filter_regimes(
-        Bnc,
-        regime_ids;
-        singular=false,
-        asymptotic=asymptotic,
-        return_mask=true,
-    )
-    positions = findall(selected_mask)
-    isempty(selected_ids) && return vals
-
-    routine = _bind_volume_route(
-        Bnc,
-        selected_ids;
-        asymptotic=asymptotic,
-        contain_overlap=contain_overlap,
-        rebase_mat=rebase_mat,
-    )
-    if routine == :classifier
-        vals[positions] .= _calc_volume_via_classifier(
-            Bnc,
-            selected_ids;
-            asymptotic_only=asymptotic,
-            rebase_mat=rebase_mat,
-            kwargs...,
-        )
-        return vals
-    end
-
-    rgms = @view _bind_regimes_data(Bnc)[selected_ids]
-    vals[positions] .= _calc_selected_constraint_volumes(
-        rgms;
-        asymptotic=asymptotic,
-        contain_overlap=contain_overlap,
-        rebase_mat=rebase_mat,
-        kwargs...,
-    )
-    return vals
-end
-
 """
     calc_volume(Cs, C0s; kwargs...) -> Vector{Volume}
 
@@ -397,15 +341,55 @@ calc_volume(C::AbstractMatrix{<:Real}, C0::AbstractVector{<:Real}; kwargs...)::V
 
 # calc_vertex_volume(Bnc::Bnc, perm;kwargs...) = calc_vertices_volume(Bnc,[perm]; kwargs...)[1]
 
+
+#=====================================================================================#
+# Volume calculation from qK-space classifier
+#=====================================================================================#
+
+function _calc_bind_regime_volumes(
+    Bnc::Bnc,
+    regime_ids::AbstractVector{<:Integer};
+    asymptotic::Bool=true,
+    rebase_mat::Union{AbstractMatrix{<:Real},Nothing}=nothing,
+    kwargs...,
+)
+    vals = zeros(Volume, length(regime_ids))
+
+    rgm_ids, rgm_mask = filter_regimes(
+        Bnc,
+        regime_ids;
+        singular=false,
+        asymptotic=asymptotic,
+        return_mask=true,
+    )
+
+    positions = findall(rgm_mask)
+
+    isempty(rgm_ids) && return vals
+
+    
+    vals[positions] .= _calc_volume_via_classifier(
+        Bnc,
+        rgm_ids;
+        asymptotic=asymptotic,
+        rebase_mat=rebase_mat,
+        kwargs...,
+    )
+    return vals
+end
+
+
+
+
 function _rebase_qK_hyperplane_classifier(
-    classifier,
+    classifier::QKHyperplaneClassifier,
     rebase_mat::AbstractMatrix{<:Real},
 )
     rebase_t = transpose(Float64.(rebase_mat))
-    dirs = Vector{SparseVector{Float64,Int}}(undef, length(classifier.dirs))
 
+    dirs = Vector{SparseVector{Float64,Int}}(undef, length(classifier.dirs))
     @inbounds for i in eachindex(classifier.dirs)
-        dirs[i] = SparseArrays.sparsevec(rebase_t * classifier.dirs[i])
+        dirs[i] = sparse(rebase_t * classifier.dirs[i])
     end
 
     return QKHyperplaneClassifier(
@@ -417,66 +401,42 @@ function _rebase_qK_hyperplane_classifier(
     )
 end
 
-@inline function _mapped_logqK!(
-    mapped::AbstractVector{Float64},
-    sample::AbstractVector{Float64},
-    rebase_mat::Union{AbstractMatrix{<:Real},Nothing},
-)
-    isnothing(rebase_mat) && return sample
-    mul!(mapped, rebase_mat, sample)
-    return mapped
-end
 
-
-function _classify_sampled_regime(
-    Bnc::Bnc,
-    classifier,
-    classifier_point::AbstractVector{<:Real},
-    logqK_eval::AbstractVector{<:Real}=classifier_point;
-    asymptotic_only::Bool=false,
-    regime_judge_tol::Float64=0.0,
-)
-    return _resolve_unique_qK_candidate(classifier, classifier_point; tol=regime_judge_tol)[1]
-end
 
 function _accumulate_classifier_hits!(
     thread_counts,
     thread_rng,
     thread_x,
-    thread_qK,
     batch_size::Int,
-    Bnc::Bnc,
-    classifier,
+    classifier::QKHyperplaneClassifier,
     idx_to_pos::AbstractDict{<:Integer,<:Integer},
     sampling;
-    rebase_mat::Union{AbstractMatrix{<:Real},Nothing}=nothing,
-    asymptotic_only::Bool=false,
-    regime_judge_tol::Float64=0.0,
+    regime_judge_tol::Float64 = 0.0,
 )
     Threads.@threads for _ in 1:batch_size
         tid = Threads.threadid()
         rng = thread_rng[tid]
         x = thread_x[tid]
-        logqK_eval = thread_qK[tid]
         local_counts = thread_counts[tid]
 
         _draw_sample!(x, rng, sampling)
-        logqK = _mapped_logqK!(logqK_eval, x, rebase_mat)
-        regime_idx = _classify_sampled_regime(
-            Bnc,
+        regime_idx, sides = _classifier_candidates(
             classifier,
-            x,
             logqK;
-            asymptotic_only=asymptotic_only,
-            regime_judge_tol=regime_judge_tol,
+            asymptotic_only=asymptotic,
+            tol=regime_judge_tol
         )
 
-        pos = get(idx_to_pos, regime_idx, 0)
-        pos == 0 && continue
-        local_counts[pos] += 1
+        for regime_id in regime_idx
+            pos = get(idx_to_pos, regime_id, 0)
+            pos == 0 && continue
+            local_counts[pos] += 1
+        end
     end
     return nothing
 end
+
+
 
 function _calc_volume_via_classifier(
     Bnc::Bnc,
@@ -493,24 +453,29 @@ function _calc_volume_via_classifier(
     rel_tol::Float64 = 0.005,
     time_limit::Float64 = 120.0,
     show_progress::Bool = false,
-    asymptotic_only::Bool = false,
+    asymptotic::Bool = false,
     rebase_mat::Union{AbstractMatrix{<:Real},Nothing} = nothing,
 )::Vector{Volume}
     n_regimes = length(regime_ids)
     n_regimes == 0 && return Volume[]
 
-    n_dim = Bnc.d + Bnc.r
-    resolved_rebase =
-        if isnothing(rebase_mat)
-            nothing
-        else
-            @assert size(rebase_mat) == (n_dim, n_dim) "size(rebase_mat) must equal (qK dimension, qK dimension)"
-            Float64.(rebase_mat)
-        end
-    classifier = _get_qK_hyperplane_classifier(Bnc; asymptotic_only=asymptotic_only)
-    !isnothing(resolved_rebase) && (classifier = _rebase_qK_hyperplane_classifier(classifier, resolved_rebase))
+    n_dim = isnothing(rebase_mat) ? Bnc.n : size(rebase_mat, 2)
+
+    resolved_rebase = if isnothing(rebase_mat)
+        nothing
+    else
+        @assert size(rebase_mat,1) == Bnc.n "size(rebase_mat) must equal (qK dimension, qK dimension)"
+        Float64.(rebase_mat)
+    end
+
+    classifier = _get_qK_hyperplane_classifier(Bnc)
+    if !isnothing(resolved_rebase)
+        classifier = _rebase_qK_hyperplane_classifier(classifier, resolved_rebase)
+    end
+
     idx_to_pos = Dict(regime_ids[i] => i for i in eachindex(regime_ids))
     z = quantile(Normal(), (1 + confidence_level) / 2)
+
     sampling = _prepare_sampling_config(
         sampler,
         n_dim;
@@ -520,6 +485,7 @@ function _calc_volume_via_classifier(
         log_upper=log_upper,
         μ_length_message="length(μ) must equal qK dimension",
     )
+
     regime_judge_tol = abs(regime_judge_tol)
 
     total_counts = zeros(Int, n_regimes)
@@ -531,7 +497,6 @@ function _calc_volume_via_classifier(
     thread_counts = [zeros(Int, n_regimes) for _ in 1:n_slots]
     thread_rng = [Random.MersenneTwister(0x5eed1234 + tid) for tid in 1:n_slots]
     thread_x = [Vector{Float64}(undef, n_dim) for _ in 1:n_slots]
-    thread_qK = [Vector{Float64}(undef, n_dim) for _ in 1:n_slots]
 
     p = show_progress ? Progress(n_regimes, desc="Calculating...", dt=1.0) : nothing
     start_time = time()
@@ -550,14 +515,10 @@ function _calc_volume_via_classifier(
             thread_counts,
             thread_rng,
             thread_x,
-            thread_qK,
             batch_size,
-            Bnc,
             classifier,
             idx_to_pos,
             sampling;
-            rebase_mat=resolved_rebase,
-            asymptotic_only=asymptotic_only,
             regime_judge_tol=regime_judge_tol,
         )
 
@@ -575,7 +536,7 @@ function _calc_volume_via_classifier(
         )
 
         if show_progress
-            next!(p, step = length(active_ids) - length(new_active))
+            next!(p, step=length(active_ids) - length(new_active))
         end
         active_ids = new_active
     end
