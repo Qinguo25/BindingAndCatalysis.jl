@@ -9,6 +9,7 @@ mutable struct SIMOPaths{T}
     rgm_paths::Vector{Vector{Int}}
     path_edge_idxs::Vector{Vector{Int}}
     edge_keys::Vector{Tuple{Int,Int}}
+    path_node_mask::BitVector
 
     node_polys::Vector{Polyhedron}
     node_polys_is_calc::BitVector
@@ -23,6 +24,12 @@ mutable struct SIMOPaths{T}
 
     function SIMOPaths(model::Bnc{T}, qK_grh, change_qK_idx, sources, sinks, rgm_paths) where T
         edge_keys, path_edge_idxs = _build_path_edge_index(rgm_paths)
+        path_node_mask = falses(n_regimes(model))
+        for path in rgm_paths
+            for idx in path
+                path_node_mask[Int(idx)] = true
+            end
+        end
         node_polys = Vector{Polyhedron}(undef, n_regimes(model))
         node_polys_is_calc = falses(length(node_polys))
         edge_polys = Vector{Polyhedron}(undef, length(edge_keys))
@@ -41,6 +48,7 @@ mutable struct SIMOPaths{T}
             rgm_paths,
             path_edge_idxs,
             edge_keys,
+            path_node_mask,
             node_polys,
             node_polys_is_calc,
             edge_polys,
@@ -51,6 +59,31 @@ mutable struct SIMOPaths{T}
             path_polys_is_calc,
         )
     end
+end
+
+@inline function _is_isolated_singular_simo_regime(
+    model::Bnc,
+    qK_grh::AbstractGraph,
+    idx::Integer,
+)::Bool
+    v = Int(idx)
+    return indegree(qK_grh, v) == 0 && outdegree(qK_grh, v) == 0 && get_nullity(model, v) > 0
+end
+
+function _filter_simo_rgm_paths(
+    model::Bnc,
+    qK_grh::AbstractGraph,
+    rgm_paths::AbstractVector{<:AbstractVector{<:Integer}},
+)::Vector{Vector{Int}}
+    out = Vector{Vector{Int}}()
+    sizehint!(out, length(rgm_paths))
+    for path in rgm_paths
+        if length(path) == 1 && _is_isolated_singular_simo_regime(model, qK_grh, only(path))
+            continue
+        end
+        push!(out, Int.(path))
+    end
+    return out
 end
 
 
@@ -64,6 +97,14 @@ function SIMOPaths(model::Bnc{T}, change_qK; rgm_paths=nothing) where {T}
     else
         qK_grh = graph_from_paths(rgm_paths, n_regimes(model))
         sources, sinks = get_sources_sinks(qK_grh)
+    end
+
+    rgm_paths = _filter_simo_rgm_paths(model, qK_grh, rgm_paths)
+    if isempty(rgm_paths)
+        sources = Int[]
+        sinks = Int[]
+    else
+        sources, sinks = sources_sinks_from_paths(rgm_paths)
     end
 
     return SIMOPaths(model, qK_grh, change_qK_idx, sources, sinks, rgm_paths)

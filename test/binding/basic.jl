@@ -170,6 +170,17 @@ end
     Hs, H0s = get_H_H0(model, singular_bind_idx)
     @test size(Hs, 1) == model.n
     @test length(H0s) == model.n
+    @test get_volume(model, singular_bind_idx; recalculate = true) == zero(BindingAndCatalysis.Volume)
+
+    subset = [1, singular_bind_idx, 2]
+    filtered_subset, subset_mask = BindingAndCatalysis.filter_regimes(
+        model,
+        subset;
+        singular = false,
+        return_mask = true,
+    )
+    @test filtered_subset == [1, 2]
+    @test subset_mask == BitVector([true, false, true])
 end
 
 @testset "Small CDN3 Polyhedra And Volume Route" begin
@@ -214,6 +225,32 @@ end
     @test classifier_vol.mean >= 0
     @test poly_vol.mean >= 0
     @test isapprox(classifier_vol.mean, poly_vol.mean; rtol = 0.35, atol = 0.02)
+
+    qK_dim = model.d + model.r
+    rebase_mat = Matrix(1.0I, qK_dim, qK_dim)
+    rebase_mat[model.d + 1, model.d + 2] = 0.25
+    rebase_mat[model.d + 2, model.d + 3] = -0.5
+    classifier_rebased_vol = calc_volume(
+        [rgm];
+        rebase_mat = rebase_mat,
+        batch_size = 4_000,
+        rel_tol = 0.2,
+        abs_tol = 1e-3,
+        time_limit = 1.0,
+    )[1]
+    poly_rebased_vol = calc_volume(
+        [rgm];
+        contain_overlap = true,
+        rebase_mat = rebase_mat,
+        batch_size = 4_000,
+        rel_tol = 0.2,
+        abs_tol = 1e-3,
+        time_limit = 1.0,
+    )[1]
+
+    @test classifier_rebased_vol.mean >= 0
+    @test poly_rebased_vol.mean >= 0
+    @test isapprox(classifier_rebased_vol.mean, poly_rebased_vol.mean; rtol = 0.35, atol = 0.02)
 end
 @testset "Exact Affine Data" begin
     model = minimal_model()

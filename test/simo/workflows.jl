@@ -58,3 +58,16 @@ end
     @test all(p -> p isa BindingAndCatalysis.Polyhedron, polys)
     @test eltype(get_C0_qK(get_regime(model, 1))) == ExactLogExpr
 end
+
+@testset "SIMO Skips Isolated Singular Path Nodes" begin
+    model = minimal_model()
+    find_all_regimes!(model)
+    singular_idx = only(filter(i -> get_nullity(model, i) > 0, get_indices(model)))
+
+    pths = SIMOPaths(model, 1; rgm_paths = [[1, 2], [singular_idx]])
+
+    @test pths.rgm_paths == [[1, 2]]
+    @test pths.path_node_mask[1]
+    @test pths.path_node_mask[2]
+    @test !pths.path_node_mask[singular_idx]
+end

@@ -10,7 +10,6 @@ struct QKHyperplaneClassifier
     bias::Vector{Float64}
     allow_pos::Vector{BitVector}
     allow_neg::Vector{BitVector}
-    allow_zero::Vector{BitVector}
 end
 
 @inline function _hyperplane_side(val::Real, tol::Real)
@@ -30,10 +29,56 @@ function _qK_signature(
     return signs
 end
 
+@inline _qK_classifier_point_repr(logqK::AbstractVector{<:Real}) = repr(collect(logqK))
+@inline _qK_classifier_sig_repr(sig::AbstractVector{Int8}) = repr(collect(sig))
+
+function _throw_qK_classifier_boundary_error(
+    logqK::AbstractVector{<:Real},
+    sig::AbstractVector{Int8},
+)
+    boundary_ids = findall(iszero, sig)
+    error(
+        "qK hyperplane classifier hit hyperplane boundary: " *
+        "logqK=$(_qK_classifier_point_repr(logqK)), " *
+        "signature=$(_qK_classifier_sig_repr(sig)), " *
+        "boundary_hyperplane_ids=$(repr(boundary_ids))",
+    )
+end
+
+function _throw_qK_classifier_nonunique_error(
+    logqK::AbstractVector{<:Real},
+    sig::AbstractVector{Int8},
+    candidate_ids::AbstractVector{<:Integer},
+)
+    error(
+        "qK hyperplane classifier is not unique: " *
+        "logqK=$(_qK_classifier_point_repr(logqK)), " *
+        "signature=$(_qK_classifier_sig_repr(sig)), " *
+        "candidate_ids=$(repr(Int.(candidate_ids)))",
+    )
+end
+
+function _throw_qK_classifier_no_candidate_error(
+    logqK::AbstractVector{<:Real},
+    sig::AbstractVector{Int8},
+)
+    error(
+        "qK hyperplane classifier found no candidate regime: " *
+        "logqK=$(_qK_classifier_point_repr(logqK)), " *
+        "signature=$(_qK_classifier_sig_repr(sig)), " *
+        "candidate_ids=Int[]",
+    )
+end
+
 function _candidate_regime_positions(
     classifier::QKHyperplaneClassifier,
     sig::AbstractVector{Int8},
+    logqK::Union{AbstractVector{<:Real},Nothing}=nothing;
+    strict::Bool=false,
 )
+    if strict
+        any(iszero, sig) && _throw_qK_classifier_boundary_error(something(logqK, Int[]), sig)
+    end
     candidates = trues(length(classifier.regime_ids))
     @inbounds for i in eachindex(sig)
         allow =
@@ -42,7 +87,8 @@ function _candidate_regime_positions(
             elseif sig[i] < 0
                 classifier.allow_neg[i]
             else
-                classifier.allow_zero[i]
+                strict && _throw_qK_classifier_boundary_error(something(logqK, Int[]), sig)
+                continue
             end
         candidates .&= allow
         any(candidates) || return Int[]
@@ -54,10 +100,22 @@ function _candidate_regimes(
     classifier::QKHyperplaneClassifier,
     logqK::AbstractVector{<:Real};
     tol::Real=0,
+    strict::Bool=false,
 )
     sig = _qK_signature(classifier.dirs, classifier.bias, logqK; tol=tol)
-    pos = _candidate_regime_positions(classifier, sig)
+    pos = _candidate_regime_positions(classifier, sig, logqK; strict=strict)
     return classifier.regime_ids[pos], sig
+end
+
+function _resolve_unique_qK_candidate(
+    classifier::QKHyperplaneClassifier,
+    logqK::AbstractVector{<:Real};
+    tol::Real=0,
+)
+    candidate_ids, sig = _candidate_regimes(classifier, logqK; tol=tol, strict=true)
+    isempty(candidate_ids) && _throw_qK_classifier_no_candidate_error(logqK, sig)
+    length(candidate_ids) == 1 || _throw_qK_classifier_nonunique_error(logqK, sig, candidate_ids)
+    return Int(candidate_ids[1]), sig
 end
 
 function _classifier_point(Bnc::Bnc, idx::Int; asymptotic_only::Bool=false)
@@ -90,57 +148,68 @@ function _merge_required_sign(old::Int8, new::Int8)
     return Int8(0)
 end
 
-function _build_qK_hyperplane_classifier(Bnc::Bnc; asymptotic_only::Bool=false)
+function _get_regime_qK_hyperplane_id_signs(
+    grh::RegimeGraph,
+    regime,
+)
+    Bnc = get_binding_network(grh)
+    idx = get_idx(Bnc, regime)
+    info = Dict{Int,Int8}()
+    for edge in grh.neighbors[idx]
+        _edge_has_qK_interface(edge) || continue
+        hid = edge.qK_interface_idx
+        sign = Int8(-edge.qK_interface_sign)
+        sign == 0 && error(
+            "RegimeGraph returned zero qK edge sign: regime=$idx, neighbor=$(edge.to), hyperplane_id=$hid",
+        )
+        old = get(info, hid, sign)
+        old == sign || error(
+            "Inconsistent qK hyperplane sign in RegimeGraph: regime=$idx, hyperplane_id=$hid, " *
+            "existing_sign=$old, new_sign=$sign",
+        )
+        info[hid] = sign
+    end
+    return info
+end
+
+function _build_qK_hyperplane_classifier(grh::RegimeGraph; asymptotic_only::Bool=false)
+    Bnc = get_binding_network(grh)
     regimes = get_regimes(
         Bnc;
         singular=false,
         asymptotic=asymptotic_only ? true : nothing,
         return_idx=true,
     )
-    dirs = SparseVector{Float64,Int}[]
-    bias = Float64[]
-    key_to_id = Dict{Any,Int}()
-    regime_constraints = Vector{Dict{Int,Int8}}(undef, length(regimes))
-    key_mode = _affine_is_exact(Bnc) ? :exact : :float
 
-    for (pos, idx) in enumerate(regimes)
-        C, C0, nlt = get_C_C0_nullity_qK(Bnc, idx)
-        info = Dict{Int,Int8}()
-        for row_idx in 1:size(C, 1)
-            I, V = findnz(C[row_idx, :])
-            isempty(I) && continue
-            row = SparseArrays.sparsevec(Int.(I), Float64.(V), size(C, 2))
-            β = asymptotic_only ? 0.0 : Float64(C0[row_idx])
-            hid, sign = _intern_constraint_hyperplane!(dirs, bias, key_to_id, row, β; key_mode=key_mode)
-            hid == 0 && continue
-            required = row_idx <= nlt ? Int8(0) : sign
-            info[hid] = haskey(info, hid) ? _merge_required_sign(info[hid], required) : required
-        end
-        regime_constraints[pos] = info
+    n_hps = length(grh.qK_interface_pool)
+    dirs = Vector{SparseVector{Float64,Int}}(undef, n_hps)
+    bias = Vector{Float64}(undef, n_hps)
+    for hid in 1:n_hps
+        hp = grh.qK_interface_pool[hid]
+        dirs[hid] = hp.change_dir_qK
+        bias[hid] = hp.intersect_qK
     end
 
     n_regimes = length(regimes)
-    n_hps = length(dirs)
     allow_pos = [trues(n_regimes) for _ in 1:n_hps]
     allow_neg = [trues(n_regimes) for _ in 1:n_hps]
-    allow_zero = [trues(n_regimes) for _ in 1:n_hps]
 
-    for (pos, info) in enumerate(regime_constraints)
+    for (pos, idx) in enumerate(regimes)
+        info = _get_regime_qK_hyperplane_id_signs(grh, idx)
         for (hid, required) in info
             if required == Int8(1)
                 allow_neg[hid][pos] = false
-                allow_zero[hid][pos] = false
             elseif required == Int8(-1)
                 allow_pos[hid][pos] = false
-                allow_zero[hid][pos] = false
             else
-                allow_pos[hid][pos] = false
-                allow_neg[hid][pos] = false
+                error(
+                    "RegimeGraph returned zero qK hyperplane sign for regime=$idx and hyperplane_id=$hid",
+                )
             end
         end
     end
 
-    return QKHyperplaneClassifier(regimes, dirs, bias, allow_pos, allow_neg, allow_zero)
+    return QKHyperplaneClassifier(regimes, dirs, bias, allow_pos, allow_neg)
 end
 
 function _get_qK_hyperplane_classifier(Bnc::Bnc; asymptotic_only::Bool=false)
@@ -148,7 +217,7 @@ function _get_qK_hyperplane_classifier(Bnc::Bnc; asymptotic_only::Bool=false)
     field = asymptotic_only ? :qK_classifier_asymptotic : :qK_classifier_full
     classifier = getfield(grh, field)
     if isnothing(classifier)
-        classifier = _build_qK_hyperplane_classifier(Bnc; asymptotic_only=asymptotic_only)
+        classifier = _build_qK_hyperplane_classifier(grh; asymptotic_only=asymptotic_only)
         setfield!(grh, field, classifier)
     end
     return classifier::QKHyperplaneClassifier
@@ -201,21 +270,47 @@ function _assign_regime_qK_from_candidates(
         warn_on_fallback=false,
     )
 
-    record = Vector{Float64}(undef, length(candidate_ids))
-    for (i, idx) in enumerate(candidate_ids)
-        C, C0 = get_C_C0_qK(Bnc, idx)
-        min_val = if !asymptotic_only
-            minimum(C * logqK .+ C0)
-        else
-            minimum(C * logqK)
+    classifier = _get_qK_hyperplane_classifier(Bnc; asymptotic_only=asymptotic_only)
+    pos_map = Dict(classifier.regime_ids[i] => i for i in eachindex(classifier.regime_ids))
+    selected_ids = Int[]
+    selected_pos = Int[]
+    for idx_any in candidate_ids
+        idx = Int(idx_any)
+        haskey(pos_map, idx) || continue
+        push!(selected_ids, idx)
+        push!(selected_pos, pos_map[idx])
+    end
+    isempty(selected_ids) && return _assign_regime_qK_fallback(
+        Bnc,
+        logqK;
+        asymptotic_only=asymptotic_only,
+        eps=eps,
+        return_idx=return_idx,
+        warn_on_fallback=false,
+    )
+
+    relevant_hids = Int[]
+    sizehint!(relevant_hids, length(classifier.dirs))
+    for hid in eachindex(classifier.dirs)
+        relevant = false
+        @inbounds for pos in selected_pos
+            if !classifier.allow_pos[hid][pos] || !classifier.allow_neg[hid][pos]
+                relevant = true
+                break
+            end
         end
-        record[i] = min_val
-        if min_val >= -eps
-            return return_idx ? Int(idx) : get_perm(Bnc, idx)
-        end
+        relevant && push!(relevant_hids, hid)
     end
 
-    idx = Int(candidate_ids[findmax(record)[2]])
+    sub_classifier = QKHyperplaneClassifier(
+        selected_ids,
+        classifier.dirs[relevant_hids],
+        classifier.bias[relevant_hids],
+        [copy(classifier.allow_pos[hid][selected_pos]) for hid in relevant_hids],
+        [copy(classifier.allow_neg[hid][selected_pos]) for hid in relevant_hids],
+    )
+
+    idx, _ = _resolve_unique_qK_candidate(sub_classifier, logqK; tol=abs(eps))
     return return_idx ? idx : get_perm(Bnc, idx)
 end
 
@@ -293,14 +388,27 @@ function assign_regime_qK(Bnc::Bnc ; x::AbstractVector{<:Real}, input_logspace::
     return assign_regime_qK(Bnc, logqK; input_logspace=true, kwargs...)
 end
 """
-    assign_regime_qK(bnc::Bnc, qK; input_logspace=false, asymptotic_only=false, eps=0, return_idx=false)
+    assign_regime_qK(bnc::Bnc, qK; input_logspace=false, asymptotic_only=false, eps=0, return_idx=false, strict=true)
 
 Assign a regime given qK coordinates.
 """
-function assign_regime_qK(Bnc::Bnc, qK::AbstractVector{<:Real}; input_logspace::Bool=false, asymptotic_only::Bool=false, eps=0, return_idx::Bool=false) 
+function assign_regime_qK(
+    Bnc::Bnc,
+    qK::AbstractVector{<:Real};
+    input_logspace::Bool=false,
+    asymptotic_only::Bool=false,
+    eps=0,
+    return_idx::Bool=false,
+    strict::Bool=true,
+)
     logqK = input_logspace ? qK : log10.(qK)
     classifier = _get_qK_hyperplane_classifier(Bnc; asymptotic_only=asymptotic_only)
-    candidate_ids, _ = _candidate_regimes(classifier, logqK; tol=abs(eps))
+    if strict
+        regime_idx, _ = _resolve_unique_qK_candidate(classifier, logqK; tol=abs(eps))
+        return return_idx ? regime_idx : get_perm(Bnc, regime_idx)
+    end
+
+    candidate_ids, _ = _candidate_regimes(classifier, logqK; tol=abs(eps), strict=false)
     length(candidate_ids) == 1 && return return_idx ? candidate_ids[1] : get_perm(Bnc, candidate_ids[1])
     !isempty(candidate_ids) && return _assign_regime_qK_from_candidates(
         Bnc,
@@ -330,63 +438,3 @@ assign_regime(args...;kwargs...)=assign_regime_qK(args...;kwargs...)
 
 
 #-------------------------------------------------------------------------------------------------------------------------------------------------------
-
-# Trying speedup assign_regime_qK, but not success yet.
-"""
-    get_i_j(model::Bnc, perm, t) -> (Int, Int, Int)
-
-Return row/column indices for a constraint index `t`.
-"""
-function get_i_j(model::Bnc,perm::Vector{<:Integer}, t::Integer)
-    i = findfirst(>(t),model._C_partition_idx) - 1
-    j1 = perm[i]
-    cth = t - model._C_partition_idx[i] + 1
-    j2 = model._valid_L_idx[i][cth]
-    j2 < j1 ? nothing : j2 += 1
-    return i, j1, j2
-end
-
-"""
-    assign_regime_qK_test(bnc::Bnc, qK; input_logspace=false, asymptotic=true, eps=0)
-
-Experimental qK regime assignment using constraint violation updates.
-"""
-function assign_regime_qK_test(Bnc::Bnc{T}, qK::AbstractVector{<:Real};
-                               input_logspace::Bool=false,
-                               asymptotic::Bool=true, eps=0) where T
-    logqK = input_logspace ? qK : log10.(qK)
-    Perm_tried = Set{UInt64}()  # 存放哈希值
-
-    function try_perm!(perm1)
-        (C, C0) = get_C_C0_qK(Bnc, perm1)
-        err = C * logqK .+ C0
-        ts = findall(er -> er <= -eps, err)
-
-        # 没有违反不等式，返回
-        if isempty(ts)
-            return perm1
-        end
-
-        h = hash(perm1)
-        if h in Perm_tried
-            error("Cyclic permutation detected! Tried permutations: $(collect(Perm_tried))")
-        end
-        push!(Perm_tried, h)
-
-        # 对所有违反的约束更新 perm
-        for t in ts
-            i, j1, j2 = get_i_j(Bnc, perm1, t)
-            perm1[i] = j2
-            if !haskey(_bind_regimes_perm_dict(Bnc), perm1) 
-                perm1[i] = j1  # 恢复原值
-            end
-            try_perm!(perm1)
-        end
-        # else
-        #         @show perm1
-    end
-
-    # 假设初始 perm1 为 1:Bnc.d 或者外部传入
-    perm0 = collect(1:Bnc.d) .|> x->T(x)
-    return try_perm!(perm0)
-end

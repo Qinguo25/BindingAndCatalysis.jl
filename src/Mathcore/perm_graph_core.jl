@@ -18,16 +18,9 @@ mutable struct RegimeEdge
 
 end
 
-
-
-@inline _edge_has_qK_interface(edge::RegimeEdge) =
-    edge.qK_interface_idx != 0
-
-
-
 struct RegimeHyperplane
-    change_dir_qK::SparseVector{Float64, Int}
-    intersect_qK::Float64
+    change_dir_qK::SparseVector{Rational{Int},Int}
+    intersect_qK::ExactLogExpr
 end
 
 
@@ -148,8 +141,11 @@ function _calc_regimes_graph(helper::MatrixHelper, perms::Vector{<:AbstractVecto
     return RegimeGraph(helper, neighbors)
 end
 #=============================================================================================#
-#          Calc qK-space change directions for edges with nullity <= 1 regimes This part is pure AI
+#          Calc qK-space change directions for edges with nullity <= 1 regimes
 #=============================================================================================#
+
+
+@inline _edge_has_qK_interface(edge::RegimeEdge) = edge.qK_interface_idx != 0
 
 function _edge_qK_interface(grh::RegimeGraph, edge::RegimeEdge)
     edge.qK_interface_idx == 0 && return nothing
@@ -163,119 +159,45 @@ function _edge_qK_interface(grh::RegimeGraph, edge::RegimeEdge)
 end
 
 
-
-# function _materialize_edge_qK_interface!(grh::RegimeGraph, edge::RegimeEdge)
-#     return edge
-# end
-
-@inline function _dense_hyperplane_sign_and_scale(dir::SparseVector{Float64,Int}; atol::Float64=1e-10)
-    I, V = findnz(dir)
-    @inbounds for k in eachindex(V)
-        if abs(V[k]) > atol
-            sgn = V[k] >= 0 ? Int8(1) : Int8(-1)
-            return sgn, abs(V[k])
-        end
-    end
-    return Int8(1), 0.0
-end
-
-@inline function _dense_hyperplane_sign_and_scale(dir::SparseVector; atol::Float64=1e-10)
-    I, V = findnz(dir)
-    @inbounds for k in eachindex(V)
-        if abs(Float64(V[k])) > atol
-            sgn = V[k] >= 0 ? Int8(1) : Int8(-1)
-            return sgn, abs(V[k])
-        end
-    end
-    return Int8(1), zero(eltype(dir))
-end
-
-@inline _is_exact_hyperplane_scalar(x) = x isa Integer || x isa Rational || x isa ExactLogExpr
-
-@inline function _exact_hyperplane_bias(x)
-    if _is_exact_hyperplane_scalar(x)
-        return x
-    elseif x isa AbstractFloat && iszero(x)
-        return 0//1
-    else
-        return nothing
-    end
-end
-
-function _canonicalize_qK_key_exact(
-    I::AbstractVector{<:Integer},
-    V::AbstractVector,
-    intersect,
-    sign::Int8,
-    scale,
-)
-    all(v -> v isa Integer || v isa Rational, V) || return nothing
-    β = _exact_hyperplane_bias(intersect)
-    isnothing(β) && return nothing
-    coeffs = Tuple(((v * sign) / scale for v in V))
-    βnorm = (β * sign) / scale
-    return (Tuple(Int.(I)), coeffs, βnorm)
-end
-
-@inline function _canonicalize_qK_key_float(
-    I::AbstractVector{<:Integer},
-    Vnorm::AbstractVector{<:Real},
-    bnorm::Real;
-    round_digits::Int=10,
-)
-    return (
-        Tuple(Int.(I)),
-        Tuple(round.(Float64.(Vnorm); digits=round_digits)),
-        round(Float64(bnorm); digits=round_digits),
-    )
-end
-
 function _canonicalize_qK_interface(
-    dir::SparseVector,
-    intersect::Real;
-    key_mode::Symbol=:float,
-    atol::Float64=1e-10,
-    round_digits::Int=10,
+    c_qK::SparseVector{<:Rational},
+    c0_qK::ExactLogExpr,
 )
-    droptol!(dir, atol)
-    nnz(dir) == 0 && return nothing
-
-    sign, scale = _dense_hyperplane_sign_and_scale(dir; atol=atol)
-    scale <= atol && return nothing
-
-    I, V = findnz(dir)
-    Vnorm = (Float64.(V) .* sign) ./ scale
-    dir_norm = SparseArrays.sparsevec(I, Vnorm, length(dir))
-    droptol!(dir_norm, atol)
-    I2, V2 = findnz(dir_norm)
-    bnorm = Float64(intersect) * sign / scale
-    key = if key_mode === :exact
-        exact_key = _canonicalize_qK_key_exact(I, V, intersect, sign, scale)
-        isnothing(exact_key) ? _canonicalize_qK_key_float(I2, V2, bnorm; round_digits=round_digits) : exact_key
-    else
-        _canonicalize_qK_key_float(I2, V2, bnorm; round_digits=round_digits)
+    dir, scale = let
+        v = nonzeros(c_qK)[1]
+        (v >= 0 ? Int8(1) : Int8(-1)), abs(v)
     end
-    return dir_norm, bnorm, sign, key
+
+    # normalize
+    c_qK.nzval .= (c_qK.nzval .* dir) ./ scale
+    c0_qK = (c0_qK * dir) / scale
+
+    key = (Tuple(c_qK.nzind), Tuple(c_qK.nzval), c0_qK)
+
+    return dir, key, c_qK, c0_qK
 end
+
 
 function _intern_qK_interface!(
-    grh::RegimeGraph,
+    pool::Vector{RegimeHyperplane},
     key_to_id::Dict,
-    dir::SparseVector,
-    intersect::Real;
-    key_mode::Symbol=:float,
-    atol::Float64=1e-10,
-    round_digits::Int=10,
+    c_qK::SparseVector{<:Rational},
+    c0_qK::ExactLogExpr,
+    dir::Int8,
 )
-    canon = _canonicalize_qK_interface(dir, intersect; key_mode=key_mode, atol=atol, round_digits=round_digits)
-    canon === nothing && return 0, Int8(0)
-    dir_norm, bnorm, sign, key = canon
+    dropzeros!(c_qK)
+    nnz(c_qK) == 0 && return 0, Int8(0)
+
+    dir_inner, key, c_qK, c0_qK = _canonicalize_qK_interface!(c_qK, c0_qK)
+
     hid = get!(key_to_id, key) do
-        push!(grh.qK_interface_pool, RegimeHyperplane(dir_norm, bnorm))
-        length(grh.qK_interface_pool)
+        push!(pool, RegimeHyperplane(c_qK, c0_qK))
+        length(pool)
     end
-    return hid, sign
+
+    return hid, sign(dir*dir_inner)
 end
+
 
 
 
@@ -289,8 +211,8 @@ function _fulfill_regimes_graph!(vtx_graph::RegimeGraph)
     Bnc = vtx_graph.bn
     regimes = _bind_regimes_data(Bnc)
     empty!(vtx_graph.qK_interface_pool)
+
     key_to_id = Dict{Any,Int}()
-    key_mode = _affine_is_exact(Bnc) ? :exact : :float
 
     for edges in vtx_graph.neighbors
         for e in edges
@@ -300,46 +222,49 @@ function _fulfill_regimes_graph!(vtx_graph::RegimeGraph)
     end
 
     @showprogress for p1 in eachindex(vtx_graph.neighbors)
+        nlt1 = regimes[p1].nullity
+        if nlt1 > 1
+            continue
+        end
+
         edges = vtx_graph.neighbors[p1]
         for e in edges
             p2 = e.to
             p1 < p2 || continue
-
-            rev_pos = get(vtx_graph.edge_pos[p2], p1, nothing)
-            rev_pos === nothing && continue
+            
+            nlt2 = regimes[p2].nullity
+            nlt2 > 1 && continue
+        
+            rev_pos = vtx_graph.edge_pos[p2][p1]
+            
             e_rev = vtx_graph.neighbors[p2][rev_pos]
 
-            src_idx, src_edge, dst_edge = let
-                nlt1 = regimes[p1].nullity
-                nlt2 = regimes[p2].nullity
-                if nlt1 <= 1
-                    (p1, e, e_rev)
-                elseif nlt2 <= 1
-                    (p2, e_rev, e)
-                else
-                    (0, nothing, nothing)
-                end
-            end
-            src_idx == 0 && continue
+            src_rgm = regimes[p1]
 
-            src_rgm = regimes[src_idx]
-            c_c0 = vtx_graph.x_interface_pool[src_edge.c_c0_x_idx]
-            
-            dir_qK, intersect_qK = _calc_dir(
+            c_c0 = vtx_graph.x_interface_pool[e.c_c0_x_idx]
+
+            c_qK, c0_qK = _calc_dir(
                 src_rgm.nullity,
                 src_rgm.H,
                 src_rgm.H0,
-                c_c0,
-                src_edge.c_c0_x_sign,
+                c_c0
             )
 
-            hid, sign = _intern_qK_interface!(vtx_graph, key_to_id, dir_qK, intersect_qK; key_mode=key_mode)
+            hid, dir = _intern_qK_interface!(
+                    vtx_graph.qK_interface_pool, 
+                    key_to_id, 
+                    c_qK, 
+                    c0_qK,
+                    e.c_c0_x_sign)
+
             hid == 0 && continue
 
-            src_edge.qK_interface_idx = hid
-            src_edge.qK_interface_sign = sign
-            dst_edge.qK_interface_idx = hid
-            dst_edge.qK_interface_sign = Int8(-sign)
+            e.qK_interface_idx = hid
+            e.qK_interface_sign = dir
+
+            e_rev.qK_interface_idx = hid
+            e_rev.qK_interface_sign = -dir
+
         end
     end
     return nothing
@@ -351,20 +276,9 @@ end
     H::SparseMatrixCSC{<:Real,Int},
     H0::AbstractVector{<:Real},
     c_c0::Hyperplane_perm,
-    sign::Int8,
-    drop_tol::Float64=1e-10,
 )
-    c_qK = c_c0 * H .* sign
-    c0_qK = nlt ==0 ? c_c0 * H0 * sign : mul(c_c0, H0; with_c0=false) * sign 
-
-    I, V = findnz(c_qK)
-    c_qK = SparseArrays.sparsevec(I, Float64.(V), length(c_qK))
-    if drop_tol > 0 
-        droptol!(c_qK, drop_tol) 
-        c0_qK = droptol!(Float64(c0_qK), drop_tol)
-    else
-        c0_qK = Float64(c0_qK)
-    end
-
+    c_qK = c_c0 * H 
+    c0_qK = nlt ==0 ? c_c0 * H0  : mul(c_c0, H0; with_c0=false) 
+    # dropzero!(c_qK)
     return c_qK, c0_qK
 end

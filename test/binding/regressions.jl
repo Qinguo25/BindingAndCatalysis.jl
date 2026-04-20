@@ -49,11 +49,12 @@ end
     model = notebook_model2()
     find_all_regimes!(model)
 
-    Random.seed!(1234)
-    samples = [rand(5) .* 12 .- 6 for _ in 1:100]
-    assigned = [assign_regime(model, x; input_logspace = true, asymptotic_only = false, return_idx = true) for x in samples]
-    fallback = [BindingAndCatalysis._assign_regime_qK_idx_fallback(model, x; asymptotic_only = false, eps = 0.0, warn_on_fallback = false) for x in samples]
-    @test assigned == fallback
+    regular_ids = get_regimes(model; singular = false, return_idx = true)
+    assigned = [
+        assign_regime(model, get_one_inner_point(model, idx); input_logspace = true, asymptotic_only = false, return_idx = true)
+        for idx in regular_ids
+    ]
+    @test assigned == regular_ids
 
     simple = minimal_model()
     find_all_regimes!(simple)
@@ -62,6 +63,68 @@ end
     p_to = get_one_inner_point(simple, 1)
     @test LinearAlgebra.dot(dir, p_from) + ins < 0
     @test LinearAlgebra.dot(dir, p_to) + ins > 0
+end
+
+@testset "Strict qK Classifier Errors" begin
+    model = minimal_model()
+    find_all_regimes!(model)
+    grh = get_regimes_graph!(model; full = true)
+
+    info = BindingAndCatalysis._get_regime_qK_hyperplane_id_signs(grh, 1)
+    edge_12 = get_edge(grh, 1, 2; full = true)
+    @test haskey(info, edge_12.qK_interface_idx)
+    @test info[edge_12.qK_interface_idx] == -edge_12.qK_interface_sign
+
+    dir, ins = get_interface(model, 2, 1)
+    p_from = get_one_inner_point(model, 2)
+    p_to = get_one_inner_point(model, 1)
+    step = p_to - p_from
+    t = -(LinearAlgebra.dot(dir, p_from) + ins) / LinearAlgebra.dot(dir, step)
+    p_boundary = p_from + t * step
+    boundary_err = try
+        assign_regime_qK(model, p_boundary; input_logspace = true, asymptotic_only = false, return_idx = true, eps = 1e-10)
+        nothing
+    catch err
+        err
+    end
+    @test boundary_err isa ErrorException
+    @test occursin("hit hyperplane boundary", sprint(showerror, boundary_err))
+    @test occursin("logqK=", sprint(showerror, boundary_err))
+    @test occursin("signature=", sprint(showerror, boundary_err))
+
+    multi_classifier = BindingAndCatalysis.QKHyperplaneClassifier(
+        [1, 2],
+        SparseVector{Float64, Int}[],
+        Float64[],
+        BitVector[],
+        BitVector[],
+    )
+    nonunique_err = try
+        BindingAndCatalysis._resolve_unique_qK_candidate(multi_classifier, [0.0])
+        nothing
+    catch err
+        err
+    end
+    @test nonunique_err isa ErrorException
+    @test occursin("is not unique", sprint(showerror, nonunique_err))
+    @test occursin("candidate_ids=[1, 2]", sprint(showerror, nonunique_err))
+
+    no_candidate_classifier = BindingAndCatalysis.QKHyperplaneClassifier(
+        [1],
+        [SparseArrays.sparsevec([1], [1.0], 1)],
+        [0.0],
+        [falses(1)],
+        [trues(1)],
+    )
+    no_candidate_err = try
+        BindingAndCatalysis._resolve_unique_qK_candidate(no_candidate_classifier, [1.0])
+        nothing
+    catch err
+        err
+    end
+    @test no_candidate_err isa ErrorException
+    @test occursin("found no candidate regime", sprint(showerror, no_candidate_err))
+    @test occursin("candidate_ids=Int[]", sprint(showerror, no_candidate_err))
 end
 
 @testset "High Nullity Exact Conditions" begin

@@ -1,7 +1,8 @@
 function _ensure_node_polyhedra!(grh::SIMOPaths, rgm_idxs::AbstractVector{<:Integer})
     bn = get_binding_network(grh)
     regimes = _bind_regimes_data(bn)
-    unique_idxs = unique(Int.(rgm_idxs))
+    unique_idxs = filter(idx -> grh.path_node_mask[idx], unique(Int.(rgm_idxs)))
+    isempty(unique_idxs) && return nothing
 
     function build_one!(idx::Int)
         if !grh.node_polys_is_calc[idx]

@@ -21,8 +21,8 @@ end
 Return unique source and sink vertices for a collection of paths.
 """
 function sources_sinks_from_paths(paths::AbstractVector{<:AbstractVector{<:Integer}})::Tuple{Vector{Int}, Vector{Int}}
-    sources = unique(p -> p[1], paths)
-    sinks = unique(p -> p[end], paths)
+    sources = unique(Int(first(p)) for p in paths)
+    sinks = unique(Int(last(p)) for p in paths)
     return sources, sinks
 end
 

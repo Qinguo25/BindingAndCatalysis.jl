@@ -26,9 +26,9 @@
 
 ## 2. 数学心智模型
 
-### 2.1 Binding layer
+### 2.1 Binding equilibrium manifold
 
-binding 侧的核心关系是
+binding 网络的连续层不是直接从 regime 开始，而是先从两个全局关系开始：
 
 ```math
 q = Lx,
@@ -36,13 +36,37 @@ q = Lx,
 N \log x = \log K.
 ```
 
-在一个固定 binding regime 内，每个 `q_i` 选定 dominant monomial，于是得到
+这里：
+
+- `x` 是 species concentration
+- `q` 是 conservation totals
+- `K` 是 equilibrium constants
+- `L` 张成 conservation law
+- `N` 是 transpose-reduced stoichiometry
+
+因此 binding manifold 是 `x` 与 `(q,K)` 之间的隐式对应。严格的 reaction order 是局部导数
+
+```math
+H(x)=\frac{\partial \log x}{\partial \log(q,K)}
+=
+\begin{bmatrix}
+\Lambda_q^{-1}L\Lambda_x\\
+N
+\end{bmatrix}^{-1}.
+```
+
+代码里 regime 近似做的事情，是把这个非线性流形按 dominance pattern 分片；在每个分片内用一套 affine 数据近似并缓存它。
+
+
+### 2.2 Binding regime geometry
+
+在一个固定 binding regime 内，每个 `q_i` 选定一个 dominant species，于是得到一个 row-wise one-hot 的 vertex matrix `P`，以及
 
 ```math
 \log q = P \log x + P_0.
 ```
 
-把 `q` 和 `K` 合在一起，得到
+再把 `q` 和 `K` 合并，得到
 
 ```math
 \log(q,K) = M \log x + M_0,
@@ -50,19 +74,67 @@ N \log x = \log K.
 M = \begin{bmatrix} P \\ N \end{bmatrix}.
 ```
 
-若 `M` 可逆，则
+这就是 `BindRegime` 里最重要的 affine skeleton。
+
+同一个 regime 同时有两套条件：
+
+- `x`-space dominance condition
 
 ```math
-\log x = H \log(q,K) + H_0.
+C_x \log x + C_{0,x} > 0
 ```
 
-因此 binding regime 的核心是两类对象：
+- `(q,K)`-space transported condition
+
+```math
+C_{qK}\log(q,K) + C_{0,qK} \ge 0
+```
+
+对 regular / invertible regime，代码直接用
+
+```math
+\log x = H \log(q,K) + H_0
+```
+
+把 `C_x/C0_x` 送到 `qK` 空间；这部分现在固定保持 exact affine data。
+
+对 singular regime，`M` 不可逆，`(q,K)` 空间条件不再是 full-dimensional chamber，而会带 hyperplane。实现上需要分清三件事：
+
+- nullity `0`：regular regime，`H/H0` 是普通逆
+- nullity `1`：singular regime，仍记录 `H/H0` 方向型数据和 shared qK hyperplane
+- nullity `> 1`：高 nullity regime，只保留必要几何信息，不把它当作 volume-carrying chamber
+
+因此 `BindRegime` 的核心不是单个矩阵，而是：
 
 - 映射：`P/P0`, `M/M0`, `H/H0`
 - 条件：`C_x/C0_x`, `C_qK/C0_qK`
+- 几何阶数：`nullity`, `is_asymptotic`
 
 
-### 2.2 Catalysis layer
+### 2.3 Regime graph and shared hyperplanes
+
+regime graph 的节点是 feasible dominance regimes，边表示“只改一行 dominant choice 后仍共享 facet”的邻接关系。
+
+实现上必须分清两个层次：
+
+- `x`-space edge：来自 dominance comparison 本身
+- `qK`-space edge：来自把 shared facet 映到 `(q,K)` 坐标后的 hyperplane
+
+对一条 graph edge，代码最终关心的是
+
+```math
+c_{qK}\log(q,K) + c_{0,qK} = 0
+```
+
+以及它的正负号朝向。当前架构里这不是 edge-local 完整向量，而是：
+
+- `RegimeGraph.qK_interface_pool` 持有 pooled hyperplane
+- 每条 `RegimeEdge` 只存 `qK_interface_idx + qK_interface_sign`
+
+因此一个 regime 在 `qK` 空间所对应的 facet hyperplanes，可以直接由“它与所有邻居的 qK edges”恢复出来。当前 `assign_regime_qK` 使用的 hyperplane classifier 也建立在这层 pooled graph hyperplane 上，而不是再单独从 `C_qK` 重新拼一遍。
+
+
+### 2.4 Catalysis layer
 
 催化层写成
 
@@ -87,7 +159,7 @@ M = \begin{bmatrix} P \\ N \end{bmatrix}.
 这里要记住：catalysis regime 本身并不直接决定 `x`，它只给出“给定 `x,k` 时哪些 flux dominance / consistency 成立”。
 
 
-### 2.3 Mixed regime
+### 2.5 Mixed regime
 
 一个 `BncRegime` 是：
 
@@ -221,6 +293,7 @@ M = \begin{bmatrix} P \\ N \end{bmatrix}.
 - edge metadata
 - x-space shared hyperplane pool
 - qK-space shared hyperplane pool
+- qK hyperplane classifier cache
 
 这层是后续 `SIMOPaths`、regime assignment、体积估计的基础。
 
@@ -295,7 +368,8 @@ vols = get_volumes(simo)
 1. 构造或补全 `RegimeGraph`
 2. 根据 graph 枚举路径
 3. 为路径计算 node / edge / path polyhedra
-4. 用 Monte Carlo 估体积
+4. regular regime 可直接走 qK hyperplane classifier；singular regime 体积固定记为 `0`
+5. 真正需要 polyhedron backend 时再 materialize H-rep 并用 Monte Carlo 估体积
 
 
 ## 6. 多面体后端架构
@@ -459,6 +533,12 @@ qK-space interface 不再是 edge-local 完整向量，而是：
 
 这样 regime assignment、interface 查询、volume sampling 才能共享几何对象。
 
+进一步地，regular regime 的 qK classifier 现在应该理解为：
+
+- hyperplane 直接来自 `RegimeGraph` 的 qK edge pool
+- 一个 regime 的 sign pattern 由它所有 incident qK edges 决定
+- classifier 只接受唯一且非边界的匹配结果
+
 
 ### 8.3 大量对象是 lazy materialize
 
@@ -475,6 +555,22 @@ qK-space interface 不再是 edge-local 完整向量，而是：
 
 - 本来就无定义
 - 还没 materialize
+
+
+### 8.4 strict qK classification 与 volume 约定
+
+现在需要把 `assign_regime_qK` 理解成 strict unique classification，而不是“尽量猜一个最近 regime”：
+
+- 输入点如果落在任意 qK hyperplane 上，应直接报错
+- hyperplane sign pattern 如果对应多个 regime，应直接报错
+- hyperplane sign pattern 如果对应零个 regime，应直接报错
+- 只有“非边界且唯一候选”才返回 regime
+
+这和 volume 侧的约定配套：
+
+- regular regime 才有 full-dimensional volume
+- singular regime 没有 chamber volume，直接记为 `0`
+- classifier 路径只服务于 regular regime 的体积估计
 
 
 ## 9. 最常用 API

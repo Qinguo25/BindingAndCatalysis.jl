@@ -830,35 +830,101 @@ end
 # -------------------------------------------------------------------------------------
 
 # if pass vector of regimes
-function _get_mask(rgms::AbstractVector{<:BindRegime};
-     singular::Union{Bool,Integer,Nothing}=nothing, 
-     asymptotic::Union{Bool,Nothing}=nothing)::Vector{Bool}
-    
-    @inline f(nlt) = isnothing(singular) || (
+@inline function _match_regime_filter(
+    nlt::Integer,
+    flag_asym::Bool;
+    singular::Union{Bool,Integer,Nothing}=nothing,
+    asymptotic::Union{Bool,Nothing}=nothing,
+)::Bool
+    ok_singular = isnothing(singular) || (
         (singular === true  && nlt > 0) ||
         (singular === false && nlt == 0) ||
         (singular isa Int   && nlt ≤ singular)
     )
+    ok_asym = isnothing(asymptotic) || (asymptotic == flag_asym)
+    return ok_singular && ok_asym
+end
 
-    @inline g(flag_asym) = isnothing(asymptotic) || (asymptotic == flag_asym)
-
-    return map(rgms) do vtx
-        f(get_nullity(vtx)) && g(is_asymptotic(vtx))
+function _get_mask(
+    rgms::AbstractVector{<:BindRegime};
+    singular::Union{Bool,Integer,Nothing}=nothing,
+    asymptotic::Union{Bool,Nothing}=nothing,
+)::BitVector
+    masks = falses(length(rgms))
+    @inbounds for i in eachindex(rgms)
+        rgm = rgms[i]
+        masks[i] = _match_regime_filter(
+            get_nullity(rgm),
+            is_asymptotic(rgm);
+            singular=singular,
+            asymptotic=asymptotic,
+        )
     end
+    return masks
 end
-function filter_regimes(rgms::AbstractVector{<:BindRegime}; kwargs...)
+
+function filter_regimes(
+    rgms::AbstractVector{<:BindRegime};
+    return_mask::Bool=false,
+    kwargs...,
+)
     masks = _get_mask(rgms; kwargs...)
-    return rgms[masks]
+    filtered = rgms[masks]
+    return return_mask ? (filtered, masks) : filtered
 end
 
 
-function _get_mask(model::Bnc,vtxs::AbstractVector{T};kwargs...)::Vector{Bool} where T
-    rgms = get_regime.(Ref(model), vtxs;inv_info=false)
-    return _get_mask(rgms; kwargs...)
+function _get_mask(
+    model::Bnc,
+    vtxs::AbstractVector{<:Integer};
+    singular::Union{Bool,Integer,Nothing}=nothing,
+    asymptotic::Union{Bool,Nothing}=nothing,
+)::BitVector
+    find_all_regimes!(model)
+    vertices = _bind_regimes_data(model)
+    masks = falses(length(vtxs))
+    @inbounds for i in eachindex(vtxs)
+        rgm = vertices[Int(vtxs[i])]
+        masks[i] = _match_regime_filter(
+            rgm.nullity,
+            rgm.is_asymptotic;
+            singular=singular,
+            asymptotic=asymptotic,
+        )
+    end
+    return masks
 end
-function filter_regimes(model::Bnc, vtxs::AbstractVector{T}; kwargs...)::Vector{T} where T
-    rgms = get_regime.(Ref(model), vtxs;inv_info=false)
-    return filter_regimes(rgms; kwargs...)
+
+function _get_mask(
+    model::Bnc,
+    vtxs::AbstractVector;
+    singular::Union{Bool,Integer,Nothing}=nothing,
+    asymptotic::Union{Bool,Nothing}=nothing,
+)::BitVector
+    find_all_regimes!(model)
+    vertices = _bind_regimes_data(model)
+    masks = falses(length(vtxs))
+    @inbounds for i in eachindex(vtxs)
+        rgm = vertices[get_idx(model, vtxs[i])]
+        masks[i] = _match_regime_filter(
+            rgm.nullity,
+            rgm.is_asymptotic;
+            singular=singular,
+            asymptotic=asymptotic,
+        )
+    end
+    return masks
+end
+
+function filter_regimes(
+    model::Bnc,
+    vtxs::AbstractVector{T};
+    return_mask::Bool=false,
+    kwargs...,
+) where T
+    masks = _get_mask(model, vtxs; kwargs...)
+    filtered = vtxs[masks]
+    return return_mask ? (filtered, masks) : filtered
 end
 
 _get_regimes_mask(args...; kwargs...) = _get_mask(args...; kwargs...)
