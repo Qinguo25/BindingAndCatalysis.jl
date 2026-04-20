@@ -411,6 +411,7 @@ function _accumulate_classifier_hits!(
     classifier::QKHyperplaneClassifier,
     idx_to_pos::AbstractDict{<:Integer,<:Integer},
     sampling;
+    asymptotic::Bool = false,
     regime_judge_tol::Float64 = 0.0,
 )
     Threads.@threads for _ in 1:batch_size
@@ -422,7 +423,7 @@ function _accumulate_classifier_hits!(
         _draw_sample!(x, rng, sampling)
         regime_idx, sides = _classifier_candidates(
             classifier,
-            logqK;
+            x;
             asymptotic_only=asymptotic,
             tol=regime_judge_tol
         )
@@ -519,6 +520,7 @@ function _calc_volume_via_classifier(
             classifier,
             idx_to_pos,
             sampling;
+            asymptotic=asymptotic,
             regime_judge_tol=regime_judge_tol,
         )
 
