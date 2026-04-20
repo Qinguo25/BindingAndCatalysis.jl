@@ -16,14 +16,9 @@ For local development:
 using Pkg
 Pkg.develop(path="/path/to/BindingAndCatalysis.jl")
 Pkg.instantiate()
-Pkg.build()
 ```
 
-`Pkg.build()` 默认会通过 [Artifacts.toml](Artifacts.toml) 下载固定版本的 `cddlib-logarithmic` 源码，并编译到 `.build/cddlog/src`。当前仓库只保留本地编译的 `cdd/cddlog` 作为多面体计算后端，所以如果本机没有可用的 C 编译器或 GMP 开发头文件，`Pkg.build()` 会直接失败。你可以在 build 前设置：
-
-```bash
-export BNC_CDDLOG_SOURCE_DIR=/path/to/local/cddlib-logarithmic
-```
+多面体计算后端现在统一使用 `Polyhedra.jl` 与 `CDDLib.jl`，不再需要仓库内置的本地 `cdd/cddlog` 编译流程。
 
 To work with the examples, activate the Examples environment:
 
@@ -31,10 +26,7 @@ To work with the examples, activate the Examples environment:
 using Pkg
 Pkg.activate("Examples")
 Pkg.instantiate()
-Pkg.build()
 ```
-
-`NativePolyhedra` 仍然作为仓库内的独立模块保留，用于数据结构、独立算法实验和单独测试，但默认业务路径不再把它作为运行时 fallback backend。
 
 ## Quick start
 

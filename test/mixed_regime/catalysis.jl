@@ -99,7 +99,7 @@ end
         k_sym = [:β, :γ],
     )
 
-    find_all_regimes!(model; mode = :exact)
+    find_all_regimes!(model)
     find_catalysis_regimes!(model)
     match_regimes!(model)
 
@@ -110,7 +110,6 @@ end
     @test get_binding_perm(mixed) == [2, 1]
     @test get_catalysis_perm(mixed) == [1, 2]
     @test string.(BindingAndCatalysis.wKk_sym(mixed)) == ["tE", "K", "β", "γ"]
-    @test BindingAndCatalysis.CddBridge._cddlog_bindir() !== nothing
     @test string.(show_condition_wKk(mixed; log_space = false)) == ["tE*β ~ K*γ", "K > tE"]
 
     C_wKk, C0_wKk, nlt_wKk = get_C_C0_nullity_wKk(mixed)
@@ -121,7 +120,7 @@ end
 
 @testset "Catalysis Exact Mixed Mode" begin
     model = minimal_catalysis_model()
-    find_all_regimes!(model; mode = :exact)
+    find_all_regimes!(model)
     find_catalysis_regimes!(model)
     match_regimes!(model)
 

@@ -98,10 +98,8 @@ end
     @test C0poly == C0qK
     @test nltpoly == nltqK
 
-    float_model = minimal_model()
-    find_all_regimes!(float_model; mode = :float)
-    inner = get_one_inner_point(float_model, 2)
-    @test assign_regime(float_model, inner; input_logspace = true, asymptotic_only = false, return_idx = true) == 2
+    inner = get_one_inner_point(model, 2)
+    @test assign_regime(model, inner; input_logspace = true, asymptotic_only = false, return_idx = true) == 2
 
     vol1 = get_volume(model, 1)
     vols = get_volumes(model)
@@ -185,16 +183,8 @@ end
     @test all(p -> p isa BindingAndCatalysis.Polyhedron, polys_default)
     @test all(p -> p isa BindingAndCatalysis.Polyhedron, polys_unc)
     @test all(p -> p isa BindingAndCatalysis.Polyhedron, polys_can)
-    @test all(p -> !p.normalized, polys_default)
-    @test all(p -> !p.normalized, polys_unc)
-    @test all(p -> p.normalized, polys_can)
-
-    # Warm both paths before comparing allocation cost.
-    get_polyhedra(model; canonicalize = false)
-    get_polyhedra(model)
-    alloc_unc = @allocated get_polyhedra(model; canonicalize = false)
-    alloc_can = @allocated get_polyhedra(model)
-    @test alloc_unc < alloc_can
+    @test all(BindingAndCatalysis.same_polyhedron.(polys_default, polys_unc))
+    @test all(BindingAndCatalysis.same_polyhedron.(polys_default, polys_can))
 
     regular_idx = first(filter(i -> get_nullity(model, i) == 0 && is_asymptotic(model, i), idxs))
     @test BindingAndCatalysis._bind_volume_route(model, [regular_idx]) == :classifier
@@ -223,9 +213,9 @@ end
     @test poly_vol.mean >= 0
     @test isapprox(classifier_vol.mean, poly_vol.mean; rtol = 0.35, atol = 0.02)
 end
-@testset "Rational H Mode" begin
+@testset "Exact Affine Data" begin
     model = minimal_model()
-    find_all_regimes!(model; mode = :exact)
+    find_all_regimes!(model)
 
     H = get_H(model, 1)
     H0 = get_H0(model, 1)
@@ -236,7 +226,6 @@ end
     rational_singular_idx = only(filter(i -> get_nullity(model, i) == 1, get_indices(model)))
     Hs, H0s = get_H_H0(model, rational_singular_idx)
 
-    @test model.affine_coeff_mode == :exact
     @test eltype(H) <: Rational
     @test eltype(H0) == ExactLogExpr
     @test eltype(CqK) <: Rational
@@ -250,9 +239,12 @@ end
     @test edge_21.qK_interface_idx == edge_12.qK_interface_idx != 0
     @test edge_21.qK_interface_sign == -edge_12.qK_interface_sign
 
-    find_all_regimes!(model; mode = :float)
-    @test model.affine_coeff_mode == :float
-    @test eltype(get_H(model, 1)) == Float64
+    singular_C, singular_C0, singular_nullity = get_C_C0_nullity_qK(model, rational_singular_idx)
+    singular_poly = get_polyhedron(model, rational_singular_idx)
 
-    @test_throws ErrorException find_all_regimes!(minimal_model(); mode = :invalid_mode)
+    @test singular_nullity == 1
+    @test eltype(singular_C) == Float64
+    @test eltype(singular_C0) == Float64
+    @test singular_poly isa BindingAndCatalysis.Polyhedron
+    @test eltype(get_C(singular_poly)) == Float64
 end

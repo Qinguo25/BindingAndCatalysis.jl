@@ -1,8 +1,3 @@
-# For SIMO path conditions we only need a canonical H-rep, not an LP-minimal one.
-# Using the light pass here matches cddlib's "canonicalize after projection" style
-# much better than running a full LP-based strong reduction on every path.
-_clean_polyhedron!(p::Polyhedron) = (removehredundancy!(p; strong=false); p)
-
 function _ensure_node_polyhedra!(grh::SIMOPaths, rgm_idxs::AbstractVector{<:Integer})
     bn = get_binding_network(grh)
     regimes = _bind_regimes_data(bn)
@@ -35,8 +30,6 @@ function _ensure_edge_polyhedra!(grh::SIMOPaths, edge_idxs::AbstractVector{<:Int
     edge_idxs_to_calc = filter(idx -> !grh.edge_polys_is_calc[idx], edge_idxs_unique)
     isempty(edge_idxs_to_calc) && return nothing
 
-    bn = get_binding_network(grh)
-    prefer_fastpath = backend_prefers_fastpath(_affine_is_exact(bn))
     rgm_idxs = Int[]
     sizehint!(rgm_idxs, 2 * length(edge_idxs_to_calc))
     for edge_idx in edge_idxs_to_calc
@@ -51,13 +44,7 @@ function _ensure_edge_polyhedra!(grh::SIMOPaths, edge_idxs::AbstractVector{<:Int
     @showprogress Threads.@threads for pos in eachindex(edge_idxs_to_calc)
         edge_idx = edge_idxs_to_calc[pos]
         u, v = grh.edge_keys[edge_idx]
-        grh.edge_polys[edge_idx] = backend_intersect_eliminate(
-            grh.node_polys[u],
-            grh.node_polys[v],
-            el_dim;
-            canonicalize=false,
-            prefer_fastpath=prefer_fastpath,
-        )
+        grh.edge_polys[edge_idx] = _poly_intersect_eliminate(grh.node_polys[u], grh.node_polys[v], el_dim; canonicalize=false)
         grh.edge_polys_is_calc[edge_idx] = true
     end
 
@@ -69,20 +56,14 @@ function _build_path_polyhedron(
     path::AbstractVector{<:Integer},
     edge_idxs::AbstractVector{<:Integer},
 )::Polyhedron
-    prefer_fastpath = backend_prefers_fastpath(_affine_is_exact(get_binding_network(grh)))
     if isempty(edge_idxs)
         _ensure_node_polyhedra!(grh, [Int(first(path))])
-        poly = backend_eliminate(
-            grh.node_polys[Int(first(path))],
-            BitSet((grh.change_qK_idx,));
-            canonicalize=false,
-            prefer_fastpath=prefer_fastpath,
-        )
-        return prefer_fastpath ? poly : _clean_polyhedron!(poly)
+        poly = _poly_eliminate(grh.node_polys[Int(first(path))], BitSet((grh.change_qK_idx,)); canonicalize=false)
+        return _clean_polyhedron!(poly)
     end
 
-    poly = backend_intersect_many(grh.edge_polys[Int.(edge_idxs)]; canonicalize=false, prefer_fastpath=prefer_fastpath)
-    return prefer_fastpath ? poly : _clean_polyhedron!(poly)
+    poly = _poly_intersect_many(grh.edge_polys[Int.(edge_idxs)]; canonicalize=false)
+    return _clean_polyhedron!(poly)
 end
 
 function _calc_polyhedra_for_paths_bulk_suffix_dag!(
@@ -91,7 +72,6 @@ function _calc_polyhedra_for_paths_bulk_suffix_dag!(
 )::Vector{Polyhedron}
     path_idxs = Int.(path_idxs)
     isempty(path_idxs) && return Polyhedron[]
-    prefer_fastpath = backend_prefers_fastpath(_affine_is_exact(get_binding_network(grh)))
 
     edge_idxs = unique(vcat(grh.path_edge_idxs[path_idxs]...))
     _ensure_edge_polyhedra!(grh, edge_idxs)
@@ -152,38 +132,6 @@ function _calc_polyhedra_for_paths_bulk_suffix_dag!(
     end
 
     @info "Start building polyhedra for paths (total: $(length(path_idxs))) via suffix DAG with $(n_nodes) unique suffix states across $(max_depth + 1) layers"
-    if prefer_fastpath
-        edge_fast = Vector{Any}(undef, length(grh.edge_polys))
-        for edge_idx in edge_idxs
-            edge_fast[edge_idx] = backend_prepare_fastpath(grh.edge_polys[edge_idx]; prefer_fastpath=true)
-        end
-        sink_fast = Vector{Any}(undef, length(grh.node_polys))
-        for v in sink_vertices
-            sink_fast[v] = backend_fast_eliminate(
-                backend_prepare_fastpath(grh.node_polys[v]; prefer_fastpath=true),
-                el_dim;
-                prefer_fastpath=true,
-            )
-        end
-
-        @showprogress dt=0.1 desc="Building polyhedra via suffix DAG" for depth in 0:max_depth
-            layer_nodes = nodes_by_depth[depth + 1]
-            isempty(layer_nodes) && continue
-            @info "Suffix DAG layer $(depth + 1)/$(max_depth + 1): $(length(layer_nodes)) states"
-
-            Threads.@threads for pos in eachindex(layer_nodes)
-                node = layer_nodes[pos]
-                poly_of[node] = if child_of[node] == 0
-                    sink_fast[vertex_of[node]]
-                else
-                    backend_fast_intersect(edge_fast[edge_of[node]], poly_of[child_of[node]]; prefer_fastpath=true)
-                end
-                is_calc[node] = true
-            end
-        end
-        return [backend_from_fastpath(poly_of[node]; canonicalize=false, prefer_fastpath=true) for node in path_nodes]
-    end
-
     @showprogress dt=0.1 desc="Building polyhedra via suffix DAG" for depth in 0:max_depth
         layer_nodes = nodes_by_depth[depth + 1]
         isempty(layer_nodes) && continue
@@ -192,14 +140,9 @@ function _calc_polyhedra_for_paths_bulk_suffix_dag!(
         Threads.@threads for pos in eachindex(layer_nodes)
             node = layer_nodes[pos]
             poly = if child_of[node] == 0
-                backend_eliminate(
-                    grh.node_polys[vertex_of[node]],
-                    el_dim;
-                    canonicalize=false,
-                    prefer_fastpath=false,
-                )
+                _poly_eliminate(grh.node_polys[vertex_of[node]], el_dim; canonicalize=false)
             else
-                intersect(grh.edge_polys[edge_of[node]], poly_of[child_of[node]]::Polyhedron; canonicalize=false)
+                intersect(grh.edge_polys[edge_of[node]], poly_of[child_of[node]]::Polyhedron)
             end
             poly_of[node] = poly
             is_calc[node] = true
@@ -215,7 +158,6 @@ function _calc_polyhedra_for_path(
     change_qK_idx::Integer,
 )::Vector{Union{Nothing, Polyhedron}}
     el_dim = BitSet((change_qK_idx,))
-    prefer_fastpath = backend_prefers_fastpath(_affine_is_exact(model))
 
     node_polyhedra = let
         unique_rgms = unique(vcat(paths...))
@@ -231,41 +173,16 @@ function _calc_polyhedra_for_path(
     @info "Start building polyhedra for edges (total: $(length(edges)))"
     @showprogress Threads.@threads for i in eachindex(edges)
         (u, v) = edges[i]
-        edge_poly[i] = if prefer_fastpath
-            backend_intersect_eliminate(
-                node_polyhedra[u],
-                node_polyhedra[v],
-                el_dim;
-                canonicalize=false,
-                prefer_fastpath=prefer_fastpath,
-            )
-        else
-            p = intersect(node_polyhedra[u], node_polyhedra[v]; canonicalize=false)
-            backend_eliminate(p, el_dim; canonicalize=false, prefer_fastpath=false)
-        end
+        edge_poly[i] = _poly_intersect_eliminate(node_polyhedra[u], node_polyhedra[v], el_dim; canonicalize=false)
     end
 
     out = Vector{Polyhedron}(undef, length(edge_paths))
     @info "Start building polyhedra for paths (total: $(length(edge_paths)))"
     @showprogress Threads.@threads for i in eachindex(edge_paths)
         if isempty(edge_paths[i])
-            out[i] = if prefer_fastpath
-                backend_eliminate(
-                    node_polyhedra[Int(first(paths[i]))],
-                    el_dim;
-                    canonicalize=false,
-                    prefer_fastpath=true,
-                )
-            else
-                backend_eliminate(
-                    node_polyhedra[Int(first(paths[i]))],
-                    el_dim;
-                    canonicalize=false,
-                    prefer_fastpath=false,
-                ) |> _clean_polyhedron!
-            end
+            out[i] = _poly_eliminate(node_polyhedra[Int(first(paths[i]))], el_dim; canonicalize=false) |> _clean_polyhedron!
         else
-            out[i] = intersect(edge_poly[edge_paths[i]]...; canonicalize=false) |> _clean_polyhedron!
+            out[i] = _poly_intersect_many(edge_poly[edge_paths[i]]; canonicalize=false) |> _clean_polyhedron!
         end
     end
     return out

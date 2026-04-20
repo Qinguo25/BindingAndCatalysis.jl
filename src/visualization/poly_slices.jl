@@ -10,7 +10,7 @@ function slice_polyhedron(poly::Polyhedron; fixed_idx::AbstractVector{<:Integer}
 
     ps = get_hyperplane.(fixed_idx)
     sliced = intersect(poly, ps...)
-    return backend_eliminate(sliced, BitSet(fixed_idx); prefer_fastpath=backend_prefers_fastpath(poly))
+    return _poly_eliminate(sliced, BitSet(fixed_idx))
 end
 
 function _grid_sample_polyhedron(poly::Polyhedron, bounds; npoints::Int=10000)

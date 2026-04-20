@@ -51,7 +51,7 @@ end
          0 1 1 0 -1 0;
          1 0 1 0 0 -1]
     model = Bnc(N = N)
-    find_all_regimes!(model; mode = :exact)
+    find_all_regimes!(model)
     pths = SIMOPaths(model, 1)
     polys = get_polyhedra(pths, 1:3)
     @test length(polys) == 3

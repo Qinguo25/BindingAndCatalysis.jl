@@ -246,7 +246,7 @@ M = \begin{bmatrix} P \\ N \end{bmatrix}.
 
 ```julia
 model = Bnc(...)
-find_all_regimes!(model; mode=:float)  # or :exact
+find_all_regimes!(model)
 rgm = get_regime(model, 1)
 show_condition_x(rgm)
 show_condition_qK(rgm)
@@ -300,7 +300,7 @@ vols = get_volumes(simo)
 
 ## 6. 多面体后端架构
 
-当前多面体层是三层结构。
+当前多面体层是两层结构。
 
 ### 6.1 `ExactTypes`
 
@@ -309,102 +309,37 @@ vols = get_volumes(simo)
 负责 `ExactLogExpr`。这是项目共享的 exact-log 标量层，不属于某个特定多面体后端。
 
 
-### 6.2 `NativePolyhedra`
+### 6.2 `Polyhedra.jl` + `CDDLib.jl`
 
-文件：
+相关文件：
 
-- `src/NativePolyhedra/NativePolyhedra.jl`
-- `src/NativePolyhedra/polyhedra_core.jl`
-- `src/NativePolyhedra/vrep_core.jl`
-
-职责：
-
-- H-rep / V-rep 数据结构
-- 相交、消元、linearity / redundancy 处理
-- exact mode 下的原生几何运算
-
-数据表示上，当前主存是：
-
-- `HyperPlane(a, β)`
-- `HalfSpace(p, sign)`
-- `HRep` / `Polyhedron` 主存为 `Vector{HalfSpace}`
-
-
-### 6.3 `CddBridge`
-
-文件：`src/CddBridge.jl`
+- `src/BindingAndCatalysis.jl`
+- `src/utils/poly_backend_utils.jl`
+- `src/utils/poly_utils.jl`
 
 职责：
 
-- 把项目内 `(C, C0, nullity)` / `Polyhedron` 桥接到本地构建的 `cddlib`
-- float 情况下调用本地编译的 `projection` / `redcheck`
-- exact-log 情况下调用本地编译的 `projection_log` / `redcheck_log`
+- 统一使用 `Polyhedra.Polyhedron` 作为多面体对象
+- 用 `CDDLib.Library(:float)` 承担 H-rep 消元、相交、canonicalization 等后端计算
+- 在项目内维护 `(C, C0, nullity)` 与 `Polyhedron` 之间的转换
 
-这个模块只负责桥接，不应该被业务层直接依赖。
-
-约定上，`CddBridge` 的矩阵级 API 统一使用项目内语义：
+约定上，项目内部矩阵语义统一为：
 
 ```math
 C x + C_0 \ge 0
 ```
 
-而 `NativePolyhedra` 内部 halfspace 语义是：
+`Polyhedra` / `CDDLib` 的 materialize 路径只在真正需要多面体后端时触发，例如：
 
-```math
-a x \le \beta
-```
-
-两者之间的换算是：
-
-```math
-a = -C,\qquad \beta = C_0.
-```
-
-
-### 6.4 `PolyBackend`
-
-文件：`src/PolyBackend.jl`
-
-这是当前的 backend facade。
-
-业务层主要通过以下 facade 进入多面体后端：
-
-- `backend_eliminate`
-- `backend_intersect_eliminate`
-- `backend_intersect_many`
-- `backend_project_hrep`
-
-此外，`SIMO` 的 bulk path-condition 构造还使用了一组 fastpath helper：
-
-- `backend_prefers_fastpath`
-- `backend_prepare_fastpath`
-- `backend_fast_eliminate`
-- `backend_fast_intersect`
-- `backend_from_fastpath`
-
-其中前四个是为了减少 bulk DAG 里重复的后端切换和 canonicalization 开销，`backend_from_fastpath` 负责把 fastpath 结果收回到项目内 `Polyhedron` 语义。
-
-当前 facade 只负责把业务层请求转给本地编译的 `cdd/cddlog`，不再在运行时切换到 `NativePolyhedra`。
-
-这层的存在意义是两点：
-
-- 把“算法逻辑”和“后端选择”分开
-- 避免 `SIMO.jl`、`regimes.jl`、`Bnc_regime.jl` 到处写 backend 分支
+- singular regime 的 `qK`-space H-rep 投影
+- `get_polyhedron`
+- `SIMO` 路径条件的 polyhedron 运算
 
 当前策略是：
 
-- float mode:
-  - bulk `SIMO` fastpath 走本地构建的 `cdd`
-- exact mode:
-  - 不启用 `SIMO` 的 float-style fastpath
-  - `backend_eliminate` / `backend_project_hrep` 直接走本地构建的 `cddlog`
-
-本地 `cdd` / `cddlog` 后端的源码默认来自 `Artifacts.toml` 里固定版本的 `cddlib-logarithmic` source artifact。编译入口在：
-
-- `deps/build.jl`
-- `scripts/build_local_cdd.sh`
-
-运行时若本地后端不可用，`PolyBackend` 会直接报错；`Pkg.build()` 也不会再静默降级。
+- graph propagation 和 `H/H0` 计算固定保持 exact
+- invertible regime 的 `C_qK/C_{0,qK}` 也固定保持 exact
+- 一旦进入多面体后端，就把数据转成 `Float64` 并交给 `CDDLib`
 
 
 ## 7. 源码地图
@@ -502,17 +437,17 @@ a = -C,\qquad \beta = C_0.
 
 ## 8. 当前重要设计边界
 
-### 8.1 `mode=:exact` 的边界
+### 8.1 exact / float 边界
 
-`mode=:exact` 主要保证 binding-layer exactness。
+当前没有 `find_all_regimes!(...; mode=...)` 这个分支。
 
-当前应理解为：
+现在应理解为：
 
-- binding coefficient matrices 可以 exact
-- 部分 log offsets 也可以 exact-log
-- 纯数值入口和部分 mixed/stability 路径仍可能显式转回 `Float64`
+- `find_all_regimes!` 固定用 exact 逻辑构造 affine 数据
+- `H/H0`、invertible regime 的 `C_qK/C_{0,qK}` 保持 exact
+- 只有多面体后端调用会显式转成 `Float64`
 
-因此 exact mode 不是“全仓库全 exact”。
+因此“exact”是 affine 层的默认行为，而不是要求整个仓库在所有路径上都保持 exact 标量。
 
 
 ### 8.2 graph cache 是 pooled hyperplane 设计
@@ -548,8 +483,7 @@ qK-space interface 不再是 edge-local 完整向量，而是：
 
 ```julia
 model = Bnc(...)
-find_all_regimes!(model; mode=:float)
-find_all_regimes!(model; mode=:exact)
+find_all_regimes!(model)
 find_catalysis_regimes!(model)
 match_regimes!(model)
 ```
@@ -587,7 +521,7 @@ vols = get_volumes(simo)
 - 改 mixed consistency：`src/Bnc_regime.jl`, `src/mixed_regime/`
 - 改 `x ↔ qK` 数值求解：`src/qK_x_mapping.jl`
 - 改 graph / path：`src/regime_graphs.jl`, `src/SIMO.jl`, `src/simo/`
-- 改 polyhedron backend：`src/PolyBackend.jl`, `src/CddBridge.jl`, `src/NativePolyhedra/`
+- 改 polyhedron backend：`src/utils/poly_backend_utils.jl`, `src/utils/poly_utils.jl`, `src/simo/polyhedra.jl`
 - 改 symbolic 输出：`src/symbolics.jl`, `src/output/`
 - 改可视化：`src/visualize.jl`, `src/visualization/`
 - 改旧 notebook 兼容：`src/old_api.jl`
@@ -605,7 +539,7 @@ vols = get_volumes(simo)
 6. `src/SIMO.jl`
 7. `src/Catalysis_regime.jl`
 8. `src/Bnc_regime.jl`
-9. `src/PolyBackend.jl`
+9. `src/utils/poly_backend_utils.jl`
 10. `test/runtests.jl`
 
 
@@ -613,12 +547,6 @@ vols = get_volumes(simo)
 
 - `test/runtests.jl`
   主流程回归。
-
-- `test/NativePolyhedra/runtests.jl`
-  多面体算法回归。
-
-- `test/backends/cdd_bridge.jl`
-  本地 `cdd` / `cddlog` 桥接回归。
 
 - `test/simo/workflows.jl`
   路径枚举、bulk path condition 和 `SIMO` 工作流回归。
@@ -651,4 +579,4 @@ Bnc
 - `BindRegime`
 - `CatalysisRegime`
 - `BncRegime`
-- `PolyBackend`
+- `Polyhedra` / `CDDLib` backend glue

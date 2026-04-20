@@ -559,8 +559,8 @@ end
 Remove intersection offsets to test asymptoticity in polyhedra.
 """
 function _remove_poly_intersect(poly::Polyhedron)
-    rep = hrep(poly)
-    return polyhedron(hrep(rep.A, zeros(eltype(rep.b), size(rep.b)), rep.linset))
+    rep = MixedMatHRep(hrep(poly))
+    return polyhedron(hrep(rep.A, zeros(eltype(rep.b), size(rep.b)), rep.linset), _float_poly_library())
 end
 
 """

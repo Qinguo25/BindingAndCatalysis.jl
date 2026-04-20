@@ -1,5 +1,3 @@
-@inline _bnc_prefer_fastpath(network::AbstractBnc) = backend_prefers_fastpath(_affine_is_exact(network))
-
 function _project_bnc_singular_condition(
     network::AbstractBnc,
     C::AbstractMatrix,
@@ -8,7 +6,7 @@ function _project_bnc_singular_condition(
     delset::BitSet,
 )
     p = get_polyhedron(C, C0, n_eq)
-    p2 = backend_eliminate(p, delset; prefer_fastpath=_bnc_prefer_fastpath(network))
+    p2 = _poly_eliminate(p, delset)
     return get_C_C0_nullity(p2)
 end
 

@@ -5,48 +5,44 @@
     ]
     singular_perm = [3, 3]
 
-    for mode in (:float, :exact)
-        model = Bnc(N = N)
-        swapped_model = Bnc(N = N[[2, 1], :])
+    model = Bnc(N = N)
+    swapped_model = Bnc(N = N[[2, 1], :])
 
-        find_all_regimes!(model; mode = mode)
-        find_all_regimes!(swapped_model; mode = mode)
+    find_all_regimes!(model)
+    find_all_regimes!(swapped_model)
 
-        @test have_perm(model, singular_perm)
-        @test have_perm(swapped_model, singular_perm)
-        @test get_nullity(model, singular_perm) == 1
-        @test get_nullity(swapped_model, singular_perm) == 1
+    @test have_perm(model, singular_perm)
+    @test have_perm(swapped_model, singular_perm)
+    @test get_nullity(model, singular_perm) == 1
+    @test get_nullity(swapped_model, singular_perm) == 1
 
-        H = Matrix(get_H(model, singular_perm))
-        H_swapped = Matrix(get_H(swapped_model, singular_perm))
+    H = Matrix(get_H(model, singular_perm))
+    H_swapped = Matrix(get_H(swapped_model, singular_perm))
 
-        @test H == H_swapped
-        @test H != -H_swapped
-    end
+    @test H == H_swapped
+    @test H != -H_swapped
 end
 
 @testset "Sparse L/N Singular Seed Fallback" begin
-    model_float = sparse_singular_model()
-    model_rational = sparse_singular_model()
+    model = sparse_singular_model()
+    find_all_regimes!(model)
 
-    find_all_regimes!(model_float; mode = :float)
-    find_all_regimes!(model_rational; mode = :exact)
+    @test n_regimes(model) == 24
 
-    @test n_regimes(model_float) == 24
-    @test n_regimes(model_rational) == 24
+    singular_idx = first(filter(i -> get_nullity(model, i) == 1, get_indices(model)))
 
-    singular_idx = first(filter(i -> get_nullity(model_rational, i) == 1, get_indices(model_rational)))
-    singular_perm = get_perm(model_rational, singular_idx)
+    H, H0 = get_H_H0(model, singular_idx)
+    CqK, C0qK, nullity = get_C_C0_nullity_qK(model, singular_idx)
+    poly = get_polyhedron(model, singular_idx)
 
-    @test have_perm(model_float, singular_perm)
-
-    Hf, H0f = get_H_H0(model_float, singular_perm)
-    Hr, H0r = get_H_H0(model_rational, singular_perm)
-
-    @test size(Hf) == (model_float.n, model_float.n)
-    @test length(H0f) == model_float.n
-    @test Matrix(Hf) ≈ Float64.(Matrix(Hr))
-    @test H0f ≈ H0r
+    @test size(H) == (model.n, model.n)
+    @test length(H0) == model.n
+    @test eltype(H) <: Rational
+    @test eltype(H0) == ExactLogExpr
+    @test nullity == 1
+    @test eltype(CqK) == Float64
+    @test eltype(C0qK) == Float64
+    @test eltype(get_C(poly)) == Float64
 end
 
 @testset "Shared Hyperplane Assignment And Interface Orientation" begin
@@ -70,7 +66,7 @@ end
 
 @testset "High Nullity Exact Conditions" begin
     model = sparse_singular_model()
-    find_all_regimes!(model; mode = :exact)
+    find_all_regimes!(model)
     idx = first(filter(i -> get_nullity(model, i) > 1, get_indices(model)))
     cond_log = show_condition_qK(model, idx)
     cond_lin = show_condition_qK(model, idx; log_space = false)

@@ -23,11 +23,8 @@ using Distributions:Uniform, Normal
 include(joinpath(@__DIR__, "ExactTypes.jl"))
 using .ExactTypes: ExactLogExpr, exact_log10, exact_log10_ratio
 
-include(joinpath(@__DIR__, "NativePolyhedra/NativePolyhedra.jl"))
-using .NativePolyhedra
-include(joinpath(@__DIR__, "CddBridge.jl"))
-include(joinpath(@__DIR__, "PolyBackend.jl"))
-using .PolyBackend: backend_prefers_fastpath, backend_intersect_eliminate, backend_intersect_many, backend_eliminate, backend_project_hrep, backend_prepare_fastpath, backend_fast_eliminate, backend_fast_intersect, backend_from_fastpath
+using Polyhedra
+import CDDLib
 
 using Graphs
 import Printf
@@ -38,13 +35,11 @@ import Random
 import Base: summary,show
 
 export Bnc, update_catalysis!
-export NativePolyhedra
 export ExactLogExpr, exact_log10, exact_log10_ratio
 export Polyhedron, HRep, MixedMatHRep, hrep, polyhedron
 export VRep, vrep, points, rays, lines
 export HalfSpace, HyperPlane, intersect, eliminate, detecthlinearity!, removehredundancy!
 export dim, fulldim, hashyperplanes, hyperplanes, allhalfspaces, issubset
-export feasible_point, interior_point
 
 #---------------------------plot dependency-----------------------------
 using Makie
@@ -187,17 +182,12 @@ const BindAffineMatrix = Union{
     SparseMatrixCSC{Float64,Int},
     SparseMatrixCSC{ExactAffineCoeff,Int},
 }
+const BindConditionBiasVector = Union{Vector{Float64}, Vector{ExactLogExpr}}
 
 abstract type AbstractBnc end
 abstract type AbstractRegime end
 
-@inline function _normalize_affine_mode(mode::Symbol)
-    mode == :rational && return :exact
-    mode in (:float, :exact) || error("Unsupported mode=$mode. Use :float or :exact.")
-    return mode
-end
-
-@inline _affine_mode(::AbstractBnc) = :float
+@inline _affine_mode(::AbstractBnc) = :exact
 @inline _affine_is_exact(model::AbstractBnc) = _affine_mode(model) === :exact
 #=================================================================================#
 # f(L) -> {P,P0,C,C0} associated structs and helpers
@@ -328,7 +318,7 @@ mutable struct BindRegime{F,T} <: AbstractRegime
     H::Union{BindAffineMatrix, Nothing}
     H0::Union{Vector{F}, Nothing} 
     C_qK::Union{BindAffineMatrix, Nothing}
-    C0_qK::Union{Vector{F}, Nothing} 
+    C0_qK::Union{BindConditionBiasVector, Nothing}
 
     volume::Union{Volume, Nothing}
 
@@ -554,7 +544,6 @@ mutable struct Bnc{T} <: AbstractBnc # T is the int type to save all the indices
 
     #------other helper parameters------
     direction::Int8 # direction of the binding reactions, determine the ray direction for invertible regime, calculated by sign of det[L;N]
-    affine_coeff_mode::Symbol
     IntegrationHelper::Union{IntegrationHelper,Nothing}
     _L_helper::MatrixHelper
 
@@ -600,7 +589,6 @@ mutable struct Bnc{T} <: AbstractBnc # T is the int type to save all the indices
             ReentrantLock(),                 # _integration_helper_lock
             # Fields 13-28 (Calculated values)
             direction,
-            :float,                          # affine_coeff_mode
             nothing,
             _L_helper,
         )
@@ -608,7 +596,6 @@ mutable struct Bnc{T} <: AbstractBnc # T is the int type to save all the indices
 end
 
 
-@inline _affine_mode(model::Bnc) = getfield(model, :affine_coeff_mode)
 @inline _bind_regimes(model::Bnc) = getfield(model, :BindRegimes)
 @inline _bind_regimes_built(model::Bnc) = !isnothing(_bind_regimes(model))
 @inline _bind_regimes_data(model::Bnc)= _bind_regimes(model).vertices_data
