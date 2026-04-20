@@ -198,7 +198,7 @@ function _calc_polyhedra_for_path(
 end
 
 function get_polyhedra(grh::SIMOPaths, pth_idx::Union{AbstractVector,Nothing}=nothing)::Vector{Polyhedron}
-    path_idxs = _normalize_simo_path_selection(grh, pth_idx)
+    path_idxs = get_indices(grh, pth_idx)
     path_idxs_to_calc = _path_indices_to_calculate(grh.path_polys_is_calc, path_idxs)
 
     if !isempty(path_idxs_to_calc)
@@ -245,7 +245,7 @@ function get_volumes(
     recalculate=false,
     kwargs...,
 )
-    path_idxs = _normalize_simo_path_selection(grh, pth_idx)
+    path_idxs = get_indices(grh, pth_idx)
     path_idxs_to_calculate = _path_indices_to_calculate(grh.path_volume_is_calc, path_idxs; recalculate=recalculate)
 
     if !isempty(path_idxs_to_calculate)

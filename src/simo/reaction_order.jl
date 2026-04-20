@@ -149,7 +149,7 @@ function get_RO_paths(
 end
 
 function get_RO_paths(model::SIMOPaths, pth_idx::Union{Nothing,AbstractVector}=nothing; observe_x=nothing, kwargs...)
-    path_idxs = _normalize_simo_path_selection(model, pth_idx)
+    path_idxs = get_indices(model, pth_idx)
     rgm_paths = get_path.(Ref(model), path_idxs; return_idx=true)
     return get_RO_paths(
         model.bn,

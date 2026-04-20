@@ -33,3 +33,4 @@ Convert a DifferentialEquations solution into time and state arrays.
 function _ode_solution_wrapper(solution::ODESolution)::Tuple{Vector{Float64}, Vector{Vector{Float64}}}
     return solution.t, solution.u
 end
+

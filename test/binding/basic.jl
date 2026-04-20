@@ -26,6 +26,8 @@
     @test size(C_poly, 2) == model.n
     @test length(C0_poly) == size(C_poly, 1)
     @test nullity_poly == nullity
+    @test zero(BindingAndCatalysis.Volume) == BindingAndCatalysis.Volume(0.0, 0.0)
+    @test zeros(BindingAndCatalysis.Volume, 3) == fill(zero(BindingAndCatalysis.Volume), 3)
 
     Random.seed!(42)
     logqK = randomize(model, 1; log_lower = -2, log_upper = 2)[1]

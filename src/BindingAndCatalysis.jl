@@ -53,60 +53,7 @@ using ProgressMeter
 
 # ---------------------Define the struct of binding and catalysis networks----------------------------------
 
-#===============================================================================================#
-# Volume struct and associated operations for uncertainty quantification in regime volumes.
-#===============================================================================================#
-struct Volume
-    mean::Float64
-    var::Float64
-end
-"""
-    fetch_mean_re(V::Volume) -> (Float64, Float64)
-
-Return the mean and relative error (standard deviation / mean) for a `Volume`.
-"""
-fetch_mean_re(V::Volume) = (V.mean, sqrt(V.var)/V.mean)
-"""
-    Base.display(V::Volume)
-
-Display a compact summary of a `Volume`.
-"""
-Base.display(V::Volume) = Printf.@sprintf("Volume(Mean=%.3e, STD=%.3e, RelError=%.2f%%)", V.mean, sqrt(V.var), (sqrt(V.var)/V.mean)*100)
-Base.show(io::IO, V::Volume) = print(io, Printf.@sprintf("Volume(Mean=%.3e, STD=%.3e, RelError=%.2f%%)", V.mean, sqrt(V.var), (sqrt(V.var)/V.mean)*100))
-"""
-    Base.:+(v1::Volume, v2::Volume) -> Volume
-
-Add two `Volume` values by summing means and variances.
-"""
-Base.:+(v1::Volume, v2::Volume) = Volume(v1.mean + v2.mean, v1.var + v2.var)
-"""
-    Base.:-(v1::Volume, v2::Volume) -> Volume
-
-Add two `Volume` values by summing means and variances.
-"""
-Base.:-(v1::Volume, v2::Volume) = Volume(v1.mean - v2.mean, v1.var + v2.var)
-"""
-    Base.isless(a::Volume, b::Volume) -> Bool
-
-Compare `Volume` objects by mean value.
-"""
-Base.isless(a::Volume, b::Volume) = a.mean < b.mean
-"""
-    Base.:(==)(a::Volume, b::Volume) -> Bool
-
-Return `true` when two `Volume` objects have identical means.
-"""
-Base.:(==)(a::Volume, b::Volume) = a.mean == b.mean 
-"""
-    Base.zero(::Volume) -> Volume
-
-Return a zero `Volume` with zero mean and variance.
-"""
-Base.zero(::Volume) = Volume(0.0, 0.0)
-
-Base.:*(c::Real, v::Volume) = Volume(c * v.mean, c^2 * v.var)
-Base.:*(v::Volume, c::Real) = c * v
-Base.:/(v::Volume, c::Real) = Volume(v.mean / c, v.var / c^2)
+include(joinpath(@__DIR__,"volume_calc.jl"))
 
 
 #===============================================================================================#
@@ -636,7 +583,7 @@ include(joinpath(@__DIR__,"helperfunctions.jl"))
 include(joinpath(pth1,"matrix_inverse.jl"))
 include(joinpath(pth1,"graph_propagate.jl"))
 include(joinpath(@__DIR__,"qK_x_mapping.jl"))
-include(joinpath(@__DIR__,"volume_calc.jl"))
+include(joinpath(@__DIR__,"volume_calc_impl.jl"))
 include(joinpath(@__DIR__,"numeric.jl"))
 
 include(joinpath(@__DIR__,"regimes.jl"))

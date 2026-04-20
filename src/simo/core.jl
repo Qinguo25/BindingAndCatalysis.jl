@@ -53,20 +53,65 @@ mutable struct SIMOPaths{T}
     end
 end
 
-function _build_paths_dict(rgm_paths::AbstractVector{<:AbstractVector{<:Integer}})
-    paths_dict = Dict{Vector{Int},Int}()
-    sizehint!(paths_dict, length(rgm_paths))
-    for (i, p) in enumerate(rgm_paths)
-        paths_dict[p] = i
+
+function SIMOPaths(model::Bnc{T}, change_qK; rgm_paths=nothing) where {T}
+    change_qK_idx = locate_sym_qK(model, change_qK)
+
+    if rgm_paths === nothing
+        qK_grh = get_SIMO_graph(model, change_qK)
+        sources, sinks = get_sources_sinks(model, qK_grh)
+        rgm_paths = _enumerate_paths(qK_grh; sources, sinks)
+    else
+        qK_grh = graph_from_paths(rgm_paths, n_regimes(model))
+        sources, sinks = get_sources_sinks(qK_grh)
     end
-    return paths_dict
+
+    return SIMOPaths(model, qK_grh, change_qK_idx, sources, sinks, rgm_paths)
 end
+
+
+
+
 
 function _ensure_paths_dict!(grh::SIMOPaths)
     isnothing(grh.paths_dict) || return grh.paths_dict
-    grh.paths_dict = _build_paths_dict(grh.rgm_paths)
+    grh.paths_dict = Dict(p=>idx for (idx, p) in enumerate(grh.rgm_paths))
     return grh.paths_dict
 end
+
+
+"""
+    _build_path_edge_index(rgm_paths::AbstractVector{<:AbstractVector{<:Integer}})
+
+为一组路径构建“去重后的无向边索引”。
+
+该函数会遍历每条路径中相邻节点组成的边，并将边 `(u, v)` 与 `(v, u)`
+视为同一条无向边，统一映射到一个唯一的整数编号。
+
+返回值包含两部分：
+- `edge_keys::Vector{Tuple{Int,Int}}`：  所有去重后的边，按首次出现顺序存储。
+- `path_edge_idxs::Vector{Vector{Int}}`：  每条路径对应的边编号序列，其中每个编号指向 `edge_keys` 中的一条边。
+
+# 参数
+- `rgm_paths`：路径集合；每条路径由一串节点编号组成。
+
+# 返回
+- `(edge_keys, path_edge_idxs)`
+
+# 说明
+- 路径长度小于 2 时，不产生边，对应返回空的边编号列表。
+- 边按无向方式处理，因此路径 `[..., u, v, ...]` 和 `[..., v, u, ...]`
+  中对应边会共享同一个索引。
+
+# 示例
+```julia
+rgm_paths = [[1, 3, 5], [5, 3, 1], [1, 2]]
+edge_keys, path_edge_idxs = _build_path_edge_index(rgm_paths)
+
+# edge_keys == [(1, 3), (3, 5), (1, 2)]
+# path_edge_idxs == [[1, 2], [2, 1], [3]]
+```
+"""
 
 function _build_path_edge_index(rgm_paths::AbstractVector{<:AbstractVector{<:Integer}})
     total_refs = sum(max(length(path) - 1, 0) for path in rgm_paths)
@@ -95,12 +140,12 @@ function _build_path_edge_index(rgm_paths::AbstractVector{<:AbstractVector{<:Int
     return edge_keys, path_edge_idxs
 end
 
-@inline function _normalize_simo_path_selection(
-    grh::SIMOPaths,
-    pth_idx::Union{AbstractVector,Nothing},
-)
+
+
+function get_indices(grh::SIMOPaths,pth_idx::Union{AbstractVector,Nothing}=nothing)
     return isnothing(pth_idx) ? collect(1:length(grh.rgm_paths)) : Int.(get_idx.(Ref(grh), pth_idx))
 end
+
 
 @inline function _path_indices_to_calculate(
     is_calc::BitVector,
@@ -140,20 +185,7 @@ function get_SIMO_graph(grh::RegimeGraph, change_qK)::SimpleDiGraph
     return g
 end
 
-function SIMOPaths(model::Bnc{T}, change_qK; rgm_paths=nothing) where {T}
-    change_qK_idx = locate_sym_qK(model, change_qK)
 
-    if rgm_paths === nothing
-        qK_grh = get_SIMO_graph(model, change_qK)
-        sources, sinks = get_sources_sinks(model, qK_grh)
-        rgm_paths = _enumerate_paths(qK_grh; sources, sinks)
-    else
-        qK_grh = graph_from_paths(rgm_paths, n_regimes(model))
-        sources, sinks = get_sources_sinks(qK_grh)
-    end
-
-    return SIMOPaths(model, qK_grh, change_qK_idx, sources, sinks, rgm_paths)
-end
 
 function get_path(grh::SIMOPaths, pth_idx::Integer; return_idx::Bool=false)
     rgm_idxs = grh.rgm_paths[pth_idx]

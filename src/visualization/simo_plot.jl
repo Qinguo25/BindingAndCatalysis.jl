@@ -357,7 +357,7 @@ function SIMO_plot(
     size=nothing,
 )
     model = get_binding_network(grh)
-    path_idxs = _normalize_simo_path_selection(grh, pth_idx)
+    path_idxs = get_indices(grh, pth_idx)
     observe_x_idx, xsyms, _ = _normalize_simo_observe_x(model, observe_x)
     line_colors = _resolve_simo_line_colors(length(observe_x_idx); colormap=line_colormap)
     rgm_cmap = get_color_map(vcat(grh.rgm_paths[path_idxs]...); colormap=region_colormap)
