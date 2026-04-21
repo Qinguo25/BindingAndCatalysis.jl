@@ -1,5 +1,16 @@
 # #--------------Matrix inverse helpers-------------------------
 
+
+struct NρCacheEntry
+    deficiency::Int                    # row-rank deficiency of Nρ; for square Nρ this is nullity(Nρ)
+    kind::UInt8                        # 0x00 = deficiency only, 0x01 = explicit inverse, 0x02 = rank-1 adjugate factors
+    inv::SparseMatrixCSC{Float64,Int}  # valid iff kind == 0x01
+    α::Float64                         # valid iff kind == 0x02
+    u::Vector{Float64}                 # left null vector  (length r)
+    v::Vector{Float64}                 # right null vector (length r)
+end
+
+
 const _EMPTY_SPM64 = spzeros(Float64, 0, 0)
 const _EMPTY_VEC64 = Float64[]
 const NρKey = Tuple{Vararg{Int}}

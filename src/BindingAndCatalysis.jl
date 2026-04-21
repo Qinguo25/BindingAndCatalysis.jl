@@ -114,14 +114,6 @@ end
 end
 
 
-struct NρCacheEntry
-    deficiency::Int                    # row-rank deficiency of Nρ; for square Nρ this is nullity(Nρ)
-    kind::UInt8                        # 0x00 = deficiency only, 0x01 = explicit inverse, 0x02 = rank-1 adjugate factors
-    inv::SparseMatrixCSC{Float64,Int}  # valid iff kind == 0x01
-    α::Float64                         # valid iff kind == 0x02
-    u::Vector{Float64}                 # left null vector  (length r)
-    v::Vector{Float64}                 # right null vector (length r)
-end
 
 
 abstract type AbstractBnc end
@@ -185,10 +177,6 @@ If `sign == -1`, use the opposite side:
 so the actual inequality is:
     z_p - z_k + oriented_c0 > 0
 """
-struct ChoiceIneq
-    hid::Int  # index into global hyperplane pool
-    sign::Int8 # +1 for canonical side, -1 for opposite side
-end
 
 """
 Helper struct for managing matrix operations.
@@ -210,7 +198,7 @@ struct MatrixHelper{Tv<:Integer,To<:Real}
     rowptr::Vector{Int} # rowptr[i] gives the starting index of constraints for row i in the global constraint list
 
     total_constraints::Int # total number of constraints across all rows
-    choice_map::Vector{Vector{Vector{ChoiceIneq}}} # choice_map[i][t] gives the list of oriented inequalities for choosing p = J[i][t]
+    choice_map::Vector{Vector{Vector{Tuple{Int, Int8}}}} # choice_map[i][t] gives the list of oriented inequalities for choosing p = J[i][t]
     hyperplanes::Vector{Hyperplane_perm{Tv,To}} # global deduplicated hyperplane pool
 end
 

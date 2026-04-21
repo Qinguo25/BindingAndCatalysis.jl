@@ -15,7 +15,7 @@ function _build_matrix_helper(L::AbstractMatrix{Tv}) where {Tv<:Integer}
     J = Vector{Vector{Int}}(undef, d)
     choice_slot = [zeros(Int, n) for _ in 1:d]
     choice_logcoeff = Vector{Vector{ExactLogExpr}}(undef, d)
-    choice_map = Vector{Vector{Vector{ChoiceIneq}}}(undef, d)
+    choice_map = Vector{Vector{Vector{Tuple{Int, Int8}}}}(undef, d)
 
     # Global deduplicated hyperplane pool
     key_to_id = Dict{Tuple{Int,Int,Tv,Tv}, Int}()
@@ -35,12 +35,12 @@ function _build_matrix_helper(L::AbstractMatrix{Tv}) where {Tv<:Integer}
         J[i] = Ji
         choice_logcoeff[i] = [exact_log10(L[i, j]) for j in Ji]
 
-        row_choices = Vector{Vector{ChoiceIneq}}(undef, length(Ji))
+        row_choices = Vector{Vector{Tuple{Int, Int8}}}(undef, length(Ji))
 
         for (t, p) in pairs(Ji)
             choice_slot[i][p] = t
 
-            refs = Vector{ChoiceIneq}(undef, max(length(Ji) - 1, 0))
+            refs = Vector{Tuple{Int, Int8}}(undef, max(length(Ji) - 1, 0))
             ptr = 1
             Lp = L[i, p]
 
@@ -71,7 +71,7 @@ function _build_matrix_helper(L::AbstractMatrix{Tv}) where {Tv<:Integer}
                     key_to_id[key] = hid
                 end
 
-                refs[ptr] = ChoiceIneq(hid,sign)
+                refs[ptr] = (hid,sign)
                 ptr += 1
             end
 

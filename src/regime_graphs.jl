@@ -12,20 +12,13 @@ export get_volume
 """
     _ensure_full_regimes_graph!(grh::RegimeGraph) -> nothing
 
-Ensure qK change directions are computed for a vertex graph.
+Compatibility no-op: regime graphs are now fulfilled during construction.
 """
 function _ensure_full_regimes_graph!(grh::RegimeGraph)
-    if !grh.change_dir_qK_computed
-        @info "Calculating vertices neighbor graph with qK change dir"
-        _fulfill_regimes_graph!(grh)
-        grh.change_dir_qK_computed = true
-    end
     return nothing
 end
 
 _ensure_full_regimes_graph!(model::Bnc) = _ensure_full_regimes_graph!(get_regimes_graph!(model; full=false))
-
-
 
 
 #---------------------------------------------------------------------------
@@ -47,16 +40,16 @@ function get_binding_network_grh(Bnc::Bnc)::SimpleGraph
 end
 
 
-
-
 #------------------------------------------------------------------------------
 #                  Getting the Graph of of regimes
 #----------------------------------------------------------------------------
 """
     get_regimes_graph!(bnc::Bnc; full=false) -> RegimeGraph
 
-Ensure the vertex graph is built; when `full=true`, also compute qK change directions.
+Ensure the vertex graph is built and return the fulfilled graph.
+`full` is kept for API compatibility.
 """
+get_regimes_graph!(args...; kwargs...) = get_regimes_graph!(get_binding_network(args...); kwargs...)
 function get_regimes_graph!(model::Bnc; full::Bool=false)::RegimeGraph
     if isnothing(model.vertices_graph)
         find_all_regimes!(model)
@@ -77,10 +70,9 @@ function get_edge(grh::RegimeGraph, from, to; kwargs...)::Union{Nothing, RegimeE
     
     pos = get(grh.edge_pos[from], to, nothing)
     if pos === nothing
-        return nothing
+        error("No edge from $from to $to in the regime graph.")
     end
     edge = grh.neighbors[from][pos]
-    # full && _materialize_edge_qK_interface!(grh, edge)
     return edge
 end
 
@@ -90,11 +82,9 @@ end
 
 Convenience wrapper to fetch an edge from a model.
 """
-get_edge(Bnc, from, to; kwargs...)= let
-    vtx_grh = get_regimes_graph!(Bnc; full=false)
+get_edge(Bnc, args...; kwargs...)= let
     bn = get_binding_network(Bnc)
-    from = get_idx(Bnc, from)
-    to = get_idx(Bnc, to)
+    vtx_grh = get_regimes_graph!(bn)
     get_edge(vtx_grh, from, to; kwargs...)
 end
 
@@ -104,10 +94,6 @@ end
 Return the model backing a vertex graph.
 """
 get_binding_network(grh::RegimeGraph,args...) = grh.bn
-# get_regimes_graph!(grh::RegimeGraph,args...; kwargs...) = grh
-
-
-
 
 
 
@@ -127,13 +113,6 @@ function get_neighbor_graph_x(grh::RegimeGraph)
     end
     return g
 end
-"""
-    get_neighbor_graph_x(bnc::Bnc) -> SimpleGraph
-
-Return the x-space neighbor graph for a model.
-"""
-get_neighbor_graph_x(Bnc::Bnc) = get_neighbor_graph_x(get_regimes_graph!(Bnc; full=false))
-
 """
     get_neighbor_graph_qK(grh::RegimeGraph; both_side=false) -> SimpleDiGraph
 
@@ -161,18 +140,24 @@ get_neighbor_graph_qK(grh::RegimeGraph; both_side::Bool=false)::SimpleDiGraph = 
 
     return qK_grh
 end
+
+
+"""
+    get_neighbor_graph_x(bnc::Bnc) -> SimpleGraph
+
+Return the x-space neighbor graph for a model.
+"""
+get_neighbor_graph_x(args...) = get_neighbor_graph_x(get_regimes_graph!(args...))
 """
     get_neighbor_graph_qK(bnc::Bnc; kwargs...) -> SimpleDiGraph
 
 Return the qK neighbor graph for a model.
 """
 get_neighbor_graph_qK(Bnc::Bnc; kwargs...) = get_neighbor_graph_qK(get_regimes_graph!(Bnc; full=true); kwargs...)
-
 """
     get_neighbor_graph(args...; kwargs...) -> SimpleDiGraph
 
 Alias for `get_neighbor_graph_qK`.
 """
 get_neighbor_graph(args...; kwargs...) = get_neighbor_graph_qK(args...; kwargs...)    
-
 

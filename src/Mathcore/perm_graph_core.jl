@@ -38,8 +38,7 @@ mutable struct RegimeGraph{Tv}
 
     qK_interface_pool::Vector{RegimeHyperplane}
     x_interface_pool::Vector{Hyperplane_perm{Tv}}
-    change_dir_qK_computed::Bool
-    qK_classifier_full::Any
+    qK_classifier_full::Any # numeric classifier for classifying regimes based on qK hyperplanes, to be filled when needed.
 
     function RegimeGraph(L_helper::MatrixHelper{Tv}, neighbors::Vector{Vector{RegimeEdge}}) where {Tv}
         
@@ -63,7 +62,6 @@ mutable struct RegimeGraph{Tv}
             edge_pos,
             RegimeHyperplane[],
             L_helper.hyperplanes,
-            false,
             nothing,
         )
     end

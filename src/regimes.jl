@@ -137,7 +137,8 @@ function find_all_regimes!(model::Bnc{T}) where T
     @info "4.Propagating affine data and deferred nullity labels..."
     _prefill_affine_cache!(model; ensure_built=false)
 
-    _ensure_full_regimes_graph!(model)
+    @info "5.Calculating qK change directions on the regime graph..."
+    _fulfill_regimes_graph!(model.vertices_graph)
 
     @info "Finished."
     return nothing

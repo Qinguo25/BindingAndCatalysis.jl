@@ -193,7 +193,6 @@ get_SIMO_graph(model::Bnc, change_qK) = get_SIMO_graph(get_regimes_graph!(model;
 function get_SIMO_graph(grh::RegimeGraph, change_qK)::SimpleDiGraph
     bn = get_binding_network(grh)
     change_qK_idx = locate_sym_qK(bn, change_qK)
-    _ensure_full_regimes_graph!(grh)
 
     n = length(grh.neighbors)
     g = SimpleDiGraph(n)

@@ -2,6 +2,11 @@ export find_catalysis_regimes!, get_catalysis_network, get_catalysis_regime, get
 export get_PΠ, get_CΠ, get_P_pos_neg, get_P0_pos_neg
 export get_C_k, get_C_C0_xk, get_C0_xk, get_C_xk, get_C_C0_nullity_xk
 
+
+
+
+
+
 @inline function _require_catalysis_network(args...)
     model = get_catalysis_network(args...)
     isnothing(model) && error("Catalysis network not found in the model.")
@@ -13,9 +18,7 @@ end
 
 
 
-
 get_binding_network(rgm::CatalysisRegime) = get_binding_network(rgm.network)
-get_binding_network(rgm::BncRegime) = get_binding_network(rgm.bind_rgm)
 function get_binding_network(model::CatalysisData)
     if isnothing(model.bn)
         @warn "Binding Network not found in the model"
@@ -23,6 +26,11 @@ function get_binding_network(model::CatalysisData)
     end
     return model.bn
 end
+
+
+
+
+get_binding_network(rgm::BncRegime) = get_binding_network(rgm.bind_rgm)
 
 
 
@@ -98,6 +106,28 @@ end
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 find_all_regimes!(model::CatalysisData) = find_catalysis_regimes!(model)
 find_catalysis_regimes!(model::Bnc) = find_catalysis_regimes!(_require_catalysis_network(model))
 
@@ -121,6 +151,7 @@ function find_catalysis_regimes!(model::CatalysisData)
     end
     return nothing
 end
+
 
 @inline function _build_catalysis_regimes(model::CatalysisData, all_vertices, is_asymptotic)
     n_vertices = length(all_vertices)
