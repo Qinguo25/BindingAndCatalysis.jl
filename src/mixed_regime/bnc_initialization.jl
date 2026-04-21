@@ -17,9 +17,9 @@ function _build_row_affine_cache(rgms, i, valid_js, perms, nlt_valid, N_ss, r_v,
         perm = perms[k]
         _, M0_ss = _steady_state_offsets(rgm, r_v, N_ss)
 
-        H_ss = if _affine_is_exact(rgm.bind_rgm.network) && nlt == 0
+        H_ss = if rgm.bind_rgm isa BindRegime{ExactLogExpr} && nlt == 0
             _exact_calc_H_regular(perm, N_ss)
-        elseif _affine_is_exact(rgm.bind_rgm.network)
+        elseif rgm.bind_rgm isa BindRegime{ExactLogExpr}
             _build_singular_H_from_perm_exact(perm, N_ss, Int(direction))[1]
         elseif nlt == 0
             _calc_H(N_ss, cache, perm)

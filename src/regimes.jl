@@ -16,31 +16,35 @@ export get_function
 #--------------Core computation functions-------------------------
 
 
-
-
-
 """
-    _calc_C_C0_qK_singular(bnc::Bnc, vtx) -> (SparseMatrixCSC, Vector)
+    _calc_C_C0_qK_singular(bnc::Bnc, vtx) -> (SparseMatrixCSC, Vector, Int)
 
-Build qK-space constraints `(C_qK, C0_qK)` for singular vertices via affine mapping.
+Build qK-space constraints `(C_qK, C0_qK,nullity)` for singular vertices via affine mapping.
 """
+
 function _calc_C_C0_qK_singular(Bnc::Bnc, vtx)
     M,M0 = get_M_M0(Bnc,vtx)
     C,C0 = get_C_C0_x(Bnc,vtx)
-    _affine_mapping_polyhedra(C,C0,M,M0)
+    C,C0,nlt = _affine_mapping_polyhedra(C,C0,0,M,M0)
+    C = sparse(C)
+    droptol!(C, 1e-10)
+    return C, C0, nlt    
 end
 
-function _affine_mapping_polyhedra(C,C0,M,M0)
-    n_qK = size(M, 1)
-    n_x = size(M, 2)
-    n_ineq = size(C, 1)
 
-    Eq = hcat(-spdiagm(0 => ones(Int, n_qK)), M)
-    In = hcat(spzeros(eltype(C), n_ineq, n_qK), C)
+function _affine_mapping_polyhedra(C,C0,nullity,M,M0)
+    poly_x = _build_polyhedron_from_C_C0(C, C0, nullity)
+    
+    poly_elim = M * poly_x  # If for convenience, one can write `translate(M * poly_x, M0)`, and then C0qK = b
+    rlt = MixedMatHRep(hrep(poly_elim))
 
-    C_full = vcat(Eq, In)
-    C0_full = vcat(M0, C0)
-    return _poly_project_hrep(C_full, C0_full, n_qK, BitSet((n_qK + 1):(n_qK + n_x)))
+    A, b, linset = (rlt.A, rlt.b, rlt.linset)
+    # @show linset
+    @assert linset == BitSet(1:maximum(linset)) "linear rows are not the first top n rows, code fix is needed"
+    # perm = [collect(linset) ; [i for i in 1:size(A,1) if i ∉ linset]]
+    CqK = sparse(-A) |> x->droptol!(x,1e-10)
+    C0qK = (b+A*M0)
+    return CqK, C0qK, length(linset)
 end
 
 
@@ -180,76 +184,29 @@ function _initialize_regime!(vtx::BindRegime)::BindRegime
     return vtx
 end
 
-function _materialize_qK_conditions_impl!(rgm::BindRegime, qk_locks::Union{Nothing,AbstractVector{ReentrantLock}}=nothing)
+
+
+
+function _materialize_qK_conditions!(rgm::BindRegime)
     _initialize_regime!(rgm)
     (!isnothing(rgm.C_qK) && !isnothing(rgm.C0_qK)) && return nothing
 
-    if !isnothing(qk_locks)
-        lock(qk_locks[rgm.idx]) do
-            (!isnothing(rgm.C_qK) && !isnothing(rgm.C0_qK)) && return nothing
-            _materialize_qK_conditions_impl!(rgm, nothing)
-        end
-        return nothing
-    end
-
     if rgm.nullity == 0
-        C_qK = sparse(rgm.C_x * rgm.H)
-        if eltype(C_qK) <: AbstractFloat
-            droptol!(C_qK, 1e-10)
-        else
-            dropzeros!(C_qK)
-        end
+        C_qK = rgm.C_x * rgm.H
+
+        dropzeros!(C_qK)
         rgm.C_qK = C_qK
         rgm.C0_qK = rgm.C0_x + rgm.C_x * rgm.H0
+
     else
-        C_qK, C0_qK, nlt = _calc_C_C0_qK_from_lower_nullity_neighbors(rgm, qk_locks)
-        if nlt == rgm.nullity
-            rgm.C_qK = C_qK
-            rgm.C0_qK = C0_qK
-        else
-            rgm.C_qK, rgm.C0_qK, _ = _calc_C_C0_qK_singular(rgm.network, rgm.perm)
-        end
+        rgm.C_qK, rgm.C0_qK, nlt =  _calc_C_C0_qK_singular(rgm.network, rgm.perm)
+        @assert nlt == rgm.nullity "Calculated nullity does not match regime's nullity, code fix is needed"
     end
 
     return nothing
 end
 
-_materialize_qK_conditions!(rgm::BindRegime) = _materialize_qK_conditions_impl!(rgm, nothing)
-_materialize_qK_conditions!(rgm::BindRegime, qk_locks::AbstractVector{ReentrantLock}) =
-    _materialize_qK_conditions_impl!(rgm, qk_locks)
 
-function _calc_C_C0_qK_from_lower_nullity_neighbors(
-    rgm::BindRegime,
-    qk_locks::Union{Nothing,AbstractVector{ReentrantLock}}=nothing,
-)
-    target_nullity = rgm.nullity
-    target_nullity > 0 || return spzeros(Rational{Int}, 0, rgm.network.d + rgm.network.r), ExactLogExpr[], 0
-
-    neighbor_idxs = filter(idx -> get_nullity(rgm.network, idx) < target_nullity,
-        get_neighbors(rgm; singular=target_nullity - 1, return_idx=true),
-    )
-    isempty(neighbor_idxs) && return spzeros(Rational{Int}, 0, rgm.network.d + rgm.network.r), ExactLogExpr[], 0
-
-    regimes = _bind_regimes_data(rgm.network)
-    C_blocks = Vector{SparseMatrixCSC}(undef, length(neighbor_idxs))
-    C0_blocks = Vector{Vector}(undef, length(neighbor_idxs))
-
-    for (pos, idx) in enumerate(neighbor_idxs)
-        nbr = regimes[idx]
-        if isnothing(qk_locks)
-            _materialize_qK_conditions!(nbr)
-        else
-            _materialize_qK_conditions!(nbr, qk_locks)
-        end
-        C_blocks[pos] = nbr.C_qK
-        C0_blocks[pos] = nbr.C0_qK
-    end
-
-    C = reduce(vcat, C_blocks)
-    C0 = reduce(vcat, C0_blocks)
-    poly = _build_polyhedron_from_C_C0(C, C0, 0; canonicalize=true)
-    return get_C_C0_nullity(poly)
-end
 
 """
     _fill_all_info!(vtx::BindRegime) -> nothing
@@ -262,40 +219,20 @@ function _fill_all_info!(vtx::BindRegime)
     return nothing
 end
 
+
 function _prefill_qK_conditions!(
     model::Bnc,
     regime_idxs::AbstractVector{<:Integer};
-    threaded::Bool=Threads.nthreads() > 1 && length(regime_idxs) >= 8,
 )
     find_all_regimes!(model)
     regimes = _bind_regimes_data(model)
 
-    if threaded
-        Threads.@threads for pos in eachindex(regime_idxs)
-            _materialize_qK_conditions!(regimes[Int(regime_idxs[pos])])
-        end
-    elseif _affine_is_exact(model) && Threads.nthreads() == 1 && length(regime_idxs) >= 8
-        qk_locks = [ReentrantLock() for _ in 1:length(regimes)]
-        asyncmap(regime_idxs; ntasks=min(length(regime_idxs), max(2, min(Sys.CPU_THREADS, 4)))) do idx_any
-            _materialize_qK_conditions!(regimes[Int(idx_any)], qk_locks)
-            return nothing
-        end
-    else
-        for idx_any in regime_idxs
-            _materialize_qK_conditions!(regimes[Int(idx_any)])
-        end
+    @showprogress desc="Prefilling qK conditions" Threads.@threads for pos in eachindex(regime_idxs)
+        _materialize_qK_conditions!(regimes[regime_idxs[pos]])
     end
 
     return nothing
 end
-
-
-
-
-
-
-
-
 
 
 #===============================================================================================================#
@@ -458,10 +395,10 @@ function get_volumes(Bnc::Bnc,vtxs::Union{AbstractVector,Nothing}=nothing;
                     nothing
                 end
         
-        #ensure conditions for volume calculation are calced, may further replaced by other functions
-        Threads.@threads for idx in vtxs_to_calc
-           get_regime(Bnc,idx; inv_info=true)
-        end
+        # #ensure conditions for volume calculation are calced, may further replaced by other functions
+        # Threads.@threads for idx in vtxs_to_calc
+        #    get_regime(Bnc,idx; inv_info=true)
+        # end
         
         rlts = _calc_bind_regime_volumes(Bnc, vtxs_to_calc; rebase_mat=rebase_mat, kwargs...)
         for (i,idx) in enumerate(vtxs_to_calc)
@@ -471,8 +408,6 @@ function get_volumes(Bnc::Bnc,vtxs::Union{AbstractVector,Nothing}=nothing;
     end
     return [vtx.volume for vtx in _bind_regimes_data(Bnc)[all_vtxs]]
 end
-
-
 
 
 
@@ -1132,40 +1067,23 @@ function get_polyhedra(
     model::Bnc,
     vtxs::Union{AbstractVector{T},Nothing}=nothing;
     canonicalize::Bool=false,
-    show_progress::Bool=Base.isinteractive(),
     kwargs...,
 ) where T
     selected = isnothing(vtxs) ? get_regimes(model; kwargs...) : vtxs
     isempty(selected) && return Polyhedron[]
-    show_progress = show_progress && length(selected) > 1
-    selected_idxs = [get_idx(model, vtx) for vtx in selected]
-    threaded = Threads.nthreads() > 1 && length(selected_idxs) >= 8 && !show_progress
 
-    _prefill_qK_conditions!(model, selected_idxs; threaded=threaded)
+    selected_idxs = [get_idx(model, vtx) for vtx in selected]
+
+    _prefill_qK_conditions!(model, selected_idxs)
+
     regimes = _bind_regimes_data(model)
 
     out = Vector{Polyhedron}(undef, length(selected))
 
-    build_one(i) = begin
+    Threads.@threads for i in eachindex(selected)
         rgm = regimes[selected_idxs[i]]
         out[i] = get_polyhedron(rgm.C_qK, rgm.C0_qK, rgm.nullity; canonicalize=canonicalize)
         return nothing
-    end
-
-    if show_progress || !threaded
-        if show_progress
-            @showprogress desc="Building polyhedra" for i in eachindex(selected)
-                build_one(i)
-            end
-        else
-            for i in eachindex(selected)
-                build_one(i)
-            end
-        end
-    else
-        Threads.@threads for i in eachindex(selected)
-            build_one(i)
-        end
     end
 
     return out

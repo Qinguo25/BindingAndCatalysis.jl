@@ -123,19 +123,10 @@ struct NρCacheEntry
     v::Vector{Float64}                 # right null vector (length r)
 end
 
-const ExactAffineCoeff = Rational{Int}
-const BindAffineMatrix = Union{
-    SparseMatrixCSC{Int,Int},
-    SparseMatrixCSC{Float64,Int},
-    SparseMatrixCSC{ExactAffineCoeff,Int},
-}
-const BindConditionBiasVector = Union{Vector{Float64}, Vector{ExactLogExpr}}
 
 abstract type AbstractBnc end
 abstract type AbstractRegime end
 
-@inline _affine_mode(::AbstractBnc) = :exact
-@inline _affine_is_exact(model::AbstractBnc) = _affine_mode(model) === :exact
 #=================================================================================#
 # f(L) -> {P,P0,C,C0} associated structs and helpers
 #=================================================================================#
@@ -236,6 +227,13 @@ struct Regimes{T,R<:AbstractRegime,A<:AbstractArray{R}}
 end
 
 
+const BindAffineMatrix = Union{
+    SparseMatrixCSC{Float64,Int},
+    SparseMatrixCSC{Rational{Int},Int},
+}
+
+const BindConditionBiasVector = Union{Vector{Float64}, Vector{ExactLogExpr}}
+
 
 """
     BindRegime
@@ -270,9 +268,8 @@ mutable struct BindRegime{F,T} <: AbstractRegime
     volume::Union{Volume, Nothing}
 
     function BindRegime(; network=nothing, perm, idx, is_asymptotic, nullity::T) where {T<:Integer}
-        F = (network isa AbstractBnc && _affine_is_exact(network)) ? ExactLogExpr : Float64
-        return new{F,T}(network, perm, idx, is_asymptotic,
-            nothing, nothing, nothing, nothing, nothing, nothing, # P, P0, M, M0, C_x, C0_x
+        return new{ExactLogExpr,T}(network, perm, idx, is_asymptotic,
+            nothing,nothing, nothing, nothing, nothing, nothing, # P, P0, M, M0, C_x, C0_x
             nullity,
             nothing, nothing, # H, H0
             nothing, nothing, # C_qK,C0_qK
@@ -309,8 +306,7 @@ mutable struct CatalysisRegime{F<:Real} <:AbstractRegime
         else
             nothing
         end
-        F = (bn isa AbstractBnc && _affine_is_exact(bn)) ? ExactLogExpr : Float64
-        return new{F}(network, perm, idx, is_asymptotic,
+        return new{ExactLogExpr}(network, perm, idx, is_asymptotic,
             nothing, # P_pos_neg
             nothing, # P0_pos_neg
             nothing, # P

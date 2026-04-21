@@ -273,7 +273,7 @@ function _initialize_regular_seed_affine!(
     _affine_info_ready(rgm) && return nothing
     state.statuses[idx] == _SEED_STATUS_REGULAR || error("Requested regular seed initialization for a non-regular regime.")
 
-    H = if _affine_is_exact(rgm.network)
+    H = let
         perm_key = state.perm_keys[idx]
         perm_key === nothing && error("Missing complement key for exact regular seed initialization.")
         _build_regular_H_from_key_entry_exact(
@@ -282,10 +282,6 @@ function _initialize_regular_seed_affine!(
             collect(perm_key);
             drop_tol=drop_tol,
         )
-    else
-        H = state.prefetched_H[idx]
-        isnothing(H) && error("Missing prefetched regular H for float seed initialization.")
-        H
     end
 
     rgm.nullity = 0
@@ -346,9 +342,9 @@ function _ensure_seed_analysis!(
                 status = _SEED_STATUS_HIGH
             end
 
-            if _affine_is_exact(rgm.network)
-                prefetched_H = nothing
-            end
+
+            prefetched_H = nothing
+
         else
             entry, stored_key = _get_or_build_Nρ_entry_threadsafe!(
                 state.cache,
@@ -547,13 +543,7 @@ function _finalize_deferred_affine_and_nullity!(
 
         _initialize_regime!(rgm)
 
-        H, nlt = if _affine_is_exact(rgm.network)
-            _build_singular_H_from_perm_exact(rgm.perm, rgm.network.N, rgm.network.direction)
-        elseif !isnothing(state.prefetched_H[idx])
-            state.prefetched_H[idx], 1
-        else
-            _build_singular_H_from_perm(rgm.perm, rgm.network.N, rgm.network.direction; drop_tol=drop_tol)
-        end
+        H, nlt = _build_singular_H_from_perm_exact(rgm.perm, rgm.network.N, rgm.network.direction)
         nlt == 1 || continue
 
         rgm.H = H

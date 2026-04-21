@@ -286,7 +286,7 @@ function _build_regular_H_from_key_entry_exact(
     n = size(N, 2)
 
     BR = _exact_inverse_matrix(N[:, Int.(collect(key))])
-    Nc = sparse(ExactAffineCoeff.(Matrix{Int}(N[:, perm_int])))
+    Nc = sparse((Rational{Int}).(Matrix{Int}(N[:, perm_int])))
     BL = -(BR * Nc)
     dropzeros!(BL)
 
@@ -804,7 +804,7 @@ function _minor_matrix(A::AbstractMatrix{<:Integer}, row::Int, col::Int)
 end
 
 function _exact_inverse_matrix(A::AbstractMatrix{<:Integer})
-    AQ = ExactAffineCoeff.(Matrix{Int}(A))
+    AQ = (Rational{Int}).(Matrix{Int}(A))
     H = sparse(inv(AQ))
     dropzeros!(H)
     return H
@@ -819,7 +819,7 @@ function _exact_calc_H_regular(
     perm_def == 0 || return nothing
 
     BR = _exact_inverse_matrix(N[:, key])
-    Nc = sparse(ExactAffineCoeff.(Matrix{Int}(N[:, Int.(perm)])))
+    Nc = sparse((Rational{Int}).(Matrix{Int}(N[:, Int.(perm)])))
     BL = -(BR * Nc)
     dropzeros!(BL)
 
@@ -831,17 +831,17 @@ function _exact_adjugate_matrix(A::AbstractMatrix{<:Integer})
     @assert n == m "A must be square."
 
     if n == 1
-        return sparse(reshape(ExactAffineCoeff[one(ExactAffineCoeff)], 1, 1))
+        return sparse(reshape(Rational{Int}[one(Rational{Int})], 1, 1))
     end
 
-    Adj = Matrix{ExactAffineCoeff}(undef, n, n)
+    Adj = Matrix{Rational{Int}}(undef, n, n)
     @inbounds for i in 1:n
         for j in 1:n
             cof = _bareiss_det_big(_minor_matrix(A, j, i))
             if isodd(i + j)
                 cof = -cof
             end
-            Adj[i, j] = ExactAffineCoeff(Int(cof), 1)
+            Adj[i, j] = Int(cof) // 1
         end
     end
 
@@ -858,7 +858,7 @@ function _exact_direct_inverse_or_adjugate(A::AbstractMatrix{<:Integer}, scale::
 
     H = _exact_adjugate_matrix(A)
     if nnz(H) == 0
-        return spzeros(ExactAffineCoeff, size(A, 1), size(A, 2)), 2
+        return spzeros(Rational{Int}, size(A, 1), size(A, 2)), 2
     end
 
     if scale != 1
@@ -881,7 +881,7 @@ function _exact_direct_inverse_or_adjugate(
 
     if !allow_singular
         n = size(N, 2)
-        return spzeros(ExactAffineCoeff, n, n), 1
+        return spzeros(Rational{Int}, n, n), 1
     end
 
     d = length(perm)
