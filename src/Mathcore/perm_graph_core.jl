@@ -221,6 +221,7 @@ function _fulfill_regimes_graph!(vtx_graph::RegimeGraph)
 
     @showprogress for p1 in eachindex(vtx_graph.neighbors)
         nlt1 = regimes[p1].nullity
+
         if nlt1 > 1
             continue
         end
@@ -239,7 +240,13 @@ function _fulfill_regimes_graph!(vtx_graph::RegimeGraph)
 
             src_rgm = regimes[p1]
 
+
+
+
             c_c0 = vtx_graph.x_interface_pool[e.c_c0_x_idx]
+            dir_x = e.c_c0_x_sign
+
+
 
             c_qK, c0_qK = _calc_dir(
                 src_rgm.nullity,
@@ -253,7 +260,7 @@ function _fulfill_regimes_graph!(vtx_graph::RegimeGraph)
                     key_to_id, 
                     c_qK, 
                     c0_qK,
-                    e.c_c0_x_sign)
+                    dir_x)
 
             hid == 0 && continue
 
