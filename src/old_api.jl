@@ -15,7 +15,6 @@ assign_vertex(args...; kwargs...) = assign_regime(args...; kwargs...)
 
 _calc_vertices_graph(args...; kwargs...) = _calc_regimes_graph(args...; kwargs...)
 _fulfill_vertices_graph!(args...; kwargs...) = _fulfill_regimes_graph!(args...; kwargs...)
-_ensure_full_vertices_graph!(args...; kwargs...) = _ensure_full_regimes_graph!(args...; kwargs...)
 get_vertices_graph!(args...; kwargs...) = get_regimes_graph!(args...; kwargs...)
 
 _vertex_graph_to_sparse(args...; kwargs...) = _regime_graph_to_sparse(args...; kwargs...)

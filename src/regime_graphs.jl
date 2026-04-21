@@ -5,22 +5,6 @@ export get_sources, get_sinks, get_sources_sinks
 export get_RO_path, group_sum, get_RO_paths, summary_RO_path
 export get_volume
 
-#---------------------------------------------------------------------------------------------------
-#             Helper functions: Functions for construct the regime graph paths
-#----------------------------------------------------------------------------------------------------
-
-"""
-    _ensure_full_regimes_graph!(grh::RegimeGraph) -> nothing
-
-Compatibility no-op: regime graphs are now fulfilled during construction.
-"""
-function _ensure_full_regimes_graph!(grh::RegimeGraph)
-    return nothing
-end
-
-_ensure_full_regimes_graph!(model::Bnc) = _ensure_full_regimes_graph!(get_regimes_graph!(model; full=false))
-
-
 #---------------------------------------------------------------------------
 #              Binding Network Graph
 #-------------------------------------------------------------------------
@@ -160,4 +144,3 @@ get_neighbor_graph_qK(Bnc::Bnc; kwargs...) = get_neighbor_graph_qK(get_regimes_g
 Alias for `get_neighbor_graph_qK`.
 """
 get_neighbor_graph(args...; kwargs...) = get_neighbor_graph_qK(args...; kwargs...)    
-
