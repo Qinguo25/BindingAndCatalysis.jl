@@ -155,6 +155,9 @@ end
 
 Base.:*(hp::Hyperplane_perm, q::AbstractVector{<:Real}) = mul(hp, q; with_c0=true)
 
+
+
+
 @inline _calc_c(hp::Hyperplane_perm,n::Int,sign::Int8) = let 
     if sign > 0 
         return sparsevec([hp.u, hp.v], Int8[1 -1], n)
@@ -198,8 +201,10 @@ struct MatrixHelper{Tv<:Integer,To<:Real}
     rowptr::Vector{Int} # rowptr[i] gives the starting index of constraints for row i in the global constraint list
 
     total_constraints::Int # total number of constraints across all rows
+
     choice_map::Vector{Vector{Vector{Tuple{Int, Int8}}}} # choice_map[i][t] gives the list of oriented inequalities for choosing p = J[i][t]
     hyperplanes::Vector{Hyperplane_perm{Tv,To}} # global deduplicated hyperplane pool
+    
 end
 
 

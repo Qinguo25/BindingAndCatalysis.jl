@@ -121,9 +121,9 @@ function _calc_regimes_graph(helper::MatrixHelper, perms::Vector{<:AbstractVecto
                     to_idx, j_to = group[b]
                     j_from == j_to && continue
 
-                    hp_id = choiceineq_between(helper, i, j_to, j_from)
-                    push!(local_edges, (from_idx, RegimeEdge(to_idx, i, hp_id.hid, hp_id.sign)))
-                    push!(local_edges, (to_idx, RegimeEdge(from_idx, i, hp_id.hid, -hp_id.sign)))
+                    hid, sign = choiceineq_between(helper, i, j_to, j_from)
+                    push!(local_edges, (from_idx, RegimeEdge(to_idx, i, hid, sign)))
+                    push!(local_edges, (to_idx, RegimeEdge(from_idx, i, hid, -sign)))
                 end
             end
         end

@@ -200,10 +200,10 @@ function _enumerate_all_regimes(
             refs = helper.choice_map[i][t]
             edges = Vector{Tuple{Int,Float64}}(undef, length(refs))
             for s in eachindex(refs)
-                ref = refs[s]
-                h = helper.hyperplanes[ref.hid]
-                competitor = ref.sign == 1 ? h.v : h.u
-                oriented_c0 = ref.sign == 1 ? h.c0 : -h.c0
+                hid, sign = refs[s]
+                h = helper.hyperplanes[hid]
+                competitor = sign == 1 ? h.v : h.u
+                oriented_c0 = sign == 1 ? h.c0 : -h.c0
                 edges[s] = (competitor, oriented_c0 - eps)
             end
             by_choice[t] = edges
@@ -360,7 +360,7 @@ function _perm_process(
         refs = helper.choice_map[i][t]
         block_start = helper.rowptr[i]
         for s in eachindex(refs)
-            hyperplane_id_signs[block_start + s - 1] = (refs[s].hid, refs[s].sign)
+            hyperplane_id_signs[block_start + s - 1] = refs[s]
         end
     end
 
@@ -411,10 +411,10 @@ function _calc_C_C0(
 
         for s in eachindex(refs)
             row = block_start + s - 1
-            ref = refs[s]
-            h = helper.hyperplanes[ref.hid]
+            hid, sign = refs[s]
+            h = helper.hyperplanes[hid]
 
-            if ref.sign == 1
+            if sign == 1
                 I[ptr] = row; J[ptr] = h.u; V[ptr] = Int8(1);  ptr += 1
                 I[ptr] = row; J[ptr] = h.v; V[ptr] = Int8(-1); ptr += 1
                 C0[row] = h.c0

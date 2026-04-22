@@ -92,8 +92,8 @@ function SIMOPaths(model::Bnc{T}, change_qK; rgm_paths=nothing) where {T}
         sources = Int[]
         sinks = Int[]
     else
-        sources = unique(Int(first(p)) for p in paths)
-        sinks = unique(Int(last(p)) for p in paths)
+        sources = unique(Int(first(p)) for p in rgm_paths)
+        sinks = unique(Int(last(p)) for p in rgm_paths)
     end
 
     return SIMOPaths(model, qK_grh, change_qK_idx, sources, sinks, rgm_paths)
