@@ -490,6 +490,7 @@ end
 const SISOPathKey = Tuple{Vararg{Int}}
 const SISOPairKey = NTuple{2,Int}
 const SISOPathConditionMap = Dict{SISOPathKey,Polyhedron}
+const SISOConditionSolver = Symbol
 
 struct SISODAG
     graph::SimpleDiGraph
@@ -785,6 +786,171 @@ function _find_all_path_conditions!(helper::SISOHelper)::SISOHelper
     return helper
 end
 
+function _pair_condition_entry_count(
+    helper::SISOHelper,
+    pairs::AbstractVector{<:Integer},
+    fixed::Int;
+    use_suffix::Bool,
+)::Int
+    total = 0
+    for vertex in pairs
+        cached = use_suffix ? _pair_conditions(helper, vertex, fixed) : _pair_conditions(helper, fixed, vertex)
+        isnothing(cached) && error("Missing cached pair condition while building DAG-scheduled SISO path conditions.")
+        total += length(cached)
+    end
+    return total
+end
+
+function _find_pair_path_conditions_dag!(
+    helper::SISOHelper,
+    from::Int,
+    to::Int,
+)::SISOPathConditionMap
+    cached = _pair_conditions(helper, from, to)
+    !isnothing(cached) && return cached
+
+    conditions = SISOPathConditionMap()
+    if from == to
+        condition = _get_vertex_prism!(helper, from)
+        isempty(condition) || (conditions[(from,)] = condition)
+        return _cache_pair_conditions!(helper, from, to, conditions)
+    end
+
+    _maybe_store_direct_path!(conditions, helper, from, to)
+
+    successors = _bridge_successors(helper, from, to)
+    predecessors = _bridge_predecessors(helper, from, to)
+    if isempty(successors) || isempty(predecessors)
+        return _cache_pair_conditions!(helper, from, to, conditions)
+    end
+
+    suffix_entries = _pair_condition_entry_count(helper, successors, to; use_suffix=true)
+    prefix_entries = _pair_condition_entry_count(helper, predecessors, from; use_suffix=false)
+
+    if suffix_entries <= prefix_entries
+        for successor in successors
+            suffix_conditions = _pair_conditions(helper, successor, to)
+            suffix_conditions === nothing && error("Missing cached suffix condition for pair ($(successor), $(to)).")
+            isempty(suffix_conditions) && continue
+            left_condition = _get_interface_prism!(helper, from, successor)
+            isempty(left_condition) && continue
+            for (suffix_path, suffix_condition) in suffix_conditions
+                full_condition = _intersect_nonempty(left_condition, suffix_condition)
+                isnothing(full_condition) && continue
+                conditions[_prepend_vertex(from, suffix_path)] = full_condition
+            end
+        end
+        return _cache_pair_conditions!(helper, from, to, conditions)
+    end
+
+    for predecessor in predecessors
+        prefix_conditions = _pair_conditions(helper, from, predecessor)
+        prefix_conditions === nothing && error("Missing cached prefix condition for pair ($(from), $(predecessor)).")
+        isempty(prefix_conditions) && continue
+        right_condition = _get_interface_prism!(helper, predecessor, to)
+        isempty(right_condition) && continue
+        for (prefix_path, prefix_condition) in prefix_conditions
+            full_condition = _intersect_nonempty(prefix_condition, right_condition)
+            isnothing(full_condition) && continue
+            conditions[_append_vertex(prefix_path, to)] = full_condition
+        end
+    end
+
+    return _cache_pair_conditions!(helper, from, to, conditions)
+end
+
+function _collect_required_pair_queries(
+    helper::SISOHelper,
+    roots::AbstractVector{<:Tuple{<:Integer,<:Integer}},
+)::Vector{Tuple{Int,Int}}
+    required = Set{Tuple{Int,Int}}()
+    pending = Tuple{Int,Int}[(Int(from), Int(to)) for (from, to) in roots]
+
+    while !isempty(pending)
+        from, to = pop!(pending)
+        key = (from, to)
+        key in required && continue
+        push!(required, key)
+
+        from == to && continue
+        successors = _bridge_successors(helper, from, to)
+        predecessors = _bridge_predecessors(helper, from, to)
+        (isempty(successors) || isempty(predecessors)) && continue
+
+        for successor in successors
+            push!(pending, (successor, to))
+        end
+        for predecessor in predecessors
+            push!(pending, (from, predecessor))
+        end
+    end
+
+    return collect(required)
+end
+
+"""
+    _find_all_path_conditions_dag!(helper) -> SISOHelper
+
+Solve reachable pair conditions in topological span order so each pair depends
+only on already-cached smaller subproblems.
+"""
+function _find_all_path_conditions_dag!(
+    helper::SISOHelper,
+    pair_queries::AbstractVector{<:Tuple{<:Integer,<:Integer}},
+)::SISOHelper
+    g = get_SISO_graph(helper)
+    topo = topological_sort_by_dfs(g)
+    n_vtx = length(topo)
+    n_vtx == 0 && return helper
+
+    topo_pos = zeros(Int, nv(g))
+    for (idx, vertex) in enumerate(topo)
+        topo_pos[vertex] = idx
+    end
+
+    required_pairs = _collect_required_pair_queries(helper, pair_queries)
+    isempty(required_pairs) && return helper
+
+    diagonal_vertices = Int[]
+    for (from, to) in required_pairs
+        push!(diagonal_vertices, from)
+        push!(diagonal_vertices, to)
+    end
+    unique!(diagonal_vertices)
+    sort!(diagonal_vertices; by=v -> topo_pos[v])
+    for vertex in diagonal_vertices
+        _find_pair_path_conditions_dag!(helper, vertex, vertex)
+    end
+
+    scheduled_pairs = Tuple{Int,Int}[]
+    for (from, to) in required_pairs
+        from == to && continue
+        _can_reach(helper, from, to) || continue
+        push!(scheduled_pairs, (from, to))
+    end
+    isempty(scheduled_pairs) && return helper
+
+    sort!(scheduled_pairs; by=pair -> (topo_pos[pair[2]] - topo_pos[pair[1]], topo_pos[pair[1]], topo_pos[pair[2]]))
+
+    if length(scheduled_pairs) == 1
+        from, to = only(scheduled_pairs)
+        _find_pair_path_conditions_dag!(helper, from, to)
+        return helper
+    end
+
+    @info "Start finding all possible path conditions across $(length(scheduled_pairs)) requested DAG-scheduled pairs."
+    @showprogress dt=0.1 desc="Finding path conditions" for (from, to) in scheduled_pairs
+        _find_pair_path_conditions_dag!(helper, from, to)
+    end
+    return helper
+end
+
+function _find_all_path_conditions_dag!(helper::SISOHelper)::SISOHelper
+    pair_queries = Tuple{Int,Int}[(source, sink) for source in helper.problem.dag.sources for sink in helper.problem.dag.sinks]
+    isempty(pair_queries) && return helper
+    return _find_all_path_conditions_dag!(helper, pair_queries)
+end
+
 get_path_conditions(helper::SISOHelper, from::Integer, to::Integer) = _find_pair_path_conditions!(helper, Int(from), Int(to))
 
 
@@ -795,6 +961,7 @@ get_path_conditions(helper::SISOHelper, from::Integer, to::Integer) = _find_pair
 mutable struct SISOPaths{T}
     problem::SISOProblem{T}
     rgm_paths::Vector{Vector{Int}}
+    condition_solver::SISOConditionSolver
     path_index::Union{Nothing,Dict{SISOPathKey,Int}}
     condition_helper::Union{Nothing,SISOHelper{T}}
     path_polys::Vector{Polyhedron}
@@ -802,12 +969,13 @@ mutable struct SISOPaths{T}
     path_volume_is_calc::BitVector
     path_polys_is_calc::BitVector
 
-    function SISOPaths(problem::SISOProblem{T}, rgm_paths) where {T}
+    function SISOPaths(problem::SISOProblem{T}, rgm_paths; condition_solver::Symbol=:recursive) where {T}
         rgm_paths_int = [Int.(path) for path in rgm_paths]
         n_paths = length(rgm_paths_int)
         return new{T}(
             problem,
             rgm_paths_int,
+            condition_solver,
             nothing,
             nothing,
             Vector{Polyhedron}(undef, n_paths),
@@ -895,6 +1063,9 @@ function _ensure_path_polyhedra!(
     helper = _ensure_condition_helper!(grh)
     pair_entries = _group_path_indices_by_endpoints(grh, path_idxs)
     isempty(pair_entries) && return nothing
+    if grh.condition_solver === :dag && isempty(helper.pair_conditions)
+        _find_all_path_conditions_dag!(helper, first.(pair_entries))
+    end
 
     if length(pair_entries) == 1
         ((from, to), idxs) = only(pair_entries)
@@ -918,9 +1089,10 @@ path-condition backend.
 function _calc_polyhedra_for_path(
     model::Bnc,
     paths::AbstractVector{<:AbstractVector{<:Integer}},
-    change_qK_idx::Integer,
+    change_qK_idx::Integer;
+    condition_solver::Symbol=:recursive,
 )::Vector{Polyhedron}
-    siso = SISOPaths(model, Int(change_qK_idx); rgm_paths=[Int.(path) for path in paths])
+    siso = SISOPaths(model, Int(change_qK_idx); rgm_paths=[Int.(path) for path in paths], condition_solver=condition_solver)
     return get_polyhedra(siso)
 end
 
@@ -938,7 +1110,7 @@ end
 
 Construct a `SISOPaths` object for a chosen qK coordinate.
 """
-function SISOPaths(model::Bnc{T}, change_qK; rgm_paths=nothing) where {T}
+function SISOPaths(model::Bnc{T}, change_qK; rgm_paths=nothing, condition_solver::Symbol=:recursive) where {T}
     change_qK_idx = locate_sym_qK(model, change_qK)
 
     if isnothing(rgm_paths)
@@ -953,7 +1125,7 @@ function SISOPaths(model::Bnc{T}, change_qK; rgm_paths=nothing) where {T}
     end
 
     problem = _build_siso_problem(model, change_qK_idx, qK_grh, sources, sinks)
-    return SISOPaths(problem, rgm_paths)
+    return SISOPaths(problem, rgm_paths; condition_solver=condition_solver)
 end
 
 """

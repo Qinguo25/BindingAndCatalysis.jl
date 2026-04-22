@@ -1,112 +1,301 @@
-# Work Summary And Suggestions
+# Session Handoff: Pair-Memo / SISO Investigation
 
-Latest update in this file: 2026-03-30
+## Current branch
 
-## What this package is doing
+- `xiaoyu_pair_memo`
 
-This package has three closely related layers:
 
-1. `BindRegime`
-   A dominance regime for the binding map `(L, N)`, with
-   - dominant monomial map `log q = P log x + P0`
-   - regime inequalities in `x` and transported inequalities in `(q, K)`
-   - inverse-like map `H` / `H0` when the regime is regular.
+## Main goal of this session
 
-2. `CatalysisRegime`
-   A dominance regime for the reduced catalysis selector `S_pos_neg`, with
-   - steady-state selector `Pθ`
-   - dominance selector `Cθ`
-   - lifted matrices `PΠ`, `CΠ`
-   - conditions naturally written in `(x, k)`.
+We focused on the single-in single-out path-condition calculation in `src/SISO.jl`, with three main questions:
 
-3. `BncRegime`
-   A mixed regime built from one binding regime and one catalysis regime, with
-   - `H_bd = Pθ Π H[:, 1:r_v]` for stability screening
-   - `(q, K, k)` consistency conditions
-   - `(q_ss, K, k)` steady-state consistency conditions
-   - the reduced map from `(q_ss, K, k)` to `x`
-   - when regular, an explicit affine expression for `q_cat`.
+- compare the current `pair_memo` backend against the other algorithm on branch `recontrol`
+- understand whether a DAG-style rewrite helps
+- identify what actually dominates runtime and pruning, so a future parallel version targets the right work
 
-## What was added in the earlier round
 
-- Completed access APIs for `CatalysisRegime` and `BncRegime`.
-- Added pair-based mixed-regime retrieval from binding perm + catalysis perm.
-- Added symbol helpers for `k`, `q_cat`, `w`, `q_para`, `q_ss`.
-- Added symbolic rendering for
-  - full catalysis dynamics
-  - reduced catalysis dynamics
-  - catalysis conditions in `(x, k)`
-  - mixed conditions in `(x, k)`, `(q, K, k)`, `(q_ss, K, k)`
-  - regular `q_cat` expressions in `(q_ss, K, k)`.
-- Added `is_stable` / `judge_stability!` for `BncRegime`.
-- Moved mixed-regime stability judgment to on-demand evaluation instead of computing it during construction.
-- Fixed cache invalidation for `BncRegimes`.
-- Fixed the existing `qK_x_mapping.jl` regression caused by the removed `_LN_sparse` field.
-- Added tests for catalytic and mixed-regime APIs.
+## Files changed in this session
 
-## What was added in today's round
+- [src/SISO.jl](/Users/wuxiaoyu/Documents/GitHub/Bnc_julia/src/SISO.jl)
+- [test/runtests.jl](/Users/wuxiaoyu/Documents/GitHub/Bnc_julia/test/runtests.jl)
+- [test/cdn4_path_condition_benchmark.jl](/Users/wuxiaoyu/Documents/GitHub/Bnc_julia/test/cdn4_path_condition_benchmark.jl)
+- [test/cdn4_pair_memo_reference.md](/Users/wuxiaoyu/Documents/GitHub/Bnc_julia/test/cdn4_pair_memo_reference.md)
+- [test/pair_memo_branch_analysis.jl](/Users/wuxiaoyu/Documents/GitHub/Bnc_julia/test/pair_memo_branch_analysis.jl)
 
-- Updated the binding graph cache so qK-space hyperplanes are pooled globally in `VertexGraph.qK_interface_pool`, mirroring the existing x-space hyperplane pool.
-- Changed `VertexEdge` to store only `qK_interface_idx` and `qK_interface_sign`; opposite directions now share one pooled qK hyperplane.
-- Restored the intended affine prefill strategy:
-  - propagate `H/H0` and `nullity = 0/1` along the x-neighbor graph
-  - defer only the remaining high-nullity candidates to `_calc_nullity`
-- Fixed the multithread propagation workspace bug by sizing thread-local buffers with `Threads.maxthreadid()` instead of `Threads.nthreads()`.
-- Corrected the `nullity = 1` affine conventions so `H = dir * adj(M)` and `H0 = -H * M0` stay on the same scale.
-- Simplified `_rank1_step_update_from_regular` back to the compact `Hyperplane_perm`-based form, while keeping the corrected singular-branch formulas.
-- Reworked `IntegrationHelper` into a lazy, thread-safe cache:
-  - it is no longer built eagerly in the `Bnc` constructor
-  - first numerical use now triggers `_integration_helper!`
-  - `_LN_sparse = Float64.(sparse([L; N]))` is cached inside the helper
-  - numerical routines reuse `copy(helper._LN_sparse)` and `deepcopy(helper._LN_lu)` instead of recomputing them
-- Updated `Archetecture.md` so the documented architecture matches the current graph/cache design.
-- Re-ran `test/runtests.jl`; the current suite passes after these changes.
 
-## Main design choices
+## Architecture and codebase reading
 
-- Kept the existing binding-regime API style.
-- Avoided a big data-structure rewrite; the mixed regime table is still a matrix of `Union{BncRegime,Nothing}`.
-- Kept the original graph-first affine propagation design instead of replacing it with an eager full-nullity sweep.
-- Kept the `Hyperplane_perm` abstraction and compact rank-1 update formulas instead of expanding the hyperplane logic into lower-level row arithmetic everywhere.
-- Used pooled hyperplane storage for both x-space and qK-space graph interfaces, so edges only carry indices and orientation signs.
-- Moved numerical integration caches toward lazy materialization, but kept per-call mutable state thread-local via local `copy` / `deepcopy`.
-- Used explicit names when the base variables differ:
-  - `show_condition_xk`
-  - `show_condition_qKk`
-  - `show_condition_qssKk`
-  - `show_expression_qcat`
-- Kept backward-flavored aliases in `src/old_api.jl`.
+Read [Archetecture.md](/Users/wuxiaoyu/Documents/GitHub/Bnc_julia/Archetecture.md) first.
 
-## Suggestions
+Important takeaways:
 
-1. Separate "dominance condition" from "steady-state equation" a little more explicitly in the public API.
+- `Bnc` is the main root object.
+- `SISOPaths` is the high-level wrapper for path/polyhedron work.
+- The current SISO path-condition backend lives in `src/SISO.jl`.
+- The hot recursive solver is `_find_pair_path_conditions!`.
+- The branch logic inside `_find_pair_path_conditions!` is:
+  - no-bridge early exit
+  - middle-overlap branch:
+    `n_solved_successors == 0 && n_solved_predecessors == 0`
+  - suffix branch:
+    `solved_successor_ratio > solved_predecessor_ratio`
+  - otherwise prefix branch
 
-Right now the catalysis layer still has both concepts, but some getters are dominance-only (`get_C_xk`) while some renderers show the full mixed set. This is mathematically fine, but clearer names like `get_dominance_*` and `get_steady_state_*` would make notebooks easier to read.
 
-2. Consider giving `BncRegimes` its own small container type.
+## Branch comparison work
 
-At the moment it is a matrix, which is simple and fast, but a wrapper with
-`bind_perm_dict`, `cat_perm_dict`, and `data` would make introspection cleaner and would mirror `Regimes`.
+We compared the current branch against `recontrol` using the `CDN4` example.
 
-3. Consider caching "catalysis-only in `(q, K, k)`" conditions.
+### Benchmark script
 
-Those are currently derived on demand. That keeps the stored object simple, but if you inspect many mixed regimes interactively, caching that block may be worthwhile.
+- [test/cdn4_path_condition_benchmark.jl](/Users/wuxiaoyu/Documents/GitHub/Bnc_julia/test/cdn4_path_condition_benchmark.jl)
 
-4. Consider documenting the three bases side-by-side in the README.
+This script:
 
-- `(x, k)` for regime selection / catalytic dominance
-- `(q, K, k)` for mixed consistency before eliminating `q_cat`
-- `(q_ss, K, k)` for steady-state reduced consistency
+- builds the `CDN4` model
+- runs `find_all_vertices!`
+- builds `SISOPaths`
+- runs `get_polyhedra`
+- prints timing and backend statistics
+- supports `condition_solver=:recursive` and `condition_solver=:dag`
 
-That distinction is the most important conceptual bridge in this package.
+### Saved recursive baseline
 
-5. `d_w` was easy to misread.
+- [test/cdn4_pair_memo_reference.md](/Users/wuxiaoyu/Documents/GitHub/Bnc_julia/test/cdn4_pair_memo_reference.md)
 
-I fixed one bug where it was accidentally taken from the wrong dimension of `L_Γ`. That suggests this field is subtle enough that a short constructor comment would help future maintenance.
+Original saved single-thread recursive baseline on `xiaoyu_pair_memo`:
 
-6. Consider keeping a small internal note on the two cache layers.
+- `find_all_vertices_seconds = 4.232400958`
+- `build_paths_seconds = 1.429451958`
+- `get_polyhedra_seconds = 6.057668875`
+- `cached_vertex_prisms = 51`
+- `cached_interface_prisms = 495`
+- `cached_pairs = 1172`
+- `cached_path_condition_entries = 6836`
 
-- `_L_helper` is eager and combinatorial
-- `IntegrationHelper` is lazy and numerical
+A later rerun gave slightly different timing but same overall picture:
 
-That split is now important enough that documenting it once near the constructor would reduce future confusion.
+- `find_all_vertices_seconds ≈ 4.53`
+- `build_paths_seconds ≈ 1.93`
+- `get_polyhedra_seconds ≈ 6.71`
+
+### `recontrol` result
+
+Earlier in the session, the `recontrol` branch was benchmarked on the same `CDN4` case while keeping `CDDLib`.
+
+Observed result:
+
+- `find_all_vertices_seconds ≈ 8.77`
+- `build_paths_seconds ≈ 0.30`
+- `get_polyhedra_seconds ≈ 218.08`
+- `computed_node_polyhedra = 170`
+- `computed_edge_polyhedra = 495`
+
+Interpretation:
+
+- with `CDDLib`, `recontrol` spends a lot of time materializing node/edge polyhedra up front
+- on this workload, current `pair_memo` is much faster
+
+Also noted:
+
+- `recontrol` has a constructor bug around `SIMOPaths` using an undefined `paths` variable
+- the benchmark script was written to fall back around that bug when possible
+
+
+## `xiaoyu_suffix_DAG` reading
+
+We also checked `xiaoyu_suffix_DAG`.
+
+Conclusion:
+
+- algorithmically useful as reference
+- not a direct apples-to-apples comparison for the requested test, because it uses a different polyhedra backend rather than the same `CDDLib` path
+
+
+## DAG experiment on current `pair_memo`
+
+I added an experimental DAG-scheduled variant into [src/SISO.jl](/Users/wuxiaoyu/Documents/GitHub/Bnc_julia/src/SISO.jl).
+
+### What was added
+
+- `condition_solver` option to `SISOPaths`
+- a new `:dag` backend path
+- DAG helper logic intended to compute pair conditions in a scheduled order
+- tests in [test/runtests.jl](/Users/wuxiaoyu/Documents/GitHub/Bnc_julia/test/runtests.jl) to compare recursive and DAG outputs on a smaller notebook model
+
+### Important conclusion
+
+The first DAG attempt was too eager.
+
+Main issue:
+
+- it expanded a much larger pair-dependency closure than the recursive memoized solver actually touches
+
+Measured effect on `CDN4`:
+
+- recursive cache footprint was about `1172` cached pairs in the original benchmark
+- one DAG dependency-closure probe found `2752` required pairs from the source-sink roots
+
+This explains why the DAG idea, implemented naively, did not help.
+
+Current understanding:
+
+- the correct pair-DAG idea should be:
+  - top-down to discover only needed pairs
+  - bottom-up to solve them
+- but the top-down phase must be selective, not broad
+- a good next step would be a branch-planned DAG:
+  - decide which dependency branch each pair will use
+  - only then schedule bottom-up evaluation
+
+
+## Branch and pruning analysis
+
+To understand what really matters for performance, I added:
+
+- [test/pair_memo_branch_analysis.jl](/Users/wuxiaoyu/Documents/GitHub/Bnc_julia/test/pair_memo_branch_analysis.jl)
+
+This script can:
+
+- instrument the current recursive `pair_memo` solver on `CDN4`
+- count branch usage
+- count pruning events
+- report inclusive time by branch family
+- sweep `CDN2` to `CDN5` for longest SISO path length and total path count
+
+### Useful commands
+
+- `julia --project=. test/pair_memo_branch_analysis.jl branch`
+- `julia --project=. test/pair_memo_branch_analysis.jl scaling`
+- `julia --project=. test/cdn4_path_condition_benchmark.jl`
+
+
+## Most important performance result
+
+On `CDN4`, the expensive part of the recursive solver is the middle-overlap branch:
+
+- `middle_overlap_pairs = 145`
+- `suffix_pairs = 244`
+- `prefix_pairs = 66`
+
+By branch count, suffix happens more often.
+
+By work and time, middle-overlap dominates:
+
+- `middle_generated_paths = 4089`
+- `suffix_generated_paths = 2305`
+- `prefix_generated_paths = 101`
+- `middle_overlap_seconds ≈ 6.16`
+- `suffix_seconds ≈ 1.75`
+- `prefix_seconds ≈ 0.037`
+
+This means:
+
+- the runtime bottleneck is the branch
+  `n_solved_successors == 0 && n_solved_predecessors == 0`
+- that is the middle bridge-through-`(successor, predecessor)` case
+
+
+## Tree pruning result
+
+This was the most useful finding for future parallelization.
+
+Question investigated:
+
+- does the solver prune mostly because candidate polyhedra fail geometric overlap tests?
+
+Answer on `CDN4`:
+
+- no
+
+Measured pruning counters:
+
+- `middle_empty_subproblem_skips = 430`
+- `no_bridge_pairs = 340`
+- `middle_intersection_empty_skips = 0`
+- `suffix_intersection_empty_skips = 0`
+- `prefix_intersection_empty_skips = 0`
+- all interface-empty skip counters were also `0`
+- suffix/prefix empty-subproblem skips were also `0`
+
+Interpretation:
+
+- the most important pruning is not the final geometric intersection test
+- the most important pruning is:
+  - the recursive middle subproblem is empty:
+    `isempty(middle_conditions)`
+- the next important prune is structural:
+  - no available bridge successors/predecessors
+
+Memoization also matters a lot:
+
+- `cache_hits = 1348`
+
+### Practical conclusion for parallelization
+
+This is the key design insight from the session.
+
+For `CDN4`, a good parallel attempt should:
+
+- preserve selective top-down discovery
+- preserve memoization, including caching of empty pair results
+- target the expensive middle-overlap work
+- avoid broad eager pair expansion
+- avoid over-investing in earlier geometric overlap checks, because those were not the dominant pruning source here
+
+In short:
+
+- empty middle subproblems matter more than polyhedron non-overlap on this workload
+
+
+## Path-length growth across CDN family
+
+Using the complete-dimerization family generated from the `CDN4` pattern:
+
+- `CDN2`: `n_regimes = 4`, `n_paths = 2`, longest path `2` edges / `3` vertices
+- `CDN3`: `n_regimes = 25`, `n_paths = 36`, longest path `5` edges / `6` vertices
+- `CDN4`: `n_regimes = 218`, `n_paths = 3936`, longest path `10` edges / `11` vertices
+- `CDN5`: `n_regimes = 2451`, `n_paths = 6243216`, longest path `19` edges / `20` vertices
+
+Important takeaway:
+
+- longest path length grows fast
+- total path count grows explosively
+
+
+## Current repo state note
+
+At the time this handoff was written, `git status` showed:
+
+- modified:
+  - `src/SISO.jl`
+  - `test/runtests.jl`
+- untracked:
+  - `test/cdn4_pair_memo_reference.md`
+  - `test/cdn4_path_condition_benchmark.jl`
+  - `test/pair_memo_branch_analysis.jl`
+- several deleted files under `test/` were also present in status and appear to be part of a separate cleanup
+
+Be careful not to accidentally undo unrelated user cleanup work.
+
+
+## Suggested next step
+
+Best next investigation:
+
+- break down `middle_empty_subproblem_skips = 430` by which `(successor, predecessor)` middle pairs are empty most often
+
+Why:
+
+- if a small set of empty middle-pair patterns accounts for much of the pruning, there may be a cheap pre-check or scheduling strategy that preserves recursive selectivity while making later parallelization cleaner
+
+Alternative next step:
+
+- redesign the DAG experiment so it first records a selective dependency plan for each pair, instead of expanding a broad dependency closure
+
+
+## Good prompt to restart on another machine
+
+When reopening Codex at home, a good starting prompt is:
+
+`Read test/work_summary_and_suggestions.md and continue the pair_memo parallelization investigation. Focus on the result that empty middle subproblems, not polyhedron overlap failures, were the main pruning source on CDN4.`

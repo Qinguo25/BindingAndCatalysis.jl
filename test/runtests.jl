@@ -379,26 +379,43 @@ end
 @testset "SISO Helper Condition Alignment Example" begin
     model = notebook_model2()
     siso = SISOPaths(model, 1)
+    siso_dag = SISOPaths(notebook_model2(), 1; condition_solver=:dag)
     path = [1, 4, 3]
     siso_poly = get_polyhedron(siso, path)
+    siso_dag_poly = get_polyhedron(siso_dag, path)
 
     helper = BindingAndCatalysis.SISOHelper(model, 1)
     BindingAndCatalysis._find_all_path_conditions!(helper)
+    helper_dag = BindingAndCatalysis.SISOHelper(notebook_model2(), 1)
+    BindingAndCatalysis._find_all_path_conditions_dag!(helper_dag)
     helper_path_polys = Dict{Tuple{Vararg{Int}},Any}()
+    helper_dag_path_polys = Dict{Tuple{Vararg{Int}},Any}()
     for source in get_sources(helper), sink in get_sinks(helper)
         for (path_key, poly) in BindingAndCatalysis.get_path_conditions(helper, source, sink)
             helper_path_polys[path_key] = poly
+        end
+    end
+    for source in get_sources(helper_dag), sink in get_sinks(helper_dag)
+        cached = get(helper_dag.pair_conditions, (source, sink), nothing)
+        isnothing(cached) && continue
+        for (path_key, poly) in cached
+            helper_dag_path_polys[path_key] = poly
         end
     end
 
     @test haskey(helper_path_polys, (1, 3))
     @test haskey(helper_path_polys, Tuple(path))
     @test Set(keys(helper_path_polys)) == Set(Tuple.(siso.rgm_paths))
+    @test Set(keys(helper_dag_path_polys)) == Set(keys(helper_path_polys))
 
     @test BindingAndCatalysis.same_polyhedron(siso_poly, helper_path_polys[Tuple(path)])
+    @test BindingAndCatalysis.same_polyhedron(siso_poly, siso_dag_poly)
+    @test BindingAndCatalysis.same_polyhedron(siso_dag_poly, helper_dag_path_polys[Tuple(path)])
 
     for (pth, poly) in helper_path_polys
         @test BindingAndCatalysis.same_polyhedron(get_polyhedron(siso, collect(pth)), poly)
+        @test BindingAndCatalysis.same_polyhedron(helper_dag_path_polys[pth], poly)
+        @test BindingAndCatalysis.same_polyhedron(get_polyhedron(siso_dag, collect(pth)), poly)
     end
 end
 
