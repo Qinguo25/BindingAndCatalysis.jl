@@ -1,3 +1,44 @@
+function _build_BncRegime(cat_rgms::Regimes, bind_rgms::Regimes)
+    n_cat_rgms = length(cat_rgms.vertices_data)
+    n_bind_rgms = length(bind_rgms.vertices_data)
+    bncrgms = Matrix{BncRegime}(undef, n_cat_rgms, n_bind_rgms)
+
+    @info "Matching Catalysis Regimes and Binding Regimes to build BncRegimes..."
+    Threads.@threads for i in 1:n_cat_rgms
+        cat_rgm = cat_rgms.vertices_data[i]
+        for j in 1:n_bind_rgms
+            bind_rgm = bind_rgms.vertices_data[j]
+            bncrgms[i, j] =  BncRegime(bind_rgm, cat_rgm)
+        end
+    end
+    @info "Finished matching BncRegimes."
+    return bncrgms
+end
+
+
+function _build_BncRegime(cat_rgms::Regimes, bind_rgms::Regimes)
+    n_cat_rgms = length(cat_rgms.vertices_data)
+    n_bind_rgms = length(bind_rgms.vertices_data)
+    bncrgms = Matrix{Union{BncRegime,Nothing}}(undef, n_cat_rgms, n_bind_rgms)
+
+    @info "Matching Catalysis Regimes and Binding Regimes to build BncRegimes..."
+    Threads.@threads for i in 1:n_cat_rgms
+        cat_rgm = cat_rgms.vertices_data[i]
+        for j in 1:n_bind_rgms
+            bind_rgm = bind_rgms.vertices_data[j]
+            bncrgms[i, j] = bind_rgm.nullity > 1 ? nothing : BncRegime(bind_rgm, cat_rgm)
+        end
+    end
+    @info "Finished matching BncRegimes."
+    return bncrgms
+end
+
+
+
+
+
+
+
 function _build_row_affine_cache(rgms, i, valid_js, perms, nlt_valid, N_ss, r_v, direction, cache)
     perm_keys, unique_keys, first_pos = _row_unique_perm_data(perms)
     Hs = Vector{Any}(undef, length(unique_keys))

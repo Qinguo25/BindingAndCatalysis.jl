@@ -221,10 +221,9 @@ end
 
 
 const BindAffineMatrix = Union{
-    SparseMatrixCSC{Float64,Int},
+    SparseMatrixCSC{Float64,Int},  # Keep this for now as singular regimes's C
     SparseMatrixCSC{Rational{Int},Int},
 }
-
 const BindConditionBiasVector = Union{Vector{Float64}, Vector{ExactLogExpr}}
 
 
@@ -325,7 +324,8 @@ mutable struct BncRegime <:AbstractRegime
     H_bd::SparseMatrixCSC{Float64, Int} 
     is_stable::Int8 # 1 for stable, 0 for unstable, -1 for unknown # judge from d_stable
 
-    #
+
+    # fixed point p
     nlt::Int  
     H::Union{AbstractMatrix{<:Real}, Nothing}
     H0::Union{AbstractVector{<:Real}, Nothing}

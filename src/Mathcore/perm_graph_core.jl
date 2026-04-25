@@ -9,6 +9,7 @@ mutable struct RegimeEdge
     i ::Int # different row index
     c_c0_x_idx::Int
     c_c0_x_sign::Int8
+      
     qK_interface_idx::Int
     qK_interface_sign::Int8
 

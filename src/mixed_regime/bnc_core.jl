@@ -16,27 +16,15 @@ function get_perm(rgm::BncRegime)
     r_v = size(rgm.catalysis_rgm.P, 1)
     return rgm.bind_rgm.perm[r_v + 1:end]
 end
+
 get_steady_state_perm(rgm::BncRegime) = get_perm(rgm)
 
 get_idx(rgm::BncRegime) = CartesianIndex(get_idx(rgm.catalysis_rgm), get_idx(rgm.bind_rgm))
+
 @inline is_bnc_regimes_built(model::Bnc) = !isnothing(model.BncRegimes)
 
-function _build_BncRegime(cat_rgms::Regimes, bind_rgms::Regimes)
-    n_cat_rgms = length(cat_rgms.vertices_data)
-    n_bind_rgms = length(bind_rgms.vertices_data)
-    bncrgms = Matrix{Union{BncRegime,Nothing}}(undef, n_cat_rgms, n_bind_rgms)
 
-    @info "Matching Catalysis Regimes and Binding Regimes to build BncRegimes..."
-    Threads.@threads for i in 1:n_cat_rgms
-        cat_rgm = cat_rgms.vertices_data[i]
-        for j in 1:n_bind_rgms
-            bind_rgm = bind_rgms.vertices_data[j]
-            bncrgms[i, j] = bind_rgm.nullity > 1 ? nothing : BncRegime(bind_rgm, cat_rgm)
-        end
-    end
-    @info "Finished matching BncRegimes."
-    return bncrgms
-end
+
 
 function get_idx(model::Bnc, bind, cat; check::Bool=false)
     cat_idx = get_idx(_require_catalysis_network(model), cat; check=check)
@@ -56,6 +44,7 @@ function have_perm(model::Bnc, bind, cat)
     return !isnothing(model.BncRegimes[get_idx(model, bind, cat)])
 end
 
+
 function get_bnc_regime(model::Bnc, bind, cat; check::Bool=false)
     match_regimes!(model)
     idx = get_idx(model, bind, cat; check=check)
@@ -66,6 +55,7 @@ function get_bnc_regime(model::Bnc, bind, cat; check::Bool=false)
     end
     return rgm
 end
+
 get_regime(model::Bnc, bind, cat; kwargs...) = get_bnc_regime(model, bind, cat; kwargs...)
 get_regime(rgm::BncRegime; kwargs...) = rgm
 

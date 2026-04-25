@@ -105,23 +105,9 @@ end
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+# ------------------------------------------------------------------------------------------------------------------------------------
+#                            CORE FUNCTIONS FOR CATALYSIS REGIMES
+#-------------------------------------------------------------------------------------------------------------------------------------
 
 
 
@@ -177,20 +163,43 @@ function _initialize_regime!(vtx::CatalysisRegime)
     perm = vtx.perm
 
     P_pos_neg, P0_pos_neg = _calc_P_P0(perm, model._S_helper)
-    C, C0 = _calc_C_C0(perm, model._S_helper)
+
     P = P_pos_neg[1:model.r_v, :] - P_pos_neg[model.r_v+1:end, :]
     P0 = P0_pos_neg[1:model.r_v] - P0_pos_neg[model.r_v+1:end]
 
+    C, C0 = _calc_C_C0(perm, model._S_helper)
+
     vtx.P_pos_neg = P_pos_neg
     vtx.P0_pos_neg = P0_pos_neg
+    
     vtx.P = P
     vtx.P0 = P0
+
     vtx.C = C
     vtx.C0 = C0
+
     vtx.CΠ = C * model.Π
     vtx.PΠ = P * model.Π
+    
     return vtx
 end
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 get_regimes_dict(model::CatalysisData) = begin
@@ -198,6 +207,13 @@ get_regimes_dict(model::CatalysisData) = begin
     get_regimes_dict(model.CatalysisRegimes)
 end
 get_catalysis_regimes_dict(model::AbstractBnc) = get_regimes_dict(_require_catalysis_network(model))
+
+
+
+
+
+
+
 
 
 function get_idx(model::CatalysisData, idx::T; check::Bool=false) where T<:Integer
