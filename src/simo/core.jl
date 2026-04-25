@@ -172,7 +172,7 @@ end
 
 
 
-function get_indices(grh::SIMOPaths,pth_idx::Union{AbstractVector,Nothing}=nothing)
+function get_indices(grh::SIMOPaths,pth_idx::Union{Nothing,Integer,AbstractVector}=nothing)
     return isnothing(pth_idx) ? collect(1:length(grh.rgm_paths)) : Int.(get_idx.(Ref(grh), pth_idx))
 end
 

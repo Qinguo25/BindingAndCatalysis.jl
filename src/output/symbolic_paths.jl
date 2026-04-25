@@ -112,6 +112,61 @@ end
     end
 end
 
+struct ExpressionPathView{P,E,B}
+    rgm_path::P
+    expr_rows::E
+    boundary_exprs::B
+end
+
+Base.length(::ExpressionPathView) = 2
+Base.getindex(v::ExpressionPathView, i::Integer) = i == 1 ? v.expr_rows : i == 2 ? v.boundary_exprs : throw(BoundsError(v, i))
+Base.iterate(v::ExpressionPathView, state::Int=1) = state == 1 ? (v.expr_rows, 2) : state == 2 ? (v.boundary_exprs, 3) : nothing
+
+@inline _path_block(x) = x isa AbstractVector ? x : Any[x]
+@inline _path_line(x) = replace(sprint(show, MIME"text/plain"(), x), '\n' => ' ')
+@inline _same_expr_row(a, b) = begin
+    aa, bb = _path_block(a), _path_block(b)
+    length(aa) == length(bb) && all(isequal.(aa, bb))
+end
+
+function _merged_expression_path_blocks(view::ExpressionPathView)
+    isempty(view.rgm_path) && return NamedTuple[]
+    starts = Int[1]
+    for i in 2:length(view.rgm_path)
+        _same_expr_row(view.expr_rows[i - 1], view.expr_rows[i]) || push!(starts, i)
+    end
+    blocks = NamedTuple[]
+    for (k, start) in enumerate(starts)
+        stop = k == length(starts) ? length(view.rgm_path) : starts[k + 1] - 1
+        push!(blocks, (
+            rgms=view.rgm_path[start:stop],
+            exprs=_path_block(view.expr_rows[start]),
+            boundary=stop < length(view.rgm_path) ? view.boundary_exprs[stop] : nothing,
+            boundary_from=stop < length(view.rgm_path) ? view.rgm_path[stop] : nothing,
+            boundary_to=stop < length(view.rgm_path) ? view.rgm_path[stop + 1] : nothing,
+        ))
+    end
+    return blocks
+end
+
+function Base.show(io::IO, ::MIME"text/plain", view::ExpressionPathView)
+    println(io, "Expression path along regimes: ", format_arrow(view.rgm_path))
+    for block in _merged_expression_path_blocks(view)
+        println(io, "Regime ", join(string.(block.rgms), ", "))
+        for expr in block.exprs
+            println(io, "  ", _path_line(expr))
+        end
+        if !isnothing(block.boundary)
+            println(io, "  cross ", block.boundary_from, " → ", block.boundary_to, " when")
+            for expr in _path_block(block.boundary)
+                println(io, "    ", _path_line(expr))
+            end
+        end
+    end
+end
+
+Base.show(io::IO, view::ExpressionPathView) = show(io, MIME"text/plain"(), view)
+
 function _path_expression_rows(
     model::Bnc,
     rgm_path::AbstractVector{<:Integer},
@@ -186,11 +241,17 @@ function get_expression_path(grh::SIMOPaths, pth; observe_x=nothing, kwargs...)
     )
 end
 
-show_expression_path(grh::SIMOPaths, pth; observe_x=nothing, kwargs...) =
-    get_expression_path(grh, pth; observe_x=observe_x, kwargs...)
+function show_expression_path(grh::SIMOPaths, pth; observe_x=nothing, kwargs...)
+    pth_idx = get_idx(grh, pth)
+    rgm_path = get_path(grh, pth_idx; return_idx=true)
+    expr_rows, boundary_exprs = get_expression_path(grh, pth; observe_x=observe_x, kwargs...)
+    return ExpressionPathView(rgm_path, expr_rows, boundary_exprs)
+end
 
-show_expression_path(model::Bnc, rgm_path, change_qK_idx, observe_x; kwargs...) =
-    get_expression_path(model, rgm_path, change_qK_idx; observe_x=observe_x, kwargs...)
+function show_expression_path(model::Bnc, rgm_path, change_qK_idx, observe_x; kwargs...)
+    expr_rows, boundary_exprs = get_expression_path(model, rgm_path, change_qK_idx; observe_x=observe_x, kwargs...)
+    return ExpressionPathView(Int.(get_idx.(Ref(model), rgm_path)), expr_rows, boundary_exprs)
+end
 
 show_expression_path(grh::SIMOPaths, pth_idx, observe_x; kwargs...) =
-    get_expression_path(grh, pth_idx; observe_x=observe_x, kwargs...)
+    show_expression_path(grh, pth_idx; observe_x=observe_x, kwargs...)

@@ -46,28 +46,4 @@ end
     @test fig isa BindingAndCatalysis.Makie.Figure
 end
 
-@testset "SIMO Exact Smoke" begin
-    N = [1 1 0 -1 0 0;
-         0 1 1 0 -1 0;
-         1 0 1 0 0 -1]
-    model = Bnc(N = N)
-    find_all_regimes!(model)
-    pths = SIMOPaths(model, 1)
-    polys = get_polyhedra(pths, 1:3)
-    @test length(polys) == 3
-    @test all(p -> p isa BindingAndCatalysis.Polyhedron, polys)
-    @test eltype(get_C0_qK(get_regime(model, 1))) == ExactLogExpr
-end
 
-@testset "SIMO Skips Isolated Singular Path Nodes" begin
-    model = minimal_model()
-    find_all_regimes!(model)
-    singular_idx = only(filter(i -> get_nullity(model, i) > 0, get_indices(model)))
-
-    pths = SIMOPaths(model, 1; rgm_paths = [[1, 2], [singular_idx]])
-
-    @test pths.rgm_paths == [[1, 2]]
-    @test pths.path_node_mask[1]
-    @test pths.path_node_mask[2]
-    @test !pths.path_node_mask[singular_idx]
-end

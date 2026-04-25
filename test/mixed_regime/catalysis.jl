@@ -24,8 +24,8 @@
     @test length(C0_xk_cat) == size(C_xk_cat, 1)
     @test nlt_xk_cat == cn.r_v
 
-    dyn_full = show_catalysis_dynamics(model)
-    dyn_reduced = show_reduced_catalysis_dynamics(model)
+    dyn_full = show_catalysis_dynamics(model; reduced = false)
+    dyn_reduced = show_catalysis_dynamics(model; reduced = true)
     @test length(dyn_full) == cn.r_v + cn.d_w
     @test length(dyn_reduced) == cn.r_v + cn.d_w
     @test length(show_condition_xk(cat_rgm)) == size(C_xk_cat, 1)
@@ -149,6 +149,34 @@ end
     @test !isempty(show_condition_qKk(mixed))
     @test !isempty(show_condition_wKk(mixed))
     @test !isempty(show_expression_qcat(regular))
+end
+
+@testset "Log-k Reparameterization Helpers" begin
+    L = [
+        0 1 1
+        1 0 1
+    ]
+    N = [1 1 -1]
+    model = Bnc(L = L, N = N, x_sym = [:E, :S, :C], q_sym = [:tS, :tE], K_sym = [:K])
+    update_catalysis!(
+        model;
+        Γ = [1 -1],
+        Π = [0 0 1; 0 1 0],
+        q_picked = [:tS],
+        k_sym = [:β, :γ],
+    )
+
+    match_regimes!(model)
+    mixed = get_bnc_regime(model, 1, 1; check = true)
+    R = reshape(Rational{Int}[1, 1], 2, 1)
+    b = ExactLogExpr[exact_log10_ratio(1, 2), 0]
+
+    C_wKθ, C0_wKθ, nlt_wKθ = get_C_C0_nullity_wKtheta(mixed; R = R, b = b)
+    @test Matrix(C_wKθ) == Rational{Int}[1 -1 0; -1 1 0]
+    @test C0_wKθ == ExactLogExpr[exact_log10_ratio(1, 2), 0]
+    @test nlt_wKθ == 1
+    @test !is_feasible_under_logkmap(mixed; R = R, b = b)
+    @test get_idx(mixed) ∉ feasible_bnc_regimes_under_logkmap(model; R = R, b = b, return_idx = true)
 end
 
 @testset "High-Nullity Mixed Regimes Keep Consistency" begin

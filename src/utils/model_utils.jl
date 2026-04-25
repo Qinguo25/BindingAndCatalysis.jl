@@ -63,7 +63,9 @@ Locate a symbol in a list of Symbolics variables.
 """
 function locate_sym(syms, target_sym)
     target_sym = Symbol(target_sym)
-    return findfirst(x -> x.val.name == target_sym, syms)
+    idx = findfirst(x -> x.val.name == target_sym, syms)
+    isnothing(idx) && throw(ArgumentError("Unknown symbol $(repr(target_sym)). Available symbols are $(string.(syms))."))
+    return idx
 end
 
 """

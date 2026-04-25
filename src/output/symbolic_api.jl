@@ -36,26 +36,60 @@ end
 show_conservation(Bnc::Bnc) = Bnc.q_sym .~ Bnc.L * Bnc.x_sym
 show_equilibrium(Bnc::Bnc; kwargs...) = show_expression_mapping(Bnc.N, zeros(Int, Bnc.r), Bnc.K_sym, Bnc.x_sym; kwargs...)
 
-function show_catalysis_dynamics(args...)
+function _catalysis_dynamics(args...; reduced::Bool=false)
     cn = _require_catalysis_network(args...)
-    w = w_sym(args...)
-    a_w = cn.a_w
-    q_cat_w = [q_cat_sym(args...); w[1:a_w]]
     v = _flux_sym(args...)
     eqs = Symbolics.Equation[]
-    append!(eqs, _d_dt(q_cat_w) .~ (cn.Γ * v))
-    append!(eqs, _d_dt(w[a_w + 1:end]) .~ 0)
+    if reduced
+        append!(eqs, _d_dt(q_cat_sym(args...)) .~ (cn.S * v))
+        append!(eqs, _d_dt(w_sym(args...)) .~ 0)
+    else
+        w = w_sym(args...)
+        a_w = cn.a_w
+        q_cat_w = [q_cat_sym(args...); w[1:a_w]]
+        append!(eqs, _d_dt(q_cat_w) .~ (cn.Γ * v))
+        append!(eqs, _d_dt(w[a_w + 1:end]) .~ 0)
+    end
     return eqs
 end
 
-function show_reduced_catalysis_dynamics(args...)
-    cn = _require_catalysis_network(args...)
-    v = _flux_sym(args...)
+@inline function _dominant_flux_terms(args...)
+    cat_rgm = get_catalysis_regime(args...)
+    cn = _require_catalysis_network(cat_rgm)
+    P_pos_neg = get_P_pos_neg(cat_rgm)
+    P0_pos_neg = get_P0_pos_neg(cat_rgm)
+    flux_terms = handle_log_weighted_sum(hcat(P_pos_neg * cn.Π, P_pos_neg), xk_sym(args...), P0_pos_neg)
+    return flux_terms[1:cn.r_v], flux_terms[cn.r_v + 1:end]
+end
+
+function _dominant_catalysis_dynamics(args...)
+    pos, neg = _dominant_flux_terms(args...)
     eqs = Symbolics.Equation[]
-    append!(eqs, _d_dt(q_cat_sym(args...)) .~ (cn.S * v))
+    append!(eqs, _d_dt(q_cat_sym(args...)) .~ (pos .- neg))
     append!(eqs, _d_dt(w_sym(args...)) .~ 0)
     return eqs
 end
+
+@inline function _substitute_binding_chart(eqs::AbstractVector{<:Symbolics.Equation}, rgm::Union{BindRegime,BncRegime})
+    bind_rgm = rgm isa BncRegime ? get_binding_regime(rgm) : rgm
+    subs = Dict(eq.lhs => eq.rhs for eq in show_expression_x(bind_rgm; log_space=false))
+    return [eq.lhs ~ Symbolics.substitute(eq.rhs, subs) for eq in eqs]
+end
+
+show_catalysis_dynamics(args...; reduced::Bool=true) = _catalysis_dynamics(args...; reduced=reduced)
+
+show_catalysis_dynamics(rgm::BindRegime; reduced::Bool=true) =
+    _substitute_binding_chart(_catalysis_dynamics(rgm; reduced=reduced), rgm)
+
+show_catalysis_dynamics(rgm::CatalysisRegime; reduced::Bool=true) = _dominant_catalysis_dynamics(rgm)
+
+show_catalysis_dynamics(rgm::BncRegime; reduced::Bool=true) =
+    _substitute_binding_chart(_dominant_catalysis_dynamics(rgm), rgm)
+
+show_catalysis_dynamics(model::Bnc, bind, cat; reduced::Bool=true) =
+    show_catalysis_dynamics(get_bnc_regime(model, bind, cat; check=true); reduced=reduced)
+
+show_reduced_catalysis_dynamics(args...; kwargs...) = show_catalysis_dynamics(args...; reduced=true, kwargs...)
 
 function show_condition_xk(rgm::CatalysisRegime; kind::Symbol=:all, kwargs...)
     syms = xk_sym(rgm)
