@@ -1,10 +1,10 @@
 """
     Bnc(; N=nothing, L=nothing, x_sym=nothing, q_sym=nothing, K_sym=nothing,
-        Γ=nothing, Π=nothing, k=nothing, cat_x_idx=nothing) -> Bnc
+        Γ=nothing, Π=nothing, k_sym=nothing, w_sym=nothing, cat_x_idx=nothing) -> Bnc
 
 Construct a binding network model from stoichiometry (`N`) or conservation (`L`)
 matrices and optional symbol metadata. Catalysis data can be attached through
-`Γ`, `Π`, and `k`.
+`Γ`, `Π`, `k_sym`, and `w_sym`.
 
 # Keyword Arguments
 - `N`: Stoichiometry matrix (reactions × species).
@@ -14,7 +14,8 @@ matrices and optional symbol metadata. Catalysis data can be attached through
 - `K_sym`: Symbols for binding constants.
 - `Γ`: Catalysis change matrix in qK space.
 - `Π`: Catalysis index and coefficient matrix.
-- `k`: Catalysis rate constants.
+- `k_sym`: Symbols for catalysis rate constants.
+- `w_sym`: Symbols for the new conservation quantities induced by catalysis.
 - `cat_x_idx`: Index of catalytic species.
 
 # Returns
@@ -62,7 +63,7 @@ end
 
 
 """
-    update_catalysis!(bnc::Bnc; Γ=nothing, Π=nothing, k=nothing, cat_x_idx=nothing) -> Bnc
+    update_catalysis!(bnc::Bnc; Γ=nothing, Π=nothing, k_sym=nothing, w_sym=nothing, cat_x_idx=nothing) -> Bnc
 
 Attach or update catalysis data on a `Bnc` model in-place.
 
@@ -72,7 +73,8 @@ Attach or update catalysis data on a `Bnc` model in-place.
 # Keyword Arguments
 - `Γ`: Catalysis change matrix in qK space.
 - `Π`: Catalysis index and coefficient matrix.
-- `k`: Rate constants.
+- `k_sym`: Symbols for catalysis rate constants.
+- `w_sym`: Symbols for the new conservation quantities induced by catalysis.
 - `cat_x_idx`: Index of catalytic species.
 
 # Returns
@@ -82,6 +84,7 @@ function update_catalysis!(model::Bnc;
     Γ::Union{<:AbstractMatrix{Int},Nothing}=nothing,
     Π::Union{<:AbstractMatrix{Int},Nothing}=nothing,
     k_sym::Union{<:AbstractVector,Nothing}=nothing,
+    w_sym::Union{<:AbstractVector,Nothing}=nothing,
     x_picked::Union{<:AbstractVector,Nothing}=nothing,
     q_picked::Union{<:AbstractVector,Nothing}=nothing,
     )
@@ -112,35 +115,35 @@ function update_catalysis!(model::Bnc;
     end
 
     k_sym = isnothing(k_sym) ? Symbolics.variables(:k, 1:size(Π,1)) : name_converter(k_sym)
-    model.catalysis = CatalysisData(model,Γ,Π, k_sym)
+    w_sym = isnothing(w_sym) ? nothing : name_converter(w_sym)
+    model.catalysis = CatalysisData(model, Γ, Π, k_sym, w_sym)
     return nothing
 end
 
-function fix_bn_catalysis!(bn::Bnc, new_ord::Vector{Int},L_Γ::AbstractMatrix{Int})
+function fix_bn_catalysis!(bn::Bnc, new_ord::Vector{Int}, L_Γ::AbstractMatrix{Int}, w_sym)
+    d_dep = size(L_Γ,2)
+    d_cat_full = length(new_ord)
+    d_cat = d_cat_full - d_dep
+
     if new_ord !== collect(1:length(new_ord)) # no reording should be made
         _change_q_L_order!(bn, new_ord)
 
         @info "q is reordered to make catalysis-involving species first"
-        d_dep = size(L_Γ,2)
-        d_cat_full = length(new_ord)
-        d_cat = d_cat_full - d_dep
-
-        if d_dep >0
-            @info "New conservation forms as catalysis involves"
-            #update the name of q_sym to make the first d_cat are q_cat, and the rest are q_dep
-            bn.q_sym[(d_cat+1):d_cat_full] = Symbolics.variables(:w, 1:d_dep)
-            # Calculate the L_w
-            L_w = L_Γ' * bn.L[1:d_cat_full,:]
-            @assert all(L_w .>=0) "L_w should be non-negative"
-            #update L_w to replace L_dep
-            bn.L[(d_cat+1):d_cat_full,:] = L_w
-        end
-
-        dropzeros!(bn.L)
-        _remove_regime_data!(bn) # remove the cached regime data, since the regimes will be changed.
-        #other initializing
     end
 
+    if d_dep >0
+        @info "New conservation forms as catalysis involves"
+        #update the name of q_sym to make the first d_cat are q_cat, and the rest are q_dep
+        bn.q_sym[(d_cat+1):d_cat_full] = isnothing(w_sym) ? Symbolics.variables(:w, 1:d_dep) : w_sym
+        # Calculate the L_w
+        L_w = L_Γ' * bn.L[1:d_cat_full,:]
+        @assert all(L_w .>=0) "L_w should be non-negative"
+        #update L_w to replace L_dep
+        bn.L[(d_cat+1):d_cat_full,:] = L_w
+    end
+
+    dropzeros!(bn.L)
+    _remove_regime_data!(bn) # remove the cached regime data, since the regimes will be changed.
     _rebuild_helper!(bn) # rebuild the helper parameters since L has been changed.
     return nothing
 end

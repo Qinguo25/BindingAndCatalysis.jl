@@ -65,14 +65,12 @@ function _row_valid_columns(rgms::AbstractMatrix{<:Union{BncRegime,Nothing}}, i:
 end
 
 function _row_unique_perm_data(perms)
-    perm_keys = Vector{Tuple{Vararg{Int}}}(undef, length(perms))
     unique_keys = Tuple{Vararg{Int}}[]
     first_pos = Int[]
     key_to_pos = Dict{Tuple{Vararg{Int}},Int}()
 
     for (k, perm) in enumerate(perms)
         key = Tuple(Int.(perm))
-        perm_keys[k] = key
         if !haskey(key_to_pos, key)
             key_to_pos[key] = length(unique_keys) + 1
             push!(unique_keys, key)
@@ -80,13 +78,7 @@ function _row_unique_perm_data(perms)
         end
     end
 
-    return perm_keys, unique_keys, first_pos
-end
-
-function _steady_state_offsets(vtx::BncRegime, r_v::Int, N_ss)
-    P0_ss = vtx.bind_rgm.P0[r_v + 1:end]
-    M0_ss = vcat(P0_ss, zeros(eltype(P0_ss), size(N_ss, 1)))
-    return P0_ss, M0_ss
+    return unique_keys, first_pos
 end
 
 function _materialize_real_vector(v)

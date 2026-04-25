@@ -84,6 +84,22 @@
     end
 end
 
+@testset "Catalysis Symbol Overrides" begin
+    model = minimal_model()
+    update_catalysis!(
+        model;
+        Γ = [1 -1; -1 1],
+        Π = [1 0 0; 0 1 0],
+        q_picked = [:tE, :tS],
+        k_sym = [:β, :γ],
+        w_sym = [:wtot],
+    )
+
+    @test string.(k_sym(model)) == ["β", "γ"]
+    @test string.(w_sym(model)) == ["wtot"]
+    @test string.(q_sym(model)) == ["tE", "wtot"]
+end
+
 @testset "Minimal Binding-Catalysis wKk Example" begin
     L = [
         0 1 1
@@ -133,6 +149,53 @@ end
     @test !isempty(show_condition_qKk(mixed))
     @test !isempty(show_condition_wKk(mixed))
     @test !isempty(show_expression_qcat(regular))
+end
+
+@testset "High-Nullity Mixed Regimes Keep Consistency" begin
+    model = sparse_singular_model()
+    update_catalysis!(
+        model;
+        Γ = [1 -1],
+        Π = [1 0 0 0 0 0; 0 1 0 0 0 0],
+        k_sym = [:k1, :k2],
+    )
+    match_regimes!(model)
+
+    bind_high = filter(r -> get_binding_regime(r).nullity > 1 && r.nlt <= 1, get_bnc_regimes(model))
+    @test !isempty(bind_high)
+
+    low_mixed = first(bind_high)
+    @test isnothing(get_H_bd(low_mixed))
+    @test ismissing(is_stable(low_mixed))
+    @test is_stable(low_mixed; return_code = true) == 0
+    @test !isempty(show_condition_qKk(low_mixed))
+    @test !isempty(show_condition_wKk(low_mixed))
+
+    H_low, H0_low = get_H_H0(low_mixed)
+    @test size(H_low, 1) == model.n
+    @test length(H0_low) == model.n
+
+    high_model = sparse_singular_model()
+    update_catalysis!(
+        high_model;
+        Γ = [1 -1],
+        Π = [1 0 0 0 0 0; 1 0 0 0 0 0],
+        k_sym = [:k1, :k2],
+    )
+    match_regimes!(high_model)
+
+    consistency_only = filter(r -> r.nlt > 1, get_bnc_regimes(high_model))
+    @test !isempty(consistency_only)
+
+    high_mixed = first(consistency_only)
+    @test isnothing(get_H_bd(high_mixed))
+    @test ismissing(is_stable(high_mixed))
+    @test is_stable(high_mixed; return_code = true) == 0
+    @test isnothing(high_mixed.H)
+    @test isnothing(high_mixed.H0)
+    @test !isempty(show_condition_qKk(high_mixed))
+    @test !isempty(show_condition_wKk(high_mixed))
+    @test_throws Exception get_H_H0(high_mixed)
 end
 
 @testset "Catalysis Offsets And Mixed Consistency" begin

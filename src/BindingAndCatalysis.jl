@@ -36,6 +36,8 @@ import Base: summary,show
 
 export Bnc, update_catalysis!
 export ExactLogExpr, exact_log10, exact_log10_ratio
+
+#Polyhedra export
 export Polyhedron, HRep, MixedMatHRep, hrep, polyhedron
 export VRep, vrep, points, rays, lines
 export HalfSpace, HyperPlane, intersect, eliminate, detecthlinearity!, removehredundancy!
@@ -321,8 +323,8 @@ mutable struct BncRegime <:AbstractRegime
     bind_rgm::BindRegime
     catalysis_rgm::CatalysisRegime
 
-    H_bd::SparseMatrixCSC{Float64, Int} 
-    is_stable::Int8 # 1 for stable, 0 for unstable, -1 for unknown # judge from d_stable
+    H_bd::Union{SparseMatrixCSC{Float64, Int}, Nothing}
+    is_stable::Int8 # 1 for stable, -1 for unstable, 0 for unknown # mapped from d_stable
 
 
     # fixed point p
@@ -347,12 +349,16 @@ mutable struct BncRegime <:AbstractRegime
     C_wKk::Union{AbstractMatrix{<:Real}, Nothing}
     C0_wKk::Union{AbstractVector{<:Real}, Nothing}
     function BncRegime(bind_rgm, catalysis_rgm)
-        PΠ = get_PΠ(catalysis_rgm)
-        H = get_H(bind_rgm)
-        r_v = size(PΠ,1)
-        H_bd = sparse(Float64.(PΠ * H[:,1:r_v]))
+        H_bd = if bind_rgm.nullity <= 1
+            PΠ = get_PΠ(catalysis_rgm)
+            H_bind = get_H(bind_rgm)
+            r_v = size(PΠ, 1)
+            sparse(Float64.(PΠ * H_bind[:, 1:r_v]))
+        else
+            nothing
+        end
         return new(bind_rgm, catalysis_rgm, 
-            H_bd, Int8(-1),
+            H_bd, Int8(0),
             -1,nothing, nothing,
             nothing,nothing, -1,  
             nothing, nothing)
@@ -399,7 +405,7 @@ mutable struct CatalysisData <:AbstractBnc
 
     CatalysisRegimes::Union{Regimes,Nothing} # Using Any for placeholder for CatalysisRegimes
 
-    function CatalysisData(bn,Γ, Π, k_sym)
+    function CatalysisData(bn,Γ, Π, k_sym, w_sym=nothing)
         Γ = sparse(Γ)
         Π = sparse(Π)
         d_wv, nv = size(Γ)
@@ -419,7 +425,7 @@ mutable struct CatalysisData <:AbstractBnc
         new_ord = vcat(pivits,no_pivits)
         Γ = Γ[new_ord, :]
         L_Γ = L_Γ[new_ord, :]
-        fix_bn_catalysis!(bn, new_ord, L_Γ)
+        fix_bn_catalysis!(bn, new_ord, L_Γ, w_sym)
 
         # Create sparse matrices
         _S_sparse = sparse(Float64.(S))

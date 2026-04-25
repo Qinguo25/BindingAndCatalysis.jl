@@ -87,20 +87,23 @@ n_bnc_regimes(model::Bnc; kwargs...) = length(get_bnc_regimes(model; kwargs...))
 
 function get_H_H0(rgm::BncRegime)
     rgm.nlt <= 1 || error("BncRegime nullity is bigger than 1, cannot get H0.")
+    (isnothing(rgm.H) || isnothing(rgm.H0)) && error("BncRegime affine map is not available.")
     return rgm.H, rgm.H0
 end
-get_H(rgm::BncRegime) = rgm.H
+get_H(rgm::BncRegime) = get_H_H0(rgm)[1]
 get_H0(rgm::BncRegime) = get_H_H0(rgm)[2]
 get_H_bd(rgm::BncRegime) = rgm.H_bd
 
 function judge_stability!(rgm::BncRegime; kwargs...)
-    rgm.is_stable = Int8(judge_dstable(rgm.H_bd; kwargs...))
+    isnothing(rgm.H_bd) && return (rgm.is_stable = Int8(0))
+    code = judge_dstable(rgm.H_bd; kwargs...)
+    rgm.is_stable = Int8(code == 0 ? -1 : code == -1 ? 0 : 1)
     return rgm.is_stable
 end
 
 function is_stable(rgm::BncRegime; recalculate::Bool=false, return_code::Bool=false, kwargs...)
-    code = (recalculate || rgm.is_stable < 0) ? judge_stability!(rgm; kwargs...) : rgm.is_stable
-    return return_code ? code : (code == 1 ? true : code == 0 ? false : missing)
+    code = (recalculate || rgm.is_stable == 0) ? judge_stability!(rgm; kwargs...) : rgm.is_stable
+    return return_code ? code : (code == 1 ? true : code == -1 ? false : missing)
 end
 is_stable(model::Bnc, bind, cat; kwargs...) = is_stable(get_bnc_regime(model, bind, cat; check=true); kwargs...)
 
