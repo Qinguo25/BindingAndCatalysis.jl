@@ -47,6 +47,20 @@ function collect_backend_stats(paths)
             stats["cached_interface_prisms"] = length(getproperty(helper, :interface_prisms))
             stats["cached_pairs"] = length(pair_conditions)
             stats["cached_path_condition_entries"] = sum(length(values) for values in values(pair_conditions))
+            if hasproperty(helper, :dag_profile)
+                profile = getproperty(helper, :dag_profile)
+                if !isnothing(profile)
+                    stats["dag_planning_seconds"] = getproperty(profile, :planning_ns) / 1e9
+                    stats["dag_pair_solve_seconds"] = getproperty(profile, :pair_solve_ns) / 1e9
+                    stats["dag_middle_collect_seconds"] = getproperty(profile, :middle_collect_ns) / 1e9
+                    stats["dag_middle_compute_seconds"] = getproperty(profile, :middle_compute_ns) / 1e9
+                    stats["dag_middle_merge_seconds"] = getproperty(profile, :middle_merge_ns) / 1e9
+                    stats["dag_pair_solve_calls"] = getproperty(profile, :pair_solve_calls)
+                    stats["dag_middle_parallel_nodes"] = getproperty(profile, :middle_parallel_nodes)
+                    stats["dag_middle_serial_nodes"] = getproperty(profile, :middle_serial_nodes)
+                    stats["dag_middle_join_pairs"] = getproperty(profile, :middle_join_pairs)
+                end
+            end
         end
     end
 

@@ -505,11 +505,27 @@ struct SISOProblem{T}
     dag::SISODAG
 end
 
+mutable struct SISODAGProfile
+    planning_ns::UInt64
+    pair_solve_ns::UInt64
+    middle_collect_ns::UInt64
+    middle_compute_ns::UInt64
+    middle_merge_ns::UInt64
+    pair_solve_calls::Int
+    planned_pairs::Int
+    middle_parallel_nodes::Int
+    middle_serial_nodes::Int
+    middle_join_pairs::Int
+end
+
+SISODAGProfile() = SISODAGProfile(0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+
 mutable struct SISOHelper{T}
     problem::SISOProblem{T}
     vertex_prisms::Vector{Union{Nothing,Polyhedron}}
     interface_prisms::Dict{SISOPairKey,Polyhedron}
     pair_conditions::Dict{SISOPairKey,SISOPathConditionMap}
+    dag_profile::Union{Nothing,SISODAGProfile}
 end
 
 @inline _pair_key(from::Int, to::Int)::SISOPairKey = (from, to)
@@ -572,6 +588,7 @@ function SISOHelper(problem::SISOProblem{T}) where {T}
         vertex_prisms,
         Dict{SISOPairKey,Polyhedron}(),
         Dict{SISOPairKey,SISOPathConditionMap}(),
+        nothing,
     )
 end
 
@@ -602,6 +619,7 @@ get_sinks(problem::SISOProblem) = copy(problem.dag.sinks)
 get_sinks(helper::SISOHelper) = get_sinks(helper.problem)
 get_change_qK_idx(problem::SISOProblem) = problem.change_qK_idx
 get_change_qK_idx(helper::SISOHelper) = get_change_qK_idx(helper.problem)
+get_dag_profile(helper::SISOHelper) = helper.dag_profile
 
 @inline _edge_exists(helper::SISOHelper, from::Int, to::Int) = has_edge(get_SISO_graph(helper), from, to)
 @inline _pair_is_cached(helper::SISOHelper, from::Int, to::Int) = haskey(helper.pair_conditions, _pair_key(from, to))
@@ -801,34 +819,260 @@ function _pair_condition_entry_count(
     return total
 end
 
-function _find_pair_path_conditions_dag!(
+struct SISOPairPlan
+    branch::Symbol
+    successors::Vector{Int}
+    predecessors::Vector{Int}
+    dependencies::Vector{SISOPairKey}
+end
+
+const SISO_DAG_MIDDLE_PARALLEL_THRESHOLD = 8
+
+function _build_pair_plan!(
     helper::SISOHelper,
+    plans::Dict{SISOPairKey,SISOPairPlan},
     from::Int,
     to::Int,
-)::SISOPathConditionMap
-    cached = _pair_conditions(helper, from, to)
+)::SISOPairPlan
+    key = _pair_key(from, to)
+    cached = get(plans, key, nothing)
     !isnothing(cached) && return cached
 
-    conditions = SISOPathConditionMap()
     if from == to
-        condition = _get_vertex_prism!(helper, from)
-        isempty(condition) || (conditions[(from,)] = condition)
-        return _cache_pair_conditions!(helper, from, to, conditions)
+        plan = SISOPairPlan(:diagonal, Int[], Int[], SISOPairKey[])
+        plans[key] = plan
+        return plan
     end
-
-    _maybe_store_direct_path!(conditions, helper, from, to)
 
     successors = _bridge_successors(helper, from, to)
     predecessors = _bridge_predecessors(helper, from, to)
     if isempty(successors) || isempty(predecessors)
-        return _cache_pair_conditions!(helper, from, to, conditions)
+        plan = SISOPairPlan(:no_bridge, successors, predecessors, SISOPairKey[])
+        plans[key] = plan
+        return plan
     end
 
-    suffix_entries = _pair_condition_entry_count(helper, successors, to; use_suffix=true)
-    prefix_entries = _pair_condition_entry_count(helper, predecessors, from; use_suffix=false)
+    n_solved_successors = count(successor -> haskey(plans, _pair_key(successor, to)), successors)
+    n_solved_predecessors = count(predecessor -> haskey(plans, _pair_key(from, predecessor)), predecessors)
+    solved_successor_ratio = n_solved_successors / length(successors)
+    solved_predecessor_ratio = n_solved_predecessors / length(predecessors)
 
-    if suffix_entries <= prefix_entries
+    if n_solved_successors == 0 && n_solved_predecessors == 0
+        dependencies = SISOPairKey[]
+        plan = SISOPairPlan(:middle, successors, predecessors, dependencies)
+        plans[key] = plan
         for successor in successors
+            for predecessor in predecessors
+                child_key = _pair_key(successor, predecessor)
+                push!(dependencies, child_key)
+                _build_pair_plan!(helper, plans, successor, predecessor)
+            end
+        end
+        return plan
+    end
+
+    if solved_successor_ratio > solved_predecessor_ratio
+        dependencies = SISOPairKey[]
+        plan = SISOPairPlan(:suffix, successors, predecessors, dependencies)
+        plans[key] = plan
+        for successor in successors
+            child_key = _pair_key(successor, to)
+            push!(dependencies, child_key)
+            _build_pair_plan!(helper, plans, successor, to)
+        end
+        return plan
+    end
+
+    dependencies = SISOPairKey[]
+    plan = SISOPairPlan(:prefix, successors, predecessors, dependencies)
+    plans[key] = plan
+    for predecessor in predecessors
+        child_key = _pair_key(from, predecessor)
+        push!(dependencies, child_key)
+        _build_pair_plan!(helper, plans, from, predecessor)
+    end
+    return plan
+end
+
+function _append_pair_postorder!(
+    pair::SISOPairKey,
+    plans::Dict{SISOPairKey,SISOPairPlan},
+    seen::Set{SISOPairKey},
+    out::Vector{SISOPairKey},
+)::Nothing
+    pair in seen && return nothing
+    push!(seen, pair)
+    plan = plans[pair]
+    for dependency in plan.dependencies
+        _append_pair_postorder!(dependency, plans, seen, out)
+    end
+    push!(out, pair)
+    return nothing
+end
+
+function _collect_pair_plan(
+    helper::SISOHelper,
+    roots::AbstractVector{<:Tuple{<:Integer,<:Integer}},
+)::Tuple{Dict{SISOPairKey,SISOPairPlan},Vector{SISOPairKey}}
+    plans = Dict{SISOPairKey,SISOPairPlan}()
+    roots_int = SISOPairKey[(Int(from), Int(to)) for (from, to) in roots]
+    for (from, to) in roots_int
+        _build_pair_plan!(helper, plans, from, to)
+    end
+
+    order = SISOPairKey[]
+    seen = Set{SISOPairKey}()
+    for root in roots_int
+        _append_pair_postorder!(root, plans, seen, order)
+    end
+    return plans, order
+end
+
+function _merge_middle_join!(
+    conditions::SISOPathConditionMap,
+    helper::SISOHelper,
+    from::Int,
+    successor::Int,
+    predecessor::Int,
+    to::Int,
+)::SISOPathConditionMap
+    profile = helper.dag_profile
+    profile !== nothing && (profile.middle_join_pairs += 1)
+    start_ns = profile === nothing ? UInt64(0) : time_ns()
+    left_condition = _get_interface_prism!(helper, from, successor)
+    isempty(left_condition) && return conditions
+    right_condition = _get_interface_prism!(helper, predecessor, to)
+    isempty(right_condition) && return conditions
+    middle_conditions = _pair_conditions(helper, successor, predecessor)
+    middle_conditions === nothing && error("Missing cached middle condition for pair ($(successor), $(predecessor)).")
+    isempty(middle_conditions) && return conditions
+
+    for (middle_path, middle_condition) in middle_conditions
+        full_condition = _intersect_nonempty(left_condition, middle_condition, right_condition)
+        isnothing(full_condition) && continue
+        conditions[_wrap_vertices(from, middle_path, to)] = full_condition
+    end
+    profile !== nothing && (profile.middle_compute_ns += time_ns() - start_ns)
+    return conditions
+end
+
+function _merge_middle_join_chunk!(
+    conditions::SISOPathConditionMap,
+    helper::SISOHelper,
+    from::Int,
+    child_pairs::AbstractVector{<:Tuple{Int,Int}},
+    start_idx::Int,
+    stop_idx::Int,
+    to::Int,
+)::SISOPathConditionMap
+    for idx in start_idx:stop_idx
+        successor, predecessor = child_pairs[idx]
+        _merge_middle_join!(conditions, helper, from, successor, predecessor, to)
+    end
+    return conditions
+end
+
+function _middle_join_chunk_ranges(
+    n_items::Int,
+    n_workers::Int,
+)::Vector{UnitRange{Int}}
+    n_items <= 0 && return UnitRange{Int}[]
+    n_chunks = min(n_items, max(1, n_workers))
+    chunk_size = cld(n_items, n_chunks)
+    ranges = UnitRange{Int}[]
+    start_idx = 1
+    while start_idx <= n_items
+        stop_idx = min(n_items, start_idx + chunk_size - 1)
+        push!(ranges, start_idx:stop_idx)
+        start_idx = stop_idx + 1
+    end
+    return ranges
+end
+
+function _collect_middle_join_pairs(
+    helper::SISOHelper,
+    from::Int,
+    to::Int,
+    successors::AbstractVector{Int},
+    predecessors::AbstractVector{Int},
+)::Vector{Tuple{Int,Int}}
+    child_pairs = Tuple{Int,Int}[]
+    for successor in successors
+        left_condition = _get_interface_prism!(helper, from, successor)
+        isempty(left_condition) && continue
+        for predecessor in predecessors
+            right_condition = _get_interface_prism!(helper, predecessor, to)
+            isempty(right_condition) && continue
+            middle_conditions = _pair_conditions(helper, successor, predecessor)
+            middle_conditions === nothing && error("Missing cached middle condition for pair ($(successor), $(predecessor)).")
+            isempty(middle_conditions) && continue
+            push!(child_pairs, (successor, predecessor))
+        end
+    end
+    return child_pairs
+end
+
+function _solve_pair_plan!(
+    helper::SISOHelper,
+    from::Int,
+    to::Int,
+    plan::SISOPairPlan,
+)::SISOPathConditionMap
+    pair_start_ns = time_ns()
+    cached = _pair_conditions(helper, from, to)
+    !isnothing(cached) && return cached
+    profile = helper.dag_profile
+    if profile !== nothing
+        profile.pair_solve_calls += 1
+    end
+
+    conditions = SISOPathConditionMap()
+    if plan.branch === :diagonal
+        condition = _get_vertex_prism!(helper, from)
+        isempty(condition) || (conditions[(from,)] = condition)
+        out = _cache_pair_conditions!(helper, from, to, conditions)
+        profile !== nothing && (profile.pair_solve_ns += time_ns() - pair_start_ns)
+        return out
+    end
+
+    _maybe_store_direct_path!(conditions, helper, from, to)
+    if plan.branch === :no_bridge
+        out = _cache_pair_conditions!(helper, from, to, conditions)
+        profile !== nothing && (profile.pair_solve_ns += time_ns() - pair_start_ns)
+        return out
+    end
+
+    if plan.branch === :middle
+        collect_start_ns = profile === nothing ? UInt64(0) : time_ns()
+        child_pairs = _collect_middle_join_pairs(helper, from, to, plan.successors, plan.predecessors)
+        profile !== nothing && (profile.middle_collect_ns += time_ns() - collect_start_ns)
+
+        if Threads.nthreads() > 1 && length(child_pairs) >= SISO_DAG_MIDDLE_PARALLEL_THRESHOLD
+            profile !== nothing && (profile.middle_parallel_nodes += 1)
+            chunk_ranges = _middle_join_chunk_ranges(length(child_pairs), 4 * Threads.nthreads())
+            local_maps = [SISOPathConditionMap() for _ in eachindex(chunk_ranges)]
+            merge_start_ns = profile === nothing ? UInt64(0) : time_ns()
+            Threads.@threads :dynamic for chunk_idx in eachindex(chunk_ranges)
+                range = chunk_ranges[chunk_idx]
+                _merge_middle_join_chunk!(local_maps[chunk_idx], helper, from, child_pairs, first(range), last(range), to)
+            end
+            for local_map in local_maps
+                merge!(conditions, local_map)
+            end
+            profile !== nothing && (profile.middle_merge_ns += time_ns() - merge_start_ns)
+        else
+            profile !== nothing && (profile.middle_serial_nodes += 1)
+            for (successor, predecessor) in child_pairs
+                _merge_middle_join!(conditions, helper, from, successor, predecessor, to)
+            end
+        end
+        out = _cache_pair_conditions!(helper, from, to, conditions)
+        profile !== nothing && (profile.pair_solve_ns += time_ns() - pair_start_ns)
+        return out
+    end
+
+    if plan.branch === :suffix
+        for successor in plan.successors
             suffix_conditions = _pair_conditions(helper, successor, to)
             suffix_conditions === nothing && error("Missing cached suffix condition for pair ($(successor), $(to)).")
             isempty(suffix_conditions) && continue
@@ -840,107 +1084,59 @@ function _find_pair_path_conditions_dag!(
                 conditions[_prepend_vertex(from, suffix_path)] = full_condition
             end
         end
-        return _cache_pair_conditions!(helper, from, to, conditions)
+        out = _cache_pair_conditions!(helper, from, to, conditions)
+        profile !== nothing && (profile.pair_solve_ns += time_ns() - pair_start_ns)
+        return out
     end
 
-    for predecessor in predecessors
-        prefix_conditions = _pair_conditions(helper, from, predecessor)
-        prefix_conditions === nothing && error("Missing cached prefix condition for pair ($(from), $(predecessor)).")
-        isempty(prefix_conditions) && continue
-        right_condition = _get_interface_prism!(helper, predecessor, to)
-        isempty(right_condition) && continue
-        for (prefix_path, prefix_condition) in prefix_conditions
-            full_condition = _intersect_nonempty(prefix_condition, right_condition)
-            isnothing(full_condition) && continue
-            conditions[_append_vertex(prefix_path, to)] = full_condition
+    if plan.branch === :prefix
+        for predecessor in plan.predecessors
+            prefix_conditions = _pair_conditions(helper, from, predecessor)
+            prefix_conditions === nothing && error("Missing cached prefix condition for pair ($(from), $(predecessor)).")
+            isempty(prefix_conditions) && continue
+            right_condition = _get_interface_prism!(helper, predecessor, to)
+            isempty(right_condition) && continue
+            for (prefix_path, prefix_condition) in prefix_conditions
+                full_condition = _intersect_nonempty(prefix_condition, right_condition)
+                isnothing(full_condition) && continue
+                conditions[_append_vertex(prefix_path, to)] = full_condition
+            end
         end
+        out = _cache_pair_conditions!(helper, from, to, conditions)
+        profile !== nothing && (profile.pair_solve_ns += time_ns() - pair_start_ns)
+        return out
     end
 
-    return _cache_pair_conditions!(helper, from, to, conditions)
-end
-
-function _collect_required_pair_queries(
-    helper::SISOHelper,
-    roots::AbstractVector{<:Tuple{<:Integer,<:Integer}},
-)::Vector{Tuple{Int,Int}}
-    required = Set{Tuple{Int,Int}}()
-    pending = Tuple{Int,Int}[(Int(from), Int(to)) for (from, to) in roots]
-
-    while !isempty(pending)
-        from, to = pop!(pending)
-        key = (from, to)
-        key in required && continue
-        push!(required, key)
-
-        from == to && continue
-        successors = _bridge_successors(helper, from, to)
-        predecessors = _bridge_predecessors(helper, from, to)
-        (isempty(successors) || isempty(predecessors)) && continue
-
-        for successor in successors
-            push!(pending, (successor, to))
-        end
-        for predecessor in predecessors
-            push!(pending, (from, predecessor))
-        end
-    end
-
-    return collect(required)
+    error("Unsupported SISO pair plan branch $(plan.branch) for pair ($(from), $(to)).")
 end
 
 """
     _find_all_path_conditions_dag!(helper) -> SISOHelper
 
-Solve reachable pair conditions in topological span order so each pair depends
-only on already-cached smaller subproblems.
+Selectively discover the same pair subproblems the recursive solver touches,
+then solve them bottom-up. Heavy middle-join nodes are split into parallel
+local join tasks while keeping pair ownership unique.
 """
 function _find_all_path_conditions_dag!(
     helper::SISOHelper,
     pair_queries::AbstractVector{<:Tuple{<:Integer,<:Integer}},
 )::SISOHelper
-    g = get_SISO_graph(helper)
-    topo = topological_sort_by_dfs(g)
-    n_vtx = length(topo)
-    n_vtx == 0 && return helper
-
-    topo_pos = zeros(Int, nv(g))
-    for (idx, vertex) in enumerate(topo)
-        topo_pos[vertex] = idx
-    end
-
-    required_pairs = _collect_required_pair_queries(helper, pair_queries)
-    isempty(required_pairs) && return helper
-
-    diagonal_vertices = Int[]
-    for (from, to) in required_pairs
-        push!(diagonal_vertices, from)
-        push!(diagonal_vertices, to)
-    end
-    unique!(diagonal_vertices)
-    sort!(diagonal_vertices; by=v -> topo_pos[v])
-    for vertex in diagonal_vertices
-        _find_pair_path_conditions_dag!(helper, vertex, vertex)
-    end
-
-    scheduled_pairs = Tuple{Int,Int}[]
-    for (from, to) in required_pairs
-        from == to && continue
-        _can_reach(helper, from, to) || continue
-        push!(scheduled_pairs, (from, to))
-    end
+    helper.dag_profile = SISODAGProfile()
+    planning_start_ns = time_ns()
+    plans, scheduled_pairs = _collect_pair_plan(helper, pair_queries)
+    helper.dag_profile.planning_ns += time_ns() - planning_start_ns
+    helper.dag_profile.planned_pairs = length(scheduled_pairs)
     isempty(scheduled_pairs) && return helper
-
-    sort!(scheduled_pairs; by=pair -> (topo_pos[pair[2]] - topo_pos[pair[1]], topo_pos[pair[1]], topo_pos[pair[2]]))
 
     if length(scheduled_pairs) == 1
         from, to = only(scheduled_pairs)
-        _find_pair_path_conditions_dag!(helper, from, to)
+        _solve_pair_plan!(helper, from, to, plans[(from, to)])
         return helper
     end
 
-    @info "Start finding all possible path conditions across $(length(scheduled_pairs)) requested DAG-scheduled pairs."
+    @info "Start finding all possible path conditions across $(length(scheduled_pairs)) selectively planned DAG pairs."
     @showprogress dt=0.1 desc="Finding path conditions" for (from, to) in scheduled_pairs
-        _find_pair_path_conditions_dag!(helper, from, to)
+        _solve_pair_plan!(helper, from, to, plans[(from, to)])
     end
     return helper
 end

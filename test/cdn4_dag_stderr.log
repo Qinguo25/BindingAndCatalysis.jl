@@ -1,0 +1,18 @@
+[ Info: ---------------------Start finding all regimes--------------------
+[ Info: Finished, with 218 regimes found and 218 asymptotic regimes.
+[ Info: 2.Building x-neighbor regime graph...
+Progress:  50%|█████████████████████                    |  ETA: 0:00:00[KProgress: 100%|█████████████████████████████████████████| Time: 0:00:00[K
+[ Info: 3.Building regime objects...
+[ Info: 4.Propagating affine data and deferred nullity labels...
+[ Info: Calculating vertices neighbor graph with qK change dir
+Progress:   1%|█                                        |  ETA: 0:00:34[KProgress:   3%|██                                       |  ETA: 0:00:13[KProgress: 100%|█████████████████████████████████████████| Time: 0:00:00[K
+[ Info: Finished.
+[ Info: sources: [1, 3, 4, 9, 11, 12, 13, 15, 33, 35, 36, 45, 48, 51, 56, 59, 63, 65, 66, 71, 73, 74, 75, 77, 95, 97, 98, 103, 105, 107, 110, 112, 115, 117, 118, 123, 125, 126, 127, 128, 140, 142, 143, 152, 154, 157, 162, 164, 167, 169, 170, 174, 176, 177, 178, 180, 192, 194, 195, 202, 205, 208, 212, 215]
+[ Info: sinks: [22]
+[ Info: Start enumerating paths from sources to sinks. This may take a while if there are many paths.
+[ Info: Total vertices to process in topological order: 218
+[ Info: Finished enumerating paths. Now collecting paths from sources. Total sources: 64
+[ Info: Start finding all possible path conditions across 1172 selectively planned DAG pairs.
+Finding path conditions   0%|█                           |  ETA: 0:09:23[KFinding path conditions   0%|█                           |  ETA: 0:07:11[KFinding path conditions   2%|█                           |  ETA: 0:01:16[KFinding path conditions  13%|████                        |  ETA: 0:00:13[KFinding path conditions  19%|██████                      |  ETA: 0:00:09[KFinding path conditions  27%|████████                    |  ETA: 0:00:06[KFinding path conditions  34%|██████████                  |  ETA: 0:00:05[KFinding path conditions  39%|████████████                |  ETA: 0:00:04[KFinding path conditions  48%|██████████████              |  ETA: 0:00:03[KFinding path conditions  55%|████████████████            |  ETA: 0:00:02[KFinding path conditions  63%|██████████████████          |  ETA: 0:00:02[KFinding path conditions  69%|████████████████████        |  ETA: 0:00:01[KFinding path conditions  74%|█████████████████████       |  ETA: 0:00:01[KFinding path conditions  77%|██████████████████████      |  ETA: 0:00:01[KFinding path conditions  80%|███████████████████████     |  ETA: 0:00:01[KFinding path conditions  86%|████████████████████████    |  ETA: 0:00:01[KFinding path conditions  90%|██████████████████████████  |  ETA: 0:00:00[KFinding path conditions  92%|██████████████████████████  |  ETA: 0:00:00[KFinding path conditions 100%|████████████████████████████| Time: 0:00:05[K
+[ Info: Start finding path conditions for 3936 paths across 64 source-sink pairs.
+Finding path conditions   3%|█                           |  ETA: 0:00:03[KFinding path conditions 100%|████████████████████████████| Time: 0:00:00[K

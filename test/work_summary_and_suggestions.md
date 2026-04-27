@@ -294,8 +294,65 @@ Alternative next step:
 - redesign the DAG experiment so it first records a selective dependency plan for each pair, instead of expanding a broad dependency closure
 
 
+## Follow-up investigation on empty middle pairs
+
+I continued the suggested next step by extending [test/pair_memo_branch_analysis.jl](/Users/wuxiaoyu/Documents/GitHub/Bnc_julia/test/pair_memo_branch_analysis.jl) to record:
+
+- how often each middle pair `(successor, predecessor)` is queried from the middle-overlap branch
+- how often that middle pair returns empty vs nonempty
+- which outer pairs `(from, to)` experience the most empty-middle skips
+
+### Updated command
+
+- `julia --project=. test/pair_memo_branch_analysis.jl branch`
+
+### New CDN4 result
+
+Relevant new summary fields from the rerun:
+
+- `middle_empty_subproblem_skips = 430`
+- `distinct_empty_middle_pairs = 248`
+- `max_empty_hits_per_pair = 3`
+- `pairs_with_single_empty_hit = 123`
+- `pairs_with_multiple_empty_hits = 125`
+- `top_10_empty_hit_share ≈ 0.0698`
+
+Top empty middle pairs all had only `3` empty hits each, for example:
+
+- `(2, 21)`
+- `(5, 18)`
+- `(7, 18)`
+- `(7, 30)`
+- `(10, 21)`
+
+### Interpretation
+
+This result is important for parallelization design:
+
+- empty middle subproblems are real and valuable pruning
+- but they are not concentrated in a tiny set of repeated middle-pair motifs
+- the top 10 empty middle pairs explain only about `7%` of all empty-middle skips
+
+So the likely conclusion is:
+
+- a cheap lookup table for only a few “known empty” middle pairs probably will not buy much on `CDN4`
+- preserving selective discovery still matters more than mining a tiny hot set of empty pairs
+
+### Updated likely next step
+
+The most promising next investigation now looks like:
+
+- record the full middle-branch dependency graph for only the actually visited pairs
+- then test whether those middle-branch child pairs can be scheduled in parallel without broadening discovery
+
+In other words:
+
+- not “precompute a small empty-pair blacklist”
+- more likely “parallelize the expensive middle branch while keeping the recursive/top-down discovery policy”
+
+
 ## Good prompt to restart on another machine
 
 When reopening Codex at home, a good starting prompt is:
 
-`Read test/work_summary_and_suggestions.md and continue the pair_memo parallelization investigation. Focus on the result that empty middle subproblems, not polyhedron overlap failures, were the main pruning source on CDN4.`
+`Read test/work_summary_and_suggestions.md and continue the pair_memo parallelization investigation.`
