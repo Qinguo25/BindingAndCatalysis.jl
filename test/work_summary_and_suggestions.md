@@ -2,7 +2,7 @@
 
 ## Current branch
 
-- `xiaoyu_pair_memo`
+- `xiaoyu_parallel_pair_memo`
 
 
 ## Main goal of this session
@@ -19,6 +19,7 @@ We focused on the single-in single-out path-condition calculation in `src/SISO.j
 - [src/SISO.jl](/Users/wuxiaoyu/Documents/GitHub/Bnc_julia/src/SISO.jl)
 - [test/runtests.jl](/Users/wuxiaoyu/Documents/GitHub/Bnc_julia/test/runtests.jl)
 - [test/cdn4_path_condition_benchmark.jl](/Users/wuxiaoyu/Documents/GitHub/Bnc_julia/test/cdn4_path_condition_benchmark.jl)
+- [test/cdn_overnight_benchmark.jl](/Users/wuxiaoyu/Documents/GitHub/Bnc_julia/test/cdn_overnight_benchmark.jl)
 - [test/cdn4_pair_memo_reference.md](/Users/wuxiaoyu/Documents/GitHub/Bnc_julia/test/cdn4_pair_memo_reference.md)
 - [test/pair_memo_branch_analysis.jl](/Users/wuxiaoyu/Documents/GitHub/Bnc_julia/test/pair_memo_branch_analysis.jl)
 
@@ -265,7 +266,7 @@ Important takeaway:
 
 ## Current repo state note
 
-At the time this handoff was written, `git status` showed:
+At the time this handoff was originally written, `git status` showed:
 
 - modified:
   - `src/SISO.jl`
@@ -277,6 +278,12 @@ At the time this handoff was written, `git status` showed:
 - several deleted files under `test/` were also present in status and appear to be part of a separate cleanup
 
 Be careful not to accidentally undo unrelated user cleanup work.
+
+Current later-session note:
+
+- the active branch is now `xiaoyu_parallel_pair_memo`
+- the current DAG backend has weighted progress diagnostics added
+- benchmark artifacts under `test/` and remote run artifacts on XiaoLab should be treated as data, not code to casually clean up
 
 
 ## Suggested next step
@@ -356,3 +363,227 @@ In other words:
 When reopening Codex at home, a good starting prompt is:
 
 `Read test/work_summary_and_suggestions.md and continue the pair_memo parallelization investigation.`
+
+
+## 2026-04-28 CDN5 remote benchmark update
+
+Remote machine:
+
+- host alias: `XiaoLab`
+- CPU allowance observed: `0-191`
+- memory observed: about `502 GiB`
+- Julia: `1.12.6`
+
+### Pair-memo DAG CDN5 run
+
+Run directory:
+
+- `/raid/users/xiaoyu/bnc_cdn5_20260427_114626`
+
+This run completed successfully.
+
+Important result fields:
+
+- `cdn = 5`
+- `condition_solver = "dag"`
+- `julia_threads = 100`
+- `n_regimes = 2451`
+- `n_sources = 625`
+- `n_sinks = 1`
+- `n_paths = 6243216`
+- `n_polyhedra = 6243216`
+- `elapsed_seconds = 19095.315429210663`
+- `get_polyhedra_seconds = 19086.222969167`
+- `cached_pairs = 32435`
+- `cached_path_condition_entries = 10496673`
+- `cached_vertex_prisms = 452`
+- `cached_interface_prisms = 7488`
+- `dag_planned_pairs = 32435`
+- `dag_pair_solve_calls = 32435`
+- `dag_middle_join_pairs = 28868`
+- `dag_middle_parallel_nodes = 962`
+- `dag_middle_serial_nodes = 2187`
+- `dag_middle_collect_seconds = 34.091755846`
+- `dag_middle_compute_seconds = 39382.462410701`
+- `dag_middle_merge_seconds = 6341.168057572`
+- `dag_pair_solve_seconds = 19080.445789332`
+
+CPU/core-use result from `artifacts/cdn5_julia_core_usage.tsv`:
+
+- monitor interval: 60 seconds
+- samples: `321`
+- average process CPU: `251.5%`, about `2.5` cores
+- peak process CPU: `299%`, about `3.0` cores
+- all samples were below `500%`, so this run never used 5 effective cores in a sampled minute
+- average active threads above 1% CPU: `52.5`
+- maximum active threads above 1% CPU: `127`
+- active threads above 10% CPU: about `1` throughout
+- maximum RSS: about `38.3 GiB`
+
+Interpretation:
+
+- the current pair-memo DAG code is memory-light enough for CDN5
+- it is not using the available parallel hardware well
+- simply giving the same implementation 50 or 100 cores will not materially speed it up
+- the observed long run behaves like a roughly 3-core job
+
+### Recontrol CDN5 run
+
+Run directory:
+
+- `/raid/users/xiaoyu/bnc_cdn5_recontrol_20260427_192359`
+
+This run did not complete.
+
+Notes:
+
+- `recontrol` does not accept `condition_solver = :dag`, so the branch default algorithm was used and recorded as `condition_solver = "recontrol_default"`
+- a temporary remote-copy fix was needed in `src/simo/core.jl`: `paths` -> `rgm_paths`
+- the benchmark script also needed to read `sources` and `sinks` fields directly because this branch does not provide `get_sources(::SIMOPaths)` / `get_sinks(::SIMOPaths)`
+
+Last observed state:
+
+- `stage = "solving_polyhedra"`
+- `n_paths = 6243216`
+- stderr reached suffix-DAG path-polyhedra construction at layer `10/20`, about `50%`
+- no `cdn5_result.json` was written
+- process disappeared after RSS climbed to about `479 GiB`, around `90.8%` of machine memory
+
+Interpretation:
+
+- recontrol exposed much more CPU parallelism during suffix-DAG construction
+- but it appears to be memory-prohibitive for CDN5 on this machine
+- likely failure mode is memory pressure / OOM, although kernel OOM logs were not accessible/visible
+
+### Weighted progress implementation
+
+The pair-memo DAG backend now uses a weighted progress bar rather than raw pair-count progress.
+
+Key idea:
+
+- raw pair count is misleading because pair work is heavy-tailed
+- each scheduled pair gets an adaptive weight
+- diagonal and no-bridge pairs have weight `1`
+- other pairs are weighted by dependency count plus already-cached child condition entries
+- the progress bar is updated once per solved pair, not inside inner loops
+
+Diagnostics added to the DAG profile and benchmark JSON:
+
+- `dag_weighted_work_done`
+- `dag_weighted_work_total`
+- `dag_weighted_progress`
+- `dag_weighted_progress_units`
+- `dag_largest_pair_seconds`
+- `dag_largest_pair`
+- `dag_current_pair`
+- `dag_current_pair_branch`
+- `dag_current_pair_weight`
+- `dag_current_pair_elapsed_seconds`
+- `dag_current_pair_running`
+- `dag_current_pair_output_entries`
+
+This should make future long runs easier to monitor, but it does not by itself improve throughput.
+
+
+## Critical rethink: should we implement a new parallel scheduler?
+
+Initial tempting proposal:
+
+- build a dependency-aware task queue of pair plans
+- run all ready pairs across worker tasks
+- commit results into the memo cache as dependencies finish
+
+This is directionally attractive because the CDN5 run used only about 3 effective cores. But it needs skepticism before implementation.
+
+### Why a fully dynamic pair task queue may be risky
+
+- The current selective DAG plan is already ordered by dependencies, but not necessarily designed for concurrent mutation of `helper`.
+- `SISOHelper` caches are shared mutable structures:
+  - `pair_conditions`
+  - `vertex_prisms`
+  - `interface_prisms`
+- Concurrent writes into these caches would require careful locking or per-worker staging.
+- Locks around polyhedron/cache operations could erase the expected speedup.
+- Pair costs are heavy-tailed, so static level scheduling may leave many workers idle near the tail.
+- Dynamic scheduling could improve load balance but complicates reproducibility and correctness.
+- Some expensive pair work may call CDDLib/polyhedron routines whose thread behavior or allocation behavior may not scale cleanly.
+- The existing CDN5 result says the current code is CPU-underutilized, but it does not yet prove which part is serial:
+  - pair scheduling
+  - cache lock/lookup shape
+  - polyhedron operations
+  - middle merge
+  - allocation/GC
+  - C library calls
+
+### Better implementation sequence
+
+Do not jump straight to a large concurrent pair-memo cache rewrite.
+
+Recommended sequence:
+
+1. **Profile first with sampled stacks on CDN4 and a short CDN5 window.**
+
+   Goal:
+
+   - identify where the 19086 seconds would go if sampled
+   - separate Julia time, CDDLib time, GC, cache lookup, middle compute, and merge
+
+2. **Measure dependency-layer width and weighted work per layer.**
+
+   Goal:
+
+   - answer whether a simple layer-parallel scheduler has enough ready work
+   - estimate tail width before adding concurrency
+
+3. **Prototype layer-parallel execution, not a full dynamic queue.**
+
+   Safer first step:
+
+   - keep the existing selective plan
+   - solve only one dependency layer at a time
+   - inside each layer, run independent pairs in parallel
+   - stage each pair result locally
+   - commit layer results serially or with minimal locking
+
+   Why this is attractive:
+
+   - correctness is easier because dependencies only point to earlier layers
+   - cache writes can be batched
+   - it preserves selective discovery
+   - it gives a real scaling test without the complexity of a full scheduler
+
+4. **Only then consider a dynamic ready queue.**
+
+   Use it if:
+
+   - layer width is high but pair costs are too skewed
+   - layer-parallel execution shows good speedup early but stalls badly at the tail
+
+5. **Split very heavy middle pairs only after profiling.**
+
+   This may be necessary for 50-core scaling, but it is the most delicate change.
+
+   The split should avoid shared writes inside inner loops:
+
+   - each chunk computes local condition candidates
+   - merge/deduplicate after chunk completion
+   - update the cache once per pair
+
+### Current recommendation
+
+Implementing some parallel structure is probably worthwhile, because the successful CDN5 run is clearly underusing cores.
+
+But the first implementation should be conservative:
+
+- add diagnostics for planned-pair dependency layers and per-layer work estimates
+- then implement layer-parallel pair solving with staged results
+- defer a fully dynamic work queue until measurements show layer scheduling is insufficient
+
+Expected upside:
+
+- if layers are wide, this could convert part of the calculation from about 3 effective cores toward the 50-core budget
+
+Main risk:
+
+- if the long tail is dominated by a very small number of huge middle pairs, layer parallelism alone will not solve the tail
+- in that case, chunking heavy middle joins becomes the next target

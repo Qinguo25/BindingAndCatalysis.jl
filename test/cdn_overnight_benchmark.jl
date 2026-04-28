@@ -45,6 +45,26 @@ function collect_helper_stats(paths)
             stats["dag_middle_parallel_nodes"] = getproperty(profile, :middle_parallel_nodes)
             stats["dag_middle_serial_nodes"] = getproperty(profile, :middle_serial_nodes)
             stats["dag_middle_join_pairs"] = getproperty(profile, :middle_join_pairs)
+            if hasproperty(profile, :weighted_work_done)
+                stats["dag_weighted_work_done"] = getproperty(profile, :weighted_work_done)
+                stats["dag_weighted_work_total"] = getproperty(profile, :weighted_work_total)
+                stats["dag_weighted_progress"] =
+                    getproperty(profile, :weighted_work_done) / max(1.0, getproperty(profile, :weighted_work_total))
+                stats["dag_weighted_progress_units"] = getproperty(profile, :weighted_progress_units)
+                stats["dag_largest_pair_seconds"] = getproperty(profile, :largest_pair_seconds)
+                stats["dag_largest_pair"] = [getproperty(profile, :largest_pair_from), getproperty(profile, :largest_pair_to)]
+                stats["dag_current_pair"] = [getproperty(profile, :current_pair_from), getproperty(profile, :current_pair_to)]
+                stats["dag_current_pair_branch"] = string(getproperty(profile, :current_pair_branch))
+                stats["dag_current_pair_weight"] = getproperty(profile, :current_pair_weight)
+                current_pair_start_ns = getproperty(profile, :current_pair_start_ns)
+                current_pair_elapsed_seconds = getproperty(profile, :current_pair_elapsed_seconds)
+                if current_pair_start_ns > 0
+                    current_pair_elapsed_seconds = (time_ns() - current_pair_start_ns) / 1e9
+                end
+                stats["dag_current_pair_elapsed_seconds"] = current_pair_elapsed_seconds
+                stats["dag_current_pair_running"] = current_pair_start_ns > 0
+                stats["dag_current_pair_output_entries"] = getproperty(profile, :current_pair_output_entries)
+            end
         end
     end
 

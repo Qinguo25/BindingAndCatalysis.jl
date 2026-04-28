@@ -516,9 +516,28 @@ mutable struct SISODAGProfile
     middle_parallel_nodes::Int
     middle_serial_nodes::Int
     middle_join_pairs::Int
+    weighted_work_done::Float64
+    weighted_work_total::Float64
+    weighted_progress_units::Int
+    largest_pair_seconds::Float64
+    largest_pair_from::Int
+    largest_pair_to::Int
+    current_pair_from::Int
+    current_pair_to::Int
+    current_pair_branch::Symbol
+    current_pair_weight::Float64
+    current_pair_start_ns::UInt64
+    current_pair_elapsed_seconds::Float64
+    current_pair_output_entries::Int
 end
 
-SISODAGProfile() = SISODAGProfile(0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+SISODAGProfile() = SISODAGProfile(
+    0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0,
+    0.0, 0.0, 0,
+    0.0, 0, 0,
+    0, 0, :none, 0.0, UInt64(0), 0.0, 0,
+)
 
 mutable struct SISOHelper{T}
     problem::SISOProblem{T}
@@ -827,6 +846,139 @@ struct SISOPairPlan
 end
 
 const SISO_DAG_MIDDLE_PARALLEL_THRESHOLD = 8
+const SISO_DAG_PROGRESS_UNITS = 10_000
+
+mutable struct SISODAGProgressState
+    pair_total::Int
+    pair_done::Int
+    static_pair_weight::Dict{SISOPairKey,Float64}
+    weighted_done::Float64
+    weighted_total::Float64
+    displayed_units::Int
+    largest_pair_seconds::Float64
+    largest_pair::SISOPairKey
+    cached_condition_entries::Int
+end
+
+function _static_pair_weight(plan::SISOPairPlan)::Float64
+    if plan.branch === :diagonal || plan.branch === :no_bridge
+        return 1.0
+    end
+    return Float64(max(1, length(plan.dependencies)))
+end
+
+function SISODAGProgressState(
+    scheduled_pairs::AbstractVector{SISOPairKey},
+    plans::Dict{SISOPairKey,SISOPairPlan},
+)::SISODAGProgressState
+    static_pair_weight = Dict{SISOPairKey,Float64}()
+    weighted_total = 0.0
+    for pair in scheduled_pairs
+        weight = _static_pair_weight(plans[pair])
+        static_pair_weight[pair] = weight
+        weighted_total += weight
+    end
+    return SISODAGProgressState(
+        length(scheduled_pairs),
+        0,
+        static_pair_weight,
+        0.0,
+        max(weighted_total, 1.0),
+        0,
+        0.0,
+        (0, 0),
+        0,
+    )
+end
+
+@inline function _cached_pair_condition_count(helper::SISOHelper, pair::SISOPairKey)::Int
+    cached = get(helper.pair_conditions, pair, nothing)
+    return isnothing(cached) ? 0 : length(cached)
+end
+
+function _adaptive_pair_weight(helper::SISOHelper, plan::SISOPairPlan)::Float64
+    if plan.branch === :diagonal || plan.branch === :no_bridge
+        return 1.0
+    end
+    child_entries = 0
+    for dependency in plan.dependencies
+        child_entries += _cached_pair_condition_count(helper, dependency)
+    end
+    return Float64(max(1, length(plan.dependencies) + child_entries))
+end
+
+function _progress_showvalues(
+    state::SISODAGProgressState,
+    profile::SISODAGProfile,
+)
+    weighted_pct = 100 * state.weighted_done / max(state.weighted_total, 1.0)
+    pair_pct = 100 * state.pair_done / max(state.pair_total, 1)
+    current_pair = (profile.current_pair_from, profile.current_pair_to)
+    largest_pair = state.largest_pair
+    return [
+        (:weighted, Printf.@sprintf("%.1f%%", weighted_pct)),
+        (:pairs, "$(state.pair_done)/$(state.pair_total) ($(Printf.@sprintf("%.1f%%", pair_pct)))"),
+        (:current, "$(current_pair) $(profile.current_pair_branch) $(Printf.@sprintf("%.1fs", profile.current_pair_elapsed_seconds))"),
+        (:largest, "$(largest_pair) $(Printf.@sprintf("%.1fs", state.largest_pair_seconds))"),
+        (:cached_entries, state.cached_condition_entries),
+    ]
+end
+
+function _begin_weighted_pair!(
+    state::SISODAGProgressState,
+    profile::SISODAGProfile,
+    helper::SISOHelper,
+    pair::SISOPairKey,
+    plan::SISOPairPlan,
+)::Float64
+    adaptive_weight = _adaptive_pair_weight(helper, plan)
+    state.weighted_total += adaptive_weight - state.static_pair_weight[pair]
+    from, to = pair
+    profile.current_pair_from = from
+    profile.current_pair_to = to
+    profile.current_pair_branch = plan.branch
+    profile.current_pair_weight = adaptive_weight
+    profile.current_pair_start_ns = time_ns()
+    profile.current_pair_elapsed_seconds = 0.0
+    profile.current_pair_output_entries = 0
+    return adaptive_weight
+end
+
+function _finish_weighted_pair!(
+    state::SISODAGProgressState,
+    profile::SISODAGProfile,
+    progress::ProgressMeter.Progress,
+    pair::SISOPairKey,
+    weight::Float64,
+    pair_seconds::Float64,
+    output_entries::Int,
+)::Nothing
+    state.pair_done += 1
+    state.weighted_done += weight
+    state.cached_condition_entries += output_entries
+    if pair_seconds > state.largest_pair_seconds
+        state.largest_pair_seconds = pair_seconds
+        state.largest_pair = pair
+    end
+
+    from, to = pair
+    profile.weighted_work_done = state.weighted_done
+    profile.weighted_work_total = state.weighted_total
+    profile.current_pair_from = from
+    profile.current_pair_to = to
+    profile.current_pair_start_ns = UInt64(0)
+    profile.current_pair_elapsed_seconds = pair_seconds
+    profile.current_pair_output_entries = output_entries
+    profile.largest_pair_seconds = state.largest_pair_seconds
+    profile.largest_pair_from = state.largest_pair[1]
+    profile.largest_pair_to = state.largest_pair[2]
+
+    units = floor(Int, SISO_DAG_PROGRESS_UNITS * state.weighted_done / max(state.weighted_total, 1.0))
+    state.displayed_units = max(state.displayed_units, min(SISO_DAG_PROGRESS_UNITS, units))
+    profile.weighted_progress_units = state.displayed_units
+    ProgressMeter.update!(progress, state.displayed_units; showvalues=_progress_showvalues(state, profile))
+    return nothing
+end
 
 function _build_pair_plan!(
     helper::SISOHelper,
@@ -1129,15 +1281,58 @@ function _find_all_path_conditions_dag!(
     isempty(scheduled_pairs) && return helper
 
     if length(scheduled_pairs) == 1
-        from, to = only(scheduled_pairs)
-        _solve_pair_plan!(helper, from, to, plans[(from, to)])
+        pair = only(scheduled_pairs)
+        from, to = pair
+        plan = plans[pair]
+        pair_weight = _adaptive_pair_weight(helper, plan)
+        helper.dag_profile.weighted_work_total = pair_weight
+        helper.dag_profile.current_pair_from = from
+        helper.dag_profile.current_pair_to = to
+        helper.dag_profile.current_pair_branch = plan.branch
+        helper.dag_profile.current_pair_weight = pair_weight
+        helper.dag_profile.current_pair_start_ns = time_ns()
+        pair_start_ns = time_ns()
+        conditions = _solve_pair_plan!(helper, from, to, plan)
+        pair_seconds = (time_ns() - pair_start_ns) / 1e9
+        helper.dag_profile.weighted_work_done = pair_weight
+        helper.dag_profile.weighted_progress_units = SISO_DAG_PROGRESS_UNITS
+        helper.dag_profile.current_pair_start_ns = UInt64(0)
+        helper.dag_profile.current_pair_elapsed_seconds = pair_seconds
+        helper.dag_profile.current_pair_output_entries = length(conditions)
+        helper.dag_profile.largest_pair_seconds = pair_seconds
+        helper.dag_profile.largest_pair_from = from
+        helper.dag_profile.largest_pair_to = to
         return helper
     end
 
     @info "Start finding all possible path conditions across $(length(scheduled_pairs)) selectively planned DAG pairs."
-    @showprogress dt=0.1 desc="Finding path conditions" for (from, to) in scheduled_pairs
-        _solve_pair_plan!(helper, from, to, plans[(from, to)])
+    progress_state = SISODAGProgressState(scheduled_pairs, plans)
+    helper.dag_profile.weighted_work_total = progress_state.weighted_total
+    progress = ProgressMeter.Progress(
+        SISO_DAG_PROGRESS_UNITS;
+        dt=1.0,
+        desc="Finding path conditions (weighted)",
+        showspeed=true,
+    )
+    ProgressMeter.update!(progress, 0; showvalues=_progress_showvalues(progress_state, helper.dag_profile))
+    for (from, to) in scheduled_pairs
+        pair = (from, to)
+        plan = plans[pair]
+        pair_weight = _begin_weighted_pair!(progress_state, helper.dag_profile, helper, pair, plan)
+        pair_start_ns = time_ns()
+        conditions = _solve_pair_plan!(helper, from, to, plan)
+        pair_seconds = (time_ns() - pair_start_ns) / 1e9
+        _finish_weighted_pair!(
+            progress_state,
+            helper.dag_profile,
+            progress,
+            pair,
+            pair_weight,
+            pair_seconds,
+            length(conditions),
+        )
     end
+    ProgressMeter.finish!(progress; showvalues=_progress_showvalues(progress_state, helper.dag_profile))
     return helper
 end
 
