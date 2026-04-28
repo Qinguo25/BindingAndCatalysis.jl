@@ -34,7 +34,9 @@ get_binding_network(rgm::BncRegime) = get_binding_network(rgm.bind_rgm)
 
 
 
-
+```
+Get the catalysis network from the model.
+```
 get_catalysis_network(model::CatalysisData) = model
 get_catalysis_network(rgm::BindRegime) = get_catalysis_network(rgm.network)
 get_catalysis_network(rgm::CatalysisRegime) = rgm.network
@@ -49,13 +51,8 @@ end
 
 
 
-@inline _catalysis_regimes(model::CatalysisData) = getfield(model, :CatalysisRegimes)
-@inline _catalysis_regimes_built(model::CatalysisData) = !isnothing(_catalysis_regimes(model))
-
-
-
 @inline function _catalysis_regimes_data(model::CatalysisData)
-    regimes = _catalysis_regimes(model)
+    regimes = getfield(model, :CatalysisRegimes)
     return isnothing(regimes) ? CatalysisRegime[] : regimes.vertices_data
 end
 
@@ -63,7 +60,7 @@ end
 
 
 @inline function _catalysis_regimes_perm_dict(model::CatalysisData)
-    regimes = _catalysis_regimes(model)
+    regimes = getfield(model, :CatalysisRegimes)
     return isnothing(regimes) ? Dict{Vector{Int},Int}() : regimes.vertices_perm_dict
 end
 

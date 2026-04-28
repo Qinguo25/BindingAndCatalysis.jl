@@ -1,4 +1,6 @@
-export judge_dstable
+module DStable
+
+export judge_dstable, d_class
 
 using SparseArrays
 using LinearAlgebra
@@ -465,3 +467,5 @@ function d_class(A::AbstractMatrix; tol::Real = 1e-10)
     end
 
 end
+
+end # module DStable

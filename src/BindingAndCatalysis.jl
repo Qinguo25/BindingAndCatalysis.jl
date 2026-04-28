@@ -20,6 +20,7 @@ using NonlinearSolve
 using Statistics:quantile
 using Distributions:Uniform, Normal
 
+# Exact log rational types
 include(joinpath(@__DIR__, "ExactTypes.jl"))
 using .ExactTypes: ExactLogExpr, exact_log10, exact_log10_ratio
 
@@ -27,12 +28,31 @@ using Polyhedra
 import CDDLib
 
 using Graphs
+
 import Printf
 import JSON3
 import ImageFiltering: imfilter, Kernel
 
 import Random
 import Base: summary,show
+
+#---------------------------plot dependency-----------------------------
+using Makie
+using GraphMakie
+using GraphMakie.NetworkLayout
+using Latexify
+
+using ProgressMeter
+
+
+
+
+
+
+
+
+
+
 
 export Bnc, update_catalysis!
 export ExactLogExpr, exact_log10, exact_log10_ratio
@@ -43,13 +63,7 @@ export VRep, vrep, points, rays, lines
 export HalfSpace, HyperPlane, intersect, eliminate, detecthlinearity!, removehredundancy!
 export dim, fulldim, hashyperplanes, hyperplanes, allhalfspaces, issubset
 
-#---------------------------plot dependency-----------------------------
-using Makie
-using GraphMakie
-using GraphMakie.NetworkLayout
-using Latexify
 
-using ProgressMeter
 
 
 
@@ -279,7 +293,7 @@ mutable struct CatalysisRegime{F<:Real} <:AbstractRegime
     network::Union{AbstractBnc,Nothing} # Reference to the parent Bnc model
     perm::Vector{Int} # The regime vector
     idx::Int # Index of the vertex in the Catalysis.vertices list
-    is_asymptotic::Bool # Whether the vertex is asymptotic or not.
+    is_asymptotic::Bool # Whether this catalysis regime is asymptotic or not.
 
     #--- Basic Properties ---
     P_pos_neg::Union{SparseMatrixCSC{Int, Int}, Nothing} # the vcat of P_pos and P_neg
@@ -291,15 +305,13 @@ mutable struct CatalysisRegime{F<:Real} <:AbstractRegime
     C0::Union{Vector{F}, Nothing} # the vcat of C0_pos and C0_neg
 
     CΠ:: Union{SparseMatrixCSC{Int, Int}, Nothing} # the vcat of C_pos*Π and C_neg*Π
+    # [CΠH C ] \log( (q_{cat},w,K), k) + C_0 + CΠH_0 >0 is the condition for catalysis regime
+    # [CΠH*_{w,K} -CΠH*_{̃k}P +C] \log((w,K),k) + C_0 + CΠH*_0 >0 is the consistency condition for fixed point.
+
     PΠ:: Union{SparseMatrixCSC{Int, Int}, Nothing} # the vcat of (P_pos - P_neg)*Π
+    # Act as N for catalysis regime.
+
     function CatalysisRegime(; network=nothing, perm, idx, is_asymptotic) 
-        bn = if !isnothing(network) && hasfield(typeof(network), :bn)
-            getfield(network, :bn)
-        elseif network isa AbstractBnc
-            network
-        else
-            nothing
-        end
         return new{ExactLogExpr}(network, perm, idx, is_asymptotic,
             nothing, # P_pos_neg
             nothing, # P0_pos_neg
@@ -323,20 +335,24 @@ mutable struct BncRegime <:AbstractRegime
     bind_rgm::BindRegime
     catalysis_rgm::CatalysisRegime
 
+
+    # Fixed point information:
     H_bd::Union{SparseMatrixCSC{Float64, Int}, Nothing}
     is_stable::Int8 # 1 for stable, -1 for unstable, 0 for unknown # mapped from d_stable
 
-
-    # fixed point p
     nlt::Int  
-    H::Union{AbstractMatrix{<:Real}, Nothing}
-    H0::Union{AbstractVector{<:Real}, Nothing}
+    H::Union{AbstractMatrix{<:Real}, Nothing} # x's reaction order to w,K,k
+    H0::Union{AbstractVector{<:Real}, Nothing} # Intersection
 
 
     # Conditions
     ## x, k base
     # Directly extract from bind_rgm and catalysis_rgm, no need to calculate separately.
     
+    # bind_conds: bind_rgm.C_x, bind_rgm.C0_x,
+    # Catalysis_conds: catalysis_rgm.
+
+
     ## q_cat, K, k base
     # Binding could directly extract from bind_rgm, catalysis needs to calculate seperately
     # If binding is singular, we need to Combine with M,M0 to do the elimination again
@@ -571,6 +587,8 @@ pth1 = joinpath(@__DIR__,"Mathcore/")
 include(joinpath(@__DIR__, "initialize.jl"))
 include(joinpath(pth1,"find_matrix_vertex.jl")) # before regimes.jl
 include(joinpath(pth1,"d_stable.jl"))
+using .DStable: judge_dstable
+export judge_dstable
 include(joinpath(pth1,"perm_graph_core.jl"))
 include(joinpath(pth1,"SparseSparse_modified.jl"))
 
