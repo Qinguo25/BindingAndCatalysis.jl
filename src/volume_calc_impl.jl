@@ -10,7 +10,9 @@ export calc_volume
     z2 = z * z
     denom = 1 + z2 / N
     center = (p̂ + z2 / (2N)) / denom
-    margin = (z / denom) * sqrt(p̂ * (1 - p̂) / N + z2 / (4N * N))
+    # Guard against tiny negative roundoff near 0 in the Wilson half-width.
+    radicand = max(0.0, p̂ * (1 - p̂) / N + z2 / (4N * N))
+    margin = (z / denom) * sqrt(radicand)
     return center, margin
 end
 

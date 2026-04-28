@@ -1,7 +1,5 @@
 @inline _render_simo_text(x) = replace(sprint(show, MIME"text/plain"(), x), '\n' => ' ')
 @inline _simo_expr_rhs(expr) = expr isa Symbolics.Equation ? expr.rhs : expr
-@inline _simo_expr_lhs(expr) = expr isa Symbolics.Equation ? expr.lhs : nothing
-@inline _simo_expr_text(expr) = _render_simo_text(expr)
 @inline _simo_expr_rhs_text(expr) = _render_simo_text(_simo_expr_rhs(expr))
 
 function _format_ro_value(x::Real; digits::Int=3)
@@ -69,7 +67,7 @@ function _simo_path_boundaries(
     return vals
 end
 
-function _simo_range_from_boundaries(boundaries::AbstractVector{<:Real}; start=nothing, stop=nothing, pad::Real=1.0)
+function _simo_range_from_boundaries(boundaries::AbstractVector{<:Real}; start=nothing, stop=nothing, pad::Real=4.0)
     finite_bounds = filter(isfinite, Float64.(collect(boundaries)))
     default_start = isempty(finite_bounds) ? -6.0 : minimum(finite_bounds) - pad
     default_stop = isempty(finite_bounds) ? 6.0 : maximum(finite_bounds) + pad
@@ -97,24 +95,16 @@ function _simo_numeric_logx(model::Bnc, params::AbstractVector{<:Real}, change_i
     return out
 end
 
-function _simo_regular_logx(
+function _simo_archetype_logx(
     model::Bnc,
-    rgm_idx::Integer,
-    observe_x_idx::AbstractVector{<:Integer},
     params::AbstractVector{<:Real},
     change_idx::Integer,
     qvals::AbstractVector{<:Real},
 )
-    get_nullity(model, rgm_idx) == 0 || return nothing
-    H, H0 = get_H_H0(model, rgm_idx)
-    base = _insert_simo_change(params, change_idx, 0.0)
-    out = Matrix{Float64}(undef, length(observe_x_idx), length(qvals))
-    for (row_idx, x_idx) in enumerate(observe_x_idx)
-        slope = Float64(H[x_idx, change_idx])
-        intercept = Float64(dot(H[x_idx, :], base) + H0[x_idx])
-        @inbounds for (col, q) in enumerate(qvals)
-            out[row_idx, col] = slope * q + intercept
-        end
+    qk_grid = _simo_sample_qk_grid(params, change_idx, qvals)
+    out = Matrix{Float64}(undef, model.n, length(qvals))
+    for i in eachindex(qvals)
+        out[:, i] = qK2x(model, collect(@view qk_grid[:, i]); input_logspace=true, output_logspace=true, use_vtx=true)
     end
     return out
 end
@@ -128,15 +118,56 @@ function _simo_dedup_consecutive(vals::AbstractVector{<:Integer})
     return out
 end
 
+function _simo_numeric_rgms(model::Bnc, numeric_logx::AbstractMatrix{<:Real})
+    out = Vector{Int}(undef, size(numeric_logx, 2))
+    for i in axes(numeric_logx, 2)
+        out[i] = assign_regime_x(model, collect(@view numeric_logx[:, i]); input_logspace=true, asymptotic_only=false, return_idx=true)
+    end
+    return out
+end
+
+function _simo_numeric_runs(qvals::AbstractVector{<:Real}, rgms::AbstractVector{<:Integer})
+    isempty(rgms) && return NamedTuple[]
+    runs = NamedTuple[]
+    start_idx = 1
+    for i in 2:(length(rgms) + 1)
+        if i > length(rgms) || rgms[i] != rgms[start_idx]
+            left = start_idx == 1 ? Float64(qvals[1]) : 0.5 * (Float64(qvals[start_idx - 1]) + Float64(qvals[start_idx]))
+            right = i > length(rgms) ? Float64(qvals[end]) : 0.5 * (Float64(qvals[i - 1]) + Float64(qvals[i]))
+            push!(runs, (rgm=Int(rgms[start_idx]), start_idx=start_idx, stop_idx=i - 1, left=left, right=right))
+            start_idx = i
+        end
+    end
+    return runs
+end
+
+function _simo_numeric_context(
+    model::Bnc,
+    rgm_path::AbstractVector{<:Integer},
+    params::AbstractVector{<:Real},
+    change_idx::Integer;
+    npoints::Integer=300,
+    start=nothing,
+    stop=nothing,
+    pad::Real=4.0,
+)
+    boundaries = _simo_path_boundaries(model, rgm_path, change_idx, params)
+    xstart, xstop = _simo_range_from_boundaries(boundaries; start=start, stop=stop, pad=pad)
+    qvals = collect(range(xstart, xstop; length=npoints))
+    numeric_logx = _simo_numeric_logx(model, params, change_idx, qvals)
+    numeric_rgms = _simo_numeric_rgms(model, numeric_logx)
+    runs = _simo_numeric_runs(qvals, numeric_rgms)
+    return (qvals=qvals, numeric_logx=numeric_logx, runs=runs, rgms=_simo_dedup_consecutive(numeric_rgms))
+end
+
 function _simo_path_from_numeric(
     model::Bnc,
     params::AbstractVector{<:Real},
     change_idx::Integer,
     qvals::AbstractVector{<:Real},
 )
-    qk_grid = _simo_sample_qk_grid(params, change_idx, qvals)
-    rgms = [assign_regime_qK(model, qk_grid[:, i]; input_logspace=true, asymptotic_only=false, return_idx=true) for i in axes(qk_grid, 2)]
-    return _simo_dedup_consecutive(rgms)
+    numeric_logx = _simo_numeric_logx(model, params, change_idx, qvals)
+    return _simo_dedup_consecutive(_simo_numeric_rgms(model, numeric_logx))
 end
 
 function _simo_y_limits(numeric_logx, regime_lines)
@@ -174,34 +205,6 @@ function _simo_region_label(
     end
 end
 
-function _simo_panel_text(
-    model::Bnc,
-    rgm_path::AbstractVector{<:Integer},
-    xsyms,
-    expr_rows::AbstractVector,
-    boundary_exprs::AbstractVector;
-    include_region_expr::Bool=true,
-    include_boundary_expr::Bool=true,
-)
-    lines = String["Path: $(format_arrow(rgm_path; prefix="#"))"]
-    for i in eachindex(rgm_path)
-        if include_region_expr
-            push!(lines, "Regime #$(rgm_path[i])")
-            expr_row = expr_rows[i]
-            if expr_row isa AbstractVector
-                append!(lines, ["  $(_render_simo_text(sym)) = $(_simo_expr_rhs_text(expr))" for (sym, expr) in zip(xsyms, expr_row)])
-            else
-                push!(lines, "  $(_render_simo_text(only(xsyms))) = $(_simo_expr_rhs_text(expr_row))")
-            end
-        end
-        if include_boundary_expr && i <= length(boundary_exprs)
-            push!(lines, "Boundary #$(rgm_path[i]) ↔ #$(rgm_path[i + 1])")
-            push!(lines, "  $(_simo_expr_text(boundary_exprs[i]))")
-        end
-    end
-    return join(lines, "\n")
-end
-
 function _simo_plot_one_path!(
     ax::Axis,
     model::Bnc,
@@ -214,68 +217,47 @@ function _simo_plot_one_path!(
     npoints::Integer=300,
     start=nothing,
     stop=nothing,
-    pad::Real=1.0,
+    pad::Real=4.0,
     show_numeric::Bool=true,
     show_regime::Bool=true,
     region_fill::Bool=true,
     region_label::Symbol=:reaction_order,
-    boundary_label::Symbol=:panel,
     region_alpha::Real=0.12,
-    boundary_color=:black,
-    boundary_lw::Real=1.0,
+    region_fontsize::Real=12,
+    numeric_linewidth::Real=2.0,
+    regime_linewidth::Real=2.0,
     numeric_linestyle=:solid,
     regime_linestyle=:dash,
     line_colors,
     show_legend_labels::Bool=false,
+    numeric_ctx=nothing,
 )
-    boundaries = _simo_path_boundaries(model, rgm_path, change_idx, params)
-    xstart, xstop = _simo_range_from_boundaries(boundaries; start=start, stop=stop, pad=pad)
-    qvals = collect(range(xstart, xstop; length=npoints))
+    ctx = isnothing(numeric_ctx) ? _simo_numeric_context(model, rgm_path, params, change_idx; npoints=npoints, start=start, stop=stop, pad=pad) : numeric_ctx
+    qvals = ctx.qvals
+    numeric_logx = ctx.numeric_logx
+    runs = ctx.runs
 
-    numeric_logx = show_numeric ? _simo_numeric_logx(model, params, change_idx, qvals) : nothing
-    ro_rows = _calc_RO_for_single_path(model, rgm_path, change_idx, observe_x_idx)
-    expr_rows, boundary_exprs = _path_expression_rows(model, rgm_path, change_idx, observe_x_idx; log_space=false)
-
-    regime_lines = Vector{Union{Nothing,Matrix{Float64}}}(undef, length(rgm_path))
-    if show_regime
-        for (i, rgm_idx) in enumerate(rgm_path)
-            regime_lines[i] = _simo_regular_logx(model, rgm_idx, observe_x_idx, params, change_idx, qvals)
-        end
-    else
-        fill!(regime_lines, nothing)
-    end
-
-    ymin, ymax = _simo_y_limits(numeric_logx, regime_lines)
+    archetype_logx = show_regime ? _simo_archetype_logx(model, params, change_idx, qvals) : nothing
+    ro_cache = Dict{Int, Vector{Float64}}()
+    expr_cache = Dict{Int, Any}()
+    ymin, ymax = _simo_y_limits(numeric_logx, [archetype_logx])
     ylims!(ax, ymin, ymax)
-    xlims!(ax, xstart, xstop)
+    xlims!(ax, qvals[1], qvals[end])
 
-    interval_edges = vcat([xstart], Float64.(boundaries), [xstop])
-    for i in eachindex(rgm_path)
-        left = interval_edges[i]
-        right = interval_edges[i + 1]
+    for run in runs
+        rgm_idx = run.rgm
+        left, right = run.left, run.right
         if region_fill && isfinite(left) && isfinite(right)
-            vspan!(ax, left, right; color=(rgm_cmap[rgm_path[i]], region_alpha))
+            vspan!(ax, left, right; color=(rgm_cmap[rgm_idx], region_alpha))
         end
 
-        if show_regime && !(regime_lines[i] === nothing)
-            mask = (qvals .>= left) .& (qvals .<= right)
-            if any(mask)
-                qseg = qvals[mask]
-                line = regime_lines[i]
-                for (j, x_idx) in enumerate(observe_x_idx)
-                    lines!(
-                        ax,
-                        qseg,
-                        @view(line[j, mask]);
-                        color=line_colors[j],
-                        linestyle=regime_linestyle,
-                        label=show_legend_labels && i == 1 ? "$(_render_simo_text(xsyms[j])) (regime)" : nothing,
-                    )
-                end
-            end
+        ro_row = get!(ro_cache, rgm_idx) do
+            vec(_calc_RO_for_single_path(model, [rgm_idx], change_idx, observe_x_idx))
         end
-
-        label_text = _simo_region_label(xsyms, @view(ro_rows[i, :]), expr_rows[i], region_label)
+        expr_row = get!(expr_cache, rgm_idx) do
+            first(_path_expression_rows(model, [rgm_idx], change_idx, observe_x_idx; log_space=false)[1])
+        end
+        label_text = _simo_region_label(xsyms, ro_row, expr_row, region_label)
         if !isnothing(label_text) && isfinite(left) && isfinite(right)
             text!(
                 ax,
@@ -283,12 +265,24 @@ function _simo_plot_one_path!(
                 ymax - 0.1 * (ymax - ymin);
                 text=label_text,
                 align=(:center, :top),
-                fontsize=12,
+                fontsize=region_fontsize,
                 color=:black,
             )
         end
     end
-
+    if !(archetype_logx === nothing)
+        for (j, x_idx) in enumerate(observe_x_idx)
+            lines!(
+                ax,
+                qvals,
+                @view(archetype_logx[x_idx, :]);
+                color=line_colors[j],
+                linestyle=regime_linestyle,
+                linewidth=regime_linewidth,
+                label=show_legend_labels ? "$(_render_simo_text(xsyms[j])) (regime)" : nothing,
+            )
+        end
+    end
     if !(numeric_logx === nothing)
         for (j, x_idx) in enumerate(observe_x_idx)
             lines!(
@@ -297,30 +291,13 @@ function _simo_plot_one_path!(
                 @view(numeric_logx[x_idx, :]);
                 color=line_colors[j],
                 linestyle=numeric_linestyle,
-                linewidth=2,
+                linewidth=numeric_linewidth,
                 label=show_legend_labels ? "$(_render_simo_text(xsyms[j])) (numeric)" : nothing,
             )
         end
     end
 
-    for (i, bnd) in enumerate(boundaries)
-        isfinite(bnd) || continue
-        vlines!(ax, [bnd]; color=boundary_color, linewidth=boundary_lw)
-        if boundary_label === :plot
-            text!(
-                ax,
-                bnd,
-                ymax - 0.02 * (ymax - ymin);
-                text=_simo_expr_text(boundary_exprs[i]),
-                rotation=pi / 2,
-                align=(:left, :top),
-                fontsize=11,
-                color=boundary_color,
-            )
-        end
-    end
-
-    return expr_rows, boundary_exprs
+    return nothing
 end
 
 function _resolve_simo_line_colors(n::Integer; colormap=:tab10)
@@ -334,6 +311,26 @@ function _resolve_simo_line_colors(n::Integer; colormap=:tab10)
     return cgrad(colormap, n, categorical=true)[1:n]
 end
 
+function _simo_figure_size(n_paths::Integer; size=nothing)
+    !isnothing(size) && return size
+    width = 980
+    height = max(320 * n_paths, 320)
+    return (width, height)
+end
+
+function _simo_style(fig_size)
+    width, _ = Float64.(Tuple(fig_size))
+    scale = clamp(width / 980.0, 0.9, 1.35)
+    return (
+        axis_fontsize = 14 * scale,
+        tick_fontsize = 11 * scale,
+        title_fontsize = 16 * scale,
+        region_fontsize = 11 * scale,
+        numeric_lw = 2.2 * scale,
+        regime_lw = 2.0 * scale,
+    )
+end
+
 function SIMO_plot(
     grh::SIMOPaths,
     pth_idx::Union{Nothing,Integer,AbstractVector}=nothing;
@@ -341,7 +338,7 @@ function SIMO_plot(
     npoints::Integer=300,
     start=nothing,
     stop=nothing,
-    pad::Real=1.0,
+    pad::Real=4.0,
     rand_line::Bool=false,
     rand_ray::Bool=false,
     extend::Real=4.0,
@@ -349,8 +346,6 @@ function SIMO_plot(
     show_regime::Bool=true,
     region_fill::Bool=true,
     region_label::Symbol=:reaction_order,
-    boundary_label::Symbol=:panel,
-    show_expression_panel::Bool=true,
     show_regime_colorbar::Bool=false,
     region_colormap=:rainbow,
     line_colormap=:tab10,
@@ -360,29 +355,40 @@ function SIMO_plot(
     path_idxs = get_indices(grh, pth_idx)
     observe_x_idx, xsyms, _ = _normalize_simo_observe_x(model, observe_x)
     line_colors = _resolve_simo_line_colors(length(observe_x_idx); colormap=line_colormap)
-    rgm_cmap = get_color_map(vcat(grh.rgm_paths[path_idxs]...); colormap=region_colormap)
 
     n_paths = length(path_idxs)
-    fig_size = isnothing(size) ? (show_expression_panel || boundary_label === :panel ? 1600 : 1200, max(360 * n_paths, 360)) : size
-    F = Figure(size=fig_size)
-
-    show_panel = show_expression_panel || boundary_label === :panel
+    fig_size = _simo_figure_size(n_paths; size=size)
+    style = _simo_style(fig_size)
+    F = Figure(size=fig_size, figure_padding=(10, 12, 10, 10))
+    rowgap!(F.layout, 8)
+    colgap!(F.layout, 12)
+    params_by_path = Dict{Int, Vector{Float64}}()
+    ctx_by_path = Dict{Int, Any}()
+    all_rgms = Int[]
+    for path_idx in path_idxs
+        params = get_one_inner_point(get_polyhedron(grh, path_idx); rand_line=rand_line, rand_ray=rand_ray, extend=extend)
+        params_by_path[path_idx] = params
+        ctx = _simo_numeric_context(model, grh.rgm_paths[path_idx], params, grh.change_qK_idx; npoints=npoints, start=start, stop=stop, pad=pad)
+        ctx_by_path[path_idx] = ctx
+        append!(all_rgms, ctx.rgms)
+    end
+    rgm_cmap = get_color_map(all_rgms; colormap=region_colormap)
     for (row, path_idx) in enumerate(path_idxs)
         ax = Axis(
             F[row, 1];
             xlabel="log" * repr(qK_sym(model)[grh.change_qK_idx]),
             ylabel=length(observe_x_idx) == 1 ? "log" * repr(only(xsyms)) : "log x",
             title="Path $(path_idx): $(format_arrow(get_path(grh, path_idx; return_idx=true); prefix="#"))",
+            xlabelsize=style.axis_fontsize,
+            ylabelsize=style.axis_fontsize,
+            titlesize=style.title_fontsize,
+            xticklabelsize=style.tick_fontsize,
+            yticklabelsize=style.tick_fontsize,
         )
 
-        params = get_one_inner_point(
-            get_polyhedron(grh, path_idx);
-            rand_line=rand_line,
-            rand_ray=rand_ray,
-            extend=extend,
-        )
+        params = params_by_path[path_idx]
 
-        expr_rows, boundary_exprs = _simo_plot_one_path!(
+        _simo_plot_one_path!(
             ax,
             model,
             grh.rgm_paths[path_idx],
@@ -399,32 +405,16 @@ function SIMO_plot(
             show_regime=show_regime,
             region_fill=region_fill,
             region_label=region_label,
-            boundary_label=boundary_label,
+            region_fontsize=style.region_fontsize,
+            numeric_linewidth=style.numeric_lw,
+            regime_linewidth=style.regime_lw,
             line_colors=line_colors,
             show_legend_labels=row == 1,
+            numeric_ctx=ctx_by_path[path_idx],
         )
 
         if row == 1 && (show_numeric || show_regime)
-            axislegend(ax; position=:rb)
-        end
-
-        if show_panel
-            Label(
-                F[row, 2],
-                _simo_panel_text(
-                    model,
-                    grh.rgm_paths[path_idx],
-                    xsyms,
-                    expr_rows,
-                    boundary_exprs;
-                    include_region_expr=show_expression_panel,
-                    include_boundary_expr=boundary_label === :panel,
-                );
-                justification=:left,
-                halign=:left,
-                valign=:top,
-                tellwidth=false,
-            )
+            axislegend(ax; position=:rb, labelsize=style.tick_fontsize)
         end
     end
 
@@ -443,17 +433,15 @@ function SIMO_plot(
     npoints::Integer=300,
     start::Real=-6,
     stop::Real=6,
-    pad::Real=1.0,
+    pad::Real=4.0,
     show_numeric::Bool=true,
     show_regime::Bool=true,
     region_fill::Bool=true,
     region_label::Symbol=:reaction_order,
-    boundary_label::Symbol=:panel,
-    show_expression_panel::Bool=true,
     show_regime_colorbar::Bool=false,
     region_colormap=:rainbow,
     line_colormap=:tab10,
-    size=(1600, 400),
+    size=nothing,
 )
     change_idx = locate_sym_qK(model, change_idx)
     params = _normalize_simo_parameters(model, parameters, change_idx)
@@ -461,17 +449,26 @@ function SIMO_plot(
     rgm_path = isnothing(rgm_path) ? _simo_path_from_numeric(model, params, change_idx, qvals) : Int.(get_idx.(Ref(model), rgm_path))
     observe_x_idx, xsyms, _ = _normalize_simo_observe_x(model, observe_x)
     line_colors = _resolve_simo_line_colors(length(observe_x_idx); colormap=line_colormap)
-    rgm_cmap = get_color_map(rgm_path; colormap=region_colormap)
+    ctx = _simo_numeric_context(model, rgm_path, params, change_idx; npoints=npoints, start=start, stop=stop, pad=pad)
+    rgm_cmap = get_color_map(ctx.rgms; colormap=region_colormap)
 
-    F = Figure(size=size)
+    fig_size = _simo_figure_size(1; size=size)
+    style = _simo_style(fig_size)
+    F = Figure(size=fig_size, figure_padding=(10, 12, 10, 10))
+    colgap!(F.layout, 12)
     ax = Axis(
         F[1, 1];
         xlabel="log" * repr(qK_sym(model)[change_idx]),
         ylabel=length(observe_x_idx) == 1 ? "log" * repr(only(xsyms)) : "log x",
         title="Path: $(format_arrow(rgm_path; prefix="#"))",
+        xlabelsize=style.axis_fontsize,
+        ylabelsize=style.axis_fontsize,
+        titlesize=style.title_fontsize,
+        xticklabelsize=style.tick_fontsize,
+        yticklabelsize=style.tick_fontsize,
     )
 
-    expr_rows, boundary_exprs = _simo_plot_one_path!(
+    _simo_plot_one_path!(
         ax,
         model,
         rgm_path,
@@ -488,32 +485,16 @@ function SIMO_plot(
         show_regime=show_regime,
         region_fill=region_fill,
         region_label=region_label,
-        boundary_label=boundary_label,
+        region_fontsize=style.region_fontsize,
+        numeric_linewidth=style.numeric_lw,
+        regime_linewidth=style.regime_lw,
         line_colors=line_colors,
         show_legend_labels=true,
+        numeric_ctx=ctx,
     )
 
     if show_numeric || show_regime
-        axislegend(ax; position=:rb)
-    end
-
-    if show_expression_panel || boundary_label === :panel
-        Label(
-            F[1, 2],
-            _simo_panel_text(
-                model,
-                rgm_path,
-                xsyms,
-                expr_rows,
-                boundary_exprs;
-                include_region_expr=show_expression_panel,
-                include_boundary_expr=boundary_label === :panel,
-            );
-            justification=:left,
-            halign=:left,
-            valign=:top,
-            tellwidth=false,
-        )
+        axislegend(ax; position=:rb, labelsize=style.tick_fontsize)
     end
 
     if show_regime_colorbar

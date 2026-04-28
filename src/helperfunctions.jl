@@ -1,4 +1,5 @@
 export locate_sym_x, locate_sym_qK, pythonprint, N_generator, L_generator, randomize
+export locate_sym_qcat, locate_sym_wKk
 export same_polyhedron
 
 include(joinpath(@__DIR__, "utils/matrix_utils.jl"))

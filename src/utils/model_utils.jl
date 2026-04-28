@@ -76,3 +76,5 @@ Return the provided index directly for convenience.
 locate_sym(syms, target_sym::Integer) = target_sym
 locate_sym_x(model::Bnc, target_sym) = locate_sym(x_sym(model), target_sym)
 locate_sym_qK(model::Bnc, target_sym) = locate_sym(qK_sym(model), target_sym)
+locate_sym_qcat(model::Bnc, target_sym) = locate_sym(q_cat_sym(model), target_sym)
+locate_sym_wKk(model::Bnc, target_sym) = locate_sym(wKk_sym(model), target_sym)

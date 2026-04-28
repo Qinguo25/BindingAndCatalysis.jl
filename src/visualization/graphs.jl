@@ -239,6 +239,28 @@ end
 
 draw_graph(model; kwargs...) = draw_graph(get_binding_network(model), get_neighbor_graph_qK(model); kwargs...)
 
+"""
+    draw_graph(grh::SIMOPaths; kwargs...) -> (Figure, Axis/Axis3, GraphPlot)
+
+Draw the qK-neighbor graph associated with a `SIMOPaths` object.
+
+This is a convenience wrapper around [`draw_graph(model::Bnc, grh; kwargs...)`] that:
+- uses `get_binding_network(grh)` as the underlying model,
+- uses `get_neighbor_graph_qK(grh)` as the graph to render,
+- and, by default, labels each edge with the symbolic qK-interface condition for the
+  scanned coordinate `grh.change_qK_idx`.
+
+# Keyword Arguments
+- `layout`: Graph layout object or explicit node positions.
+- `edge_labels`: Override the default symbolic edge labels.
+- `use_x_space_neighbor_layout=true`: When `true`, node positions are computed from the
+  x-neighbor graph layout even though the plotted graph is the qK-neighbor graph.
+- `plot_dim=2`: Plot in 2D or 3D.
+- `kwargs...`: Passed through to the underlying `graphplot!` call.
+
+# Returns
+- `(f, ax, p)`: the Makie figure, axis, and graph plot object.
+"""
 function draw_graph(
     grh::SIMOPaths;
     layout=nothing,
@@ -261,6 +283,39 @@ function draw_graph(
     )
 end
 
+"""
+    draw_graph(model::Bnc, grh=nothing; kwargs...) -> (Figure, Axis/Axis3, GraphPlot)
+
+Draw a regime-neighbor graph for a binding network model.
+
+By default this renders the qK-neighbor graph of `model`. Nodes are regimes, node colors
+encode regime type, and optional edge labels can show symbolic interface conditions.
+
+# Arguments
+- `model`: The binding network model.
+- `grh`: The graph to draw. If omitted, `get_neighbor_graph_qK(model)` is used.
+
+# Keyword Arguments
+- `default_node_size=50`: Reference node size when `node_size` is not provided.
+- `node_posi=nothing`: Explicit node positions. Otherwise a layout is computed.
+- `node_size=nothing`: Explicit node sizes. Otherwise derived from regime volumes.
+- `edge_labels=nothing`: Edge labels. If omitted, symbolic interface labels are generated.
+- `node_labels=nothing`: Override node labels.
+- `node_colors=nothing`: Override node colors.
+- `add_rgm_idx=true`: Overlay regime indices like `#1`, `#2`, ...
+- `use_x_space_neighbor_layout=true`: Use the x-neighbor graph to compute node layout.
+- `hide_isolated_nodes=false`: Remove degree-zero nodes from the displayed graph.
+- `edge_label_log_space=false`: Show default edge labels in log space.
+- `edge_label_lhs_idx=nothing`: When set, solve default edge labels for one qK coordinate.
+- `plot_dim=2`: Plot in 2D or 3D.
+- `hide_nullity_ge_2=false`: Hide regimes whose nullity is greater than 1.
+- `figsize=(1000, 1000)`: Makie figure size in pixels.
+- `layout=nothing`: Layout object or explicit positions.
+- `kwargs...`: Forwarded to `graphplot!`.
+
+# Returns
+- `(f, ax, p)`: the Makie figure, axis, and graph plot object.
+"""
 function draw_graph(
     model::Bnc,
     grh=nothing;

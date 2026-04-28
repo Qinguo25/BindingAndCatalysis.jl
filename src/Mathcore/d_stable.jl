@@ -195,6 +195,12 @@ function _strong_zero_certificate_singletons(
     return false
 end
 
+
+
+
+
+
+
 """
     judge_dstable(A; kwargs...) -> Int
 
@@ -211,7 +217,7 @@ end
 """
 function judge_dstable(
     Ain::AbstractMatrix{<:Real};
-    optimizer_factory = nothing,
+    # optimizer_factory = nothing,
     time_limit::Float64 = 20.0,
     dense_exact_threshold::Int = 256,
     spectral_tol::Float64 = 1e-8,
@@ -236,9 +242,9 @@ function judge_dstable(
     scale = max(opnorm(A, Inf), 1.0)
     A = A / scale
 
-    if optimizer_factory === nothing
+    # if optimizer_factory === nothing
         optimizer_factory = _default_optimizer_factory(time_limit)
-    end
+    # end
 
     # Step 0: 便宜的单边 0 证书
     rhp = _obvious_not_hurwitz(
@@ -251,6 +257,13 @@ function judge_dstable(
     if rhp === true
         return 0
     end
+
+    # Step 0.1: for lesser than 3 dim matrix, we know explicitly the d-stable conditon
+    
+    if n <= 3
+        return d_class(Matrix(A); tol = margin_tol)
+    end
+
 
     # Step 1: diagonal stability => D-stable
     tpos = _signed_diag_lyap_margin(
@@ -277,4 +290,178 @@ function judge_dstable(
     end
 
     return -1
+end
+
+
+
+
+
+"""
+    d_class(A; tol=1e-10)
+
+For real square matrices A with size n = 1, 2, or 3:
+
+Return:
+    1   if A is D-stable
+    0   if A is D-unstable
+   -1   otherwise
+
+Definition:
+    D-stable:     D*A is Hurwitz for every positive diagonal D.
+    D-unstable:   D*A is not Hurwitz for every positive diagonal D.
+"""
+function d_class(A::AbstractMatrix; tol::Real = 1e-10)
+    n, m = size(A)
+    n == m || throw(ArgumentError("A must be square."))
+    1 <= n <= 3 || throw(ArgumentError("Only n = 1, 2, 3 are supported."))
+
+    all(isreal, A) || throw(ArgumentError("A must be real."))
+
+    B = Float64.(real.(A))
+
+    pos(x) = x > tol
+    neg(x) = x < -tol
+    nonpos(x) = x <= tol
+    nonneg(x) = x >= -tol
+
+    # ---------- n = 1 ----------
+    if n == 1
+        a = B[1, 1]
+
+        if neg(a)
+            return 1          # always Hurwitz after positive scaling
+        else
+            return 0          # never Hurwitz
+        end
+    end
+
+    # ---------- n = 2 ----------
+    if n == 2
+        a = B[1, 1]
+        d = B[2, 2]
+        detA = B[1,1] * B[2,2] - B[1,2] * B[2,1]
+
+        # D-stable iff det(A)>0, a<=0, d<=0, and not both a,d are zero.
+        if pos(detA) && nonpos(a) && nonpos(d) && neg(a + d)
+            return 1
+        end
+
+        # D-unstable iff det(A)<=0 or both diagonal entries are nonnegative.
+        if !pos(detA) || (nonneg(a) && nonneg(d))
+            return 0
+        end
+
+        return -1
+    end
+
+    # ---------- n = 3 ----------
+    a11, a12, a13 = B[1,1], B[1,2], B[1,3]
+    a21, a22, a23 = B[2,1], B[2,2], B[2,3]
+    a31, a32, a33 = B[3,1], B[3,2], B[3,3]
+
+    # alpha_i = -a_ii
+    alpha = [-a11, -a22, -a33]
+
+    # Principal 2x2 minors
+    Δ12 = a11 * a22 - a12 * a21
+    Δ13 = a11 * a33 - a13 * a31
+    Δ23 = a22 * a33 - a23 * a32
+
+    # beta is ordered so that
+    # p2/(xyz) = beta[1]/x + beta[2]/y + beta[3]/z
+    beta = [Δ23, Δ13, Δ12]
+
+    delta = -det(B)
+
+
+
+
+    # ---------- Check D-stability for n = 3 ----------
+    #
+    # Need:
+    #   alpha_i >= 0, not all zero
+    #   beta_i  >= 0, not all zero
+    #   delta > 0
+    #   inf_x (alpha⋅x)(beta⋅1/x) > delta
+    #
+    # The infimum is:
+    #   (sum_i sqrt(alpha_i * beta_i))^2
+    #
+    alpha_ok = all(nonneg, alpha) && any(pos, alpha)
+    beta_ok  = all(nonneg, beta)  && any(pos, beta)
+
+    if pos(delta) && alpha_ok && beta_ok
+        lower = sum(sqrt(max(alpha[i], 0.0) * max(beta[i], 0.0)) for i in 1:3)^2
+
+        # If supports differ, the infimum is not attained inside x>0.
+        support_equal = all((alpha[i] > tol) == (beta[i] > tol) for i in 1:3)
+
+        if delta < lower - tol || (abs(delta - lower) <= tol && !support_equal)
+            return 1
+        end
+    end
+
+
+    # ---------- Check D-stabilizability for n = 3 ----------
+    #
+    # A is D-unstable iff it is NOT possible to find a positive diagonal D
+    # such that D*A is Hurwitz.
+    #
+    # For n=3 this reduces to checking whether
+    #
+    #   sup_{x>0, alpha⋅x>0} (alpha⋅x)(beta⋅1/x) > delta.
+    #
+    function is_d_stabilizable_3(alpha, beta, delta)
+        pos(delta) || return false
+
+        P = findall(i -> alpha[i] > tol, 1:3)
+
+        # Need alpha⋅x > 0 for some positive x.
+        isempty(P) && return false
+
+        # Need beta⋅1/x positive somewhere.
+        any(i -> beta[i] > tol, 1:3) || return false
+
+        # If at least two alpha_i are positive and some beta_j is positive,
+        # the supremum is +∞.
+        if length(P) >= 2
+            return true
+        end
+
+        # Exactly one positive alpha.
+        k = P[1]
+
+        # If some beta_j > 0 with j != k, again the supremum is +∞.
+        for j in 1:3
+            if j != k && beta[j] > tol
+                return true
+            end
+        end
+
+        # Now the only possible positive beta is beta[k].
+        beta[k] > tol || return false
+
+        C = alpha[k] * beta[k]
+
+        S = 0.0
+        for j in 1:3
+            j == k && continue
+
+            if alpha[j] < -tol && beta[j] < -tol
+                S += sqrt((-alpha[j]) * (-beta[j]) / C)
+            end
+        end
+
+        M = C * max(1.0 - S, 0.0)^2
+
+        return M > delta + tol
+    end
+
+
+    if is_d_stabilizable_3(alpha, beta, delta)
+        return -1
+    else
+        return 0
+    end
+
 end
