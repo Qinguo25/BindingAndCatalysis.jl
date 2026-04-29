@@ -134,94 +134,14 @@ end
 
 abstract type AbstractBnc end
 abstract type AbstractRegime end
+abstract type AbstractHyperPlane end
+abstract type AbstractHelper end
 
 #=================================================================================#
 # f(L) -> {P,P0,C,C0} associated structs and helpers
 #=================================================================================#
 
-"""
-Canonical hyperplane
-
-Stored in canonical form with `u < v`:
-
-    z_u - z_v + log10(num/den) = 0
-
-where `(num, den)` is the reduced integer ratio.
-"""
-struct Hyperplane_perm{Tv<:Integer,To<:Real} 
-    u::Int # fast access #j2 by default 
-    v::Int # fast access #j1 by default 
-
-    num::Tv # reduced positive integer L_{i,j2}
-    den::Tv # reduced positive integer L_{i,j1}
-    c0::To # pre-logarithm log10(num/den)
-end
-
-function Base.:*(hp::Hyperplane_perm, M::AbstractMatrix{<:Real})
-    return M[hp.u, :] -M[hp.v, :]
-end
-
-function mul(hp::Hyperplane_perm, q::AbstractVector{<:Real}; with_c0::Bool=true)
-    if with_c0
-        return q[hp.u] - q[hp.v] .+ hp.c0
-    else
-        return q[hp.u] - q[hp.v]
-    end
-end
-
-Base.:*(hp::Hyperplane_perm, q::AbstractVector{<:Real}) = mul(hp, q; with_c0=true)
-
-
-
-
-@inline _calc_c(hp::Hyperplane_perm,n::Int,sign::Int8) = let 
-    if sign > 0 
-        return sparsevec([hp.u, hp.v], Int8[1 -1], n)
-    else
-        return sparsevec([hp.u, hp.v], Int8[-1, 1], n)
-    end
-end
-
-
-"""
-One oriented inequality induced by choosing p in row i.
-If `sign == +1`, use the canonical side:
-    crow * z + c0 > 0
-If `sign == -1`, use the opposite side:
-    crow_neg * z - c0 > 0
-
-`competitor` is the losing column k compared against the perm dominant p.
-`oriented_c0 = log10(L[i,p] / L[i,k])`
-
-so the actual inequality is:
-    z_p - z_k + oriented_c0 > 0
-"""
-
-"""
-Helper struct for managing matrix operations.
-- `J[i]`: positive columns in row i
-- `choice_slot[i][p]`: local slot of column p inside J[i], or 0 if p ∉ J[i]
-- `choice_map[i][t]`: all oriented inequalities for choosing p = J[i][t]
-- `hyperplanes`: global deduplicated hyperplane pool
-- `asymptotic`: all asymptotic regimes
-- `feasible`: all regimes feasible under the weighted constraints
-"""
-struct MatrixHelper{Tv<:Integer,To<:Real}
-    n::Int # number of columns
-    J::Vector{Vector{Int}} # positive columns idx for each row
-
-    # Fast access from column index to "local slot" in J[i]/ choice_logcoeff[i]
-    choice_slot::Vector{Vector{Int}} # k = choice_slot[i][p] denotes p is the k th positive column in row i, or 0 if p ∉ J[i]
-    choice_logcoeff::Vector{Vector{To}} # choice_logcoeff[i] = [log10(L[i, j]) for j in Ji]
-
-    rowptr::Vector{Int} # rowptr[i] gives the starting index of constraints for row i in the global constraint list
-
-    total_constraints::Int # total number of constraints across all rows
-
-    choice_map::Vector{Vector{Vector{Tuple{Int, Int8}}}} # choice_map[i][t] gives the list of oriented inequalities for choosing p = J[i][t]
-    hyperplanes::Vector{Hyperplane_perm{Tv,To}} # global deduplicated hyperplane pool
-    
-end
+include(joinpath(@__DIR__, "utils/HyperPlanes.jl"))
 
 
 
@@ -417,7 +337,7 @@ mutable struct CatalysisData <:AbstractBnc
 
     #Catalysis regimes
     S_pos_neg::SparseMatrixCSC{Int,Int} # the vcat of positive and negative parts of S
-    _S_helper::MatrixHelper
+    _S_helper::AbstractHelper
 
     CatalysisRegimes::Union{Regimes,Nothing} # Using Any for placeholder for CatalysisRegimes
 
@@ -503,7 +423,7 @@ mutable struct Bnc{T} <: AbstractBnc # T is the int type to save all the indices
     #------other helper parameters------
     direction::Int8 # direction of the binding reactions, determine the ray direction for invertible regime, calculated by sign of det[L;N]
     IntegrationHelper::Union{IntegrationHelper,Nothing}
-    _L_helper::MatrixHelper
+    _L_helper::AbstractHelper # MatrixHelper
 
 
     # Inner constructor 

@@ -2,6 +2,149 @@ export find_all_regimes
 
 
 
+"""
+Helper struct for managing matrix operations.
+- `J[i]`: positive columns in row i
+- `choice_slot[i][p]`: local slot of column p inside J[i], or 0 if p ∉ J[i]
+- `choice_map[i][t]`: all oriented inequalities for choosing p = J[i][t]
+- `hyperplanes`: global deduplicated hyperplane pool
+- `asymptotic`: all asymptotic regimes
+- `feasible`: all regimes feasible under the weighted constraints
+"""
+struct MatrixHelper{Tv<:Integer,To<:Real} <: AbstractHelper
+    n::Int # number of columns
+    J::Vector{Vector{Int}} # positive columns idx for each row
+
+    # Fast access from column index to "local slot" in J[i]/ choice_logcoeff[i]
+    choice_slot::Vector{Vector{Int}} # k = choice_slot[i][p] denotes p is the k th positive column in row i, or 0 if p ∉ J[i]
+    choice_logcoeff::Vector{Vector{To}} # choice_logcoeff[i] = [log10(L[i, j]) for j in Ji]
+
+    rowptr::Vector{Int} # rowptr[i] gives the starting index of constraints for row i in the global constraint list
+
+    total_constraints::Int # total number of constraints across all rows
+
+    choice_map::Vector{Vector{Vector{Tuple{Int, Int8}}}} # choice_map[i][t] gives the list of oriented inequalities for choosing p = J[i][t]
+    hyperplanes::Vector{Hyperplane_perm{Tv,To}} # global deduplicated hyperplane pool
+end
+
+
+# MatrixHelper Will act exact as RegimeToHyperplanePool, the only difference is that 
+# you won't need to add new hyperplanes
+
+
+
+
+
+function _calc_P_P0(perm::Vector{<:Integer},
+    helper::MatrixHelper{Tv,To},
+) where {Tv<:Integer,To<:Real}
+    d = length(perm)
+    n = helper.n
+    P0 = Vector{To}(undef, d)
+    @inbounds for i in 1:d
+        p = perm[i]
+        t = helper.choice_slot[i][p]
+        P0[i] = helper.choice_logcoeff[i][t]
+    end
+    I = collect(1:d)
+    J = copy(perm)
+    V = ones(Int8, d)
+    P = sparse(I, J, V, d, n)
+    return P, P0
+end
+
+
+
+function _calc_C_C0(
+    perm::Vector{<:Integer},
+    helper::MatrixHelper{Tv,To},
+) where {Tv<:Integer,To<:Real}
+    d = length(perm)
+    m = helper.total_constraints
+    n = helper.n
+
+    # 稀疏矩阵三元组
+    I = Vector{Int}(undef, 2m)
+    J = Vector{Int}(undef, 2m)
+    V = Vector{Int8}(undef, 2m)
+
+    C0 = Vector{To}(undef, m)
+
+    ptr = 1
+    @inbounds for i in 1:d
+        p = perm[i]
+        t = helper.choice_slot[i][p]
+
+        refs = helper.choice_map[i][t]
+        block_start = helper.rowptr[i]
+
+        for s in eachindex(refs)
+            row = block_start + s - 1
+            hid, sign = refs[s]
+            h = helper.hyperplanes[hid]
+
+            if sign == 1
+                I[ptr] = row; J[ptr] = h.u; V[ptr] = Int8(1);  ptr += 1
+                I[ptr] = row; J[ptr] = h.v; V[ptr] = Int8(-1); ptr += 1
+                C0[row] = h.c0
+            else
+                I[ptr] = row; J[ptr] = h.v; V[ptr] = Int8(1);  ptr += 1
+                I[ptr] = row; J[ptr] = h.u; V[ptr] = Int8(-1); ptr += 1
+                C0[row] = -h.c0
+            end
+        end
+    end
+
+    C = sparse(I, J, V, m, n)
+    return C, C0
+end
+
+
+
+
+@inline function _calc_perm_nullity(perm)
+    perm_nullity = 0
+    seen = falses(length(perm))
+    @inbounds for p in perm
+        if seen[p]
+            perm_nullity += 1
+        else
+            seen[p] = true
+        end
+    end
+    return perm_nullity
+end
+
+
+function _perm_process(
+    perm::Vector{<:Integer},
+    helper::MatrixHelper{Tv,To},
+) where {Tv<:Integer,To<:Real}
+    d = length(helper.J)
+    # n = helper.n
+    P0 = Vector{To}(undef, d)
+    hyperplane_id_signs = Vector{Tuple{Int,Int8}}(undef, helper.total_constraints)
+    # signs = Vector{Int8}(undef, helper.total_constraints)
+
+    @inbounds for i in 1:d
+        p = perm[i]
+        t = helper.choice_slot[i][p]
+        P0[i] = helper.choice_logcoeff[i][t]
+
+        refs = helper.choice_map[i][t]
+        block_start = helper.rowptr[i]
+        for s in eachindex(refs)
+            hyperplane_id_signs[block_start + s - 1] = refs[s]
+        end
+    end
+
+    return P0, hyperplane_id_signs
+end
+
+
+
+
+
 
 
 
@@ -63,8 +206,6 @@ function _build_matrix_helper(L::AbstractMatrix{Tv}) where {Tv<:Integer}
                 hid = get(key_to_id, key, 0)
 
                 if hid == 0
-                    # crow = sparsevec([u, v], Int8[1, -1], n)
-                    # crow_neg = sparsevec([v, u], Int8[1, -1], n)
                     c0 = exact_log10_ratio(num, den)
                     push!(hyperplanes, Hyperplane_perm{Tv,ExactLogExpr}(u, v, num, den, c0))
                     hid = length(hyperplanes)
@@ -95,12 +236,6 @@ function _build_matrix_helper(L::AbstractMatrix{Tv}) where {Tv<:Integer}
     )
 end
 
-function sparsevec(hp::Hyperplane_perm{Tv}, n::Int, sign::Int8) where {Tv<:Integer}
-    I = [hp.u, hp.v]
-    J = [1, 1]
-    V = Int8[sign, -sign]
-    return sparse(I, J, V, n, 1)
-end
 
 
 function _enumerate_asymptotic_regimes(helper::MatrixHelper)
@@ -341,111 +476,6 @@ end
 
 
 
-
-function _perm_process(
-    perm::Vector{<:Integer},
-    helper::MatrixHelper{Tv,To},
-) where {Tv<:Integer,To<:Real}
-    d = length(helper.J)
-    # n = helper.n
-    P0 = Vector{To}(undef, d)
-    hyperplane_id_signs = Vector{Tuple{Int,Int8}}(undef, helper.total_constraints)
-    # signs = Vector{Int8}(undef, helper.total_constraints)
-
-    @inbounds for i in 1:d
-        p = perm[i]
-        t = helper.choice_slot[i][p]
-        P0[i] = helper.choice_logcoeff[i][t]
-
-        refs = helper.choice_map[i][t]
-        block_start = helper.rowptr[i]
-        for s in eachindex(refs)
-            hyperplane_id_signs[block_start + s - 1] = refs[s]
-        end
-    end
-
-    return P0, hyperplane_id_signs
-end
-
-
-function _calc_P_P0(perm::Vector{<:Integer},
-    helper::MatrixHelper{Tv,To},
-) where {Tv<:Integer,To<:Real}
-    d = length(perm)
-    n = helper.n
-    P0 = Vector{To}(undef, d)
-    @inbounds for i in 1:d
-        p = perm[i]
-        t = helper.choice_slot[i][p]
-        P0[i] = helper.choice_logcoeff[i][t]
-    end
-    I = collect(1:d)
-    J = copy(perm)
-    V = ones(Int8, d)
-    P = sparse(I, J, V, d, n)
-    return P, P0
-end
-
-function _calc_C_C0(
-    perm::Vector{<:Integer},
-    helper::MatrixHelper{Tv,To},
-) where {Tv<:Integer,To<:Real}
-    d = length(perm)
-    m = helper.total_constraints
-    n = helper.n
-
-    # 稀疏矩阵三元组
-    I = Vector{Int}(undef, 2m)
-    J = Vector{Int}(undef, 2m)
-    V = Vector{Int8}(undef, 2m)
-
-    C0 = Vector{To}(undef, m)
-
-    ptr = 1
-    @inbounds for i in 1:d
-        p = perm[i]
-        t = helper.choice_slot[i][p]
-
-        refs = helper.choice_map[i][t]
-        block_start = helper.rowptr[i]
-
-        for s in eachindex(refs)
-            row = block_start + s - 1
-            hid, sign = refs[s]
-            h = helper.hyperplanes[hid]
-
-            if sign == 1
-                I[ptr] = row; J[ptr] = h.u; V[ptr] = Int8(1);  ptr += 1
-                I[ptr] = row; J[ptr] = h.v; V[ptr] = Int8(-1); ptr += 1
-                C0[row] = h.c0
-            else
-                I[ptr] = row; J[ptr] = h.v; V[ptr] = Int8(1);  ptr += 1
-                I[ptr] = row; J[ptr] = h.u; V[ptr] = Int8(-1); ptr += 1
-                C0[row] = -h.c0
-            end
-        end
-    end
-
-    C = sparse(I, J, V, m, n)
-    return C, C0
-end
-
-@inline function _calc_perm_nullity(perm)
-    perm_nullity = 0
-    seen = falses(length(perm))
-    @inbounds for p in perm
-        if seen[p]
-            perm_nullity += 1
-        else
-            seen[p] = true
-        end
-    end
-    return perm_nullity
-end
-
-
-
-
 # ============================================================
 # Top-level compiler
 # ============================================================
@@ -499,14 +529,12 @@ end
 #=============================================================#
 # Utils
 #==============================================================#
-@inline function choiceineq_between(helper::MatrixHelper, i::Int, j2::Int, j1::Int)
+get_hyperplane(helper::MatrixHelper, idx::Int) = helper.hyperplanes[idx]
+
+# locate (e^j2 - e^j1)^\top z + log10(L[i,j2]/L[i,j1]) > 0 are which hyperplane and its sign.
+@inline function locate_halfspace(helper::MatrixHelper, i::Int, j2::Int, j1::Int)
     tp = helper.choice_slot[i][j2]
     tk = helper.choice_slot[i][j1]
-
-    # tp == 0 && throw(ArgumentError("p=$j2 ∉ J[$i]"))
-    # tk == 0 && throw(ArgumentError("k=$j1 ∉ J[$i]"))
-    # j2 == j1 && throw(ArgumentError("p and k must be different"))
-
     s = tk < tp ? tk : tk - 1
     return helper.choice_map[i][tp][s]
 end

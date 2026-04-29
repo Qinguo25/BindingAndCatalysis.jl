@@ -7,6 +7,7 @@ Edge metadata connecting neighboring vertices in a regime graph.
 mutable struct RegimeEdge
     to::Int
     i ::Int # different row index
+
     c_c0_x_idx::Int
     c_c0_x_sign::Int8
       
@@ -19,10 +20,7 @@ mutable struct RegimeEdge
 
 end
 
-struct RegimeHyperplane
-    change_dir_qK::SparseVector{Rational{Int},Int}
-    intersect_qK::ExactLogExpr
-end
+
 
 
 # Adjacency list + optional caches
@@ -37,8 +35,9 @@ mutable struct RegimeGraph{Tv}
 
     edge_pos::Vector{Dict{Int, Int}}  # (u,v) -> (u,edge_pos[u][v]) to locate the RegimeEdge.
 
-    qK_interface_pool::Vector{RegimeHyperplane}
-    x_interface_pool::Vector{Hyperplane_perm{Tv}}
+    qK_hp_data::RegimeToHyperplanePool
+    x_hp_data::MatrixHelper
+
     qK_classifier_full::Any # numeric classifier for classifying regimes based on qK hyperplanes, to be filled when needed.
 
     function RegimeGraph(L_helper::MatrixHelper{Tv}, neighbors::Vector{Vector{RegimeEdge}}) where {Tv}
@@ -63,6 +62,7 @@ mutable struct RegimeGraph{Tv}
             edge_pos,
             RegimeHyperplane[],
             L_helper.hyperplanes,
+            RegimeToHyperplanePool(bn.n),
             nothing,
         )
     end
@@ -122,7 +122,7 @@ function _calc_regimes_graph(helper::MatrixHelper, perms::Vector{<:AbstractVecto
                     to_idx, j_to = group[b]
                     j_from == j_to && continue
 
-                    hid, sign = choiceineq_between(helper, i, j_to, j_from)
+                    hid, sign = locate_halfspace(helper, i, j_to, j_from)
                     push!(local_edges, (from_idx, RegimeEdge(to_idx, i, hid, sign)))
                     push!(local_edges, (to_idx, RegimeEdge(from_idx, i, hid, -sign)))
                 end
@@ -137,62 +137,27 @@ function _calc_regimes_graph(helper::MatrixHelper, perms::Vector{<:AbstractVecto
     end
     return RegimeGraph(helper, neighbors)
 end
+
+
+
+
 #=============================================================================================#
 #          Calc qK-space change directions for edges with nullity <= 1 regimes
 #=============================================================================================#
 
 
+
+
 @inline _edge_has_qK_interface(edge::RegimeEdge) = edge.qK_interface_idx != 0
 
 function _edge_qK_interface(grh::RegimeGraph, edge::RegimeEdge)
-    edge.qK_interface_idx == 0 && return nothing
+    idx = edge.qK_interface_idx
+    idx == 0 && return nothing
+    
+    hp = get_hyperplane(grh.qK_hp_data, idx)
+    dir = edge.qK_interface_sign
 
-    hp = grh.qK_interface_pool[edge.qK_interface_idx]
-    if edge.qK_interface_sign >= 0
-        return hp.change_dir_qK, hp.intersect_qK
-    else
-        return -hp.change_dir_qK, -hp.intersect_qK
-    end
-end
-
-
-function _canonicalize_qK_interface(
-    c_qK::SparseVector{<:Rational},
-    c0_qK::ExactLogExpr,
-)
-    dir, scale = let
-        v = nonzeros(c_qK)[1]
-        (v >= 0 ? Int8(1) : Int8(-1)), abs(v)
-    end
-
-    # normalize
-    c_qK.nzval .= (c_qK.nzval .* dir) ./ scale
-    c0_qK = (c0_qK * dir) / scale
-
-    key = (Tuple(c_qK.nzind), Tuple(c_qK.nzval), c0_qK)
-
-    return dir, key, c_qK, c0_qK
-end
-
-
-function _intern_qK_interface!(
-    pool::Vector{RegimeHyperplane},
-    key_to_id::Dict,
-    c_qK::SparseVector{<:Rational},
-    c0_qK::ExactLogExpr,
-    dir::Int8,
-)
-    dropzeros!(c_qK)
-    nnz(c_qK) == 0 && return 0, Int8(0)
-
-    dir_inner, key, c_qK, c0_qK = _canonicalize_qK_interface(c_qK, c0_qK)
-
-    hid = get!(key_to_id, key) do
-        push!(pool, RegimeHyperplane(c_qK, c0_qK))
-        length(pool)
-    end
-
-    return hid, sign(dir*dir_inner)
+    return _calc_c_c0(hp, dir)
 end
 
 
@@ -207,21 +172,16 @@ Compute qK-space change directions for edges in the vertex graph.
 function _fulfill_regimes_graph!(vtx_graph::RegimeGraph)
     Bnc = vtx_graph.bn
     regimes = _bind_regimes_data(Bnc)
-    empty!(vtx_graph.qK_interface_pool)
+    db = vtx_graph.qK_hp_data
 
-    key_to_id = Dict{Any,Int}()
-
-    for edges in vtx_graph.neighbors
-        for e in edges
-            e.qK_interface_idx = 0
-            e.qK_interface_sign = 0
-        end
-    end
+    I = Int[]     # row indices: polyhedron id
+    J = Int[]     # col indices: hyperplane id
+    V = Int8[]    # values: +1 or -1
 
     @showprogress for p1 in eachindex(vtx_graph.neighbors)
         nlt1 = regimes[p1].nullity
 
-        if nlt1 > 1
+        if nlt1 > 1 #skip regimes with nullity >1
             continue
         end
 
@@ -231,46 +191,49 @@ function _fulfill_regimes_graph!(vtx_graph::RegimeGraph)
             p1 < p2 || continue
             
             nlt2 = regimes[p2].nullity
-            nlt2 > 1 && continue
+            nlt2 > 1 && continue  #skip regimes with nullity >1
         
+
+
             rev_pos = vtx_graph.edge_pos[p2][p1]
             
             e_rev = vtx_graph.neighbors[p2][rev_pos]
 
             src_rgm = regimes[p1]
 
-
-
-
-            c_c0 = vtx_graph.x_interface_pool[e.c_c0_x_idx]
+            c_c0 = get_hyperplane(vtx_graph.x_hp_data, e.c_c0_x_idx)
             dir_x = e.c_c0_x_sign
-
-
 
             c_qK, c0_qK = _calc_dir(
                 src_rgm.nullity,
                 src_rgm.H,
                 src_rgm.H0,
                 c_c0
-            )
+            ) # already dropped zeros in c_qK
 
-            hid, dir = _intern_qK_interface!(
-                    vtx_graph.qK_interface_pool, 
-                    key_to_id, 
-                    c_qK, 
-                    c0_qK,
-                    dir_x)
+            hid, dir = add_halfspace!(db, c_qK, c0_qK, dir_x; canonicalize=true)
 
             hid == 0 && continue
+
+            push!(I, p1)
+            push!(J, hid)
+            push!(V, -dir) #hid, dir define the halfspace for p2, so p1 is on the opposite side
+
+            push!(I, p2)
+            push!(J, hid)
+            push!(V, dir)
 
             e.qK_interface_idx = hid
             e.qK_interface_sign = dir
 
             e_rev.qK_interface_idx = hid
             e_rev.qK_interface_sign = -dir
-
         end
     end
+
+    M = sparse(I, J, V, length(vtx_graph.neighbors), length(db.hyperplanes))
+    MT = sparse(J, I, V, length(db.hyperplanes), length(vtx_graph.neighbors))
+    db.hp_to_poly = FacetIncidence(M, MT)
     return nothing
 end
 
@@ -283,6 +246,6 @@ end
 )
     c_qK = c_c0 * H 
     c0_qK = nlt ==0 ? c_c0 * H0  : mul(c_c0, H0; with_c0=false) 
-    # dropzero!(c_qK)
+    dropzero!(c_qK)
     return c_qK, c0_qK
 end
