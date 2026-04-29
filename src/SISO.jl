@@ -848,6 +848,8 @@ end
 const SISO_DAG_MIDDLE_PARALLEL_THRESHOLD = 8
 const SISO_DAG_PROGRESS_UNITS = 10_000
 
+_siso_dag_layer_parallel_enabled() = parse(Bool, get(ENV, "BNC_SISO_DAG_LAYER_PARALLEL", "false"))
+
 mutable struct SISODAGProgressState
     pair_total::Int
     pair_done::Int
@@ -858,6 +860,29 @@ mutable struct SISODAGProgressState
     largest_pair_seconds::Float64
     largest_pair::SISOPairKey
     cached_condition_entries::Int
+end
+
+mutable struct SISOPairSolveStats
+    pair_solve_ns::UInt64
+    middle_collect_ns::UInt64
+    middle_compute_ns::UInt64
+    middle_merge_ns::UInt64
+    middle_join_pairs::Int
+    middle_parallel_nodes::Int
+    middle_serial_nodes::Int
+end
+
+SISOPairSolveStats() = SISOPairSolveStats(0, 0, 0, 0, 0, 0, 0)
+
+function _add_pair_solve_stats!(profile::SISODAGProfile, stats::SISOPairSolveStats)::Nothing
+    profile.pair_solve_ns += stats.pair_solve_ns
+    profile.middle_collect_ns += stats.middle_collect_ns
+    profile.middle_compute_ns += stats.middle_compute_ns
+    profile.middle_merge_ns += stats.middle_merge_ns
+    profile.middle_join_pairs += stats.middle_join_pairs
+    profile.middle_parallel_nodes += stats.middle_parallel_nodes
+    profile.middle_serial_nodes += stats.middle_serial_nodes
+    return nothing
 end
 
 function _static_pair_weight(plan::SISOPairPlan)::Float64
@@ -1080,6 +1105,85 @@ function _collect_pair_plan(
     return plans, order
 end
 
+function _pair_plan_depth!(
+    depths::Dict{SISOPairKey,Int},
+    pair::SISOPairKey,
+    plans::Dict{SISOPairKey,SISOPairPlan},
+)::Int
+    cached = get(depths, pair, nothing)
+    cached === nothing || return cached
+    plan = plans[pair]
+    depth = isempty(plan.dependencies) ? 1 : 1 + maximum(_pair_plan_depth!(depths, dep, plans) for dep in plan.dependencies)
+    depths[pair] = depth
+    return depth
+end
+
+function _pair_plan_layers(
+    scheduled_pairs::AbstractVector{SISOPairKey},
+    plans::Dict{SISOPairKey,SISOPairPlan},
+)::Vector{Vector{SISOPairKey}}
+    depths = Dict{SISOPairKey,Int}()
+    max_depth = 0
+    for pair in scheduled_pairs
+        max_depth = max(max_depth, _pair_plan_depth!(depths, pair, plans))
+    end
+
+    layers = [SISOPairKey[] for _ in 1:max_depth]
+    scheduled_set = Set(scheduled_pairs)
+    for pair in scheduled_pairs
+        push!(layers[depths[pair]], pair)
+    end
+    for layer in layers
+        filter!(pair -> pair in scheduled_set, layer)
+    end
+    return layers
+end
+
+function _prewarm_pair_plan_prisms!(
+    helper::SISOHelper,
+    pair::SISOPairKey,
+    plan::SISOPairPlan,
+)::Nothing
+    from, to = pair
+    if plan.branch === :diagonal
+        _get_vertex_prism!(helper, from)
+        return nothing
+    end
+
+    if _edge_exists(helper, from, to)
+        _get_interface_prism!(helper, from, to)
+    end
+
+    if plan.branch === :middle
+        for successor in plan.successors
+            _get_interface_prism!(helper, from, successor)
+        end
+        for predecessor in plan.predecessors
+            _get_interface_prism!(helper, predecessor, to)
+        end
+    elseif plan.branch === :suffix
+        for successor in plan.successors
+            _get_interface_prism!(helper, from, successor)
+        end
+    elseif plan.branch === :prefix
+        for predecessor in plan.predecessors
+            _get_interface_prism!(helper, predecessor, to)
+        end
+    end
+    return nothing
+end
+
+function _prewarm_pair_plan_layer_prisms!(
+    helper::SISOHelper,
+    layer::AbstractVector{SISOPairKey},
+    plans::Dict{SISOPairKey,SISOPairPlan},
+)::Nothing
+    for pair in layer
+        _prewarm_pair_plan_prisms!(helper, pair, plans[pair])
+    end
+    return nothing
+end
+
 function _merge_middle_join!(
     conditions::SISOPathConditionMap,
     helper::SISOHelper,
@@ -1108,6 +1212,34 @@ function _merge_middle_join!(
     return conditions
 end
 
+function _merge_middle_join_local!(
+    conditions::SISOPathConditionMap,
+    helper::SISOHelper,
+    from::Int,
+    successor::Int,
+    predecessor::Int,
+    to::Int,
+    stats::SISOPairSolveStats,
+)::SISOPathConditionMap
+    stats.middle_join_pairs += 1
+    start_ns = time_ns()
+    left_condition = _get_interface_prism!(helper, from, successor)
+    isempty(left_condition) && return conditions
+    right_condition = _get_interface_prism!(helper, predecessor, to)
+    isempty(right_condition) && return conditions
+    middle_conditions = _pair_conditions(helper, successor, predecessor)
+    middle_conditions === nothing && error("Missing cached middle condition for pair ($(successor), $(predecessor)).")
+    isempty(middle_conditions) && return conditions
+
+    for (middle_path, middle_condition) in middle_conditions
+        full_condition = _intersect_nonempty(left_condition, middle_condition, right_condition)
+        isnothing(full_condition) && continue
+        conditions[_wrap_vertices(from, middle_path, to)] = full_condition
+    end
+    stats.middle_compute_ns += time_ns() - start_ns
+    return conditions
+end
+
 function _merge_middle_join_chunk!(
     conditions::SISOPathConditionMap,
     helper::SISOHelper,
@@ -1120,6 +1252,23 @@ function _merge_middle_join_chunk!(
     for idx in start_idx:stop_idx
         successor, predecessor = child_pairs[idx]
         _merge_middle_join!(conditions, helper, from, successor, predecessor, to)
+    end
+    return conditions
+end
+
+function _merge_middle_join_chunk_local!(
+    conditions::SISOPathConditionMap,
+    helper::SISOHelper,
+    from::Int,
+    child_pairs::AbstractVector{<:Tuple{Int,Int}},
+    start_idx::Int,
+    stop_idx::Int,
+    to::Int,
+    stats::SISOPairSolveStats,
+)::SISOPathConditionMap
+    for idx in start_idx:stop_idx
+        successor, predecessor = child_pairs[idx]
+        _merge_middle_join_local!(conditions, helper, from, successor, predecessor, to, stats)
     end
     return conditions
 end
@@ -1164,63 +1313,65 @@ function _collect_middle_join_pairs(
     return child_pairs
 end
 
-function _solve_pair_plan!(
+function _compute_pair_plan_conditions!(
     helper::SISOHelper,
     from::Int,
     to::Int,
     plan::SISOPairPlan,
+    stats::SISOPairSolveStats;
+    use_inner_parallel::Bool=true,
 )::SISOPathConditionMap
-    pair_start_ns = time_ns()
-    cached = _pair_conditions(helper, from, to)
-    !isnothing(cached) && return cached
-    profile = helper.dag_profile
-    if profile !== nothing
-        profile.pair_solve_calls += 1
-    end
-
     conditions = SISOPathConditionMap()
     if plan.branch === :diagonal
         condition = _get_vertex_prism!(helper, from)
         isempty(condition) || (conditions[(from,)] = condition)
-        out = _cache_pair_conditions!(helper, from, to, conditions)
-        profile !== nothing && (profile.pair_solve_ns += time_ns() - pair_start_ns)
-        return out
+        return conditions
     end
 
     _maybe_store_direct_path!(conditions, helper, from, to)
     if plan.branch === :no_bridge
-        out = _cache_pair_conditions!(helper, from, to, conditions)
-        profile !== nothing && (profile.pair_solve_ns += time_ns() - pair_start_ns)
-        return out
+        return conditions
     end
 
     if plan.branch === :middle
-        collect_start_ns = profile === nothing ? UInt64(0) : time_ns()
+        collect_start_ns = time_ns()
         child_pairs = _collect_middle_join_pairs(helper, from, to, plan.successors, plan.predecessors)
-        profile !== nothing && (profile.middle_collect_ns += time_ns() - collect_start_ns)
+        stats.middle_collect_ns += time_ns() - collect_start_ns
 
-        if Threads.nthreads() > 1 && length(child_pairs) >= SISO_DAG_MIDDLE_PARALLEL_THRESHOLD
-            profile !== nothing && (profile.middle_parallel_nodes += 1)
+        if use_inner_parallel && Threads.nthreads() > 1 && length(child_pairs) >= SISO_DAG_MIDDLE_PARALLEL_THRESHOLD
+            stats.middle_parallel_nodes += 1
             chunk_ranges = _middle_join_chunk_ranges(length(child_pairs), 4 * Threads.nthreads())
             local_maps = [SISOPathConditionMap() for _ in eachindex(chunk_ranges)]
-            merge_start_ns = profile === nothing ? UInt64(0) : time_ns()
+            local_stats = [SISOPairSolveStats() for _ in eachindex(chunk_ranges)]
+            merge_start_ns = time_ns()
             Threads.@threads :dynamic for chunk_idx in eachindex(chunk_ranges)
                 range = chunk_ranges[chunk_idx]
-                _merge_middle_join_chunk!(local_maps[chunk_idx], helper, from, child_pairs, first(range), last(range), to)
+                _merge_middle_join_chunk_local!(
+                    local_maps[chunk_idx],
+                    helper,
+                    from,
+                    child_pairs,
+                    first(range),
+                    last(range),
+                    to,
+                    local_stats[chunk_idx],
+                )
             end
             for local_map in local_maps
                 merge!(conditions, local_map)
             end
-            profile !== nothing && (profile.middle_merge_ns += time_ns() - merge_start_ns)
+            stats.middle_merge_ns += time_ns() - merge_start_ns
+            for chunk_stats in local_stats
+                stats.middle_compute_ns += chunk_stats.middle_compute_ns
+                stats.middle_join_pairs += chunk_stats.middle_join_pairs
+            end
         else
-            profile !== nothing && (profile.middle_serial_nodes += 1)
+            stats.middle_serial_nodes += 1
             for (successor, predecessor) in child_pairs
-                _merge_middle_join!(conditions, helper, from, successor, predecessor, to)
+                _merge_middle_join_local!(conditions, helper, from, successor, predecessor, to, stats)
             end
         end
-        out = _cache_pair_conditions!(helper, from, to, conditions)
-        profile !== nothing && (profile.pair_solve_ns += time_ns() - pair_start_ns)
-        return out
+        return conditions
     end
 
     if plan.branch === :suffix
@@ -1236,9 +1387,7 @@ function _solve_pair_plan!(
                 conditions[_prepend_vertex(from, suffix_path)] = full_condition
             end
         end
-        out = _cache_pair_conditions!(helper, from, to, conditions)
-        profile !== nothing && (profile.pair_solve_ns += time_ns() - pair_start_ns)
-        return out
+        return conditions
     end
 
     if plan.branch === :prefix
@@ -1254,12 +1403,109 @@ function _solve_pair_plan!(
                 conditions[_append_vertex(prefix_path, to)] = full_condition
             end
         end
-        out = _cache_pair_conditions!(helper, from, to, conditions)
-        profile !== nothing && (profile.pair_solve_ns += time_ns() - pair_start_ns)
-        return out
+        return conditions
     end
 
     error("Unsupported SISO pair plan branch $(plan.branch) for pair ($(from), $(to)).")
+end
+
+function _solve_pair_plan!(
+    helper::SISOHelper,
+    from::Int,
+    to::Int,
+    plan::SISOPairPlan,
+)::SISOPathConditionMap
+    pair_start_ns = time_ns()
+    cached = _pair_conditions(helper, from, to)
+    !isnothing(cached) && return cached
+    profile = helper.dag_profile
+    profile !== nothing && (profile.pair_solve_calls += 1)
+
+    stats = SISOPairSolveStats()
+    conditions = _compute_pair_plan_conditions!(helper, from, to, plan, stats)
+    stats.pair_solve_ns += time_ns() - pair_start_ns
+    profile !== nothing && _add_pair_solve_stats!(profile, stats)
+    return _cache_pair_conditions!(helper, from, to, conditions)
+end
+
+function _solve_pair_plan_layers!(
+    helper::SISOHelper,
+    plans::Dict{SISOPairKey,SISOPairPlan},
+    scheduled_pairs::AbstractVector{SISOPairKey},
+    progress_state::SISODAGProgressState,
+    progress::ProgressMeter.Progress,
+)::Nothing
+    layers = _pair_plan_layers(scheduled_pairs, plans)
+    profile = helper.dag_profile
+    profile === nothing && error("DAG profile must be initialized before layer-parallel solving.")
+
+    @info "Solving DAG pair plans across $(length(layers)) dependency layers with staged layer-parallel commits."
+    for (layer_idx, layer) in enumerate(layers)
+        isempty(layer) && continue
+        _prewarm_pair_plan_layer_prisms!(helper, layer, plans)
+
+        n_layer_pairs = length(layer)
+        conditions_by_pair = Vector{Union{Nothing,SISOPathConditionMap}}(nothing, n_layer_pairs)
+        stats_by_pair = [SISOPairSolveStats() for _ in 1:n_layer_pairs]
+        seconds_by_pair = zeros(Float64, n_layer_pairs)
+        output_entries = zeros(Int, n_layer_pairs)
+        pair_weights = zeros(Float64, n_layer_pairs)
+        was_cached = falses(n_layer_pairs)
+
+        for idx in eachindex(layer)
+            pair = layer[idx]
+            pair_weights[idx] = _begin_weighted_pair!(progress_state, profile, helper, pair, plans[pair])
+            cached = get(helper.pair_conditions, pair, nothing)
+            if !isnothing(cached)
+                was_cached[idx] = true
+                output_entries[idx] = length(cached)
+            end
+        end
+
+        Threads.@threads :dynamic for idx in eachindex(layer)
+            was_cached[idx] && continue
+            pair = layer[idx]
+            from, to = pair
+            plan = plans[pair]
+            stats = stats_by_pair[idx]
+            pair_start_ns = time_ns()
+            conditions = _compute_pair_plan_conditions!(
+                helper,
+                from,
+                to,
+                plan,
+                stats;
+                use_inner_parallel=false,
+            )
+            pair_seconds = (time_ns() - pair_start_ns) / 1e9
+            stats.pair_solve_ns += round(UInt64, pair_seconds * 1e9)
+            conditions_by_pair[idx] = conditions
+            seconds_by_pair[idx] = pair_seconds
+            output_entries[idx] = length(conditions)
+        end
+
+        for idx in eachindex(layer)
+            pair = layer[idx]
+            from, to = pair
+            if !was_cached[idx]
+                conditions = conditions_by_pair[idx]
+                conditions === nothing && error("Missing computed conditions for pair ($(from), $(to)) in layer $(layer_idx).")
+                _cache_pair_conditions!(helper, from, to, conditions)
+                profile.pair_solve_calls += 1
+                _add_pair_solve_stats!(profile, stats_by_pair[idx])
+            end
+            _finish_weighted_pair!(
+                progress_state,
+                profile,
+                progress,
+                pair,
+                pair_weights[idx],
+                seconds_by_pair[idx],
+                output_entries[idx],
+            )
+        end
+    end
+    return nothing
 end
 
 """
@@ -1315,22 +1561,26 @@ function _find_all_path_conditions_dag!(
         showspeed=true,
     )
     ProgressMeter.update!(progress, 0; showvalues=_progress_showvalues(progress_state, helper.dag_profile))
-    for (from, to) in scheduled_pairs
-        pair = (from, to)
-        plan = plans[pair]
-        pair_weight = _begin_weighted_pair!(progress_state, helper.dag_profile, helper, pair, plan)
-        pair_start_ns = time_ns()
-        conditions = _solve_pair_plan!(helper, from, to, plan)
-        pair_seconds = (time_ns() - pair_start_ns) / 1e9
-        _finish_weighted_pair!(
-            progress_state,
-            helper.dag_profile,
-            progress,
-            pair,
-            pair_weight,
-            pair_seconds,
-            length(conditions),
-        )
+    if _siso_dag_layer_parallel_enabled() && Threads.nthreads() > 1
+        _solve_pair_plan_layers!(helper, plans, scheduled_pairs, progress_state, progress)
+    else
+        for (from, to) in scheduled_pairs
+            pair = (from, to)
+            plan = plans[pair]
+            pair_weight = _begin_weighted_pair!(progress_state, helper.dag_profile, helper, pair, plan)
+            pair_start_ns = time_ns()
+            conditions = _solve_pair_plan!(helper, from, to, plan)
+            pair_seconds = (time_ns() - pair_start_ns) / 1e9
+            _finish_weighted_pair!(
+                progress_state,
+                helper.dag_profile,
+                progress,
+                pair,
+                pair_weight,
+                pair_seconds,
+                length(conditions),
+            )
+        end
     end
     ProgressMeter.finish!(progress; showvalues=_progress_showvalues(progress_state, helper.dag_profile))
     return helper

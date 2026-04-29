@@ -116,3 +116,76 @@ Interpretation:
 
 - recontrol appears to expose much more CPU parallelism
 - but for CDN5 it is likely memory-prohibitive on the XiaoLab machine
+
+
+## CDN5 Remote Layer-Parallel Pair-Memo DAG Reference
+
+Saved from XiaoLab run:
+
+- `/raid/users/xiaoyu/bnc_cdn5_layer_parallel_20260428_184549`
+
+Run setup:
+
+- `condition_solver = "dag"`
+- `BNC_SISO_DAG_LAYER_PARALLEL = true`
+- `JULIA_NUM_THREADS = 50`
+- Julia `1.12.6`
+- machine CPU allowance: `0-191`
+- machine memory: about `502 GiB`
+
+Completed timing:
+
+- `find_all_vertices_seconds = 5.553000724`
+- `build_paths_seconds = 4.381636538`
+- `get_polyhedra_seconds = 9438.820804268`
+- `elapsed_seconds = 9469.500964164734`
+- `finished_at = "2026-04-28T21:45:44.396"`
+
+Backend cache summary:
+
+- `cached_vertex_prisms = 452`
+- `cached_interface_prisms = 7488`
+- `cached_pairs = 32435`
+- `cached_path_condition_entries = 10496673`
+- `n_polyhedra = 6243216`
+
+DAG summary:
+
+- `dag_planned_pairs = 32435`
+- `dag_pair_solve_calls = 32435`
+- `dag_middle_join_pairs = 29530`
+- `dag_middle_serial_nodes = 3149`
+- `dag_middle_parallel_nodes = 0`
+- `dag_pair_solve_seconds = 75591.480857416`
+- `dag_middle_compute_seconds = 52146.752355458`
+- `dag_middle_collect_seconds = 4.202313223`
+- `dag_middle_merge_seconds = 0.0`
+
+CPU/memory monitor summary:
+
+- monitor file: `artifacts/cdn5_julia_core_usage.tsv`
+- monitor interval: 60 seconds
+- samples: `158`
+- average process CPU: `1330.7%`, about `13.3` effective cores
+- peak sampled process CPU: `2028%`, about `20.3` effective cores
+- user-observed `top` peak: about `4900%`, about `49` effective cores
+- max RSS: about `36.3 GiB`
+
+Comparison to previous pair-memo DAG CDN5 run:
+
+- previous `get_polyhedra_seconds = 19086.222969167`
+- layer-parallel `get_polyhedra_seconds = 9438.820804268`
+- speedup: about `2.02x`
+
+Tail note:
+
+- `dag_largest_pair = [1251, 155]`
+- `dag_largest_pair_seconds = 3129.701002878`
+- final current pair `[2447, 155]` took about `3109.117938709s`
+
+Interpretation:
+
+- layer-parallel pair solving substantially improves CDN5 runtime while keeping memory under control
+- it can reach near-50-core utilization in bursts
+- sustained CPU remains much lower because the late heavy middle-pair tail is still narrow
+- further algorithm work is paused for now; next focus is branch merge preparation
