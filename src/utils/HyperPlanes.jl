@@ -1,17 +1,19 @@
 """
-Canonical hyperplane
+    Hyperplane_perm
 
-Stored in canonical form with `u < v`:
+Canonical hyperplane stored with `u < v`:
 
-    z_u - z_v + log10(num/den) = 0
+    z_u - z_v + log10(num / den) = 0
 
 where `(num, den)` is the reduced integer ratio.
-"""
-"""
+
 One oriented inequality induced by choosing p in row i.
 If `sign == +1`, use the canonical side:
+
     crow * z + c0 > 0
+
 If `sign == -1`, use the opposite side:
+
     crow_neg * z - c0 > 0
 
 `competitor` is the losing column k compared against the perm dominant p.
@@ -171,7 +173,7 @@ _canonicalize_hyperplane(args...;kwargs...) = _canonicalize_halfspace(args...; k
 
 # You should make sure the hyperplane is already canonicalized before calling this function
 # Will return the hid
-function add_hyperplane!(db::RegimeToHyperplanePool, c::SparseVector{<:Rational}, c0::ExactLogExpr; canonicalize::Bool=false) where {T}
+function add_hyperplane!(db::RegimeToHyperplanePool, c::SparseVector{<:Rational}, c0::ExactLogExpr; canonicalize::Bool=false)
 
     hp = if canonicalize 
           _canonicalize_hyperplane(c, c0)
@@ -212,8 +214,6 @@ function add_halfspace!(db::RegimeToHyperplanePool, c::SparseVector{<:Rational},
     return hid, sign(dir*dir_inner)
 end
 add_halfspace!(db::RegimeToHyperplanePool, hp::RegimeHyperplane, dir::Int8; canonicalize::Bool=true) = add_halfspace!(db, hp.change_dir_qK, hp.intersect_qK, dir; canonicalize=canonicalize)
-
-
 
 
 
