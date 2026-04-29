@@ -140,7 +140,7 @@ mutable struct RegimeToHyperplanePool
     function RegimeToHyperplanePool(dim::Int)
         new(dim, RegimeHyperplane[], 
         # RgmPolyhedron[], 
-        FacetIncidence(SparseMatrixCSC{Int8, Int}(), SparseMatrixCSC{Int8, Int}()), Dict{HyperplaneKey,Int}())
+        FacetIncidence(spzeros(Int8, 0, 0), spzeros(Int8, 0, 0)), Dict{HyperplaneKey,Int}())
     end
 end
 
@@ -214,7 +214,6 @@ function add_halfspace!(db::RegimeToHyperplanePool, c::SparseVector{<:Rational},
     return hid, sign(dir*dir_inner)
 end
 add_halfspace!(db::RegimeToHyperplanePool, hp::RegimeHyperplane, dir::Int8; canonicalize::Bool=true) = add_halfspace!(db, hp.change_dir_qK, hp.intersect_qK, dir; canonicalize=canonicalize)
-
 
 
 

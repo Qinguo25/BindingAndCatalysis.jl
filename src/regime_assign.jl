@@ -134,7 +134,7 @@ function _build_qK_hyperplane_classifier(
     compact_hids = sort!(collect(active_hids))
     hid_to_pos = Dict(hid => pos for (pos, hid) in enumerate(compact_hids))
 
-    pool = grh.qK_interface_pool
+    pool = grh.qK_hp_data.hyperplanes
     dirs = [SparseVector{Float64,Int}(pool[hid].change_dir_qK) for hid in compact_hids]
     bias = Float64[Float64(pool[hid].intersect_qK) for hid in compact_hids]
 

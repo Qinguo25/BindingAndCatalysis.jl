@@ -54,7 +54,7 @@ function get_edge(grh::RegimeGraph, from, to; kwargs...)::Union{Nothing, RegimeE
     
     pos = get(grh.edge_pos[from], to, nothing)
     if pos === nothing
-        error("No edge from $from to $to in the regime graph.")
+        return nothing
     end
     edge = grh.neighbors[from][pos]
     return edge
@@ -69,7 +69,7 @@ Convenience wrapper to fetch an edge from a model.
 get_edge(Bnc, args...; kwargs...)= let
     bn = get_binding_network(Bnc)
     vtx_grh = get_regimes_graph!(bn)
-    get_edge(vtx_grh, from, to; kwargs...)
+    get_edge(vtx_grh, args...; kwargs...)
 end
 
 """

@@ -60,9 +60,8 @@ mutable struct RegimeGraph{Tv}
             nothing,
             neighbors,
             edge_pos,
-            RegimeHyperplane[],
-            L_helper.hyperplanes,
-            RegimeToHyperplanePool(bn.n),
+            RegimeToHyperplanePool(L_helper.n),
+            L_helper,
             nothing,
         )
     end
@@ -246,6 +245,6 @@ end
 )
     c_qK = c_c0 * H 
     c0_qK = nlt ==0 ? c_c0 * H0  : mul(c_c0, H0; with_c0=false) 
-    dropzero!(c_qK)
+    dropzeros!(c_qK)
     return c_qK, c0_qK
 end

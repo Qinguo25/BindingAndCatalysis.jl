@@ -455,7 +455,7 @@ function _calc_volume_via_classifier(
     abs_tol::Float64 = 1.0e-8,
     rel_tol::Float64 = 0.005,
     time_limit::Float64 = 120.0,
-    show_progress::Bool = false,
+    show_progress::Bool = true,
     asymptotic::Bool = false,
     rebase_mat::Union{AbstractMatrix{<:Real},Nothing} = nothing,
 )::Vector{Volume}
