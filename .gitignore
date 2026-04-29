@@ -8,3 +8,10 @@ noback/
 .build/
 src/cddlib*
 src/lrs*
+test/*_dag_job.json
+test/*_dag_result.json
+test/*_dag_status.json
+test/*_dag_stdout.log
+test/*_dag_stderr.log
+test/*_dag_launcher.log
+test/work_summary_and_suggestions.md
