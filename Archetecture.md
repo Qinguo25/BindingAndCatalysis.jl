@@ -927,14 +927,29 @@ regular 情况下很多东西可直接通过矩阵逆得到；singular 情况下
 
 ## 11. 对开发者最有用的测试与示例
 
-- [test/runtests.jl](/home/joker/Realizibility_index/BindingAndCatalysis.jl/test/runtests.jl)
+- [test/runtests.jl](test/runtests.jl)
   现在是最可靠的程序化回归入口，覆盖 binding、catalysis、mixed regime，以及 notebook 的主流程。
 
-- [Examples/Minimal_example.ipynb](/home/joker/Realizibility_index/BindingAndCatalysis.jl/Examples/Minimal_example.ipynb)
+- [Examples/Minimal_example.ipynb](Examples/Minimal_example.ipynb)
   最适合交互式学习。
 
-- [test/work_summary_and_suggestions.md](/home/joker/Realizibility_index/BindingAndCatalysis.jl/test/work_summary_and_suggestions.md)
-  记录了最近几轮关于 `CatalysisRegime` / `BncRegime` / binding graph cache / numerical cache 的补全与一些设计建议。
+### 11.1 测试目录组织约定
+
+`test/runtests.jl` 应该保持为 package-level correctness suite：也就是 CI 和普通开发时最先运行的入口。
+
+当某个模块需要更多专门的测试、诊断脚本、benchmark、长时间运行脚本或 reference note 时，请在 `test/` 下创建模块子目录，而不是继续把所有文件堆在 `test/` 根目录。例如：
+
+- SISO / path-condition 相关脚本放在 [test/SISO_test/](test/SISO_test/)
+- 未来如果有 catalysis 专门诊断，可以放在 `test/Catalysis_test/`
+- 未来如果有 visualization 专门 smoke test，可以放在 `test/Visualize_test/`
+
+推荐区分三类文件：
+
+- `test/runtests.jl`：快速、确定性的主回归测试，适合 CI。
+- `test/<Module>_test/*.jl`：模块相关的额外测试、诊断或 benchmark。短的可以由人或 coding agent 按需运行；长的要在文件名或注释里说清楚。
+- `test/<Module>_test/*.md`：可复现 benchmark 的 reference note 或设计说明。
+
+不要提交本地运行生成的 status/result JSON、stdout/stderr log、launcher log、session handoff note 等文件；这些应该通过 `.gitignore` 忽略。需要保留性能结论时，用小的、手写的 reference `.md` 总结，而不是提交整份机器输出。
 
 
 ## 12. 如果我要改功能，先看哪里
