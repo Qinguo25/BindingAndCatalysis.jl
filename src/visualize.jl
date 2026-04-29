@@ -1,3 +1,10 @@
+export SISO_plot, get_edge_labels, set_proper_bounds_for_graph_plot!
+export get_node_positions, get_node_colors, get_node_labels, get_node_size
+export draw_graph, add_vertices_idx!, add_arrows!, add_nodes_text!, set_node_positions
+export draw_qK_neighbor_grh, find_bounds, add_rgm_colorbar!, get_color_map
+export draw_ROP
+export plot_polyhedron_slices
+
 #-------------------------------------------------------------
 # Key visualizing functions
 #----------------------------------------------------------------
@@ -14,9 +21,9 @@ Plot a SISO path trajectory in x space colored by dominant regime.
 """
 function SISO_plot(SISOPaths::SISOPaths,pth_idx;rand_line=false, rand_ray=false, extend=4, kwargs...)
     pth_idx = get_idx(SISOPaths, pth_idx)
-    parameters = get_one_inner_point(SISOPaths.path_polys[pth_idx], rand_line=rand_line, rand_ray=rand_ray, extend=extend)
+    parameters = get_one_inner_point(get_polyhedron(SISOPaths, pth_idx), rand_line=rand_line, rand_ray=rand_ray, extend=extend)
     @show parameters
-    return SISO_plot(SISOPaths.bn, parameters, SISOPaths.change_qK_idx; kwargs...)
+    return SISO_plot(get_binding_network(SISOPaths), parameters, get_change_qK_idx(SISOPaths); kwargs...)
 end
 """
     SISO_plot(model::Bnc, parameters, change_idx; npoints=1000, start=-6, stop=6, colormap=:rainbow,
@@ -55,7 +62,7 @@ function SISO_plot(model::Bnc, parameters, change_idx;
     
 
     #assign color
-    rgms = logx .|> x-> assign_vertex_x(model, x;input_logspace=true,asymptotic_only=asymptotic_only, return_idx=true)
+    rgms = logx .|> x-> assign_regime_x(model, x;input_logspace=true,asymptotic_only=asymptotic_only, return_idx=true)
     cmap = get_color_map(rgms; colormap=colormap)
     colors = getindex.(Ref(cmap), rgms)
 
@@ -199,7 +206,7 @@ end
 
 Return a color map for vertices in a model.
 """
-get_color_map(model::Bnc, args...;colormap=:rainbow, kwargs...) = get_color_map(get_vertices(model,args...;kwargs...), colormap=colormap)
+get_color_map(model::Bnc, args...;colormap=:rainbow, kwargs...) = get_color_map(get_perms(model,args...;kwargs...), colormap=colormap)
 
 
 
@@ -220,8 +227,7 @@ get_color_map(model::Bnc, args...;colormap=:rainbow, kwargs...) = get_color_map(
 Return edges with weights for a specified qK change direction.
 """
 function get_edge_weight_vec(Bnc::Bnc,change_qK_idx)::Vector{Tuple{Edge,Dict{Symbol,Any}}}
-    vg = get_vertices_graph!(Bnc;full=true)
-    n = length(vg.neighbors)
+    vg = get_regimes_graph!(Bnc;full=true)
     weight_vec = Vector{Tuple{Edge,Dict{Symbol,Any}}}()
     for (i, edges) in enumerate(vg.neighbors)
         nlt = get_nullity(Bnc,i)
@@ -229,21 +235,15 @@ function get_edge_weight_vec(Bnc::Bnc,change_qK_idx)::Vector{Tuple{Edge,Dict{Sym
             continue
         end
         for e in edges
-            if isnothing(e.change_dir_qK)
-                continue
-            end 
-            # if nlt ==0 
-            #     val = e.change_dir_qK[change_qK_idx]
-            #     if val > 1e-6
-            #         push!(weight_vec, (Edge(i,e.to), Dict(:magnitude=>1.0)))
-            #     end
-            # else
-                val = e.change_dir_qK[change_qK_idx]
-                if val > 1e-6
-                    push!(weight_vec, (Edge(i,e.to), Dict(:magnitude=>val)))
-                end
-            # end 
-        end
+            !_edge_has_qK_interface(e) && continue
+            iface = _edge_qK_interface(vg, e)
+            iface === nothing && continue
+            dir_qK = iface[1]
+            val = dir_qK[change_qK_idx]
+            if val > 1e-6
+                push!(weight_vec, (Edge(i,e.to), Dict(:magnitude=>val)))
+            end
+        end 
     end
     return weight_vec
 end
@@ -291,18 +291,17 @@ end
 
 Return edge labels for qK-space edges, optionally only one direction.
 """
-function get_edge_labels(Bnc::Bnc; half::Bool=false,f=nothing)::Dict{Edge,String}
-    vg = get_vertices_graph!(Bnc;full=true)
+function get_edge_labels(Bnc::Bnc; half::Bool=false, f=nothing)::Dict{Edge,String}
+    vg = get_regimes_graph!(Bnc;full=true)
     labels = Dict{Edge,String}()
+    f = isnothing(f) ? (from, to) -> get_change_dir_qK(Bnc, from, to)|> x-> sym_direction(Bnc,x) : f
     for (i, edges) in enumerate(vg.neighbors)
         if get_nullity(Bnc,i) >1 # skip higher nullity
             continue
         end
 
-        f = isnothing(f) ? (from, to) -> get_change_dir_qK(Bnc, from, to)|> x-> sym_direction(Bnc,x) : f
-
         for e in edges
-            if isnothing(e.change_dir_qK) || (half && e.to < i)    # only label one direction
+            if !_edge_has_qK_interface(e) || (half && e.to < i)    # only label one direction
                 continue
             end 
             labels[Edge(i, e.to)] = f(i, e.to)
@@ -349,7 +348,7 @@ Return node colors based on regime types.
 """
 function get_node_colors(model, regimes=nothing; singular_color="#CCCCFF", asymptotic_color="#FFCCCC", regular_color="#CCFFCC")::Vector{String}
     
-    all_regimes = isnothing(regimes) ? get_vertices(model;return_idx=true) : regimes
+    all_regimes = isnothing(regimes) ? get_regimes(model;return_idx=true) : regimes
     all_node_colors = let 
             node_colors = Vector{String}(undef, length(all_regimes))
             for (i,j) in enumerate(all_regimes)
@@ -377,7 +376,7 @@ end
 Return labels for nodes based on dominant species symbols.
 """
 function get_node_labels(model::Bnc)
-    model.vertices_perm .|>
+    getfield.(_bind_regimes_data(model), :perm) .|>
         x -> model.x_sym[x] |>
         repr |> strip_before_bracket
 end
@@ -392,11 +391,11 @@ function get_node_size(model::Bnc; default_node_size=50, asymptotic=true, kwargs
     vals = get_volumes(model; asymptotic=asymptotic, kwargs...) .|> x->x.mean
     
     zero_volume_idx = if asymptotic # both non-asymptotic and singular
-        non_asym_idx = get_vertices(model, singular=nothing, asymptotic=false, return_idx=true) # non-asymptotic
-        singular_asym_idx = get_vertices(model, singular=true, asymptotic=true, return_idx=true)# singular asymptotic
+        non_asym_idx = get_regimes(model, singular=nothing, asymptotic=false, return_idx=true) # non-asymptotic
+        singular_asym_idx = get_regimes(model, singular=true, asymptotic=true, return_idx=true)# singular asymptotic
         vcat(non_asym_idx, singular_asym_idx)
     else # only singular
-        get_vertices(model, singular=true, asymptotic=nothing, return_idx=true) # only care about singular
+        get_regimes(model, singular=true, asymptotic=nothing, return_idx=true) # only care about singular
     end
 
     n_data = length(vals)-length(zero_volume_idx)
@@ -404,6 +403,37 @@ function get_node_size(model::Bnc; default_node_size=50, asymptotic=true, kwargs
     Volume = vals .* n_data .* default_node_size^2
     Volume[zero_volume_idx] .= default_node_size^2
     return Dict(i=>sqrt(Volume[i]) for i in eachindex(Volume))
+end
+
+@inline function _node_subset_by_nullity(model::Bnc; hide_nullity_ge_2::Bool=false)
+    if hide_nullity_ge_2
+        return [i for i in 1:n_regimes(model) if get_nullity(model, i) <= 1]
+    else
+        return collect(1:n_regimes(model))
+    end
+end
+
+function _filter_edge_labels_for_nodes(edge_labels, grh::AbstractGraph, keep_nodes::Vector{Int})
+    keep_set = Set(keep_nodes)
+    old_to_new = Dict(keep_nodes[i] => i for i in eachindex(keep_nodes))
+
+    if edge_labels isa Dict
+        labels = Dict{Edge,Any}()
+        for (e, lbl) in edge_labels
+            (e.src in keep_set && e.dst in keep_set) || continue
+            labels[Edge(old_to_new[e.src], old_to_new[e.dst])] = lbl
+        end
+        return labels
+    elseif edge_labels isa AbstractVector
+        labels = Any[]
+        for (e, lbl) in zip(edges(grh), edge_labels)
+            (src(e) in keep_set && dst(e) in keep_set) || continue
+            push!(labels, lbl)
+        end
+        return labels
+    else
+        return edge_labels
+    end
 end
 
 
@@ -424,7 +454,7 @@ Draw a SISO path graph with direction labels.
 """
 function draw_graph(grh::SISOPaths;kwargs...)
     bn = get_binding_network(grh)
-    change_sym = qK_sym(bn)[grh.change_qK_idx]
+    change_sym = qK_sym(bn)[get_change_qK_idx(grh)]
     grh = get_neighbor_graph_qK(grh)
     edge_labels = ["+"* repr(change_sym) for _ in 1:ne(grh)]
     f,ax,p = draw_graph(bn, grh; edge_labels = edge_labels, kwargs...)
@@ -433,7 +463,8 @@ end
 
 """
     draw_graph(model::Bnc, grh=nothing; default_node_size=50, node_posi=nothing, edge_labels=nothing,
-        node_labels=nothing, node_colors=nothing, add_rgm_idx=true, figsize=(1000,1000), kwargs...) -> (Figure, Axis, Plot)
+        node_labels=nothing, node_colors=nothing, add_rgm_idx=true, figsize=(1000,1000),
+        hide_nullity_ge_2=false, kwargs...) -> (Figure, Axis, Plot)
 
 Draw a graph with customizable node/edge annotations.
 """
@@ -444,17 +475,31 @@ function draw_graph(model::Bnc, grh=nothing;
     node_labels=nothing,
     node_colors=nothing,
     add_rgm_idx::Bool=true, 
+    hide_nullity_ge_2::Bool=false,
     figsize=(1000,1000), 
     kwargs...)
 
     # use provided grh or compute a default neighbor graph
     grh = isnothing(grh) ? get_neighbor_graph_qK(model) : grh
+    full_grh = grh
 
     edge_labels =  isnothing(edge_labels) ? get_edge_labels(model) : edge_labels
     posi = isnothing(node_posi) ? get_node_positions(model) : Point2f.(node_posi)
     node_labels = isnothing(node_labels) ? get_node_labels(model) : node_labels
     node_colors = isnothing(node_colors) ? get_node_colors(model) : node_colors
     node_size = get_node_size(model; default_node_size=default_node_size)
+
+    keep_nodes = _node_subset_by_nullity(model; hide_nullity_ge_2=hide_nullity_ge_2)
+    if length(keep_nodes) < nv(grh)
+        grh, _ = induced_subgraph(grh, keep_nodes)
+        edge_labels = _filter_edge_labels_for_nodes(edge_labels, full_grh, keep_nodes)
+        posi = posi[keep_nodes]
+        node_labels = node_labels[keep_nodes]
+        node_colors = node_colors[keep_nodes]
+        node_size = [node_size[i] for i in keep_nodes]
+    else
+        node_size = [node_size[i] for i in 1:length(node_labels)]
+    end
 
 
     f = Figure(size = figsize)
@@ -580,16 +625,18 @@ end
 # Inherently we need two properties, 1. the neighbor information 2. the specific value of H
 
 function draw_ROP(model::Bnc, pairs::AbstractVector{<:Tuple{Any, Any}};
+    emphasize_regimes::AbstractVector=Int[],
     add_inner_points::Bool=true,
     npoints = 50000,
-    singular_extends::Float64 = 2.0,singular_color="#CCCCFF", asymptotic_color="#FFCCCC", regular_color="#CCFFCC")
+    singular_extends::Float64 = 2.0,
+    singular_color="#CCCCFF", asymptotic_color="#FFCCCC", regular_color="#CCFFCC", emphasize_color="#FF0000")
 
     #####################################################################################################################
     # The first part of these code are purely model related. Intend to find the realationship between different regiems.
     #####################################################################################################################
 
     # all potential vertices, could be direction for singular regimes.
-    V = get_vertices(model, singular = 1,return_idx=true) # only regimes with maximum singularity 1.
+    V = get_regimes(model, singular = 1,return_idx=true) # only regimes with maximum singularity 1.
 
     # find all singular and non-singular regimes, and we assign singular to their neighbor regimes.
     V_non_singular = filter(V) do v 
@@ -600,7 +647,7 @@ function draw_ROP(model::Bnc, pairs::AbstractVector{<:Tuple{Any, Any}};
         is_singular(model, v)
     end
 
-    neighbor_mat = get_vertices_neighbor_mat(model)
+    neighbor_mat = get_regimes_neighbor_mat(model)
     singular_neighbor_mat = neighbor_mat[V_singular, V_singular]
     nonsingular_neighbor_mat = neighbor_mat[V_non_singular, V_non_singular]
 
@@ -726,26 +773,20 @@ function draw_ROP(model::Bnc, pairs::AbstractVector{<:Tuple{Any, Any}};
 
     # The direct rays 
 
-    direct_rays = let 
-        rays = Tuple{Ptype, Ptype}[]
+    (direct_rays, indirect_rays) = let 
+        rays1 = Tuple{Ptype, Ptype}[]
+        rays2 = Tuple{Ptype, Ptype}[]
         for i in eachindex(vtx_bag)
             for j in vtx_bag[i][1] # direct adjacent singular regimes
-                push!(rays, (Points[i], Points[i] + dirs[j] * singular_extends))
+                push!(rays1, (Points[i], Points[i] + dirs[j] * singular_extends))
+            end
+            for j in vtx_bag[i][2] # indirect adjacent singular regimes
+                push!(rays2, (Points[i], Points[i] + dirs[j] * singular_extends))
             end
         end
-        rays
+        (rays1, rays2)
     end
 
-    # The indirect rays
-    indirect_rays = let 
-        rays = Tuple{Ptype, Ptype}[]
-        for i in eachindex(vtx_bag)
-            for j in vtx_bag[i][2] # indirect adjacent singular regimes
-                push!(rays, (Points[i], Points[i] + dirs[j] * singular_extends))
-            end
-        end
-        rays
-    end
     #####################################################################################################################
     # The third part of the code is the optional adding of inner points for better visualization of the regime 
     #####################################################################################################################
@@ -755,6 +796,45 @@ function draw_ROP(model::Bnc, pairs::AbstractVector{<:Tuple{Any, Any}};
             pnts = x_smp .|> x -> ∂logx_∂logqK(model; x = x, input_logspace=true) |> get_val
             Ptype.(pnts)
         end
+    end
+
+    #####################################################################################################################
+    # The forth part of the code is to emphasize specific regimes if needed
+    #####################################################################################################################
+    if !isempty(emphasize_regimes)
+        idx = get_idx.(Ref(model), emphasize_regimes)
+        
+        inv_rgm = Set{Int}() # their index in the non-singular regime list
+        singular_rgm = Set{Int}() # their index in the singular regime list
+        for i in idx
+            if is_singular(model, i)
+                push!(singular_rgm, findfirst(isequal(i), V_singular))
+            else
+                push!(inv_rgm, findfirst(isequal(i), V_non_singular))
+            end
+        end
+
+        # Points can be directly fetch
+        emphasize_Points = Points[collect(inv_rgm)]
+        # rays we need to compute again
+        (emph_rays_direct, emph_rays_indirect) = let 
+            rays1 = Tuple{Ptype, Ptype}[]
+            rays2 = Tuple{Ptype, Ptype}[]
+            for i in eachindex(vtx_bag)
+                for j in vtx_bag[i][1] # direct adjacent singular regimes
+                    if j in singular_rgm
+                        push!(rays1, (Points[i], Points[i] + dirs[j] * singular_extends))
+                    end
+                end
+                for j in vtx_bag[i][2] # indirect adjacent singular regimes
+                    if j in singular_rgm
+                        push!(rays2, (Points[i], Points[i] + dirs[j] * singular_extends))
+                    end
+                end
+            end
+            (rays1, rays2)
+        end
+
     end
 
 
@@ -813,11 +893,99 @@ function draw_ROP(model::Bnc, pairs::AbstractVector{<:Tuple{Any, Any}};
     autolimits!(ax)
     lock_current_limits!(ax)
 
+    # Optional, add emphasis on specific regimes
+    if !isempty(emphasize_regimes)
+        @show emph_rays_direct
+        scatter!(ax, emphasize_Points; color = emphasize_color, markersize = 20)
+
+        for (p1, p2) in emph_rays_direct
+            lines!(ax, [p1, p2]; color = emphasize_color, linewidth = 5)
+        end
+
+        for (p1, p2) in emph_rays_indirect
+            lines!(ax, [p1, p2]; color = emphasize_color, linewidth = 5, linestyle = :dash)
+        end
+    end
+
+    # Optional, add inner points for better visualization of the regime
     if add_inner_points
          scatter!(ax, inner_pnts; color = (:gray,0.1), markersize = 5)
     end
 
     return f, ax 
+end
+
+
+function slice_polyhedron(poly::Polyhedron; fixed_idx::AbstractVector{<:Integer}, fixed_value::Real=1.0)::Polyhedron
+    n = fulldim(poly)
+    all(1 .<= fixed_idx .<= n) || throw(ArgumentError("`fixed_idx` must be in 1:$n"))
+
+    get_hyperplane(i) = let
+        aT = zeros( n)
+        aT[i] = 1.0
+        HyperPlane(aT, fixed_value)
+    end
+    
+    ps = get_hyperplane.(fixed_idx)
+    poly = intersect(poly, ps...)
+    return eliminate(poly, BitSet(fixed_idx))
+end
+
+_f64(x) = Float64.(collect(x))
+
+
+function _grid_sample_polyhedron(
+    poly::Polyhedron,
+    bounds;
+    npoints::Int=10000
+)
+    @assert fulldim(poly) == 3 "Only 3D polyhedra are supported for grid sampling."
+    pts_each_dim = npoints^(1/3) |> round .|> Int
+    gridsize = (pts_each_dim, pts_each_dim, pts_each_dim)
+    (xmin, xmax), (ymin, ymax), (zmin, zmax) = bounds
+    xs = range(xmin, xmax; length=gridsize[1])
+    ys = range(ymin, ymax; length=gridsize[2])
+    zs = range(zmin, zmax; length=gridsize[3])
+
+    return Point3f[
+        Point3f(x, y, z)
+        for x in xs, y in ys, z in zs
+        if [x,y,z] ∈ poly
+    ]
+end
+
+function plot_polyhedron_slices(
+    polys::AbstractVector{<:Polyhedron};
+    fixed_idx::AbstractVector{<:Integer},
+    fixed_value::Real=1.0,
+    labels=nothing,
+    colors=nothing,
+    axis_labels=nothing,
+    bounds=[(-6,6),(-6,6),(-6,6)],
+    npoints = 10000,
+    markersize::Real=5,
+    alpha::Real=0.35,
+    title::AbstractString="Polyhedron slices (grid sampling)",
+)
+    isempty(polys) && throw(ArgumentError("`polys` must not be empty"))
+
+    sliced = [slice_polyhedron(p; fixed_idx=fixed_idx, fixed_value=fixed_value) for p in polys]
+    labels = isnothing(labels) ? ["poly $i" for i in eachindex(polys)] : collect(string.(labels))
+    axis_labels = isnothing(axis_labels) ? ["dim 1", "dim 2", "dim 3"] : collect(string.(axis_labels))
+    colors = isnothing(colors) ? Makie.wong_colors() : collect(colors)
+
+    samples = [isempty(p) ? Point3f[] : _grid_sample_polyhedron(p, bounds; npoints=npoints) for p in sliced]
+
+    fig = Figure()
+    ax = Axis3(fig[1, 1]; title=title, xlabel=axis_labels[1], ylabel=axis_labels[2], zlabel=axis_labels[3])
+
+    for (i, pts) in enumerate(samples)
+        isempty(pts) && continue
+        scatter!(ax, pts; color=(colors[mod1(i, length(colors))], alpha), markersize=markersize, label=labels[i])
+    end
+
+    axislegend(ax; position=:rb)
+    return fig, ax
 end
 
 

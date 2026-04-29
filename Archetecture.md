@@ -165,7 +165,7 @@ C^\theta \Pi \log x + C^\theta \log k + C_0^\theta \ge 0.
 
 ### 3.1 `Bnc`
 
-定义在 [src/initialize.jl](/home/joker/Realizibility_index/BindingAndCatalysis.jl/src/initialize.jl)。
+主类型定义在 [src/initialize.jl](/home/joker/Realizibility_index/BindingAndCatalysis.jl/src/initialize.jl)；和 graph/path 相关的高层 wrapper `SISOPaths` 则已经收敛到 [src/SISO.jl](/home/joker/Realizibility_index/BindingAndCatalysis.jl/src/SISO.jl)。
 
 它是整个项目的主模型，包含：
 
@@ -304,7 +304,7 @@ C^\theta \Pi \log x + C^\theta \log k + C_0^\theta \ge 0.
 因此 exact mode 目前是“binding-layer exact”，不是“整个 mixed pipeline 全 exact”。
 
 
-### 3.6 `Regimes` 和 `VertexGraph`
+### 3.6 `Regimes`、`VertexGraph`、`SISODAG`、`SISOProblem`、`SISOHelper` 和 `SISOPaths`
 
 `Regimes` 是一个轻量容器：
 
@@ -338,6 +338,47 @@ C^\theta \Pi \log x + C^\theta \log k + C_0^\theta \ge 0.
 - 方向差异只靠 `qK_interface_sign = ±1` 表示
 
 这套设计把 graph cache 从“邻接表”提升成了“邻接表 + canonical interface pool”。
+
+要注意一个最近的结构变化：
+
+- `VertexGraph` 现在不再长期保存单独的 `x_grh` 字段
+- x-neighbor graph 由 `neighbors` 按需通过 `get_neighbor_graph_x(...)` 重建
+- 因此 `VertexGraph` 更像“最小必要邻接缓存”，而不是把每种图表示都各存一份
+
+在当前架构里，`VertexGraph` 负责“全局 regime 图缓存”，而 SISO 路径条件求解已经集中到 [src/SISO.jl](/home/joker/Realizibility_index/BindingAndCatalysis.jl/src/SISO.jl)。这一层又被拆成 4 个层次：
+
+- `SISODAG`
+  - 保存某个 `change_qK` 方向下的有向图
+  - 保存 `sources` / `sinks`
+  - 保存 reachability bitmatrix
+  - 它表达的是“图论问题本身”
+
+- `SISOProblem`
+  - 保存 `bn`
+  - 保存 `change_qK_idx`
+  - 保存 `dag::SISODAG`
+  - 它表达的是“某个模型、某个坐标轴方向下的一次 SISO 分析问题”
+
+- `SISOHelper`
+  - 是内部 memoized backend
+  - 只保存求解缓存，不再长期保存对外结果
+  - 当前主要缓存：
+    - `vertex_prisms`
+    - `interface_prisms`
+    - `pair_conditions`
+  - `pair_conditions[(from,to)]` 对应一个 `Dict(path_tuple => polyhedron)`，因此缓存粒度已经从“矩阵里挂 path 对象”收口成“按 source-sink pair 缓存条件映射”
+
+- `SISOPaths`
+  - 是对外的路径分析对象
+  - 现在只保存：
+    - `problem`
+    - `rgm_paths`
+    - lazy 的 `path_index`
+    - lazy 的 `condition_helper`
+    - `path_polys` / `path_volume` 及其状态位
+  - 它表达的是“某一个坐标轴方向上的全路径结果容器”
+
+这次重构的核心目标是把“图问题定义”、“递归求解缓存”、“对外路径结果”三层拆开，减少 `RegimePath`/helper/path container 之间的重复存储。调用 `get_polyhedra` / `get_volume` / `get_RO_paths` 时，底层都会复用同一个 `SISOHelper`，但外层不再把 helper 内部缓存结构直接暴露成长期数据模型。
 
 
 ### 3.7 `MatrixHelper` 和 `IntegrationHelper`
@@ -481,6 +522,16 @@ rgm = get_bnc_regime(model, bind_perm, cat_perm)
 - `SISOPaths(...)`
 - `get_RO_path` / `summary_RO_path`
 
+当前路径分析的实际流水线是：
+
+1. `get_regimes_graph!(model; full=true)` 先保证 `VertexGraph` 和 qK interface direction 都已 materialize。
+2. `SISOPaths(model, change_qK)` 在 [src/SISO.jl](/home/joker/Realizibility_index/BindingAndCatalysis.jl/src/SISO.jl) 里先构造 `SISODAG`，再封装成 `SISOProblem`；这一层会沿单个坐标轴定向并过滤 singular isolated regimes。
+3. 如果没有手动传 `rgm_paths`，会先枚举所有 source-to-sink 路径；这一步现在带进度提示。
+4. `get_polyhedra(pths)` 会懒触发 `SISOHelper`，按 source-sink pair 批量求条件；当前缓存是 `vertex prism + interface prism + pair_conditions[(from,to)]`，并带进度提示。
+5. `get_volume`、`get_expression_path`、`get_RO_paths`、`summary_RO_path` 都建立在这些 path polyhedra 之上。
+
+所以现在的“全路径条件”实现已经不再分散在多个文件里，而是统一收束到 `src/SISO.jl`。
+
 
 ### 4.7 做符号渲染和稳定性判断
 
@@ -543,10 +594,13 @@ rgm = get_bnc_regime(model, bind_perm, cat_perm)
 
 下面按“读代码的推荐顺序”列出。
 
-### 6.1 基础类型与装配
+### 6.1 模块装配与基础类型
+
+- [src/BindingAndCatalysis.jl](/home/joker/Realizibility_index/BindingAndCatalysis.jl/src/BindingAndCatalysis.jl)
+  负责模块外壳、`include` 顺序、export，以及把各子文件装配成最终 public API。
 
 - [src/initialize.jl](/home/joker/Realizibility_index/BindingAndCatalysis.jl/src/initialize.jl)
-  负责定义 `Bnc`, `BindRegime`, `CatalysisData`, `CatalysisRegime`, `BncRegime`, `SISOPaths` 等核心类型，以及构造器、lazy numerical cache、`include` 顺序。
+  负责定义 `Bnc`, `BindRegime`, `CatalysisData`, `CatalysisRegime`, `BncRegime` 等核心类型、构造器，以及 lazy numerical cache 的基础脚手架。`SISOPaths` 已不在这个文件里。
 
 
 ### 6.2 组合学枚举与矩阵辅助
@@ -590,14 +644,24 @@ rgm = get_bnc_regime(model, bind_perm, cat_perm)
 - [src/Bnc_regime.jl](/home/joker/Realizibility_index/BindingAndCatalysis.jl/src/Bnc_regime.jl)
   mixed regime 构造、pair-based retrieval、consistency 条件、steady-state reduced map、`H_bd` 和稳定性接口。这里也负责把 binding exact 系数在 mixed 边界显式转回 `Float64`。
 
-- [src/d_stable.jl](/home/joker/Realizibility_index/BindingAndCatalysis.jl/src/d_stable.jl)
+- [src/Mathcore/d_stable.jl](/home/joker/Realizibility_index/BindingAndCatalysis.jl/src/Mathcore/d_stable.jl)
   diagonal stability / Hurwitz 性质的数值判断。
 
 
 ### 6.5 图、路径、符号输出和可视化
 
+- [src/SISO.jl](/home/joker/Realizibility_index/BindingAndCatalysis.jl/src/SISO.jl)
+  当前 graph/path backend 的主实现文件。它按层组织了：
+  - `VertexGraph` 访问与 graph utility
+  - axis-aligned SISO 有向图构造
+  - `SISODAG` / `SISOProblem`
+  - polyhedron projection / prism helper
+  - 内部 `SISOHelper`
+  - 对外 `SISOPaths`
+  - path polyhedron、volume、expression tracing、reaction-order、summary API
+
 - [src/regime_graphs.jl](/home/joker/Realizibility_index/BindingAndCatalysis.jl/src/regime_graphs.jl)
-  regime neighbor graph、SISO path、路径 polyhedron、RO path 汇总。
+  当前是空的过渡文件，只保留为兼容/装配占位；实质 graph/path 逻辑已经全部迁入 `src/SISO.jl`。
 
 - [src/symbolics.jl](/home/joker/Realizibility_index/BindingAndCatalysis.jl/src/symbolics.jl)
   把内部矩阵渲染成易读表达式，是 notebook 和 debug 最常用的“解释层”。
@@ -620,8 +684,8 @@ rgm = get_bnc_regime(model, bind_perm, cat_perm)
 2. [Examples/Minimal_example.ipynb](/home/joker/Realizibility_index/BindingAndCatalysis.jl/Examples/Minimal_example.ipynb)
 3. [src/initialize.jl](/home/joker/Realizibility_index/BindingAndCatalysis.jl/src/initialize.jl)
 4. [src/regimes.jl](/home/joker/Realizibility_index/BindingAndCatalysis.jl/src/regimes.jl)
-5. [src/qK_x_mapping.jl](/home/joker/Realizibility_index/BindingAndCatalysis.jl/src/qK_x_mapping.jl)
-6. [src/regime_graphs.jl](/home/joker/Realizibility_index/BindingAndCatalysis.jl/src/regime_graphs.jl)
+5. [src/SISO.jl](/home/joker/Realizibility_index/BindingAndCatalysis.jl/src/SISO.jl)
+6. [src/qK_x_mapping.jl](/home/joker/Realizibility_index/BindingAndCatalysis.jl/src/qK_x_mapping.jl)
 7. [src/Catalysis_regime.jl](/home/joker/Realizibility_index/BindingAndCatalysis.jl/src/Catalysis_regime.jl)
 8. [src/Bnc_regime.jl](/home/joker/Realizibility_index/BindingAndCatalysis.jl/src/Bnc_regime.jl)
 9. [src/symbolics.jl](/home/joker/Realizibility_index/BindingAndCatalysis.jl/src/symbolics.jl)
@@ -685,9 +749,16 @@ show_expression_qcat(bnc_rgm)
 ```julia
 get_regimes_graph!(model)
 pths = SISOPaths(model, :tS)
+get_polyhedra(pths)
 summary_RO_path(pths; observe_x=:E)
 get_volume(model, 1)
 ```
+
+其中：
+
+- `SISOPaths(model, :tS)` 会沿 `:tS` 对应的 qK 坐标构造 SISO DAG
+- `get_polyhedra(pths)` 会触发当前统一的 path-condition backend
+- 如果路径很多，路径枚举和 path-condition 求解都会显示进度
 
 
 ### 8.7 稳定性
@@ -856,14 +927,29 @@ regular 情况下很多东西可直接通过矩阵逆得到；singular 情况下
 
 ## 11. 对开发者最有用的测试与示例
 
-- [test/runtests.jl](/home/joker/Realizibility_index/BindingAndCatalysis.jl/test/runtests.jl)
+- [test/runtests.jl](test/runtests.jl)
   现在是最可靠的程序化回归入口，覆盖 binding、catalysis、mixed regime，以及 notebook 的主流程。
 
-- [Examples/Minimal_example.ipynb](/home/joker/Realizibility_index/BindingAndCatalysis.jl/Examples/Minimal_example.ipynb)
+- [Examples/Minimal_example.ipynb](Examples/Minimal_example.ipynb)
   最适合交互式学习。
 
-- [test/work_summary_and_suggestions.md](/home/joker/Realizibility_index/BindingAndCatalysis.jl/test/work_summary_and_suggestions.md)
-  记录了最近几轮关于 `CatalysisRegime` / `BncRegime` / binding graph cache / numerical cache 的补全与一些设计建议。
+### 11.1 测试目录组织约定
+
+`test/runtests.jl` 应该保持为 package-level correctness suite：也就是 CI 和普通开发时最先运行的入口。
+
+当某个模块需要更多专门的测试、诊断脚本、benchmark、长时间运行脚本或 reference note 时，请在 `test/` 下创建模块子目录，而不是继续把所有文件堆在 `test/` 根目录。例如：
+
+- SISO / path-condition 相关脚本放在 [test/SISO_test/](test/SISO_test/)
+- 未来如果有 catalysis 专门诊断，可以放在 `test/Catalysis_test/`
+- 未来如果有 visualization 专门 smoke test，可以放在 `test/Visualize_test/`
+
+推荐区分三类文件：
+
+- `test/runtests.jl`：快速、确定性的主回归测试，适合 CI。
+- `test/<Module>_test/*.jl`：模块相关的额外测试、诊断或 benchmark。短的可以由人或 coding agent 按需运行；长的要在文件名或注释里说清楚。
+- `test/<Module>_test/*.md`：可复现 benchmark 的 reference note 或设计说明。
+
+不要提交本地运行生成的 status/result JSON、stdout/stderr log、launcher log、session handoff note 等文件；这些应该通过 `.gitignore` 忽略。需要保留性能结论时，用小的、手写的 reference `.md` 总结，而不是提交整份机器输出。
 
 
 ## 12. 如果我要改功能，先看哪里
@@ -872,7 +958,7 @@ regular 情况下很多东西可直接通过矩阵逆得到；singular 情况下
 - 想改 catalysis regime：看 `src/Catalysis_regime.jl`
 - 想改 mixed consistency / steady-state reduction：看 `src/Bnc_regime.jl`
 - 想改 `x ↔ qK` 数值求解：看 `src/qK_x_mapping.jl`
-- 想改 graph/path 分析：看 `src/regime_graphs.jl`
+- 想改 graph/path 分析：看 `src/SISO.jl`
 - 想改显示输出：看 `src/symbolics.jl`
 - 想改画图：看 `src/visualize.jl`
 - 想保留旧 notebook 兼容性：看 `src/old_api.jl`

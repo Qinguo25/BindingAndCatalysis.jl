@@ -1,3 +1,5 @@
+export logder_x_qK, logder_qK_x, ∂logx_∂logqK, ∂logqK_∂logx
+
 #----------------Functions for calculates the derivative of log(x) with respect to log(qK) and vice versa----------------------
 
 """
@@ -15,7 +17,7 @@ Compute the Jacobian of `log(q,K)` with respect to `log(x)` at a given point.
 function ∂logqK_∂logx(Bnc::Bnc;
     x::Union{AbstractVector{<:Real},Nothing}=nothing,
     qK::Union{AbstractVector{<:Real},Nothing}=nothing,
-    input_logspace::Bool=false)::Matrix{<:Real}
+    input_logspace::Bool=false)::Matrix{Float64}
 
     x = if isnothing(x)
             if isnothing(qK)
@@ -38,8 +40,8 @@ function ∂logqK_∂logx(Bnc::Bnc;
         end
 
     return vcat(
-        x' .* Bnc.L ./ q,
-        Bnc.N
+        x' .* Matrix{Float64}(Bnc.L) ./ q,
+        Matrix{Float64}(Bnc.N)
     )
 end
 """
@@ -112,7 +114,7 @@ function get_reaction_order(Bnc::Bnc, x_mat::Matrix{<:Real}, q_mat::Union{Matrix
     Jt = copy(Bnc._LNt_sparse)
     Jt_lu = copy(Bnc._LNt_lu)
 
-    Jt_left = @view(Jt.nzval[1:length(Bnc._L_sparse.nzval)])
+    Jt_left = @view(Jt.nzval[1:length(Bnc.L.nzval)])
     
     function _update_Jt!(Jt_left, x::AbstractArray{<:Real}, q::AbstractArray{<:Real})
         x_view = @view(x[Bnc._I])
@@ -260,8 +262,6 @@ end
 
 
 # for now as the perm is not defined , we shall 
-
-
 
 
 

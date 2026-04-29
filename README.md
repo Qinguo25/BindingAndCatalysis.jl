@@ -111,6 +111,16 @@ installkernel(
 
 This creates a Jupyter kernel named “Julia (multi threads)” with automatic multi-thread configuration.
 
+## Testing
+
+Run the main regression suite from the repository root:
+
+```bash
+julia --project=. test/runtests.jl
+```
+
+Keep `test/runtests.jl` as the package-level correctness entry point. Put module-specific diagnostics, benchmarks, long-running scripts, and saved reference notes in a module subfolder under `test/`; for example, SISO path-condition tooling lives in [`test/SISO_test/`](test/SISO_test/). Generated result files, status JSON, stdout/stderr logs, and launcher logs should stay ignored rather than committed.
+
 ## API overview
 
 Core entry points:
