@@ -21,7 +21,7 @@ Reference backend cache summary:
 - `cached_path_condition_entries = 6836`
 
 Notes:
-- These numbers came from `test/cdn4_path_condition_benchmark.jl` in single-thread mode with the recursive pair-memo solver.
+- These numbers came from `test/SISO_test/cdn4_path_condition_benchmark.jl` in single-thread mode with the recursive pair-memo solver.
 - Use this file as the baseline when comparing `condition_solver=:dag`.
 
 

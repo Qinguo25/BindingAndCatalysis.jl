@@ -1,6 +1,6 @@
 $ErrorActionPreference = "Stop"
 
-$repoRoot = Split-Path -Parent $PSScriptRoot
+$repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 Set-Location $repoRoot
 
 $threads = if ($env:BNC_THREADS) { $env:BNC_THREADS } else { "5" }
@@ -9,11 +9,12 @@ $solver = if ($env:BNC_CDN_SOLVER) { $env:BNC_CDN_SOLVER } else { "dag" }
 $heartbeatSeconds = if ($env:BNC_HEARTBEAT_SECONDS) { $env:BNC_HEARTBEAT_SECONDS } else { "60" }
 $timeoutSeconds = if ($env:BNC_TIMEOUT_SECONDS) { [int]$env:BNC_TIMEOUT_SECONDS } else { 23400 }
 
-$statusPath = Join-Path $repoRoot "test\cdn${cdn}_${solver}_status.json"
-$resultPath = Join-Path $repoRoot "test\cdn${cdn}_${solver}_result.json"
-$stdoutPath = Join-Path $repoRoot "test\cdn${cdn}_${solver}_stdout.log"
-$stderrPath = Join-Path $repoRoot "test\cdn${cdn}_${solver}_stderr.log"
-$launcherPath = Join-Path $repoRoot "test\cdn${cdn}_${solver}_launcher.log"
+$artifactRoot = Join-Path $repoRoot "test\SISO_test"
+$statusPath = Join-Path $artifactRoot "cdn${cdn}_${solver}_status.json"
+$resultPath = Join-Path $artifactRoot "cdn${cdn}_${solver}_result.json"
+$stdoutPath = Join-Path $artifactRoot "cdn${cdn}_${solver}_stdout.log"
+$stderrPath = Join-Path $artifactRoot "cdn${cdn}_${solver}_stderr.log"
+$launcherPath = Join-Path $artifactRoot "cdn${cdn}_${solver}_launcher.log"
 
 function Stop-ProcessTree {
     param(
@@ -67,7 +68,7 @@ $command = @"
 `$env:BNC_HEARTBEAT_SECONDS='$heartbeatSeconds'
 `$env:BNC_STATUS_PATH='$statusPath'
 `$env:BNC_RESULT_PATH='$resultPath'
-julia --project=. test/cdn_overnight_benchmark.jl
+julia --project=. test/SISO_test/cdn_overnight_benchmark.jl
 "@
 
 $process = Start-Process -FilePath "pwsh" -ArgumentList "-NoLogo", "-NoProfile", "-Command", $command -PassThru -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath

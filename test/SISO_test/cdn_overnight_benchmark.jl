@@ -87,8 +87,8 @@ function main()
     n = parse(Int, get(ENV, "BNC_CDN_N", "5"))
     solver = Symbol(get(ENV, "BNC_CDN_SOLVER", "dag"))
     heartbeat_seconds = parse(Float64, get(ENV, "BNC_HEARTBEAT_SECONDS", "60"))
-    status_path = get(ENV, "BNC_STATUS_PATH", joinpath("test", "cdn_status.json"))
-    result_path = get(ENV, "BNC_RESULT_PATH", joinpath("test", "cdn_result.json"))
+    status_path = get(ENV, "BNC_STATUS_PATH", joinpath("test", "SISO_test", "cdn_status.json"))
+    result_path = get(ENV, "BNC_RESULT_PATH", joinpath("test", "SISO_test", "cdn_result.json"))
 
     payload = Dict{String,Any}(
         "started_at" => string(now()),
