@@ -111,6 +111,18 @@ installkernel(
 
 This creates a Jupyter kernel named “Julia (multi threads)” with automatic multi-thread configuration.
 
+## Testing
+
+Run the main regression suite from the repository root:
+
+```bash
+julia --project=. test/runtests.jl
+```
+
+Keep `test/runtests.jl` as the package-level correctness entry point. Put module-specific diagnostics, benchmarks, long-running scripts, and saved reference notes in a module subfolder under `test/`; for example, SISO path-condition tooling lives in [`test/SISO_test/`](test/SISO_test/), with benchmark scripts under [`test/SISO_test/benchmarks/`](test/SISO_test/benchmarks/). Generated result files, status JSON, stdout/stderr logs, launcher logs, and benchmark `results/` folders should stay ignored rather than committed.
+
+For threaded SISO DAG path-condition solving, the default scheduler is the pair+chunk queue. Use `BNC_SISO_DAG_SCHEDULER=serial` for single-scheduler debugging, or `BNC_SISO_DAG_SCHEDULER=queue` to request the threaded queue explicitly. Large middle-join pairs are chunked by an adaptive estimator; tune `BNC_SISO_DAG_TARGET_CHUNK_SECONDS` when a machine needs larger or smaller chunk tasks.
+
 ## API overview
 
 Core entry points:

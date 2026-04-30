@@ -67,7 +67,7 @@ $command = @"
 `$env:BNC_HEARTBEAT_SECONDS='$heartbeatSeconds'
 `$env:BNC_STATUS_PATH='$statusPath'
 `$env:BNC_RESULT_PATH='$resultPath'
-julia --project=. test/cdn_overnight_benchmark.jl
+julia --project=. test/SISO_test/long_runs/cdn_overnight_benchmark.jl
 "@
 
 $process = Start-Process -FilePath "pwsh" -ArgumentList "-NoLogo", "-NoProfile", "-Command", $command -PassThru -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath

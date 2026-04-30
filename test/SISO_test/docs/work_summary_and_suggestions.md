@@ -18,10 +18,10 @@ We focused on the single-in single-out path-condition calculation in `src/SISO.j
 
 - [src/SISO.jl](/Users/wuxiaoyu/Documents/GitHub/Bnc_julia/src/SISO.jl)
 - [test/runtests.jl](/Users/wuxiaoyu/Documents/GitHub/Bnc_julia/test/runtests.jl)
-- [test/cdn4_path_condition_benchmark.jl](/Users/wuxiaoyu/Documents/GitHub/Bnc_julia/test/cdn4_path_condition_benchmark.jl)
-- [test/cdn_overnight_benchmark.jl](/Users/wuxiaoyu/Documents/GitHub/Bnc_julia/test/cdn_overnight_benchmark.jl)
-- [test/cdn4_pair_memo_reference.md](/Users/wuxiaoyu/Documents/GitHub/Bnc_julia/test/cdn4_pair_memo_reference.md)
-- [test/pair_memo_branch_analysis.jl](/Users/wuxiaoyu/Documents/GitHub/Bnc_julia/test/pair_memo_branch_analysis.jl)
+- [test/SISO_test/benchmarks/cdn4_path_condition_benchmark.jl](/Users/wuxiaoyu/Documents/GitHub/Bnc_julia/test/SISO_test/benchmarks/cdn4_path_condition_benchmark.jl)
+- [test/SISO_test/long_runs/cdn_overnight_benchmark.jl](/Users/wuxiaoyu/Documents/GitHub/Bnc_julia/test/SISO_test/long_runs/cdn_overnight_benchmark.jl)
+- [test/SISO_test/references/cdn4_pair_memo_reference.md](/Users/wuxiaoyu/Documents/GitHub/Bnc_julia/test/SISO_test/references/cdn4_pair_memo_reference.md)
+- [test/SISO_test/diagnostics/pair_memo_branch_analysis.jl](/Users/wuxiaoyu/Documents/GitHub/Bnc_julia/test/SISO_test/diagnostics/pair_memo_branch_analysis.jl)
 
 
 ## Architecture and codebase reading
@@ -49,7 +49,7 @@ We compared the current branch against `recontrol` using the `CDN4` example.
 
 ### Benchmark script
 
-- [test/cdn4_path_condition_benchmark.jl](/Users/wuxiaoyu/Documents/GitHub/Bnc_julia/test/cdn4_path_condition_benchmark.jl)
+- [test/SISO_test/benchmarks/cdn4_path_condition_benchmark.jl](/Users/wuxiaoyu/Documents/GitHub/Bnc_julia/test/SISO_test/benchmarks/cdn4_path_condition_benchmark.jl)
 
 This script:
 
@@ -62,7 +62,7 @@ This script:
 
 ### Saved recursive baseline
 
-- [test/cdn4_pair_memo_reference.md](/Users/wuxiaoyu/Documents/GitHub/Bnc_julia/test/cdn4_pair_memo_reference.md)
+- [test/SISO_test/references/cdn4_pair_memo_reference.md](/Users/wuxiaoyu/Documents/GitHub/Bnc_julia/test/SISO_test/references/cdn4_pair_memo_reference.md)
 
 Original saved single-thread recursive baseline on `xiaoyu_pair_memo`:
 
@@ -154,7 +154,7 @@ Current understanding:
 
 To understand what really matters for performance, I added:
 
-- [test/pair_memo_branch_analysis.jl](/Users/wuxiaoyu/Documents/GitHub/Bnc_julia/test/pair_memo_branch_analysis.jl)
+- [test/SISO_test/diagnostics/pair_memo_branch_analysis.jl](/Users/wuxiaoyu/Documents/GitHub/Bnc_julia/test/SISO_test/diagnostics/pair_memo_branch_analysis.jl)
 
 This script can:
 
@@ -166,9 +166,9 @@ This script can:
 
 ### Useful commands
 
-- `julia --project=. test/pair_memo_branch_analysis.jl branch`
-- `julia --project=. test/pair_memo_branch_analysis.jl scaling`
-- `julia --project=. test/cdn4_path_condition_benchmark.jl`
+- `julia --project=. test/SISO_test/diagnostics/pair_memo_branch_analysis.jl branch`
+- `julia --project=. test/SISO_test/diagnostics/pair_memo_branch_analysis.jl scaling`
+- `julia --project=. test/SISO_test/benchmarks/cdn4_path_condition_benchmark.jl`
 
 
 ## Most important performance result
@@ -272,9 +272,9 @@ At the time this handoff was originally written, `git status` showed:
   - `src/SISO.jl`
   - `test/runtests.jl`
 - untracked:
-  - `test/cdn4_pair_memo_reference.md`
-  - `test/cdn4_path_condition_benchmark.jl`
-  - `test/pair_memo_branch_analysis.jl`
+  - `test/SISO_test/references/cdn4_pair_memo_reference.md`
+  - `test/SISO_test/benchmarks/cdn4_path_condition_benchmark.jl`
+  - `test/SISO_test/diagnostics/pair_memo_branch_analysis.jl`
 - several deleted files under `test/` were also present in status and appear to be part of a separate cleanup
 
 Be careful not to accidentally undo unrelated user cleanup work.
@@ -303,7 +303,7 @@ Alternative next step:
 
 ## Follow-up investigation on empty middle pairs
 
-I continued the suggested next step by extending [test/pair_memo_branch_analysis.jl](/Users/wuxiaoyu/Documents/GitHub/Bnc_julia/test/pair_memo_branch_analysis.jl) to record:
+I continued the suggested next step by extending [test/SISO_test/diagnostics/pair_memo_branch_analysis.jl](/Users/wuxiaoyu/Documents/GitHub/Bnc_julia/test/SISO_test/diagnostics/pair_memo_branch_analysis.jl) to record:
 
 - how often each middle pair `(successor, predecessor)` is queried from the middle-overlap branch
 - how often that middle pair returns empty vs nonempty
@@ -311,7 +311,7 @@ I continued the suggested next step by extending [test/pair_memo_branch_analysis
 
 ### Updated command
 
-- `julia --project=. test/pair_memo_branch_analysis.jl branch`
+- `julia --project=. test/SISO_test/diagnostics/pair_memo_branch_analysis.jl branch`
 
 ### New CDN4 result
 
@@ -362,7 +362,7 @@ In other words:
 
 When reopening Codex at home, a good starting prompt is:
 
-`Read test/work_summary_and_suggestions.md and continue the pair_memo parallelization investigation.`
+`Read test/SISO_test/docs/work_summary_and_suggestions.md and continue the pair_memo parallelization investigation.`
 
 
 ## 2026-04-28 CDN5 remote benchmark update
@@ -593,7 +593,7 @@ Main risk:
 
 Added:
 
-- [test/dag_parallel_diagnostics.jl](/Users/wuxiaoyu/Documents/GitHub/Bnc_julia/test/dag_parallel_diagnostics.jl)
+- [test/SISO_test/diagnostics/dag_parallel_diagnostics.jl](/Users/wuxiaoyu/Documents/GitHub/Bnc_julia/test/SISO_test/diagnostics/dag_parallel_diagnostics.jl)
 
 Purpose:
 
@@ -603,9 +603,9 @@ Purpose:
 
 Useful commands:
 
-- `julia --project=. test/dag_parallel_diagnostics.jl`
-- `BNC_DIAG_SOLVE=true julia --project=. test/dag_parallel_diagnostics.jl`
-- `BNC_DIAG_CDN_N=5 julia --project=. test/dag_parallel_diagnostics.jl`
+- `julia --project=. test/SISO_test/diagnostics/dag_parallel_diagnostics.jl`
+- `BNC_DIAG_SOLVE=true julia --project=. test/SISO_test/diagnostics/dag_parallel_diagnostics.jl`
+- `BNC_DIAG_CDN_N=5 julia --project=. test/SISO_test/diagnostics/dag_parallel_diagnostics.jl`
 
 ### CDN4 diagnostic results
 

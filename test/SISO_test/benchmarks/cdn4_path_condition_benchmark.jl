@@ -59,6 +59,38 @@ function collect_backend_stats(paths)
                     stats["dag_middle_parallel_nodes"] = getproperty(profile, :middle_parallel_nodes)
                     stats["dag_middle_serial_nodes"] = getproperty(profile, :middle_serial_nodes)
                     stats["dag_middle_join_pairs"] = getproperty(profile, :middle_join_pairs)
+                    if hasproperty(profile, :queue_pair_tasks)
+                        stats["dag_queue_pair_tasks"] = getproperty(profile, :queue_pair_tasks)
+                        stats["dag_queue_chunk_tasks"] = getproperty(profile, :queue_chunk_tasks)
+                        stats["dag_queue_chunked_pairs"] = getproperty(profile, :queue_chunked_pairs)
+                        stats["dag_queue_finalize_tasks"] = getproperty(profile, :queue_finalize_tasks)
+                        stats["dag_queue_max_chunks_per_pair"] = getproperty(profile, :queue_max_chunks_per_pair)
+                        stats["dag_queue_max_chunk_estimated_entries"] =
+                            getproperty(profile, :queue_max_chunk_estimated_entries)
+                        stats["dag_queue_total_chunk_estimated_entries"] =
+                            getproperty(profile, :queue_total_chunk_estimated_entries)
+                        stats["dag_queue_max_chunk_seconds"] = getproperty(profile, :queue_max_chunk_seconds)
+                        stats["dag_queue_total_chunk_seconds"] = getproperty(profile, :queue_total_chunk_seconds)
+                        stats["dag_queue_finalize_seconds"] = getproperty(profile, :queue_finalize_ns) / 1e9
+                        if hasproperty(profile, :queue_estimator_entries_per_second)
+                            stats["dag_queue_chunk_candidate_pairs"] =
+                                getproperty(profile, :queue_chunk_candidate_pairs)
+                            stats["dag_queue_chunk_size_gate_skips"] =
+                                getproperty(profile, :queue_chunk_size_gate_skips)
+                            stats["dag_queue_chunk_width_gate_skips"] =
+                                getproperty(profile, :queue_chunk_width_gate_skips)
+                            stats["dag_queue_chunk_thread_gate_skips"] =
+                                getproperty(profile, :queue_chunk_thread_gate_skips)
+                            stats["dag_queue_estimator_entries_per_second"] =
+                                getproperty(profile, :queue_estimator_entries_per_second)
+                            stats["dag_queue_estimator_target_entries"] =
+                                getproperty(profile, :queue_estimator_target_entries)
+                            stats["dag_queue_estimator_min_parallel_entries"] =
+                                getproperty(profile, :queue_estimator_min_parallel_entries)
+                            stats["dag_queue_estimator_target_seconds"] =
+                                getproperty(profile, :queue_estimator_target_seconds)
+                        end
+                    end
                     if hasproperty(profile, :weighted_work_done)
                         stats["dag_weighted_work_done"] = getproperty(profile, :weighted_work_done)
                         stats["dag_weighted_work_total"] = getproperty(profile, :weighted_work_total)
@@ -139,7 +171,8 @@ function main()
             flush(io)
         end
     end
-    ccall(:exit, Cvoid, (Cint,), 0)
 end
 
-main()
+if abspath(PROGRAM_FILE) == @__FILE__
+    main()
+end
