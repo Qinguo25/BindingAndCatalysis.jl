@@ -55,16 +55,19 @@ function _rank1_step_update_from_regular(
         H0_to =  -H[:, i] .* c0_qK
         nlt_to = 1
     else
-        
-        if a < 0 
-            @warn "H Determinant is changing sign in rank-1 update"
-        end
-
         scale = inv(a)
         H_to  = H - _sparse_outer(H[:, i], c_qK, scale) 
         dropzeros!(H_to)
         H0_to = H0 - H[:, i] .* (scale * c0_qK)
         nlt_to = 0
+        
+        if a < 0 
+            @show a
+            @show inv(float.(H))
+            @show inv(float.(H_to))
+            @warn "H Determinant is changing sign in rank-1 update"
+        end
+
     end
 
     return H_to, H0_to, nlt_to, c_qK, c0_qK

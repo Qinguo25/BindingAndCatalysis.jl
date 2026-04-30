@@ -331,174 +331,321 @@ function _simo_style(fig_size)
     )
 end
 
-function SIMO_plot(
-    grh::SIMOPaths,
-    pth_idx::Union{Nothing,Integer,AbstractVector}=nothing;
-    observe_x=nothing,
-    npoints::Integer=300,
-    start=nothing,
-    stop=nothing,
-    pad::Real=4.0,
-    rand_line::Bool=false,
-    rand_ray::Bool=false,
-    extend::Real=4.0,
-    show_numeric::Bool=true,
-    show_regime::Bool=true,
-    region_fill::Bool=true,
-    region_label::Symbol=:reaction_order,
-    show_regime_colorbar::Bool=false,
-    region_colormap=:rainbow,
-    line_colormap=:tab10,
-    size=nothing,
-)
-    model = get_binding_network(grh)
-    path_idxs = get_indices(grh, pth_idx)
-    observe_x_idx, xsyms, _ = _normalize_simo_observe_x(model, observe_x)
-    line_colors = _resolve_simo_line_colors(length(observe_x_idx); colormap=line_colormap)
+# function SIMO_plot(
+#     grh::SIMOPaths,
+#     pth_idx::Union{Nothing,Integer,AbstractVector}=nothing;
+#     observe_x=nothing,
+#     npoints::Integer=300,
+#     start=nothing,
+#     stop=nothing,
+#     pad::Real=4.0,
+#     rand_line::Bool=false,
+#     rand_ray::Bool=false,
+#     extend::Real=4.0,
+#     show_numeric::Bool=true,
+#     show_regime::Bool=true,
+#     region_fill::Bool=true,
+#     region_label::Symbol=:reaction_order,
+#     show_regime_colorbar::Bool=false,
+#     region_colormap=:rainbow,
+#     line_colormap=:tab10,
+#     size=nothing,
+# )
+#     model = get_binding_network(grh)
+#     path_idxs = get_indices(grh, pth_idx)
+#     observe_x_idx, xsyms, _ = _normalize_simo_observe_x(model, observe_x)
+#     line_colors = _resolve_simo_line_colors(length(observe_x_idx); colormap=line_colormap)
 
-    n_paths = length(path_idxs)
-    fig_size = _simo_figure_size(n_paths; size=size)
-    style = _simo_style(fig_size)
-    F = Figure(size=fig_size, figure_padding=(10, 12, 10, 10))
-    rowgap!(F.layout, 8)
-    colgap!(F.layout, 12)
-    params_by_path = Dict{Int, Vector{Float64}}()
-    ctx_by_path = Dict{Int, Any}()
-    all_rgms = Int[]
-    for path_idx in path_idxs
-        params = get_one_inner_point(get_polyhedron(grh, path_idx); rand_line=rand_line, rand_ray=rand_ray, extend=extend)
-        params_by_path[path_idx] = params
-        ctx = _simo_numeric_context(model, grh.rgm_paths[path_idx], params, grh.change_qK_idx; npoints=npoints, start=start, stop=stop, pad=pad)
-        ctx_by_path[path_idx] = ctx
-        append!(all_rgms, ctx.rgms)
-    end
-    rgm_cmap = get_color_map(all_rgms; colormap=region_colormap)
-    for (row, path_idx) in enumerate(path_idxs)
-        ax = Axis(
-            F[row, 1];
-            xlabel="log" * repr(qK_sym(model)[grh.change_qK_idx]),
-            ylabel=length(observe_x_idx) == 1 ? "log" * repr(only(xsyms)) : "log x",
-            title="Path $(path_idx): $(format_arrow(get_path(grh, path_idx; return_idx=true); prefix="#"))",
-            xlabelsize=style.axis_fontsize,
-            ylabelsize=style.axis_fontsize,
-            titlesize=style.title_fontsize,
-            xticklabelsize=style.tick_fontsize,
-            yticklabelsize=style.tick_fontsize,
-        )
+#     n_paths = length(path_idxs)
+#     fig_size = _simo_figure_size(n_paths; size=size)
+#     style = _simo_style(fig_size)
+#     F = Figure(size=fig_size, figure_padding=(10, 12, 10, 10))
+#     rowgap!(F.layout, 8)
+#     colgap!(F.layout, 12)
+#     params_by_path = Dict{Int, Vector{Float64}}()
+#     ctx_by_path = Dict{Int, Any}()
+#     all_rgms = Int[]
+#     for path_idx in path_idxs
+#         params = get_one_inner_point(get_polyhedron(grh, path_idx); rand_line=rand_line, rand_ray=rand_ray, extend=extend)
+#         params_by_path[path_idx] = params
+#         ctx = _simo_numeric_context(model, grh.rgm_paths[path_idx], params, grh.change_qK_idx; npoints=npoints, start=start, stop=stop, pad=pad)
+#         ctx_by_path[path_idx] = ctx
+#         append!(all_rgms, ctx.rgms)
+#     end
+#     rgm_cmap = get_color_map(all_rgms; colormap=region_colormap)
+#     for (row, path_idx) in enumerate(path_idxs)
+#         ax = Axis(
+#             F[row, 1];
+#             xlabel="log" * repr(qK_sym(model)[grh.change_qK_idx]),
+#             ylabel=length(observe_x_idx) == 1 ? "log" * repr(only(xsyms)) : "log x",
+#             title="Path $(path_idx): $(format_arrow(get_path(grh, path_idx; return_idx=true); prefix="#"))",
+#             xlabelsize=style.axis_fontsize,
+#             ylabelsize=style.axis_fontsize,
+#             titlesize=style.title_fontsize,
+#             xticklabelsize=style.tick_fontsize,
+#             yticklabelsize=style.tick_fontsize,
+#         )
 
-        params = params_by_path[path_idx]
+#         params = params_by_path[path_idx]
 
-        _simo_plot_one_path!(
-            ax,
-            model,
-            grh.rgm_paths[path_idx],
-            params,
-            grh.change_qK_idx,
-            observe_x_idx,
-            xsyms,
-            rgm_cmap;
-            npoints=npoints,
-            start=start,
-            stop=stop,
-            pad=pad,
-            show_numeric=show_numeric,
-            show_regime=show_regime,
-            region_fill=region_fill,
-            region_label=region_label,
-            region_fontsize=style.region_fontsize,
-            numeric_linewidth=style.numeric_lw,
-            regime_linewidth=style.regime_lw,
-            line_colors=line_colors,
-            show_legend_labels=row == 1,
-            numeric_ctx=ctx_by_path[path_idx],
-        )
+#         _simo_plot_one_path!(
+#             ax,
+#             model,
+#             grh.rgm_paths[path_idx],
+#             params,
+#             grh.change_qK_idx,
+#             observe_x_idx,
+#             xsyms,
+#             rgm_cmap;
+#             npoints=npoints,
+#             start=start,
+#             stop=stop,
+#             pad=pad,
+#             show_numeric=show_numeric,
+#             show_regime=show_regime,
+#             region_fill=region_fill,
+#             region_label=region_label,
+#             region_fontsize=style.region_fontsize,
+#             numeric_linewidth=style.numeric_lw,
+#             regime_linewidth=style.regime_lw,
+#             line_colors=line_colors,
+#             show_legend_labels=row == 1,
+#             numeric_ctx=ctx_by_path[path_idx],
+#         )
 
-        if row == 1 && (show_numeric || show_regime)
-            axislegend(ax; position=:rb, labelsize=style.tick_fontsize)
+#         if row == 1 && (show_numeric || show_regime)
+#             axislegend(ax; position=:rb, labelsize=style.tick_fontsize)
+#         end
+#     end
+
+#     if show_regime_colorbar
+#         add_rgm_colorbar!(F, rgm_cmap)
+#     end
+#     return F
+# end
+
+# function SIMO_plot(
+#     model::Bnc,
+#     parameters,
+#     change_idx;
+#     rgm_path=nothing,
+#     observe_x=nothing,
+#     npoints::Integer=300,
+#     start::Real=-6,
+#     stop::Real=6,
+#     pad::Real=4.0,
+#     show_numeric::Bool=true,
+#     show_regime::Bool=true,
+#     region_fill::Bool=true,
+#     region_label::Symbol=:reaction_order,
+#     show_regime_colorbar::Bool=false,
+#     region_colormap=:rainbow,
+#     line_colormap=:tab10,
+#     size=nothing,
+# )
+#     change_idx = locate_sym_qK(model, change_idx)
+#     params = _normalize_simo_parameters(model, parameters, change_idx)
+#     qvals = collect(range(Float64(start), Float64(stop); length=max(npoints, 50)))
+#     rgm_path = isnothing(rgm_path) ? _simo_path_from_numeric(model, params, change_idx, qvals) : Int.(get_idx.(Ref(model), rgm_path))
+#     observe_x_idx, xsyms, _ = _normalize_simo_observe_x(model, observe_x)
+#     line_colors = _resolve_simo_line_colors(length(observe_x_idx); colormap=line_colormap)
+#     ctx = _simo_numeric_context(model, rgm_path, params, change_idx; npoints=npoints, start=start, stop=stop, pad=pad)
+#     rgm_cmap = get_color_map(ctx.rgms; colormap=region_colormap)
+
+#     fig_size = _simo_figure_size(1; size=size)
+#     style = _simo_style(fig_size)
+#     F = Figure(size=fig_size, figure_padding=(10, 12, 10, 10))
+#     colgap!(F.layout, 12)
+#     ax = Axis(
+#         F[1, 1];
+#         xlabel="log" * repr(qK_sym(model)[change_idx]),
+#         ylabel=length(observe_x_idx) == 1 ? "log" * repr(only(xsyms)) : "log x",
+#         title="Path: $(format_arrow(rgm_path; prefix="#"))",
+#         xlabelsize=style.axis_fontsize,
+#         ylabelsize=style.axis_fontsize,
+#         titlesize=style.title_fontsize,
+#         xticklabelsize=style.tick_fontsize,
+#         yticklabelsize=style.tick_fontsize,
+#     )
+
+#     _simo_plot_one_path!(
+#         ax,
+#         model,
+#         rgm_path,
+#         params,
+#         change_idx,
+#         observe_x_idx,
+#         xsyms,
+#         rgm_cmap;
+#         npoints=npoints,
+#         start=start,
+#         stop=stop,
+#         pad=pad,
+#         show_numeric=show_numeric,
+#         show_regime=show_regime,
+#         region_fill=region_fill,
+#         region_label=region_label,
+#         region_fontsize=style.region_fontsize,
+#         numeric_linewidth=style.numeric_lw,
+#         regime_linewidth=style.regime_lw,
+#         line_colors=line_colors,
+#         show_legend_labels=true,
+#         numeric_ctx=ctx,
+#     )
+
+#     if show_numeric || show_regime
+#         axislegend(ax; position=:rb, labelsize=style.tick_fontsize)
+#     end
+
+#     if show_regime_colorbar
+#         add_rgm_colorbar!(F, rgm_cmap)
+#     end
+#     return F
+# end
+
+
+
+
+# Light SIMO plot:
+# path condition -> one inner point -> sweep changed qK -> logx curves
+# background color = regime assigned from numeric x
+# optional dashed regime-derived line
+
+_txt(x) = replace(sprint(show, MIME"text/plain"(), x), '\n' => ' ')
+
+_full_qK(params, change_idx, q) =
+    Float64.(vcat(params[1:change_idx-1], q, params[change_idx:end]))
+
+function _logx_grid(model, params, change_idx, qvals; regime_line::Bool=false)
+    f(q) = regime_line ?
+        qK2x(model, _full_qK(params, change_idx, q);
+             input_logspace=true, output_logspace=true, use_vtx=true) :
+        qK2x(model, _full_qK(params, change_idx, q);
+             input_logspace=true, output_logspace=true)
+
+    return reduce(hcat, (f(q) for q in qvals))
+end
+
+function _assign_rgms(model, logx)
+    return [
+        assign_regime_x(model, collect(@view logx[:, i]);
+            input_logspace=true,
+            asymptotic_only=false,
+            return_idx=true)
+        for i in axes(logx, 2)
+    ]
+end
+
+function _rgm_runs(qvals, rgms)
+    runs = NamedTuple[]
+    s = 1
+
+    for i in 2:(length(rgms) + 1)
+        if i > length(rgms) || rgms[i] != rgms[s]
+            left  = s == 1 ? qvals[1]  : (qvals[s-1] + qvals[s]) / 2
+            right = i > length(rgms) ? qvals[end] : (qvals[i-1] + qvals[i]) / 2
+            push!(runs, (; rgm=Int(rgms[s]), left=Float64(left), right=Float64(right)))
+            s = i
         end
     end
 
-    if show_regime_colorbar
-        add_rgm_colorbar!(F, rgm_cmap)
-    end
-    return F
+    return runs
 end
 
 function SIMO_plot(
     model::Bnc,
-    parameters,
+    params,
     change_idx;
-    rgm_path=nothing,
-    observe_x=nothing,
-    npoints::Integer=300,
     start::Real=-6,
     stop::Real=6,
-    pad::Real=4.0,
-    show_numeric::Bool=true,
-    show_regime::Bool=true,
-    region_fill::Bool=true,
-    region_label::Symbol=:reaction_order,
-    show_regime_colorbar::Bool=false,
+    observe_x=nothing,
+    npoints::Integer=300,
+    add_regime_line::Bool=true,
+    shade_background::Bool=true,
+    region_alpha::Real=0.12,
     region_colormap=:rainbow,
-    line_colormap=:tab10,
-    size=nothing,
+    size=(760, 500),
+    title=nothing,
 )
     change_idx = locate_sym_qK(model, change_idx)
-    params = _normalize_simo_parameters(model, parameters, change_idx)
-    qvals = collect(range(Float64(start), Float64(stop); length=max(npoints, 50)))
-    rgm_path = isnothing(rgm_path) ? _simo_path_from_numeric(model, params, change_idx, qvals) : Int.(get_idx.(Ref(model), rgm_path))
-    observe_x_idx, xsyms, _ = _normalize_simo_observe_x(model, observe_x)
-    line_colors = _resolve_simo_line_colors(length(observe_x_idx); colormap=line_colormap)
-    ctx = _simo_numeric_context(model, rgm_path, params, change_idx; npoints=npoints, start=start, stop=stop, pad=pad)
-    rgm_cmap = get_color_map(ctx.rgms; colormap=region_colormap)
 
-    fig_size = _simo_figure_size(1; size=size)
-    style = _simo_style(fig_size)
-    F = Figure(size=fig_size, figure_padding=(10, 12, 10, 10))
-    colgap!(F.layout, 12)
+    params = Float64.(collect(params))
+    if length(params) == model.d + model.r
+        deleteat!(params, change_idx)   # allow full qK input too
+    end
+
+    qvals = collect(range(Float64(start), Float64(stop); length=max(npoints, 2)))
+
+    x_idx, xsyms, _ = _normalize_simo_observe_x(model, observe_x)
+
+    logx = _logx_grid(model, params, change_idx, qvals)
+    rgms = _assign_rgms(model, logx)
+
+    rgm_colors = get_color_map(unique(rgms); colormap=region_colormap)
+    line_colors = Makie.wong_colors()
+
+    F = Figure(size=size)
     ax = Axis(
         F[1, 1];
-        xlabel="log" * repr(qK_sym(model)[change_idx]),
-        ylabel=length(observe_x_idx) == 1 ? "log" * repr(only(xsyms)) : "log x",
-        title="Path: $(format_arrow(rgm_path; prefix="#"))",
-        xlabelsize=style.axis_fontsize,
-        ylabelsize=style.axis_fontsize,
-        titlesize=style.title_fontsize,
-        xticklabelsize=style.tick_fontsize,
-        yticklabelsize=style.tick_fontsize,
+        xlabel = "log" * _txt(qK_sym(model)[change_idx]),
+        ylabel = length(x_idx) == 1 ? "log" * _txt(only(xsyms)) : "log x",
+        title = isnothing(title) ? "Changing " * _txt(qK_sym(model)[change_idx]) : title,
     )
 
-    _simo_plot_one_path!(
-        ax,
+    if shade_background
+        for run in _rgm_runs(qvals, rgms)
+            vspan!(ax, run.left, run.right; color=(rgm_colors[run.rgm], region_alpha))
+        end
+    end
+
+    if add_regime_line
+        rgm_logx = _logx_grid(model, params, change_idx, qvals; regime_line=true)
+
+        for (j, xi) in enumerate(x_idx)
+            c = line_colors[mod1(j, length(line_colors))]
+            lines!(ax, qvals, @view rgm_logx[xi, :];
+                color=c, linestyle=:dash, linewidth=2,
+                label="$(_txt(xsyms[j])) regime")
+        end
+    end
+
+    for (j, xi) in enumerate(x_idx)
+        c = line_colors[mod1(j, length(line_colors))]
+        lines!(ax, qvals, @view logx[xi, :];
+            color=c, linewidth=2.5,
+            label="$(_txt(xsyms[j])) numeric")
+    end
+
+    axislegend(ax; position=:lb)
+    return F,ax
+end
+
+function SIMO_plot(
+    grh::SIMOPaths,
+    path_idx::Integer;
+    title="Path $path_idx",
+    extend::Real = 4.0,
+    kwargs...,
+)
+    model = get_binding_network(grh)
+    
+     
+    params = get_one_inner_point(get_polyhedron(grh, path_idx), rand_line=false,rand_ray=false, extend=extend)
+    
+    let 
+        model = get_binding_network(grh)
+        qK_s = qK_sym(model)
+        deleteat!(qK_s, grh.change_qK_idx)
+        dict = Dict{Any,Float64}(sym => val for (sym, val) in zip(qK_s, params))
+        @info "$dict"
+    end
+
+
+    return SIMO_plot(
         model,
-        rgm_path,
         params,
-        change_idx,
-        observe_x_idx,
-        xsyms,
-        rgm_cmap;
-        npoints=npoints,
-        start=start,
-        stop=stop,
-        pad=pad,
-        show_numeric=show_numeric,
-        show_regime=show_regime,
-        region_fill=region_fill,
-        region_label=region_label,
-        region_fontsize=style.region_fontsize,
-        numeric_linewidth=style.numeric_lw,
-        regime_linewidth=style.regime_lw,
-        line_colors=line_colors,
-        show_legend_labels=true,
-        numeric_ctx=ctx,
+        grh.change_qK_idx;
+        title=title,
+        kwargs...,
     )
-
-    if show_numeric || show_regime
-        axislegend(ax; position=:rb, labelsize=style.tick_fontsize)
-    end
-
-    if show_regime_colorbar
-        add_rgm_colorbar!(F, rgm_cmap)
-    end
-    return F
 end

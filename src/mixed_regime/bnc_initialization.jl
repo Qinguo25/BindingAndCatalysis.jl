@@ -9,11 +9,16 @@ function _build_BncRegime(cat_rgms::Regimes, bind_rgms::Regimes)
         for j in 1:n_bind_rgms
             bind_rgm = bind_rgms.vertices_data[j]
             bncrgms[i, j] = BncRegime(bind_rgm, cat_rgm)
-        end
+        end 
     end
     @info "Finished matching BncRegimes."
     return bncrgms
 end
+
+
+
+
+
 
 function _steady_state_affine(
     bind_rgm::BindRegime,
@@ -37,6 +42,10 @@ function _steady_state_affine(
 
     return H_ss, vec(-(H_ss * M0_ss))
 end
+
+
+
+
 
 function _build_row_affine_cache(rgms, i, valid_js, perms, nlt_valid, N_ss, r_v, direction)
     unique_keys, first_pos = _row_unique_perm_data(perms)
@@ -68,6 +77,10 @@ function _build_row_affine_cache(rgms, i, valid_js, perms, nlt_valid, N_ss, r_v,
     return affine_by_perm
 end
 
+
+
+
+
 function _build_row_context(rgms::AbstractMatrix{<:Union{BncRegime,Nothing}}, i::Int, r_v::Int)
     valid_js = _row_valid_columns(rgms, i)
     isempty(valid_js) && return nothing
@@ -89,6 +102,9 @@ function _build_row_context(rgms::AbstractMatrix{<:Union{BncRegime,Nothing}}, i:
         affine_by_perm=affine_by_perm,
     )
 end
+
+
+
 
 
 
@@ -139,6 +155,8 @@ function _init_consistency_only_bnc_regime!(vtx::BncRegime)
     vtx.C0_wKk = _materialize_real_vector(C0_wKk)
     return nothing
 end
+
+
 
 function _initialize_regime!(rgms::AbstractMatrix{<:Union{BncRegime,Nothing}})
     first_vtx = _first_nonempty_regime(rgms)

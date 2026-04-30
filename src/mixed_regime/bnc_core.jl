@@ -185,6 +185,10 @@ function _binding_C_qKk(bind_rgm::BindRegime, n_v::Int)
     return C, C0_qK, nlt
 end
 
+
+
+
+
 function get_C_C0_nullity_xk(rgm::BncRegime, kind::Symbol=:combined)
     bind_rgm = rgm.bind_rgm
     cat_rgm = rgm.catalysis_rgm
@@ -209,12 +213,19 @@ function get_C_C0_nullity_xk(rgm::BncRegime, kind::Symbol=:combined)
     end
 end
 
+
+
+
 function get_C_C0_xk(rgm::BncRegime, kind::Symbol=:combined)
     C, C0, _ = get_C_C0_nullity_xk(rgm, kind)
     return C, C0
 end
 get_C_xk(rgm::BncRegime, kind::Symbol=:combined) = get_C_C0_nullity_xk(rgm, kind)[1]
 get_C0_xk(rgm::BncRegime, kind::Symbol=:combined) = get_C_C0_nullity_xk(rgm, kind)[2]
+
+
+
+
 
 function get_C_C0_nullity_qKk(rgm::BncRegime, kind::Symbol=:combined)
     n_v = size(rgm.catalysis_rgm.P, 2)
@@ -237,6 +248,11 @@ end
 get_C_qKk(rgm::BncRegime, kind::Symbol=:combined) = get_C_C0_nullity_qKk(rgm, kind)[1]
 get_C0_qKk(rgm::BncRegime, kind::Symbol=:combined) = get_C_C0_nullity_qKk(rgm, kind)[2]
 
+
+
+
+
+
 function get_C_C0_nullity_wKk(rgm::BncRegime)
     return rgm.C_wKk, rgm.C0_wKk, rgm.nlt
 end
@@ -248,6 +264,11 @@ end
 get_C_wKk(rgm::BncRegime) = get_C_C0_nullity_wKk(rgm)[1]
 get_C0_wKk(rgm::BncRegime) = get_C_C0_nullity_wKk(rgm)[2]
 
+
+
+
+
+
 function get_qcat_F_F0(rgm::BncRegime)
     rgm.nlt == 0 || error("The reduced steady-state system is singular, so q_cat has no affine expression in (w, K, k).")
     r_v = size(rgm.catalysis_rgm.P, 1)
@@ -256,4 +277,11 @@ function get_qcat_F_F0(rgm::BncRegime)
     F = P_cat * rgm.H
     F0 = P0_cat + P_cat * rgm.H0
     return F, vec(F0)
+end
+
+
+
+function get_polyhedron(rgm::BncRegime)
+    C, C0, nullity = get_C_C0_nullity_wKk(rgm)
+    return _build_polyhedron_from_C_C0(C, C0, nullity)
 end

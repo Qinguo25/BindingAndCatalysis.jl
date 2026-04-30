@@ -62,7 +62,7 @@ export Polyhedron, HRep, MixedMatHRep, hrep, polyhedron
 export VRep, vrep, points, rays, lines
 export HalfSpace, HyperPlane, intersect, eliminate, detecthlinearity!, removehredundancy!
 export dim, fulldim, hashyperplanes, hyperplanes, allhalfspaces, issubset
-
+export get_Lcat
 
 
 
@@ -509,7 +509,17 @@ function Base.propertynames(model::Bnc, private::Bool=false)
     return private ? Tuple(unique(names)) : Tuple(sym for sym in unique(names) if !startswith(String(sym), "_"))
 end
 
-
+function get_Lcat(model)
+    bn = get_binding_network(model)
+    cn = model.catalysis
+    if isnothing(cn)
+        return spzeros(Int,0, n)
+    else
+        r_v = cn.r_v
+        return bn.L[r_v + 1:end, :]
+    end
+end
+    
 
 
 pth1 = joinpath(@__DIR__,"Mathcore/")

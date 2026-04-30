@@ -334,33 +334,33 @@ function S_to_S_pos_neg(S::SparseMatrixCSC{T,Ti}) where {T<:Real,Ti<:Integer}
     m, n = size(S)
     nnzS = nnz(S)
 
-    colptr = Vector{Ti}(undef, n + 1)
-    rowval = Vector{Ti}(undef, nnzS)
-    nzval  = Vector{T}(undef, nnzS)
+    I = Vector{Ti}(undef, nnzS)
+    J = Vector{Ti}(undef, nnzS)
+    V = Vector{T}(undef, nnzS)
 
-    pos = 1
-    colptr[1] = 1
-
+    pos = 0
     @inbounds for j in 1:n
         for p in S.colptr[j]:(S.colptr[j + 1] - 1)
             i = S.rowval[p]
             v = S.nzval[p]
 
             if v > zero(T)
-                rowval[pos] = i
-                nzval[pos] = v
                 pos += 1
+                I[pos] = i
+                J[pos] = j
+                V[pos] = v
             elseif v < zero(T)
-                rowval[pos] = i + m
-                nzval[pos] = -v
                 pos += 1
+                I[pos] = i + m
+                J[pos] = j
+                V[pos] = -v
             end
         end
-        colptr[j + 1] = pos
     end
 
-    resize!(rowval, pos - 1)
-    resize!(nzval, pos - 1)
+    resize!(I, pos)
+    resize!(J, pos)
+    resize!(V, pos)
 
-    return SparseMatrixCSC(2m, n, colptr, rowval, nzval)
+    return sparse(I, J, V, 2m, n)
 end
