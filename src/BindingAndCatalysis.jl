@@ -293,11 +293,21 @@ mutable struct BncRegime <:AbstractRegime
         else
             nothing
         end
-        return new(bind_rgm, catalysis_rgm, 
-            H_bd, Int8(0),
-            -1,nothing, nothing,
-            nothing,nothing, -1,  
-            nothing, nothing)
+        return new(
+            bind_rgm, 
+            catalysis_rgm, 
+            H_bd, 
+            Int8(0), #is_stable
+            -1, # nlt
+            
+            nothing, 
+            nothing,
+            nothing,
+            nothing, 
+            -1,  
+            
+            nothing, 
+            nothing)
     end
 end
 

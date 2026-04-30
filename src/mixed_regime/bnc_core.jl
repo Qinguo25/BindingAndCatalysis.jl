@@ -6,6 +6,10 @@
     return detA > 0 ? 1 : detA < 0 ? -1 : 0
 end
 
+
+
+
+
 get_binding_regime(rgm::BncRegime) = rgm.bind_rgm
 get_catalysis_regime(rgm::BncRegime) = rgm.catalysis_rgm
 
@@ -22,6 +26,21 @@ get_steady_state_perm(rgm::BncRegime) = get_perm(rgm)
 get_idx(rgm::BncRegime) = CartesianIndex(get_idx(rgm.catalysis_rgm), get_idx(rgm.bind_rgm))
 
 @inline is_bnc_regimes_built(model::Bnc) = !isnothing(model.BncRegimes)
+
+
+
+get_nullity(rgm::BncRegime) = rgm.nlt
+is_singular(rgm::BncRegime) = get_nullity(rgm) > 0
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -96,7 +115,16 @@ get_H_bd(rgm::BncRegime) = rgm.H_bd
 
 
 
+# Get an H_bd numerically if the inner binding regime is singular.
+function get_H_bd_numerically(rgm::BncRegime)
+    bind_rgm = get_binding_regime(rgm)
+    cat_rgm = get_catalysis_regime(rgm)
 
+    PΠ = get_PΠ(cat_rgm)
+    H_bind = get_H_numerically(bind_rgm)
+    r_v = size(PΠ, 1)
+    return sparse(Float64.(PΠ * H_bind[:, 1:r_v]))
+end
 
 
 
@@ -104,18 +132,45 @@ get_H_bd(rgm::BncRegime) = rgm.H_bd
 
 # Determine the stability of a mixed regime
 function judge_stability!(rgm::BncRegime; kwargs...)
-    isnothing(rgm.H_bd) && return (rgm.is_stable = Int8(0))
+    # if is_singular(rgm)
+    #     return (rgm.is_stable = Int8(0))
+    # end
+    
+    if isnothing(rgm.H_bd)
+        rgm.H_bd = get_H_bd_numerically(rgm)
+        H_bd = rgm.H_bd
+    else
+        H_bd = rgm.H_bd
+    end
+
     code = judge_dstable(rgm.H_bd; kwargs...)
-    rgm.is_stable = Int8(code == 0 ? -1 : code == -1 ? 0 : 1)
+
+    flag = if code ==1  # d-stable
+            Int8(1)
+        elseif code == 0 # d-unstable
+            Int8(-1)
+        else # undetermined
+            Int8(2) 
+        end
+
+    rgm.is_stable = flag
+
     return rgm.is_stable
 end
 
 
 
-function is_stable(rgm::BncRegime; recalculate::Bool=false, return_code::Bool=false, kwargs...)
-    code = (recalculate || rgm.is_stable == 0) ? judge_stability!(rgm; kwargs...) : rgm.is_stable
-    return return_code ? code : (code == 1 ? true : code == -1 ? false : missing)
+function is_stable(rgm::BncRegime; recalculate::Bool=false, kwargs...)
+    
+    flag = if (recalculate || rgm.is_stable == 0) 
+                judge_stability!(rgm; kwargs...)
+           else 
+            rgm.is_stable
+           end
+
+    return flag == 1 ? true : flag == -1 ? false : missing
 end
+
 is_stable(model::Bnc, bind, cat; kwargs...) = is_stable(get_bnc_regime(model, bind, cat; check=true); kwargs...)
 
 
