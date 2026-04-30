@@ -927,10 +927,10 @@ regular 情况下很多东西可直接通过矩阵逆得到；singular 情况下
 
 ## 11. 对开发者最有用的测试与示例
 
-- [test/runtests.jl](/home/joker/Realizibility_index/BindingAndCatalysis.jl/test/runtests.jl)
+- [test/runtests.jl](test/runtests.jl)
   现在是最可靠的程序化回归入口，覆盖 binding、catalysis、mixed regime，以及 notebook 的主流程。
 
-- [Examples/Minimal_example.ipynb](/home/joker/Realizibility_index/BindingAndCatalysis.jl/Examples/Minimal_example.ipynb)
+- [Examples/Minimal_example.ipynb](Examples/Minimal_example.ipynb)
   最适合交互式学习。
 
 ### 11.1 测试目录组织约定
