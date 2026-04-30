@@ -516,6 +516,24 @@ mutable struct SISODAGProfile
     middle_parallel_nodes::Int
     middle_serial_nodes::Int
     middle_join_pairs::Int
+    queue_pair_tasks::Int
+    queue_chunk_tasks::Int
+    queue_chunked_pairs::Int
+    queue_finalize_tasks::Int
+    queue_max_chunks_per_pair::Int
+    queue_max_chunk_estimated_entries::Int
+    queue_total_chunk_estimated_entries::Int
+    queue_max_chunk_seconds::Float64
+    queue_total_chunk_seconds::Float64
+    queue_finalize_ns::UInt64
+    queue_chunk_candidate_pairs::Int
+    queue_chunk_size_gate_skips::Int
+    queue_chunk_width_gate_skips::Int
+    queue_chunk_thread_gate_skips::Int
+    queue_estimator_entries_per_second::Float64
+    queue_estimator_target_entries::Int
+    queue_estimator_min_parallel_entries::Float64
+    queue_estimator_target_seconds::Float64
     weighted_work_done::Float64
     weighted_work_total::Float64
     weighted_progress_units::Int
@@ -534,6 +552,8 @@ end
 SISODAGProfile() = SISODAGProfile(
     0, 0, 0, 0, 0,
     0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0.0, 0.0, 0,
+    0, 0, 0, 0, _siso_dag_fallback_entries_per_second(), 0, 0.0, _siso_dag_target_chunk_seconds(),
     0.0, 0.0, 0,
     0.0, 0, 0,
     0, 0, :none, 0.0, UInt64(0), 0.0, 0,
@@ -544,6 +564,7 @@ mutable struct SISOHelper{T}
     vertex_prisms::Vector{Union{Nothing,Polyhedron}}
     interface_prisms::Dict{SISOPairKey,Polyhedron}
     pair_conditions::Dict{SISOPairKey,SISOPathConditionMap}
+    cache_lock::ReentrantLock
     dag_profile::Union{Nothing,SISODAGProfile}
 end
 
@@ -607,6 +628,7 @@ function SISOHelper(problem::SISOProblem{T}) where {T}
         vertex_prisms,
         Dict{SISOPairKey,Polyhedron}(),
         Dict{SISOPairKey,SISOPathConditionMap}(),
+        ReentrantLock(),
         nothing,
     )
 end
@@ -641,8 +663,14 @@ get_change_qK_idx(helper::SISOHelper) = get_change_qK_idx(helper.problem)
 get_dag_profile(helper::SISOHelper) = helper.dag_profile
 
 @inline _edge_exists(helper::SISOHelper, from::Int, to::Int) = has_edge(get_SISO_graph(helper), from, to)
-@inline _pair_is_cached(helper::SISOHelper, from::Int, to::Int) = haskey(helper.pair_conditions, _pair_key(from, to))
-@inline _pair_conditions(helper::SISOHelper, from::Int, to::Int) = get(helper.pair_conditions, _pair_key(from, to), nothing)
+@inline _pair_is_cached(helper::SISOHelper, from::Int, to::Int) =
+    lock(helper.cache_lock) do
+        haskey(helper.pair_conditions, _pair_key(from, to))
+    end
+@inline _pair_conditions(helper::SISOHelper, from::Int, to::Int) =
+    lock(helper.cache_lock) do
+        get(helper.pair_conditions, _pair_key(from, to), nothing)
+    end
 @inline _can_reach(helper::SISOHelper, from::Int, to::Int) = helper.problem.dag.reachable[from, to]
 
 function _get_vertex_prism!(
@@ -707,7 +735,9 @@ function _cache_pair_conditions!(
     to::Int,
     conditions::SISOPathConditionMap,
 )::SISOPathConditionMap
-    helper.pair_conditions[_pair_key(from, to)] = conditions
+    lock(helper.cache_lock) do
+        helper.pair_conditions[_pair_key(from, to)] = conditions
+    end
     return conditions
 end
 
@@ -848,7 +878,45 @@ end
 const SISO_DAG_MIDDLE_PARALLEL_THRESHOLD = 8
 const SISO_DAG_PROGRESS_UNITS = 10_000
 
+_siso_dag_scheduler() = Symbol(lowercase(get(ENV, "BNC_SISO_DAG_SCHEDULER", "auto")))
 _siso_dag_layer_parallel_enabled() = parse(Bool, get(ENV, "BNC_SISO_DAG_LAYER_PARALLEL", "false"))
+_siso_dag_pair_queue_enabled() = parse(Bool, get(ENV, "BNC_SISO_DAG_PAIR_QUEUE", "false"))
+_siso_dag_chunk_queue_enabled() = parse(Bool, get(ENV, "BNC_SISO_DAG_CHUNK_QUEUE", "true"))
+_siso_dag_layer_inner_parallel_width() = max(0, parse(Int, get(ENV, "BNC_SISO_DAG_LAYER_INNER_PARALLEL_WIDTH", "1")))
+_siso_dag_inner_parallel_min_weight() = parse(Float64, get(ENV, "BNC_SISO_DAG_INNER_PARALLEL_MIN_WEIGHT", "50000"))
+_siso_dag_chunk_size_gate_enabled() = parse(Bool, get(ENV, "BNC_SISO_DAG_CHUNK_SIZE_GATE", "true"))
+_siso_dag_chunk_width_gate_enabled() = parse(Bool, get(ENV, "BNC_SISO_DAG_CHUNK_WIDTH_GATE", "true"))
+_siso_dag_chunk_thread_gate_enabled() = parse(Bool, get(ENV, "BNC_SISO_DAG_CHUNK_THREAD_GATE", "true"))
+_siso_dag_target_chunk_seconds() =
+    max(0.1, parse(Float64, get(ENV, "BNC_SISO_DAG_TARGET_CHUNK_SECONDS", "40")))
+_siso_dag_fallback_entries_per_second() =
+    max(1.0, parse(Float64, get(ENV, "BNC_SISO_DAG_FALLBACK_ENTRIES_PER_SECOND", "125")))
+_siso_dag_chunk_rate_alpha() =
+    min(1.0, max(0.0, parse(Float64, get(ENV, "BNC_SISO_DAG_CHUNK_RATE_ALPHA", "0.2"))))
+_siso_dag_chunk_width_factor() =
+    max(0.0, parse(Float64, get(ENV, "BNC_SISO_DAG_CHUNK_WIDTH_FACTOR", "2")))
+_siso_dag_inner_parallel_max_pairs_per_layer() =
+    max(0, parse(Int, get(ENV, "BNC_SISO_DAG_INNER_PARALLEL_MAX_PAIRS_PER_LAYER", "2")))
+_siso_dag_inner_parallel_target_entries() =
+    haskey(ENV, "BNC_SISO_DAG_INNER_PARALLEL_TARGET_ENTRIES") ?
+    max(1, parse(Int, ENV["BNC_SISO_DAG_INNER_PARALLEL_TARGET_ENTRIES"])) :
+    max(1, round(Int, _siso_dag_fallback_entries_per_second() * _siso_dag_target_chunk_seconds()))
+_siso_dag_inner_parallel_max_chunks() =
+    max(1, parse(Int, get(ENV, "BNC_SISO_DAG_INNER_PARALLEL_MAX_CHUNKS", string(4 * Threads.nthreads()))))
+
+function _siso_dag_use_queue_scheduler()::Bool
+    scheduler = _siso_dag_scheduler()
+    scheduler === :serial && return false
+    scheduler === :queue && return Threads.nthreads() > 1
+    scheduler === :auto && return Threads.nthreads() > 1
+    scheduler === :layer && return false
+    error("Unsupported BNC_SISO_DAG_SCHEDULER=$(scheduler). Use auto, serial, or queue.")
+end
+
+function _siso_dag_use_layer_scheduler()::Bool
+    _siso_dag_scheduler() === :layer && return Threads.nthreads() > 1
+    return _siso_dag_layer_parallel_enabled() && Threads.nthreads() > 1
+end
 
 mutable struct SISODAGProgressState
     pair_total::Int
@@ -917,7 +985,9 @@ function SISODAGProgressState(
 end
 
 @inline function _cached_pair_condition_count(helper::SISOHelper, pair::SISOPairKey)::Int
-    cached = get(helper.pair_conditions, pair, nothing)
+    cached = lock(helper.cache_lock) do
+        get(helper.pair_conditions, pair, nothing)
+    end
     return isnothing(cached) ? 0 : length(cached)
 end
 
@@ -1184,6 +1254,17 @@ function _prewarm_pair_plan_layer_prisms!(
     return nothing
 end
 
+function _prewarm_pair_plan_prisms!(
+    helper::SISOHelper,
+    scheduled_pairs::AbstractVector{SISOPairKey},
+    plans::Dict{SISOPairKey,SISOPairPlan},
+)::Nothing
+    for pair in scheduled_pairs
+        _prewarm_pair_plan_prisms!(helper, pair, plans[pair])
+    end
+    return nothing
+end
+
 function _merge_middle_join!(
     conditions::SISOPathConditionMap,
     helper::SISOHelper,
@@ -1240,54 +1321,80 @@ function _merge_middle_join_local!(
     return conditions
 end
 
-function _merge_middle_join_chunk!(
+function _merge_middle_join_chunk_indices_local!(
     conditions::SISOPathConditionMap,
     helper::SISOHelper,
     from::Int,
     child_pairs::AbstractVector{<:Tuple{Int,Int}},
-    start_idx::Int,
-    stop_idx::Int,
-    to::Int,
-)::SISOPathConditionMap
-    for idx in start_idx:stop_idx
-        successor, predecessor = child_pairs[idx]
-        _merge_middle_join!(conditions, helper, from, successor, predecessor, to)
-    end
-    return conditions
-end
-
-function _merge_middle_join_chunk_local!(
-    conditions::SISOPathConditionMap,
-    helper::SISOHelper,
-    from::Int,
-    child_pairs::AbstractVector{<:Tuple{Int,Int}},
-    start_idx::Int,
-    stop_idx::Int,
+    chunk_indices::AbstractVector{Int},
     to::Int,
     stats::SISOPairSolveStats,
 )::SISOPathConditionMap
-    for idx in start_idx:stop_idx
+    for idx in chunk_indices
         successor, predecessor = child_pairs[idx]
         _merge_middle_join_local!(conditions, helper, from, successor, predecessor, to, stats)
     end
     return conditions
 end
 
-function _middle_join_chunk_ranges(
-    n_items::Int,
-    n_workers::Int,
-)::Vector{UnitRange{Int}}
-    n_items <= 0 && return UnitRange{Int}[]
-    n_chunks = min(n_items, max(1, n_workers))
-    chunk_size = cld(n_items, n_chunks)
-    ranges = UnitRange{Int}[]
-    start_idx = 1
-    while start_idx <= n_items
-        stop_idx = min(n_items, start_idx + chunk_size - 1)
-        push!(ranges, start_idx:stop_idx)
-        start_idx = stop_idx + 1
+function _middle_join_weighted_chunks(
+    helper::SISOHelper,
+    child_pairs::AbstractVector{<:Tuple{Int,Int}},
+    target_entries::Int=_siso_dag_inner_parallel_target_entries(),
+    max_chunks::Int=_siso_dag_inner_parallel_max_chunks(),
+)::Vector{Vector{Int}}
+    n_items = length(child_pairs)
+    n_items == 0 && return Vector{Int}[]
+
+    weights = [max(1, _cached_pair_condition_count(helper, pair)) for pair in child_pairs]
+    total_weight = sum(weights; init=0)
+    target_entries = max(1, target_entries)
+    max_chunks = min(n_items, max(1, max_chunks))
+    n_chunks = min(max_chunks, max(1, cld(total_weight, target_entries)))
+
+    chunks = [Int[] for _ in 1:n_chunks]
+    chunk_loads = zeros(Int, n_chunks)
+    for idx in sortperm(weights; rev=true)
+        chunk_idx = argmin(chunk_loads)
+        push!(chunks[chunk_idx], idx)
+        chunk_loads[chunk_idx] += weights[idx]
     end
-    return ranges
+    return filter!(!isempty, chunks)
+end
+
+function _middle_join_chunk_entry_loads(
+    helper::SISOHelper,
+    child_pairs::AbstractVector{<:Tuple{Int,Int}},
+    chunks::AbstractVector{<:AbstractVector{Int}},
+)::Vector{Int}
+    weights = [max(1, _cached_pair_condition_count(helper, pair)) for pair in child_pairs]
+    return [sum((weights[idx] for idx in chunk); init=0) for chunk in chunks]
+end
+
+function _queue_estimator_target_entries(profile::SISODAGProfile)::Int
+    if haskey(ENV, "BNC_SISO_DAG_INNER_PARALLEL_TARGET_ENTRIES")
+        return _siso_dag_inner_parallel_target_entries()
+    end
+    target_entries = round(Int, profile.queue_estimator_entries_per_second * _siso_dag_target_chunk_seconds())
+    return max(1, target_entries)
+end
+
+function _queue_estimator_min_parallel_entries(target_entries::Int)::Float64
+    return max(_siso_dag_inner_parallel_min_weight(), 4.0 * target_entries)
+end
+
+function _update_queue_chunk_rate!(
+    profile::SISODAGProfile,
+    estimated_entries::Int,
+    chunk_seconds::Float64,
+)::Nothing
+    estimated_entries > 0 || return nothing
+    chunk_seconds > 0 || return nothing
+    sample_rate = estimated_entries / chunk_seconds
+    alpha = _siso_dag_chunk_rate_alpha()
+    profile.queue_estimator_entries_per_second =
+        (1 - alpha) * profile.queue_estimator_entries_per_second + alpha * sample_rate
+    return nothing
 end
 
 function _collect_middle_join_pairs(
@@ -1340,19 +1447,17 @@ function _compute_pair_plan_conditions!(
 
         if use_inner_parallel && Threads.nthreads() > 1 && length(child_pairs) >= SISO_DAG_MIDDLE_PARALLEL_THRESHOLD
             stats.middle_parallel_nodes += 1
-            chunk_ranges = _middle_join_chunk_ranges(length(child_pairs), 4 * Threads.nthreads())
-            local_maps = [SISOPathConditionMap() for _ in eachindex(chunk_ranges)]
-            local_stats = [SISOPairSolveStats() for _ in eachindex(chunk_ranges)]
+            chunks = _middle_join_weighted_chunks(helper, child_pairs)
+            local_maps = [SISOPathConditionMap() for _ in eachindex(chunks)]
+            local_stats = [SISOPairSolveStats() for _ in eachindex(chunks)]
             merge_start_ns = time_ns()
-            Threads.@threads :dynamic for chunk_idx in eachindex(chunk_ranges)
-                range = chunk_ranges[chunk_idx]
-                _merge_middle_join_chunk_local!(
+            Threads.@threads :dynamic for chunk_idx in eachindex(chunks)
+                _merge_middle_join_chunk_indices_local!(
                     local_maps[chunk_idx],
                     helper,
                     from,
                     child_pairs,
-                    first(range),
-                    last(range),
+                    chunks[chunk_idx],
                     to,
                     local_stats[chunk_idx],
                 )
@@ -1428,6 +1533,315 @@ function _solve_pair_plan!(
     return _cache_pair_conditions!(helper, from, to, conditions)
 end
 
+function _pair_plan_dependents(
+    scheduled_pairs::AbstractVector{SISOPairKey},
+    plans::Dict{SISOPairKey,SISOPairPlan},
+)::Tuple{Dict{SISOPairKey,Int},Vector{Vector{Int}},Vector{Int}}
+    pair_index = Dict{SISOPairKey,Int}(pair => idx for (idx, pair) in enumerate(scheduled_pairs))
+    dependents = [Int[] for _ in eachindex(scheduled_pairs)]
+    remaining_deps = zeros(Int, length(scheduled_pairs))
+    for (idx, pair) in enumerate(scheduled_pairs)
+        for dependency in plans[pair].dependencies
+            dep_idx = get(pair_index, dependency, nothing)
+            dep_idx === nothing && error("Missing scheduled dependency $(dependency) for pair $(pair).")
+            push!(dependents[dep_idx], idx)
+            remaining_deps[idx] += 1
+        end
+    end
+    return pair_index, dependents, remaining_deps
+end
+
+function _solve_pair_plan_queue!(
+    helper::SISOHelper,
+    plans::Dict{SISOPairKey,SISOPairPlan},
+    scheduled_pairs::AbstractVector{SISOPairKey},
+    progress_state::SISODAGProgressState,
+    progress::ProgressMeter.Progress,
+)::Nothing
+    profile = helper.dag_profile
+    profile === nothing && error("DAG profile must be initialized before queue solving.")
+
+    _prewarm_pair_plan_prisms!(helper, scheduled_pairs, plans)
+    _, dependents, remaining_deps = _pair_plan_dependents(scheduled_pairs, plans)
+    n_pairs = length(scheduled_pairs)
+    ready = Channel{Tuple{Symbol,Int,Int}}(n_pairs + Threads.nthreads())
+    scheduler_lock = ReentrantLock()
+    progress_lock = ReentrantLock()
+    completed = Ref(0)
+    ready_pair_count = Ref(0)
+    n_workers = Threads.nthreads()
+    pair_weights = zeros(Float64, n_pairs)
+    pair_start_ns = zeros(UInt64, n_pairs)
+    pair_base_conditions = Vector{Union{Nothing,SISOPathConditionMap}}(nothing, n_pairs)
+    pair_stats = [SISOPairSolveStats() for _ in 1:n_pairs]
+    chunk_pairs_by_pair = Vector{Any}(nothing, n_pairs)
+    chunk_indices_by_pair = Vector{Any}(nothing, n_pairs)
+    chunk_loads_by_pair = Vector{Any}(nothing, n_pairs)
+    chunk_maps_by_pair = Vector{Any}(nothing, n_pairs)
+    chunk_stats_by_pair = Vector{Any}(nothing, n_pairs)
+    chunks_remaining = zeros(Int, n_pairs)
+
+    for idx in eachindex(scheduled_pairs)
+        if remaining_deps[idx] == 0
+            ready_pair_count[] += 1
+            put!(ready, (:pair, idx, 0))
+        end
+    end
+
+    function enqueue_dependents_or_stop!(idx::Int)::Nothing
+        newly_ready = Int[]
+        should_stop = false
+        lock(scheduler_lock) do
+            completed[] += 1
+            for dependent_idx in dependents[idx]
+                remaining_deps[dependent_idx] -= 1
+                if remaining_deps[dependent_idx] == 0
+                    ready_pair_count[] += 1
+                    push!(newly_ready, dependent_idx)
+                end
+            end
+            should_stop = completed[] == n_pairs
+        end
+        for ready_idx in newly_ready
+            put!(ready, (:pair, ready_idx, 0))
+        end
+        if should_stop
+            for _ in 1:n_workers
+                put!(ready, (:stop, 0, 0))
+            end
+        end
+        return nothing
+    end
+
+    function finish_queue_pair!(
+        idx::Int,
+        pair_seconds::Float64,
+        output_entries::Int,
+        stats::SISOPairSolveStats;
+        conditions::Union{Nothing,SISOPathConditionMap}=nothing,
+        was_cached::Bool=false,
+    )::Nothing
+        pair = scheduled_pairs[idx]
+        from, to = pair
+        if !was_cached
+            conditions === nothing && error("Missing computed conditions for queued pair ($(from), $(to)).")
+            _cache_pair_conditions!(helper, from, to, conditions)
+        end
+        lock(progress_lock) do
+            if !was_cached
+                profile.pair_solve_calls += 1
+                _add_pair_solve_stats!(profile, stats)
+            end
+            _finish_weighted_pair!(
+                progress_state,
+                profile,
+                progress,
+                pair,
+                pair_weights[idx],
+                pair_seconds,
+                output_entries,
+            )
+        end
+        enqueue_dependents_or_stop!(idx)
+        return nothing
+    end
+
+    function chunk_estimator_params()::Tuple{Int,Float64}
+        lock(progress_lock) do
+            target_entries = _queue_estimator_target_entries(profile)
+            profile.queue_estimator_target_entries = target_entries
+            profile.queue_estimator_target_seconds = _siso_dag_target_chunk_seconds()
+            profile.queue_estimator_min_parallel_entries = _queue_estimator_min_parallel_entries(target_entries)
+            return target_entries, profile.queue_estimator_min_parallel_entries
+        end
+    end
+
+    function should_chunk_pair(idx::Int, plan::SISOPairPlan, target_entries::Int, min_entries::Float64)::Bool
+        _siso_dag_chunk_queue_enabled() || return false
+        plan.branch === :middle || return false
+        lock(progress_lock) do
+            profile.queue_chunk_candidate_pairs += 1
+        end
+        if _siso_dag_chunk_size_gate_enabled() && pair_weights[idx] < min_entries
+            lock(progress_lock) do
+                profile.queue_chunk_size_gate_skips += 1
+            end
+            return false
+        end
+        if _siso_dag_chunk_width_gate_enabled()
+            queued_pairs = lock(scheduler_lock) do
+                ready_pair_count[]
+            end
+            if queued_pairs > _siso_dag_chunk_width_factor() * n_workers
+                lock(progress_lock) do
+                    profile.queue_chunk_width_gate_skips += 1
+                end
+                return false
+            end
+        end
+        if _siso_dag_chunk_thread_gate_enabled() && cld(max(1, round(Int, pair_weights[idx])), target_entries) <= 1
+            lock(progress_lock) do
+                profile.queue_chunk_thread_gate_skips += 1
+            end
+            return false
+        end
+        return true
+    end
+
+    @info "Solving DAG pair plans with a global dependency queue across $(n_workers) worker threads."
+    @sync for _ in 1:n_workers
+        Threads.@spawn begin
+            while true
+                task = take!(ready)
+                kind, idx, chunk_idx = task
+                kind === :stop && break
+
+                if kind === :chunk
+                    pair = scheduled_pairs[idx]
+                    from, to = pair
+                    child_pairs = chunk_pairs_by_pair[idx]::Vector{Tuple{Int,Int}}
+                    chunk_maps = chunk_maps_by_pair[idx]::Vector{Union{Nothing,SISOPathConditionMap}}
+                    stats_vec = chunk_stats_by_pair[idx]::Vector{SISOPairSolveStats}
+                    chunk_loads = chunk_loads_by_pair[idx]::Vector{Int}
+                    chunk_indices = (chunk_indices_by_pair[idx]::Vector{Vector{Int}})[chunk_idx]
+                    local_map = SISOPathConditionMap()
+                    local_stats = SISOPairSolveStats()
+                    chunk_start_ns = time_ns()
+                    _merge_middle_join_chunk_indices_local!(
+                        local_map,
+                        helper,
+                        from,
+                        child_pairs,
+                        chunk_indices,
+                        to,
+                        local_stats,
+                    )
+                    chunk_seconds = (time_ns() - chunk_start_ns) / 1e9
+                    lock(scheduler_lock) do
+                        chunk_maps[chunk_idx] = local_map
+                        stats_vec[chunk_idx] = local_stats
+                        chunks_remaining[idx] -= 1
+                        chunks_remaining[idx] == 0 && put!(ready, (:finalize, idx, 0))
+                    end
+                    lock(progress_lock) do
+                        profile.queue_chunk_tasks += 1
+                        profile.queue_max_chunk_seconds = max(profile.queue_max_chunk_seconds, chunk_seconds)
+                        profile.queue_total_chunk_seconds += chunk_seconds
+                        _update_queue_chunk_rate!(profile, chunk_loads[chunk_idx], chunk_seconds)
+                    end
+                    continue
+                end
+
+                if kind === :finalize
+                    finalize_start_ns = time_ns()
+                    conditions = pair_base_conditions[idx]
+                    conditions === nothing && (conditions = SISOPathConditionMap())
+                    local_maps = chunk_maps_by_pair[idx]::Vector{Union{Nothing,SISOPathConditionMap}}
+                    local_stats = chunk_stats_by_pair[idx]::Vector{SISOPairSolveStats}
+                    stats = pair_stats[idx]
+                    for local_map in local_maps
+                        local_map === nothing && error("Missing queued chunk result for pair $(scheduled_pairs[idx]).")
+                        merge!(conditions, local_map)
+                    end
+                    for chunk_stats in local_stats
+                        stats.middle_compute_ns += chunk_stats.middle_compute_ns
+                        stats.middle_join_pairs += chunk_stats.middle_join_pairs
+                    end
+                    pair_seconds = (time_ns() - pair_start_ns[idx]) / 1e9
+                    stats.pair_solve_ns += round(UInt64, pair_seconds * 1e9)
+                    lock(progress_lock) do
+                        profile.queue_finalize_tasks += 1
+                        profile.queue_finalize_ns += time_ns() - finalize_start_ns
+                    end
+                    finish_queue_pair!(idx, pair_seconds, length(conditions), stats; conditions)
+                    continue
+                end
+
+                pair = scheduled_pairs[idx]
+                from, to = pair
+                plan = plans[pair]
+                lock(scheduler_lock) do
+                    ready_pair_count[] = max(0, ready_pair_count[] - 1)
+                end
+                lock(progress_lock) do
+                    profile.queue_pair_tasks += 1
+                end
+                pair_weights[idx] = lock(progress_lock) do
+                    _begin_weighted_pair!(progress_state, profile, helper, pair, plan)
+                end
+
+                cached = _pair_conditions(helper, from, to)
+                if !isnothing(cached)
+                    finish_queue_pair!(idx, 0.0, length(cached), SISOPairSolveStats(); was_cached=true)
+                    continue
+                end
+
+                target_entries, min_entries = chunk_estimator_params()
+                if should_chunk_pair(idx, plan, target_entries, min_entries)
+                    pair_start_ns[idx] = time_ns()
+                    stats = pair_stats[idx]
+                    base_conditions = SISOPathConditionMap()
+                    _maybe_store_direct_path!(base_conditions, helper, from, to)
+                    pair_base_conditions[idx] = base_conditions
+                    collect_start_ns = time_ns()
+                    child_pairs = _collect_middle_join_pairs(helper, from, to, plan.successors, plan.predecessors)
+                    stats.middle_collect_ns += time_ns() - collect_start_ns
+                    if length(child_pairs) >= SISO_DAG_MIDDLE_PARALLEL_THRESHOLD
+                        chunks = _middle_join_weighted_chunks(
+                            helper,
+                            child_pairs,
+                            target_entries,
+                            _siso_dag_inner_parallel_max_chunks(),
+                        )
+                        if length(chunks) > 1
+                            stats.middle_parallel_nodes += 1
+                            chunk_loads = _middle_join_chunk_entry_loads(helper, child_pairs, chunks)
+                            chunk_pairs_by_pair[idx] = child_pairs
+                            chunk_indices_by_pair[idx] = chunks
+                            chunk_loads_by_pair[idx] = chunk_loads
+                            chunk_maps_by_pair[idx] =
+                                Vector{Union{Nothing,SISOPathConditionMap}}(nothing, length(chunks))
+                            chunk_stats_by_pair[idx] = [SISOPairSolveStats() for _ in eachindex(chunks)]
+                            lock(scheduler_lock) do
+                                chunks_remaining[idx] = length(chunks)
+                            end
+                            lock(progress_lock) do
+                                profile.queue_chunked_pairs += 1
+                                profile.queue_max_chunks_per_pair =
+                                    max(profile.queue_max_chunks_per_pair, length(chunks))
+                                if !isempty(chunk_loads)
+                                    profile.queue_max_chunk_estimated_entries =
+                                        max(profile.queue_max_chunk_estimated_entries, maximum(chunk_loads))
+                                    profile.queue_total_chunk_estimated_entries += sum(chunk_loads; init=0)
+                                end
+                            end
+                            for chunk_task_idx in eachindex(chunks)
+                                put!(ready, (:chunk, idx, chunk_task_idx))
+                            end
+                            continue
+                        end
+                    end
+                end
+
+                stats = SISOPairSolveStats()
+                pair_start = time_ns()
+                conditions = _compute_pair_plan_conditions!(
+                    helper,
+                    from,
+                    to,
+                    plan,
+                    stats;
+                    use_inner_parallel=false,
+                )
+                pair_seconds = (time_ns() - pair_start) / 1e9
+                stats.pair_solve_ns += round(UInt64, pair_seconds * 1e9)
+                finish_queue_pair!(idx, pair_seconds, length(conditions), stats; conditions)
+            end
+        end
+    end
+    return nothing
+end
+
 function _solve_pair_plan_layers!(
     helper::SISOHelper,
     plans::Dict{SISOPairKey,SISOPairPlan},
@@ -1455,14 +1869,83 @@ function _solve_pair_plan_layers!(
         for idx in eachindex(layer)
             pair = layer[idx]
             pair_weights[idx] = _begin_weighted_pair!(progress_state, profile, helper, pair, plans[pair])
-            cached = get(helper.pair_conditions, pair, nothing)
+            cached = _pair_conditions(helper, pair[1], pair[2])
             if !isnothing(cached)
                 was_cached[idx] = true
                 output_entries[idx] = length(cached)
             end
         end
 
-        Threads.@threads :dynamic for idx in eachindex(layer)
+        inner_parallel_idxs = Set{Int}()
+        if n_layer_pairs <= _siso_dag_layer_inner_parallel_width()
+            union!(inner_parallel_idxs, eachindex(layer))
+        else
+            max_inner_pairs = _siso_dag_inner_parallel_max_pairs_per_layer()
+            min_inner_weight = _siso_dag_inner_parallel_min_weight()
+            if max_inner_pairs > 0
+                candidates = Int[
+                    idx for idx in eachindex(layer)
+                    if !was_cached[idx] &&
+                        plans[layer[idx]].branch === :middle &&
+                        pair_weights[idx] >= min_inner_weight
+                ]
+                sort!(candidates; by=idx -> pair_weights[idx], rev=true)
+                for idx in Iterators.take(candidates, max_inner_pairs)
+                    push!(inner_parallel_idxs, idx)
+                end
+            end
+        end
+
+        for idx in sort!(collect(inner_parallel_idxs))
+            pair = layer[idx]
+            from, to = pair
+            if was_cached[idx]
+                _finish_weighted_pair!(
+                    progress_state,
+                    profile,
+                    progress,
+                    pair,
+                    pair_weights[idx],
+                    seconds_by_pair[idx],
+                    output_entries[idx],
+                )
+                continue
+            end
+
+            plan = plans[pair]
+            stats = stats_by_pair[idx]
+            pair_start_ns = time_ns()
+            conditions = _compute_pair_plan_conditions!(
+                helper,
+                from,
+                to,
+                plan,
+                stats;
+                use_inner_parallel=true,
+            )
+            pair_seconds = (time_ns() - pair_start_ns) / 1e9
+            stats.pair_solve_ns += round(UInt64, pair_seconds * 1e9)
+            conditions_by_pair[idx] = conditions
+            seconds_by_pair[idx] = pair_seconds
+            output_entries[idx] = length(conditions)
+            _cache_pair_conditions!(helper, from, to, conditions)
+            profile.pair_solve_calls += 1
+            _add_pair_solve_stats!(profile, stats)
+            _finish_weighted_pair!(
+                progress_state,
+                profile,
+                progress,
+                pair,
+                pair_weights[idx],
+                pair_seconds,
+                output_entries[idx],
+            )
+        end
+
+        outer_parallel_idxs = Int[idx for idx in eachindex(layer) if !(idx in inner_parallel_idxs)]
+
+        Threads.@threads :dynamic for idx_idx in eachindex(outer_parallel_idxs)
+            idx = outer_parallel_idxs[idx_idx]
             was_cached[idx] && continue
             pair = layer[idx]
             from, to = pair
@@ -1484,7 +1967,7 @@ function _solve_pair_plan_layers!(
             output_entries[idx] = length(conditions)
         end
 
-        for idx in eachindex(layer)
+        for idx in outer_parallel_idxs
             pair = layer[idx]
             from, to = pair
             if !was_cached[idx]
@@ -1561,7 +2044,9 @@ function _find_all_path_conditions_dag!(
         showspeed=true,
     )
     ProgressMeter.update!(progress, 0; showvalues=_progress_showvalues(progress_state, helper.dag_profile))
-    if _siso_dag_layer_parallel_enabled() && Threads.nthreads() > 1
+    if _siso_dag_pair_queue_enabled() || _siso_dag_use_queue_scheduler()
+        _solve_pair_plan_queue!(helper, plans, scheduled_pairs, progress_state, progress)
+    elseif _siso_dag_use_layer_scheduler()
         _solve_pair_plan_layers!(helper, plans, scheduled_pairs, progress_state, progress)
     else
         for (from, to) in scheduled_pairs
@@ -1704,7 +2189,10 @@ function _ensure_path_polyhedra!(
     helper = _ensure_condition_helper!(grh)
     pair_entries = _group_path_indices_by_endpoints(grh, path_idxs)
     isempty(pair_entries) && return nothing
-    if grh.condition_solver === :dag && isempty(helper.pair_conditions)
+    needs_dag_solve = lock(helper.cache_lock) do
+        isempty(helper.pair_conditions)
+    end
+    if grh.condition_solver === :dag && needs_dag_solve
         _find_all_path_conditions_dag!(helper, first.(pair_entries))
     end
 
