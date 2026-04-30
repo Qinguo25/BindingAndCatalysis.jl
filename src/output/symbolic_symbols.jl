@@ -3,17 +3,17 @@ q_sym(args...) = get_binding_network(args...).q_sym
 K_sym(args...) = get_binding_network(args...).K_sym
 qK_sym(args...) = [q_sym(args...); K_sym(args...)]
 
-k_sym(args...) = _require_catalysis_network(args...).k_sym
+k_sym(args...) = get_catalysis_network(args...).k_sym
 
 function q_cat_sym(args...)
     bn = get_binding_network(args...)
-    cn = _require_catalysis_network(args...)
+    cn = get_catalysis_network(args...)
     return bn.q_sym[1:cn.r_v]
 end
 
 function w_sym(args...)
     bn = get_binding_network(args...)
-    cn = _require_catalysis_network(args...)
+    cn = get_catalysis_network(args...)
     return bn.q_sym[cn.r_v + 1:bn.d]
 end
 
@@ -25,7 +25,7 @@ end
 @inline _d_dt(syms) = Symbolics.Differential(_time_sym()).(syms)
 
 function _flux_sym(args...)
-    cn = _require_catalysis_network(args...)
+    cn = get_catalysis_network(args...)
     flux_monomials = handle_log_weighted_sum(cn.Π, x_sym(args...))
     return k_sym(args...) .* flux_monomials
 end

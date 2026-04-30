@@ -1,7 +1,7 @@
 export find_all_regimes!, get_bind_regimes_dict, get_nullities, get_volumes, have_perm
 export get_regimes, get_perms, get_indices, get_regimes_neighbor_mat
 export is_singular, is_asymptotic, n_regimes
-export get_idx, get_perm, get_regime, get_neighbors, get_nullity, get_one_inner_point
+export get_idx, get_perm, get_regime, get_neighbors, get_nullity
 export get_P_P0, get_P, get_P0
 export get_M_M0, get_M, get_M0
 export get_H_H0, get_H, get_H0
@@ -1145,34 +1145,6 @@ function hyperplane_project_func(polyhedra::T)::Function where T<:Polyhedron
     return x -> P0*x+b0
 end
 
-
-
-"""
-    get_one_inner_point(poly::Polyhedron; rand_line=true, rand_ray=true, extend=3) -> Vector
-
-Return a point guaranteed to lie inside the polyhedron.
-"""
-function get_one_inner_point(poly::T;rand_line=true,rand_ray=true,extend=3) where T<:Polyhedron
-    vrep_poly = MixedMatVRep(vrep(poly))
-    point = if size(vrep_poly.V, 1) == 0
-        zeros(Float64, fulldim(poly))
-    else
-        [mean(col) for col in eachcol(vrep_poly.V)]
-    end
-    ray_avg = zeros(eltype(point), length(point))
-    for (i, ray) in enumerate(eachrow(vrep_poly.R))
-        if i ∉ vrep_poly.Rlinset
-            norm_ray = norm(ray)
-            sigma = rand_ray ? (rand() + 0.5) * extend : extend
-            ray_avg .+= ray ./ norm_ray .* sigma
-        elseif rand_line
-            norm_ray = norm(ray)
-            sigma = (rand() - 0.5) * extend
-            ray_avg .+= ray ./ norm_ray .* sigma
-        end
-    end
-    return point .+ ray_avg
-end
 """
     get_one_inner_point(args...; kwargs...) -> Vector
 
@@ -1209,3 +1181,6 @@ function feasible_vertieces_with_constraint(Bnc::Bnc; C::AbstractMatrix{<:Real},
     end
     return feasible_vtx
 end
+
+
+#==========================================================================#

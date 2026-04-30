@@ -27,7 +27,7 @@ get_idx(rgm::BncRegime) = CartesianIndex(get_idx(rgm.catalysis_rgm), get_idx(rgm
 
 
 function get_idx(model::Bnc, bind, cat; check::Bool=false)
-    cat_idx = get_idx(_require_catalysis_network(model), cat; check=check)
+    cat_idx = get_idx(get_catalysis_network(model), cat; check=check)
     bind_idx = get_idx(model, bind; check=check)
     return CartesianIndex(cat_idx, bind_idx)
 end
@@ -94,6 +94,15 @@ get_H(rgm::BncRegime) = get_H_H0(rgm)[1]
 get_H0(rgm::BncRegime) = get_H_H0(rgm)[2]
 get_H_bd(rgm::BncRegime) = rgm.H_bd
 
+
+
+
+
+
+
+
+
+# Determine the stability of a mixed regime
 function judge_stability!(rgm::BncRegime; kwargs...)
     isnothing(rgm.H_bd) && return (rgm.is_stable = Int8(0))
     code = judge_dstable(rgm.H_bd; kwargs...)
@@ -101,11 +110,19 @@ function judge_stability!(rgm::BncRegime; kwargs...)
     return rgm.is_stable
 end
 
+
+
 function is_stable(rgm::BncRegime; recalculate::Bool=false, return_code::Bool=false, kwargs...)
     code = (recalculate || rgm.is_stable == 0) ? judge_stability!(rgm; kwargs...) : rgm.is_stable
     return return_code ? code : (code == 1 ? true : code == -1 ? false : missing)
 end
 is_stable(model::Bnc, bind, cat; kwargs...) = is_stable(get_bnc_regime(model, bind, cat; check=true); kwargs...)
+
+
+
+
+
+
 
 function _binding_C_qKk(bind_rgm::BindRegime, n_v::Int)
     C_qK, C0_qK, nlt = get_C_C0_nullity_qK(bind_rgm)

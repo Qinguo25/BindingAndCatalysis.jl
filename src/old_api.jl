@@ -39,7 +39,7 @@ show_cat_dynamics(args...; kwargs...) = show_catalysis_dynamics(args...; kwargs.
 show_reduced_cat_dynamics(args...; kwargs...) = show_reduced_catalysis_dynamics(args...; kwargs...)
 show_qcat_expression(args...; kwargs...) = show_expression_qcat(args...; kwargs...)
 q_para_sym(args...) = begin
-    cn = _require_catalysis_network(args...)
+    cn = get_catalysis_network(args...)
     w = w_sym(args...)
     w[cn.a_w + 1:end]
 end

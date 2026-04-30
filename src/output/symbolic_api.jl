@@ -37,7 +37,7 @@ show_conservation(Bnc::Bnc) = Bnc.q_sym .~ Bnc.L * Bnc.x_sym
 show_equilibrium(Bnc::Bnc; kwargs...) = show_expression_mapping(Bnc.N, zeros(Int, Bnc.r), Bnc.K_sym, Bnc.x_sym; kwargs...)
 
 function _catalysis_dynamics(args...; reduced::Bool=false)
-    cn = _require_catalysis_network(args...)
+    cn = get_catalysis_network(args...)
     v = _flux_sym(args...)
     eqs = Symbolics.Equation[]
     if reduced
@@ -55,7 +55,7 @@ end
 
 @inline function _dominant_flux_terms(args...)
     cat_rgm = get_catalysis_regime(args...)
-    cn = _require_catalysis_network(cat_rgm)
+    cn = get_catalysis_network(cat_rgm)
     P_pos_neg = get_P_pos_neg(cat_rgm)
     P0_pos_neg = get_P0_pos_neg(cat_rgm)
     flux_terms = handle_log_weighted_sum(hcat(P_pos_neg * cn.Π, P_pos_neg), xk_sym(args...), P0_pos_neg)

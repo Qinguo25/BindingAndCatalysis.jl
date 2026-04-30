@@ -2,22 +2,6 @@ export find_catalysis_regimes!, get_catalysis_network, get_catalysis_regime, get
 export get_PΠ, get_CΠ, get_P_pos_neg, get_P0_pos_neg
 export get_C_k, get_C_C0_xk, get_C0_xk, get_C_xk, get_C_C0_nullity_xk
 
-
-
-
-
-
-@inline function _require_catalysis_network(args...)
-    model = get_catalysis_network(args...)
-    isnothing(model) && error("Catalysis network not found in the model.")
-    return model
-end
-
-
-
-
-
-
 get_binding_network(rgm::CatalysisRegime) = get_binding_network(rgm.network)
 function get_binding_network(model::CatalysisData)
     if isnothing(model.bn)
@@ -107,15 +91,15 @@ end
 #-------------------------------------------------------------------------------------------------------------------------------------
 
 
-
-
-
-
 find_all_regimes!(model::CatalysisData) = find_catalysis_regimes!(model)
-find_catalysis_regimes!(model::Bnc) = find_catalysis_regimes!(_require_catalysis_network(model))
+function find_catalysis_regimes!(model::Bnc)
+    cn = get_catalysis_network(model)
+    isnothing(cn) && error("Catalysis network not found in the model.")
+    return find_catalysis_regimes!(cn)
+end
 
 function find_catalysis_regimes!(model::CatalysisData)
-    if _catalysis_regimes_built(model)
+    if !isnothing(getfield(model, :CatalysisRegimes))
         return nothing
     end
 
@@ -156,7 +140,8 @@ function _initialize_regime!(vtx::CatalysisRegime)
         return vtx
     end
 
-    model = _require_catalysis_network(vtx)
+    model = get_catalysis_network(vtx)
+    isnothing(model) && error("Catalysis network not found in the model.")
     perm = vtx.perm
 
     P_pos_neg, P0_pos_neg = _calc_P_P0(perm, model._S_helper)
@@ -203,7 +188,7 @@ get_regimes_dict(model::CatalysisData) = begin
     find_catalysis_regimes!(model)
     get_regimes_dict(model.CatalysisRegimes)
 end
-get_catalysis_regimes_dict(model::AbstractBnc) = get_regimes_dict(_require_catalysis_network(model))
+get_catalysis_regimes_dict(model::AbstractBnc) = get_regimes_dict(get_catalysis_network(model))
 
 
 
@@ -227,7 +212,7 @@ function get_idx(model::CatalysisData, perm::AbstractVector{<:Integer}; check::B
     end
     return dict[perm]
 end
-get_idx(model::AbstractBnc, rgm::CatalysisRegime; kwargs...) = get_idx(_require_catalysis_network(model), rgm; kwargs...)
+get_idx(model::AbstractBnc, rgm::CatalysisRegime; kwargs...) = get_idx(get_catalysis_network(model), rgm; kwargs...)
 get_idx(model::CatalysisData, rgm::CatalysisRegime; kwargs...) = get_idx(rgm)
 get_idx(rgm::CatalysisRegime) = rgm.idx
 
@@ -244,7 +229,7 @@ get_perm(model::AbstractBnc, rgm::CatalysisRegime; kwargs...) = get_perm(rgm)
 
 
 function get_catalysis_regime(model::AbstractBnc, perm_or_idx; check::Bool=false, kwargs...)::CatalysisRegime
-    return get_catalysis_regime(_require_catalysis_network(model), perm_or_idx; check=check, kwargs...)
+    return get_catalysis_regime(get_catalysis_network(model), perm_or_idx; check=check, kwargs...)
 end
 function get_catalysis_regime(model::CatalysisData, perm_or_idx; check::Bool=false, kwargs...)::CatalysisRegime
     find_catalysis_regimes!(model)
@@ -289,7 +274,7 @@ get_nullity(::CatalysisRegime) = 0
 is_singular(::CatalysisRegime) = false
 
 
-get_catalysis_regimes(model::AbstractBnc; kwargs...) = get_regimes(_require_catalysis_network(model); kwargs...)
+get_catalysis_regimes(model::AbstractBnc; kwargs...) = get_regimes(get_catalysis_network(model); kwargs...)
 get_catalysis_regimes(model::CatalysisData; kwargs...) = get_regimes(model; kwargs...)
 
 

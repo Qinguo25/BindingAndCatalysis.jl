@@ -141,7 +141,14 @@ function get_reaction_order(Bnc::Bnc, x_mat::Matrix{<:Real}, q_mat::Union{Matrix
 end
 
 
-
+function get_H_numerically(rgm::BindRegime)
+    bn = get_binding_network(rgm)
+    C,C0 = get_C_C0_x(bind_rgm)
+    poly = get_polyhedron(C, C0, 0; canonicalize=true)
+    logx = get_one_inner_point(poly,rand_line=false, rand_ray=false, extend=3)
+    H = logder_x_qK(bn; x=logx, input_logspace=true)
+    return H
+end
 
 
 
