@@ -126,6 +126,83 @@ function _update_volume_stats!(
     return new_active
 end
 
+function _estimate_volumes(
+    accumulate!,
+    n_regimes::Int,
+    n_dim::Int;
+    sampler::Symbol = :gaussian,
+    μ::Union{Nothing,AbstractVector{<:Real}} = nothing,
+    σ::Float64 = 1.0,
+    log_lower::Float64 = -6.0,
+    log_upper::Float64 = 6.0,
+    confidence_level::Float64 = 0.95,
+    batch_size::Int = 100_000,
+    abs_tol::Float64 = 1.0e-8,
+    rel_tol::Float64 = 0.005,
+    time_limit::Float64 = 120.0,
+    show_progress::Bool = false,
+    rng_seed::Integer = 0x12345678,
+    μ_length_message::AbstractString = "length(μ) must equal the sample dimension",
+)::Vector{Volume}
+    n_regimes == 0 && return Volume[]
+
+    z = quantile(Normal(), (1 + confidence_level) / 2)
+    sampling = _prepare_sampling_config(
+        sampler,
+        n_dim;
+        μ=μ,
+        σ=σ,
+        log_lower=log_lower,
+        log_upper=log_upper,
+        μ_length_message=μ_length_message,
+    )
+
+    total_counts = zeros(Int, n_regimes)
+    total_N = 0
+    stats = zeros(Volume, n_regimes)
+    active_ids = collect(1:n_regimes)
+
+    n_slots = Threads.maxthreadid()
+    thread_counts = [zeros(Int, n_regimes) for _ in 1:n_slots]
+    seed = Int(rng_seed)
+    thread_rng = [Random.MersenneTwister(seed + tid) for tid in 1:n_slots]
+    thread_x = [Vector{Float64}(undef, n_dim) for _ in 1:n_slots]
+
+    p = show_progress ? Progress(n_regimes, desc="Calculating...", dt=1.0) : nothing
+    start_time = time()
+
+    while true
+        elapsed = time() - start_time
+        if elapsed > time_limit
+            @info "Reached time limit ($(round(elapsed, digits=2)) s). Stopping."
+            break
+        elseif isempty(active_ids)
+            @info "All regimes converged after $total_N samples."
+            break
+        end
+
+        accumulate!(thread_counts, thread_rng, thread_x, batch_size, active_ids, sampling)
+        _flush_thread_counts!(total_counts, thread_counts, active_ids)
+        total_N += batch_size
+
+        new_active = _update_volume_stats!(
+            stats,
+            total_counts,
+            active_ids,
+            total_N,
+            z,
+            rel_tol,
+            abs_tol,
+        )
+
+        show_progress && next!(p, step = length(active_ids) - length(new_active))
+        active_ids = new_active
+    end
+
+    show_progress && finish!(p)
+    return stats
+end
+
 
 # 把一组 (C, C0) 约束整理成后续 Monte Carlo 可直接使用的形式。
 function _prepare_hrep_volume_problem(
@@ -254,47 +331,30 @@ function calc_volume(
     @info "Number of polyhedra to calc volume: $n_regimes"
     n_regimes == 0 && return Volume[]
 
-    n_dim = problem.n_dim
-    z = quantile(Normal(), (1 + confidence_level) / 2)
-    sampling = _prepare_sampling_config(
-        sampler,
-        n_dim;
-        μ=μ,
-        σ=σ,
-        log_lower=log_lower,
-        log_upper=log_upper,
-        μ_length_message="length(μ) must equal n_dim",
-    )
-
     regime_judge_tol = abs(regime_judge_tol)
-
-    total_counts = zeros(Int, n_regimes)
-    total_N = 0
-    stats = zeros(Volume, n_regimes)
-    active_ids = collect(1:n_regimes)
-
     n_slots = Threads.maxthreadid()
-    thread_counts = [zeros(Int, n_regimes) for _ in 1:n_slots]
-    thread_rng = [Random.MersenneTwister(0x12345678 + tid) for tid in 1:n_slots]
-    thread_x = [Vector{Float64}(undef, n_dim) for _ in 1:n_slots]
     thread_y = [
         [Vector{Float64}(undef, size(problem.Cs[i], 1)) for i in 1:n_regimes]
         for _ in 1:n_slots
     ]
 
-    p = show_progress ? Progress(n_regimes, desc="Calculating...", dt=1.0) : nothing
-    start_time = time()
-
-    while true
-        elapsed = time() - start_time
-        if elapsed > time_limit
-            @info "Reached time limit ($(round(elapsed, digits=2)) s). Stopping."
-            break
-        elseif isempty(active_ids)
-            @info "All regimes converged after $total_N samples."
-            break
-        end
-
+    return _estimate_volumes(
+        n_regimes,
+        problem.n_dim;
+        sampler=sampler,
+        μ=μ,
+        σ=σ,
+        log_lower=log_lower,
+        log_upper=log_upper,
+        confidence_level=confidence_level,
+        batch_size=batch_size,
+        abs_tol=abs_tol,
+        rel_tol=rel_tol,
+        time_limit=time_limit,
+        show_progress=show_progress,
+        rng_seed=0x12345678,
+        μ_length_message="length(μ) must equal n_dim",
+    ) do thread_counts, thread_rng, thread_x, batch_size, active_ids, sampling
         _accumulate_polyhedron_hits!(
             thread_counts,
             thread_rng,
@@ -308,28 +368,7 @@ function calc_volume(
             regime_judge_tol,
             contain_overlap,
         )
-
-        _flush_thread_counts!(total_counts, thread_counts, active_ids)
-        total_N += batch_size
-
-        new_active = _update_volume_stats!(
-            stats,
-            total_counts,
-            active_ids,
-            total_N,
-            z,
-            rel_tol,
-            abs_tol,
-        )
-
-        if show_progress
-            next!(p, step = length(active_ids) - length(new_active))
-        end
-        active_ids = new_active
     end
-
-    show_progress && finish!(p)
-    return stats
 end
 
 
@@ -348,10 +387,18 @@ calc_volume(C::AbstractMatrix{<:Real}, C0::AbstractVector{<:Real}; kwargs...)::V
 # Volume calculation from qK-space classifier
 #=====================================================================================#
 
+_bind_volume_route(
+    ::Bnc,
+    ::AbstractVector{<:Integer};
+    contain_overlap::Bool=false,
+    kwargs...,
+) = contain_overlap ? :polyhedra : :classifier
+
 function _calc_bind_regime_volumes(
     Bnc::Bnc,
     regime_ids::AbstractVector{<:Integer};
     asymptotic::Bool=true,
+    contain_overlap::Bool=false,
     rebase_mat::Union{AbstractMatrix{<:Real},Nothing}=nothing,
     kwargs...,
 )
@@ -369,48 +416,36 @@ function _calc_bind_regime_volumes(
 
     isempty(rgm_ids) && return vals
 
-    
-    vals[positions] .= _calc_volume_via_classifier(
-        Bnc,
-        rgm_ids;
-        asymptotic=asymptotic,
-        rebase_mat=rebase_mat,
-        kwargs...,
-    )
+    route = _bind_volume_route(Bnc, rgm_ids; contain_overlap=contain_overlap)
+    vals[positions] .= if route === :classifier
+        _calc_volume_via_classifier(
+            Bnc,
+            rgm_ids;
+            asymptotic=asymptotic,
+            rebase_mat=rebase_mat,
+            kwargs...,
+        )
+    elseif route === :polyhedra
+        rgms = [get_regime(Bnc, idx; inv_info=true) for idx in rgm_ids]
+        _calc_selected_constraint_volumes(
+            rgms;
+            asymptotic=asymptotic,
+            contain_overlap=contain_overlap,
+            rebase_mat=rebase_mat,
+            kwargs...,
+        )
+    else
+        error("unknown bind volume route: $route")
+    end
     return vals
 end
-
-
-
-
-function _rebase_qK_hyperplane_classifier(
-    classifier::QKHyperplaneClassifier,
-    rebase_mat::AbstractMatrix{<:Real},
-)
-    rebase_t = transpose(Float64.(rebase_mat))
-
-    dirs = Vector{SparseVector{Float64,Int}}(undef, length(classifier.dirs))
-    @inbounds for i in eachindex(classifier.dirs)
-        dirs[i] = sparse(rebase_t * classifier.dirs[i])
-    end
-
-    return QKHyperplaneClassifier(
-        classifier.regime_ids,
-        dirs,
-        classifier.bias,
-        classifier.allow_pos,
-        classifier.allow_neg,
-    )
-end
-
-
 
 function _accumulate_classifier_hits!(
     thread_counts,
     thread_rng,
     thread_x,
     batch_size::Int,
-    classifier::QKHyperplaneClassifier,
+    classifier::CompiledClassifier,
     idx_to_pos::AbstractDict{<:Integer,<:Integer},
     sampling;
     asymptotic::Bool = false,
@@ -471,49 +506,34 @@ function _calc_volume_via_classifier(
         Float64.(rebase_mat)
     end
 
-    classifier = _get_qK_hyperplane_classifier(Bnc)
-    if !isnothing(resolved_rebase)
-        classifier = _rebase_qK_hyperplane_classifier(classifier, resolved_rebase)
-    end
+    grh = get_regimes_graph!(Bnc; full=true)
+    classifier = compile_classifier(
+        grh.qK_hp_data.hyperplanes,
+        grh.qK_hp_data.hp_to_poly.M,
+        regime_ids;
+        rebase_mat=resolved_rebase,
+    )
 
-    idx_to_pos = Dict(regime_ids[i] => i for i in eachindex(regime_ids))
-    z = quantile(Normal(), (1 + confidence_level) / 2)
+    idx_to_pos = Dict(Int(regime_ids[i]) => i for i in eachindex(regime_ids))
+    regime_judge_tol = abs(regime_judge_tol)
 
-    sampling = _prepare_sampling_config(
-        sampler,
+    return _estimate_volumes(
+        n_regimes,
         n_dim;
+        sampler=sampler,
         μ=μ,
         σ=σ,
         log_lower=log_lower,
         log_upper=log_upper,
+        confidence_level=confidence_level,
+        batch_size=batch_size,
+        abs_tol=abs_tol,
+        rel_tol=rel_tol,
+        time_limit=time_limit,
+        show_progress=show_progress,
+        rng_seed=0x5eed1234,
         μ_length_message="length(μ) must equal qK dimension",
-    )
-
-    regime_judge_tol = abs(regime_judge_tol)
-
-    total_counts = zeros(Int, n_regimes)
-    total_N = 0
-    stats = zeros(Volume, n_regimes)
-    active_ids = collect(1:n_regimes)
-
-    n_slots = Threads.maxthreadid()
-    thread_counts = [zeros(Int, n_regimes) for _ in 1:n_slots]
-    thread_rng = [Random.MersenneTwister(0x5eed1234 + tid) for tid in 1:n_slots]
-    thread_x = [Vector{Float64}(undef, n_dim) for _ in 1:n_slots]
-
-    p = show_progress ? Progress(n_regimes, desc="Calculating...", dt=1.0) : nothing
-    start_time = time()
-
-    while true
-        elapsed = time() - start_time
-        if elapsed > time_limit
-            @info "Reached time limit ($(round(elapsed, digits=2)) s). Stopping."
-            break
-        elseif isempty(active_ids)
-            @info "All regimes converged after $total_N samples."
-            break
-        end
-
+    ) do thread_counts, thread_rng, thread_x, batch_size, active_ids, sampling
         _accumulate_classifier_hits!(
             thread_counts,
             thread_rng,
@@ -525,28 +545,7 @@ function _calc_volume_via_classifier(
             asymptotic=asymptotic,
             regime_judge_tol=regime_judge_tol,
         )
-
-        _flush_thread_counts!(total_counts, thread_counts, active_ids)
-        total_N += batch_size
-
-        new_active = _update_volume_stats!(
-            stats,
-            total_counts,
-            active_ids,
-            total_N,
-            z,
-            rel_tol,
-            abs_tol,
-        )
-
-        if show_progress
-            next!(p, step=length(active_ids) - length(new_active))
-        end
-        active_ids = new_active
     end
-
-    show_progress && finish!(p)
-    return stats
 end
 
 

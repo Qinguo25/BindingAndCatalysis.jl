@@ -4,13 +4,26 @@ export assign_regime, assign_regime_qK, assign_regime_x
 # Functions for assigning vertices
 #-----------------------------------------------------------------
 
-struct QKHyperplaneClassifier
+"""
+    CompiledClassifier
+
+Hot-loop-friendly qK hyperplane classifier.
+
+For each hyperplane h:
+- `allow_pos[h]` is a BitVector of regimes still possible if a point is on the positive side.
+- `allow_neg[h]` is a BitVector of regimes still possible if a point is on the negative side.
+
+Boundary points keep both sides.
+"""
+struct CompiledClassifier
     regime_ids::Vector{Int}
     dirs::Vector{SparseVector{Float64,Int}}
     bias::Vector{Float64} 
     allow_pos::Vector{BitVector} # Should be caring about the growing 
     allow_neg::Vector{BitVector}
 end
+
+Base.length(c::CompiledClassifier) = length(c.regime_ids)
 
 @inline _hyperplane_side(val::Real, tol::Real) = val >= tol ? Int8(1) : val < -tol ? Int8(-1) : Int8(0)
 
@@ -34,7 +47,7 @@ end
 
 
 function _classifier_candidates(
-    classifier::QKHyperplaneClassifier,
+    classifier::CompiledClassifier,
     logqK::AbstractVector{<:Real};
     tol::Real = 0,
     asymptotic_only::Bool=false,
@@ -74,19 +87,117 @@ end
 
 # shrink a classifier to only the candidates.
 function _restrict_classifier(
-    classifier::QKHyperplaneClassifier,
+    classifier::CompiledClassifier,
     candidate_ids::AbstractVector{<:Integer},
 )
     pos_map = Dict(classifier.regime_ids[i] => i for i in eachindex(classifier.regime_ids))
     selected_pos = [pos_map[Int(idx)] for idx in candidate_ids if haskey(pos_map, Int(idx))]
     isempty(selected_pos) && return nothing
-    return QKHyperplaneClassifier(
+    return CompiledClassifier(
         classifier.regime_ids[selected_pos],
         classifier.dirs,
         classifier.bias,
         [classifier.allow_pos[i][selected_pos] for i in eachindex(classifier.allow_pos)],
         [classifier.allow_neg[i][selected_pos] for i in eachindex(classifier.allow_neg)],
     )
+end
+
+function _allow_masks_from_incidence(M::SparseMatrixCSC{Int8, Int})
+    n_regimes, n_hps = size(M)
+
+    allow_pos = [trues(n_regimes) for _ in 1:n_hps]
+    allow_neg = [trues(n_regimes) for _ in 1:n_hps]
+
+    rows = rowvals(M)
+    vals = nonzeros(M)
+
+    @inbounds for h in 1:n_hps
+        for k in nzrange(M, h)
+            r = rows[k]
+            sgn = vals[k]
+
+            if sgn == Int8(1)
+                allow_neg[h][r] = false
+            elseif sgn == Int8(-1)
+                allow_pos[h][r] = false
+            else
+                allow_neg[h][r] = false
+                allow_pos[h][r] = false
+            end
+        end
+    end
+
+    return allow_pos, allow_neg
+end
+
+function _C_C0_from_pool(
+    hyperplanes::AbstractVector{RegimeHyperplane},
+    active_hids::Union{AbstractVector{<:Integer}, Nothing}=nothing;
+    rebase_mat::Union{AbstractMatrix{<:Real}, Nothing}=nothing,
+)
+    active_hids = isnothing(active_hids) ? eachindex(hyperplanes) : active_hids
+    n = length(active_hids)
+
+    dirs = Vector{SparseVector{Float64, Int}}(undef, n)
+    bias = Vector{Float64}(undef, n)
+
+    if isnothing(rebase_mat)
+        @inbounds for (j, hid0) in pairs(active_hids)
+            hid = Int(hid0)
+            dirs[j] = SparseVector{Float64,Int}(hyperplanes[hid].change_dir_qK)
+            bias[j] = Float64(hyperplanes[hid].intersect_qK)
+        end
+    else
+        Rt = transpose(Float64.(rebase_mat))
+        @inbounds for (j, hid0) in pairs(active_hids)
+            hid = Int(hid0)
+            dirs[j] = sparse(Rt * hyperplanes[hid].change_dir_qK)
+            bias[j] = Float64(hyperplanes[hid].intersect_qK)
+        end
+    end
+
+    return dirs, bias
+end
+
+"""
+    compile_classifier(hps, M, regime_ids=nothing; rebase_mat=nothing)
+
+Compile qK hyperplanes and incidence rows into a classifier.
+
+`M` is the polyhedron-regime by hyperplane incidence matrix. `regime_ids`
+selects rows of `M`, using global regime indices.
+"""
+function compile_classifier(
+    hps::AbstractVector{<:RegimeHyperplane},
+    M::SparseMatrixCSC{Int8, Int},
+    regime_ids::Union{AbstractVector{<:Integer}, Nothing}=nothing;
+    rebase_mat::Union{Nothing, AbstractMatrix{<:Real}}=nothing,
+)
+    rows = if isnothing(regime_ids)
+        collect(1:size(M, 1))
+    else
+        collect(Int.(regime_ids))
+    end
+
+    if isempty(rows)
+        return CompiledClassifier(
+            Int[],
+            SparseVector{Float64, Int}[],
+            Float64[],
+            BitVector[],
+            BitVector[],
+        )
+    end
+
+    Msub = M[rows, :]
+    _, active_hids_raw, _ = findnz(Msub)
+    active_hids = sort!(unique(active_hids_raw))
+    Mactive = Msub[:, active_hids]
+
+    dirs, bias = _C_C0_from_pool(hps, active_hids; rebase_mat=rebase_mat)
+    allow_pos, allow_neg = _allow_masks_from_incidence(Mactive)
+
+    return CompiledClassifier(rows, dirs, bias, allow_pos, allow_neg)
 end
 
 # Get the hyperplane id and sign info from RegimeGraph.
@@ -114,48 +225,17 @@ function _build_qK_hyperplane_classifier(
     candidates::Union{Nothing,AbstractVector}=nothing,
 )
     model = get_binding_network(grh)
-
     regimes = if isnothing(candidates)
         get_indices(model; singular=false)
     else
         [get_idx(model, rgm) for rgm in filter_regimes(model, candidates; singular=false)]
     end
 
-    n_regimes = length(regimes)
-    regime_signs = Vector{Dict{Int,Int8}}(undef, n_regimes)
-    active_hids = Set{Int}()
-
-    for (pos, idx) in enumerate(regimes)
-        info = _get_regime_qK_hyperplane_id_signs(grh, idx)
-        regime_signs[pos] = info
-        union!(active_hids, keys(info))
-    end
-
-    compact_hids = sort!(collect(active_hids))
-    hid_to_pos = Dict(hid => pos for (pos, hid) in enumerate(compact_hids))
-
-    pool = grh.qK_hp_data.hyperplanes
-    dirs = [SparseVector{Float64,Int}(pool[hid].change_dir_qK) for hid in compact_hids]
-    bias = Float64[Float64(pool[hid].intersect_qK) for hid in compact_hids]
-
-    n_hps = length(compact_hids)
-    allow_pos = [trues(n_regimes) for _ in 1:n_hps]
-    allow_neg = [trues(n_regimes) for _ in 1:n_hps]
-
-    for (pos, signs) in enumerate(regime_signs)
-        for (hid, sgn) in signs
-            local_hid = hid_to_pos[hid]
-            if sgn > 0
-                allow_neg[local_hid][pos] = false
-            elseif sgn < 0
-                allow_pos[local_hid][pos] = false
-            else
-                error("zero qK hyperplane sign for regime=$(regimes[pos]) and hyperplane_id=$hid")
-            end
-        end
-    end
-
-    return QKHyperplaneClassifier(regimes, dirs, bias, allow_pos, allow_neg)
+    return compile_classifier(
+        grh.qK_hp_data.hyperplanes,
+        grh.qK_hp_data.hp_to_poly.M,
+        regimes,
+    )
 end
 
 
@@ -277,32 +357,32 @@ Alias for `assign_regime_qK`.
 """
 assign_regime(args...;kwargs...)=assign_regime_qK(args...;kwargs...)
 
-function _assign_regime_qK_fallback(
-    Bnc::Bnc,
-    logqK::AbstractVector{<:Real};
-    asymptotic_only::Bool=false,
-    eps=0,
-    return_idx::Bool=false,
-    warn_on_fallback::Bool=true,
-)
-    real_only = asymptotic_only ? true : nothing
-    all_vertice_idx = get_regimes(Bnc, singular=false, asymptotic = real_only, return_idx = true)
+# function _assign_regime_qK_fallback(
+#     Bnc::Bnc,
+#     logqK::AbstractVector{<:Real};
+#     asymptotic_only::Bool=false,
+#     eps=0,
+#     return_idx::Bool=false,
+#     warn_on_fallback::Bool=true,
+# )
+#     real_only = asymptotic_only ? true : nothing
+#     all_vertice_idx = get_regimes(Bnc, singular=false, asymptotic = real_only, return_idx = true)
 
-    record = Vector{Float64}(undef,length(all_vertice_idx))
-    for (i, idx) in enumerate(all_vertice_idx)
-        C, C0 = get_C_C0_qK(Bnc, idx)
-        min_val = if !asymptotic_only
-            minimum(C * logqK .+ C0)
-        else
-            minimum(C * logqK)
-        end
-        record[i] = min_val
+#     record = Vector{Float64}(undef,length(all_vertice_idx))
+#     for (i, idx) in enumerate(all_vertice_idx)
+#         C, C0 = get_C_C0_qK(Bnc, idx)
+#         min_val = if !asymptotic_only
+#             minimum(C * logqK .+ C0)
+#         else
+#             minimum(C * logqK)
+#         end
+#         record[i] = min_val
 
-        if record[i] >= -eps
-            return return_idx ? idx : get_perm(Bnc, idx)
-        end
-    end
-    warn_on_fallback && @warn("All vertex conditions failed for logqK=$logqK. Returning the best-fit vertex.")
-    idx = all_vertice_idx[findmax(record)[2]]
-    return return_idx ? idx : get_perm(Bnc, idx)
-end
+#         if record[i] >= -eps
+#             return return_idx ? idx : get_perm(Bnc, idx)
+#         end
+#     end
+#     warn_on_fallback && @warn("All vertex conditions failed for logqK=$logqK. Returning the best-fit vertex.")
+#     idx = all_vertice_idx[findmax(record)[2]]
+#     return return_idx ? idx : get_perm(Bnc, idx)
+# end

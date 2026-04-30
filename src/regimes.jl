@@ -1084,7 +1084,6 @@ function get_polyhedra(
     Threads.@threads for i in eachindex(selected)
         rgm = regimes[selected_idxs[i]]
         out[i] = get_polyhedron(rgm.C_qK, rgm.C0_qK, rgm.nullity; canonicalize=canonicalize)
-        return nothing
     end
 
     return out

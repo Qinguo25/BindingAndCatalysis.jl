@@ -132,15 +132,15 @@ mutable struct RegimeToHyperplanePool
     
     hyperplanes::Vector{RegimeHyperplane}
     # polytopes::Vector{RgmPolyhedron}
-
     hp_to_poly::FacetIncidence
-    
     hp_dict::Dict{HyperplaneKey,Int}
 
     function RegimeToHyperplanePool(dim::Int)
-        new(dim, RegimeHyperplane[], 
+        new(dim, 
+        RegimeHyperplane[], 
         # RgmPolyhedron[], 
-        FacetIncidence(spzeros(Int8, 0, 0), spzeros(Int8, 0, 0)), Dict{HyperplaneKey,Int}())
+        FacetIncidence(spzeros(Int8, 0, 0), spzeros(Int8, 0, 0)), 
+        Dict{HyperplaneKey,Int}())
     end
 end
 
