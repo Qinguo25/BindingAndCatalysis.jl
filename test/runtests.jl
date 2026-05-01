@@ -63,6 +63,8 @@ function clique5_binding_model()
     return Bnc(N = N, x_sym = x_sym, q_sym = q_sym, K_sym = K_sym)
 end
 
+include("Relation_Prunning/relation_pruning_tests.jl")
+
 @testset "BindingAndCatalysis.jl" begin
     model = minimal_model()
 

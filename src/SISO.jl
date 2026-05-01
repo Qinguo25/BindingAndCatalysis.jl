@@ -17,6 +17,9 @@ High-level idea
 """
 
 export SISOPaths, get_polyhedra, get_polyhedron, get_SISO_graph
+export RelationPruningDiagnostics, get_pruned_SISO_graph
+export get_qK_preconstraints, get_qK_constraints, get_pruning_diagnostics
+export qK_preconstraint, qK_preconstraints
 export get_sources, get_sinks, get_sources_sinks
 export get_regimes_graph!
 export get_path, get_edge, get_intersect
@@ -429,6 +432,280 @@ get_SISO_graph(model::Bnc, change_qK) = get_SISO_graph(get_regimes_graph!(model;
 
 
 # ============================================================================
+# Relation-Pruned Graph Construction
+# ============================================================================
+
+function _polyhedron_ambient_dim(poly::Polyhedron)::Int
+    h = MixedMatHRep(hrep(poly))
+    return size(h.A, 2)
+end
+
+function _validate_qK_constraint_dim(model::Bnc, poly::Polyhedron)::Polyhedron
+    qK_dim = model.n
+    poly_dim = _polyhedron_ambient_dim(poly)
+    poly_dim == qK_dim ||
+        throw(ArgumentError("qK constraint dimension must match full qK dimension $(qK_dim), got $(poly_dim)."))
+    return poly
+end
+
+_normalize_qK_constraints(model::Bnc, ::Nothing) = nothing
+
+function _normalize_qK_constraints(model::Bnc, poly::Polyhedron)
+    return _validate_qK_constraint_dim(model, poly)
+end
+
+function _normalize_qK_constraints(model::Bnc, constraints::Tuple{<:AbstractMatrix{<:Real},<:AbstractVector{<:Real}})
+    C, C0 = constraints
+    return _validate_qK_constraint_dim(model, get_polyhedron(C, C0))
+end
+
+function _normalize_qK_constraints(
+    model::Bnc,
+    constraints::Tuple{<:AbstractMatrix{<:Real},<:AbstractVector{<:Real},<:Integer},
+)
+    C, C0, nullity = constraints
+    return _validate_qK_constraint_dim(model, get_polyhedron(C, C0, nullity))
+end
+
+function _normalize_qK_constraints(model::Bnc, constraints)
+    throw(ArgumentError("Unsupported qK_preconstraints type $(typeof(constraints)). Expected nothing, Polyhedron, (C, C0), or (C, C0, nullity)."))
+end
+
+function _resolve_qK_preconstraints(; qK_preconstraints=nothing, qK_constraints=nothing)
+    if !isnothing(qK_preconstraints) && !isnothing(qK_constraints)
+        throw(ArgumentError("Use only one of qK_preconstraints or qK_constraints."))
+    end
+    return isnothing(qK_preconstraints) ? qK_constraints : qK_preconstraints
+end
+
+function _normalize_relation_op(op)::Symbol
+    sym = op isa Symbol ? op : Symbol(op)
+    sym in (:>, :>=, :gt, :ge) && return :ge
+    sym in (:<, :<=, :lt, :le) && return :le
+    sym in (:(==), :(=), :eq) && return :eq
+    throw(ArgumentError("Unsupported qK relation operator $(repr(op)). Use >, >=, <, <=, or ==."))
+end
+
+function _qK_relation_row(
+    model::Bnc,
+    lhs,
+    op,
+    rhs;
+    margin::Real=0.0,
+)
+    normalized_op = _normalize_relation_op(op)
+    row = zeros(Float64, model.n)
+    rhs_offset = Float64(margin)
+
+    if normalized_op === :le
+        row[locate_sym_qK(model, rhs)] += 1.0
+        row[locate_sym_qK(model, lhs)] -= 1.0
+    else
+        row[locate_sym_qK(model, lhs)] += 1.0
+        row[locate_sym_qK(model, rhs)] -= 1.0
+    end
+
+    # get_polyhedron(C, C0) represents C * logqK >= -C0.
+    return row, -rhs_offset, normalized_op === :eq
+end
+
+function _qK_relation_row(
+    model::Bnc,
+    lhs,
+    op,
+    rhs::AbstractFloat;
+    margin::Real=0.0,
+)
+    normalized_op = _normalize_relation_op(op)
+    row = zeros(Float64, model.n)
+    value = Float64(rhs)
+    rhs_offset = Float64(margin)
+
+    if normalized_op === :le
+        row[locate_sym_qK(model, lhs)] -= 1.0
+        return row, -(rhs_offset - value), false
+    end
+
+    row[locate_sym_qK(model, lhs)] += 1.0
+    return row, -(rhs_offset + value), normalized_op === :eq
+end
+
+function _normalize_relation_spec(spec)
+    if spec isa Tuple
+        length(spec) == 3 && return spec[1], spec[2], spec[3], 0.0
+        length(spec) == 4 && return spec[1], spec[2], spec[3], spec[4]
+    end
+    throw(ArgumentError("qK relation specs must be tuples `(lhs, op, rhs)` or `(lhs, op, rhs, margin)`."))
+end
+
+function _qK_preconstraint_C_C0_nullity(model::Bnc, specs)
+    eq_rows = Vector{Vector{Float64}}()
+    eq_C0 = Float64[]
+    ineq_rows = Vector{Vector{Float64}}()
+    ineq_C0 = Float64[]
+
+    for spec in specs
+        lhs, op, rhs, margin = _normalize_relation_spec(spec)
+        row, c0, is_eq = _qK_relation_row(model, lhs, op, rhs; margin=margin)
+        if is_eq
+            push!(eq_rows, row)
+            push!(eq_C0, c0)
+        else
+            push!(ineq_rows, row)
+            push!(ineq_C0, c0)
+        end
+    end
+
+    rows = vcat(eq_rows, ineq_rows)
+    isempty(rows) && throw(ArgumentError("At least one qK preconstraint relation is required."))
+    C = reduce(vcat, reshape.(rows, 1, model.n))
+    C0 = vcat(eq_C0, ineq_C0)
+    return C, C0, length(eq_rows)
+end
+
+"""
+    qK_preconstraint(model, lhs, op, rhs[, margin]) -> Polyhedron
+
+Build a full qK-space preconstraint from one symbolic qK relation in log space.
+For example, `qK_preconstraint(model, :K12, :>, :K23)` represents
+`logK12 >= logK23`. A positive `margin` represents `log(lhs) - log(rhs) >= margin`.
+"""
+function qK_preconstraint(model::Bnc, lhs, op, rhs, margin::Real=0.0)
+    C, C0, nullity = _qK_preconstraint_C_C0_nullity(model, ((lhs, op, rhs, margin),))
+    return get_polyhedron(C, C0, nullity)
+end
+
+"""
+    qK_preconstraints(model, specs...) -> Polyhedron
+    qK_preconstraints(model, specs::AbstractVector) -> Polyhedron
+
+Build a full qK-space preconstraint from relation tuples. Each tuple is either
+`(lhs, op, rhs)` or `(lhs, op, rhs, margin)`.
+"""
+function qK_preconstraints(model::Bnc, specs::AbstractVector)
+    C, C0, nullity = _qK_preconstraint_C_C0_nullity(model, specs)
+    return get_polyhedron(C, C0, nullity)
+end
+
+qK_preconstraints(model::Bnc, specs::Tuple...) = qK_preconstraints(model, collect(specs))
+
+_constrain_polyhedron(poly::Polyhedron, ::Nothing) = poly
+_constrain_polyhedron(poly::Polyhedron, constraints::Polyhedron) = intersect(poly, constraints)
+
+function _relation_feasible_polyhedron(poly::Polyhedron, constraints::Union{Nothing,Polyhedron})::Bool
+    constraints === nothing && return true
+    constrained = _constrain_polyhedron(poly, constraints) |> _clean_polyhedron!
+    return !isempty(constrained)
+end
+
+function _relation_feasible_vertex(model::Bnc, vertex_idx::Int, constraints::Union{Nothing,Polyhedron})::Bool
+    constraints === nothing && return true
+    return _relation_feasible_polyhedron(get_polyhedron(model, vertex_idx), constraints)
+end
+
+function _relation_feasible_interface(
+    model::Bnc,
+    vertex_idx_from::Int,
+    vertex_idx_to::Int,
+    constraints::Union{Nothing,Polyhedron},
+)::Bool
+    constraints === nothing && return true
+    poly = intersect(get_polyhedron(model, vertex_idx_from), get_polyhedron(model, vertex_idx_to))
+    return _relation_feasible_polyhedron(poly, constraints)
+end
+
+function _relation_feasible_vertices(model::Bnc, constraints::Union{Nothing,Polyhedron})::BitVector
+    n_vertices = n_regimes(model)
+    feasible = falses(n_vertices)
+    if constraints === nothing
+        fill!(feasible, true)
+        return feasible
+    end
+
+    Threads.@threads for vertex_idx in 1:n_vertices
+        feasible[vertex_idx] = _relation_feasible_vertex(model, vertex_idx, constraints)
+    end
+    return feasible
+end
+
+function _filter_relation_pruned_sources_sinks(
+    model::Bnc,
+    graph::SimpleDiGraph,
+    feasible_vertices::BitVector,
+)
+    sources, sinks = get_sources_sinks(model, graph)
+    keep(v) = feasible_vertices[v] && !(indegree(graph, v) == 0 && outdegree(graph, v) == 0)
+    filter!(keep, sources)
+    filter!(keep, sinks)
+    return sources, sinks
+end
+
+function _filter_relation_pruned_edge_pairs(
+    model::Bnc,
+    edge_pairs::AbstractVector{<:Tuple{Int,Int}},
+    feasible_vertices::BitVector,
+    constraints::Union{Nothing,Polyhedron},
+)
+    constraints === nothing && return Tuple{Int,Int}[edge_pairs...]
+
+    pruned_edge_pairs = Tuple{Int,Int}[]
+    sizehint!(pruned_edge_pairs, length(edge_pairs))
+    for (from, to) in edge_pairs
+        feasible_vertices[from] || continue
+        feasible_vertices[to] || continue
+        _relation_feasible_interface(model, from, to, constraints) || continue
+        push!(pruned_edge_pairs, (from, to))
+    end
+    return pruned_edge_pairs
+end
+
+function _relation_pruned_siso_graph_data(
+    model::Bnc,
+    change_qK;
+    qK_preconstraints=nothing,
+    qK_constraints=nothing,
+)
+    constraints = _normalize_qK_constraints(
+        model,
+        _resolve_qK_preconstraints(; qK_preconstraints=qK_preconstraints, qK_constraints=qK_constraints),
+    )
+    grh = get_regimes_graph!(model; full=true)
+    change_qK_idx = locate_sym_qK(model, change_qK)
+    edge_pairs = _collect_oriented_edge_pairs(grh, change_qK_idx)
+    feasible_vertices = _relation_feasible_vertices(model, constraints)
+    pruned_edge_pairs = _filter_relation_pruned_edge_pairs(model, edge_pairs, feasible_vertices, constraints)
+
+    graph = _edge_pairs_to_digraph(n_regimes(model), pruned_edge_pairs)
+    diagnostics = RelationPruningDiagnostics(
+        n_regimes(model),
+        count(feasible_vertices),
+        length(edge_pairs),
+        length(pruned_edge_pairs),
+        n_regimes(model) - count(feasible_vertices),
+        length(edge_pairs) - length(pruned_edge_pairs),
+    )
+    return graph, feasible_vertices, diagnostics, constraints
+end
+
+"""
+    get_pruned_SISO_graph(model, change_qK; qK_preconstraints) -> graph, feasible_vertices, diagnostics
+
+Build a SISO-oriented directed graph after applying full qK-space relation
+constraints. The graph preserves original regime indices.
+"""
+function get_pruned_SISO_graph(model::Bnc, change_qK; qK_preconstraints=nothing, qK_constraints=nothing)
+    graph, feasible_vertices, diagnostics, _ =
+        _relation_pruned_siso_graph_data(
+            model,
+            change_qK;
+            qK_preconstraints=qK_preconstraints,
+            qK_constraints=qK_constraints,
+        )
+    return graph, feasible_vertices, diagnostics
+end
+
+
+# ============================================================================
 # Polyhedron Utilities
 # ============================================================================
 
@@ -459,8 +736,10 @@ function _get_interface_prism(
     vertex_idx_from::Int,
     vertex_idx_to::Int,
     change_qK_idx::Int,
+    qK_constraints::Union{Nothing,Polyhedron}=nothing,
 )::Polyhedra.Polyhedron
     poly = intersect(get_polyhedron(bnc_sys, vertex_idx_from), get_polyhedron(bnc_sys, vertex_idx_to))
+    poly = _constrain_polyhedron(poly, qK_constraints)
     return _project_polyhedron(poly, change_qK_idx)
 end
 
@@ -473,8 +752,10 @@ function _get_polyhedron_prism(
     bnc_sys::Bnc,
     vertex_idx::Int,
     change_qK_idx::Int,
+    qK_constraints::Union{Nothing,Polyhedron}=nothing,
 )::Polyhedra.Polyhedron
-    return _project_polyhedron(get_polyhedron(bnc_sys, vertex_idx), change_qK_idx)
+    poly = _constrain_polyhedron(get_polyhedron(bnc_sys, vertex_idx), qK_constraints)
+    return _project_polyhedron(poly, change_qK_idx)
 end
 
 function _intersect_nonempty(polys::Polyhedra.Polyhedron...)::Union{Nothing,Polyhedra.Polyhedron}
@@ -492,6 +773,15 @@ const SISOPairKey = NTuple{2,Int}
 const SISOPathConditionMap = Dict{SISOPathKey,Polyhedron}
 const SISOConditionSolver = Symbol
 
+struct RelationPruningDiagnostics
+    original_vertices::Int
+    feasible_vertices::Int
+    original_edges::Int
+    feasible_edges::Int
+    removed_vertices::Int
+    removed_edges::Int
+end
+
 struct SISODAG
     graph::SimpleDiGraph
     sources::Vector{Int}
@@ -503,6 +793,9 @@ struct SISOProblem{T}
     bn::Bnc{T}
     change_qK_idx::Int
     dag::SISODAG
+    qK_constraints::Union{Nothing,Polyhedron}
+    feasible_vertices::Union{Nothing,BitVector}
+    pruning_diagnostics::Union{Nothing,RelationPruningDiagnostics}
 end
 
 mutable struct SISODAGProfile
@@ -609,6 +902,9 @@ function _build_siso_problem(
     qK_grh::SimpleDiGraph,
     sources::AbstractVector{<:Integer},
     sinks::AbstractVector{<:Integer},
+    qK_constraints::Union{Nothing,Polyhedron}=nothing,
+    feasible_vertices::Union{Nothing,BitVector}=nothing,
+    pruning_diagnostics::Union{Nothing,RelationPruningDiagnostics}=nothing,
 ) where {T}
     dag = SISODAG(
         qK_grh,
@@ -616,7 +912,14 @@ function _build_siso_problem(
         sort!(Int.(collect(sinks))),
         _build_reachability(qK_grh),
     )
-    return SISOProblem{T}(bnc_sys, Int(change_qK_idx), dag)
+    return SISOProblem{T}(
+        bnc_sys,
+        Int(change_qK_idx),
+        dag,
+        qK_constraints,
+        feasible_vertices,
+        pruning_diagnostics,
+    )
 end
 
 function SISOHelper(problem::SISOProblem{T}) where {T}
@@ -637,17 +940,63 @@ function SISOHelper(
     bnc_sys::Bnc{T},
     change_qK;
     connectome=nothing,
+    qK_preconstraints=nothing,
+    qK_constraints=nothing,
 )::SISOHelper{T} where {T}
     change_qK_idx = change_qK isa Integer ? Int(change_qK) : locate_sym_qK(bnc_sys, change_qK)
+    constraints = _normalize_qK_constraints(
+        bnc_sys,
+        _resolve_qK_preconstraints(; qK_preconstraints=qK_preconstraints, qK_constraints=qK_constraints),
+    )
     if isnothing(connectome)
-        qK_grh = get_SISO_graph(bnc_sys, change_qK_idx)
-        sources, sinks = get_sources_sinks(bnc_sys, qK_grh)
+        if constraints === nothing
+            qK_grh = get_SISO_graph(bnc_sys, change_qK_idx)
+            sources, sinks = get_sources_sinks(bnc_sys, qK_grh)
+            feasible_vertices = nothing
+            diagnostics = nothing
+        else
+            qK_grh, feasible_vertices, diagnostics, _ =
+                _relation_pruned_siso_graph_data(bnc_sys, change_qK_idx; qK_preconstraints=constraints)
+            sources, sinks = _filter_relation_pruned_sources_sinks(bnc_sys, qK_grh, feasible_vertices)
+        end
     else
         connectome_bool = Matrix{Bool}(connectome)
         qK_grh = _connectome_to_digraph(connectome_bool)
-        sources, sinks = get_sources_sinks(bnc_sys, connectome_bool)
+        if constraints === nothing
+            sources, sinks = get_sources_sinks(bnc_sys, connectome_bool)
+            feasible_vertices = nothing
+            diagnostics = nothing
+        else
+            feasible_vertices = _relation_feasible_vertices(bnc_sys, constraints)
+            edge_pairs = Tuple{Int,Int}[(src(edge), dst(edge)) for edge in edges(qK_grh)]
+            pruned_edge_pairs = _filter_relation_pruned_edge_pairs(
+                bnc_sys,
+                edge_pairs,
+                feasible_vertices,
+                constraints,
+            )
+            qK_grh = _edge_pairs_to_digraph(nv(qK_grh), pruned_edge_pairs)
+            sources, sinks = _filter_relation_pruned_sources_sinks(bnc_sys, qK_grh, feasible_vertices)
+            diagnostics = RelationPruningDiagnostics(
+                n_regimes(bnc_sys),
+                count(feasible_vertices),
+                count(connectome_bool),
+                length(pruned_edge_pairs),
+                n_regimes(bnc_sys) - count(feasible_vertices),
+                count(connectome_bool) - length(pruned_edge_pairs),
+            )
+        end
     end
-    return SISOHelper(_build_siso_problem(bnc_sys, change_qK_idx, qK_grh, sources, sinks))
+    return SISOHelper(_build_siso_problem(
+        bnc_sys,
+        change_qK_idx,
+        qK_grh,
+        sources,
+        sinks,
+        constraints,
+        feasible_vertices,
+        diagnostics,
+    ))
 end
 
 get_binding_network(problem::SISOProblem, args...) = problem.bn
@@ -660,6 +1009,12 @@ get_sinks(problem::SISOProblem) = copy(problem.dag.sinks)
 get_sinks(helper::SISOHelper) = get_sinks(helper.problem)
 get_change_qK_idx(problem::SISOProblem) = problem.change_qK_idx
 get_change_qK_idx(helper::SISOHelper) = get_change_qK_idx(helper.problem)
+get_qK_preconstraints(problem::SISOProblem) = problem.qK_constraints
+get_qK_preconstraints(helper::SISOHelper) = get_qK_preconstraints(helper.problem)
+get_qK_constraints(problem::SISOProblem) = problem.qK_constraints
+get_qK_constraints(helper::SISOHelper) = get_qK_constraints(helper.problem)
+get_pruning_diagnostics(problem::SISOProblem) = problem.pruning_diagnostics
+get_pruning_diagnostics(helper::SISOHelper) = get_pruning_diagnostics(helper.problem)
 get_dag_profile(helper::SISOHelper) = helper.dag_profile
 
 @inline _edge_exists(helper::SISOHelper, from::Int, to::Int) = has_edge(get_SISO_graph(helper), from, to)
@@ -682,7 +1037,12 @@ function _get_vertex_prism!(
         return prism
     end
 
-    prism = _get_polyhedron_prism(helper.problem.bn, vertex_idx, helper.problem.change_qK_idx) |> _clean_polyhedron!
+    prism = _get_polyhedron_prism(
+        helper.problem.bn,
+        vertex_idx,
+        helper.problem.change_qK_idx,
+        helper.problem.qK_constraints,
+    ) |> _clean_polyhedron!
     helper.vertex_prisms[vertex_idx] = prism
     return prism
 end
@@ -703,6 +1063,7 @@ function _get_interface_prism!(
         vertex_idx_from,
         vertex_idx_to,
         helper.problem.change_qK_idx,
+        helper.problem.qK_constraints,
     ) |> _clean_polyhedron!
 
     helper.interface_prisms[key] = prism
@@ -2121,6 +2482,9 @@ get_binding_network(grh::SISOPaths, args...) = get_binding_network(grh.problem)
 get_sources(grh::SISOPaths) = get_sources(grh.problem)
 get_sinks(grh::SISOPaths) = get_sinks(grh.problem)
 get_change_qK_idx(grh::SISOPaths) = get_change_qK_idx(grh.problem)
+get_qK_preconstraints(grh::SISOPaths) = get_qK_preconstraints(grh.problem)
+get_qK_constraints(grh::SISOPaths) = get_qK_constraints(grh.problem)
+get_pruning_diagnostics(grh::SISOPaths) = get_pruning_diagnostics(grh.problem)
 
 function _build_paths_dict(rgm_paths::AbstractVector{<:AbstractVector{<:Integer}})
     paths_dict = Dict{SISOPathKey,Int}()
@@ -2220,8 +2584,20 @@ function _calc_polyhedra_for_path(
     paths::AbstractVector{<:AbstractVector{<:Integer}},
     change_qK_idx::Integer;
     condition_solver::Symbol=:recursive,
+    qK_preconstraints=nothing,
+    qK_constraints=nothing,
 )::Vector{Polyhedron}
-    siso = SISOPaths(model, Int(change_qK_idx); rgm_paths=[Int.(path) for path in paths], condition_solver=condition_solver)
+    constraints = _resolve_qK_preconstraints(;
+        qK_preconstraints=qK_preconstraints,
+        qK_constraints=qK_constraints,
+    )
+    siso = SISOPaths(
+        model,
+        Int(change_qK_idx);
+        rgm_paths=[Int.(path) for path in paths],
+        condition_solver=condition_solver,
+        qK_preconstraints=constraints,
+    )
     return get_polyhedra(siso)
 end
 
@@ -2239,21 +2615,76 @@ end
 
 Construct a `SISOPaths` object for a chosen qK coordinate.
 """
-function SISOPaths(model::Bnc{T}, change_qK; rgm_paths=nothing, condition_solver::Symbol=:recursive) where {T}
+function SISOPaths(
+    model::Bnc{T},
+    change_qK;
+    rgm_paths=nothing,
+    condition_solver::Symbol=:recursive,
+    qK_preconstraints=nothing,
+    qK_constraints=nothing,
+) where {T}
     change_qK_idx = locate_sym_qK(model, change_qK)
+    constraints = _normalize_qK_constraints(
+        model,
+        _resolve_qK_preconstraints(; qK_preconstraints=qK_preconstraints, qK_constraints=qK_constraints),
+    )
 
     if isnothing(rgm_paths)
-        qK_grh = get_SISO_graph(model, change_qK)
-        sources, sinks = get_sources_sinks(model, qK_grh)
+        if constraints === nothing
+            qK_grh = get_SISO_graph(model, change_qK)
+            sources, sinks = get_sources_sinks(model, qK_grh)
+            feasible_vertices = nothing
+            diagnostics = nothing
+        else
+            qK_grh, feasible_vertices, diagnostics, _ =
+                _relation_pruned_siso_graph_data(model, change_qK_idx; qK_preconstraints=constraints)
+            sources, sinks = _filter_relation_pruned_sources_sinks(model, qK_grh, feasible_vertices)
+        end
         rgm_paths = _enumerate_paths(qK_grh; sources, sinks)
     else
         qK_grh = graph_from_paths(rgm_paths, n_regimes(model))
-        sources_all, sinks_all = get_sources_sinks(qK_grh)
-        sources = sort!(collect(sources_all))
-        sinks = sort!(collect(sinks_all))
+        if constraints === nothing
+            sources_all, sinks_all = get_sources_sinks(qK_grh)
+            sources = sort!(collect(sources_all))
+            sinks = sort!(collect(sinks_all))
+            feasible_vertices = nothing
+            diagnostics = nothing
+        else
+            feasible_vertices = _relation_feasible_vertices(model, constraints)
+            for path in rgm_paths
+                for vertex_idx in path
+                    feasible_vertices[Int(vertex_idx)] ||
+                        throw(ArgumentError("Provided SISO path $(Int.(path)) includes vertex $(Int(vertex_idx)) infeasible under qK_preconstraints."))
+                end
+                for edge_idx in 1:(length(path)-1)
+                    from = Int(path[edge_idx])
+                    to = Int(path[edge_idx + 1])
+                    _relation_feasible_interface(model, from, to, constraints) ||
+                        throw(ArgumentError("Provided SISO path $(Int.(path)) includes interface ($(from), $(to)) infeasible under qK_preconstraints."))
+                end
+            end
+            sources, sinks = _filter_relation_pruned_sources_sinks(model, qK_grh, feasible_vertices)
+            diagnostics = RelationPruningDiagnostics(
+                n_regimes(model),
+                count(feasible_vertices),
+                ne(qK_grh),
+                ne(qK_grh),
+                n_regimes(model) - count(feasible_vertices),
+                0,
+            )
+        end
     end
 
-    problem = _build_siso_problem(model, change_qK_idx, qK_grh, sources, sinks)
+    problem = _build_siso_problem(
+        model,
+        change_qK_idx,
+        qK_grh,
+        sources,
+        sinks,
+        constraints,
+        feasible_vertices,
+        diagnostics,
+    )
     return SISOPaths(problem, rgm_paths; condition_solver=condition_solver)
 end
 

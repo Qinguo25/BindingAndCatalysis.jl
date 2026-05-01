@@ -81,7 +81,7 @@ This distinction matters whenever `R` involves the eliminated coordinate.
 The first implementation should support a low-level full qK-space polyhedron:
 
 ```julia
-SISOPaths(model, change_qK; qK_constraints = relation_polyhedron)
+SISOPaths(model, change_qK; qK_preconstraints = relation_polyhedron)
 ```
 
 where `relation_polyhedron` is a `Polyhedron` with the same ambient dimension as
@@ -91,15 +91,32 @@ For convenience, a second accepted form can be added if it is cheap and
 unambiguous:
 
 ```julia
-SISOPaths(model, change_qK; qK_constraints = (C, C0))
-SISOPaths(model, change_qK; qK_constraints = (C, C0, nullity))
+SISOPaths(model, change_qK; qK_preconstraints = (C, C0))
+SISOPaths(model, change_qK; qK_preconstraints = (C, C0, nullity))
 ```
 
 These tuple forms should be interpreted exactly as inputs to `get_polyhedron`.
 
-A higher-level relation DSL, for example specifying `K_d1,2 > K_d2,3` using qK
-symbols, should be deferred. It is useful, but not needed to validate the core
-graph and SISO behavior.
+A higher-level relation DSL for domain-specific names such as `K_d1,2` can be
+deferred, but a lightweight qK-symbol helper is useful once the core graph and
+SISO behavior are stable.
+
+After the low-level API is stable, add a symbolic convenience layer that still
+returns ordinary full qK-space polyhedra:
+
+```julia
+qK_preconstraint(model, :K12, :>, :K23)
+qK_preconstraint(model, :K12, :>, :K23, log10(10))
+
+qK_preconstraints(model,
+    (:K12, :>, :K23),
+    (:K13, :<, :K14),
+)
+```
+
+The fourth tuple element or positional argument is a log-space margin. Strict
+relations are represented as closed halfspaces unless the user supplies a
+positive margin.
 
 ## Graph-Level API
 
@@ -107,13 +124,13 @@ SISO should not be the only entry point. Add a lower-level helper that returns a
 pruned qK graph:
 
 ```julia
-get_pruned_SISO_graph(model, change_qK; qK_constraints)
+get_pruned_SISO_graph(model, change_qK; qK_preconstraints)
 ```
 
 or, if we want a more general name:
 
 ```julia
-get_relation_pruned_graph(model, change_qK; qK_constraints)
+get_relation_pruned_graph(model, change_qK; qK_preconstraints)
 ```
 
 The helper should return enough information for diagnostics and testing. A
@@ -156,7 +173,7 @@ struct SISOProblem
     bn
     change_qK_idx
     dag
-    qK_constraints
+    qK_preconstraints
     feasible_vertices
     pruning_diagnostics
 end
@@ -191,11 +208,11 @@ Throw clear errors for invalid inputs, such as:
 
 - relation polyhedron dimension does not match full qK dimension,
 - tuple constraint dimensions are inconsistent,
-- unsupported `qK_constraints` type.
+- unsupported `qK_preconstraints` type.
 
 ## Implementation Sketch
 
-1. Normalize `qK_constraints` into either `nothing` or a full qK-space
+1. Normalize `qK_preconstraints` into either `nothing` or a full qK-space
    `Polyhedron`.
 2. Validate that the constraint dimension matches the model's qK dimension.
 3. Build or retrieve the full regime graph with qK interfaces.
