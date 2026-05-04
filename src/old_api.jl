@@ -56,6 +56,22 @@ SISOPaths(args...; kwargs...) = SIMOPaths(args...; kwargs...)
 get_SISO_graph(args...; kwargs...) = get_SIMO_graph(args...; kwargs...)
 SISO_plot(args...; kwargs...) = SIMO_plot(args...; kwargs...)
 
+
+# Set the default to be binding network
+get_binding_regime(args...;kwargs...) = get_bind_regime(args...;kwargs...)
+get_perm(args...;kwargs...) = get_bind_perm(args...;kwargs...)
+get_regimes_perm_dict(args...; kwargs...) = get_bind_perm_dict(args...; kwargs...)
+get_regime(args...; kwargs...) = get_bind_regime(args...; kwargs...)
+get_idx(args...; kwargs...) = get_bind_idx(args...; kwargs...)
+get_nullity(args...; kwargs...) = get_bind_nullity(args...; kwargs...)
+is_singular(args...; kwargs...) = is_bind_singular(args...; kwargs...)
+is_asymptotic(args...; kwargs...) = is_bind_asymptotic(args...; kwargs...)
+get_regimes(args...; kwargs...) = get_bind_regimes(args...; kwargs...)
+get_perms(args...; kwargs...) = get_bind_perms(args...; kwargs...)
+get_indices(args...; kwargs...) = get_bind_indices(args...; kwargs...)
+n_regimes(Bnc::Bnc)=n_bind_regimes(Bnc)
+
+export get_binding_regime, get_perm, get_regimes_perm_dict, get_regime, get_idx, get_nullity, is_singular, is_asymptotic
 export find_all_vertices, find_all_vertices!, get_vertices_perm_dict
 export VertexGraph, VertexEdge
 export assign_vertex_x, assign_vertex_qK, assign_vertex

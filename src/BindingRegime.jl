@@ -248,82 +248,6 @@ end
 #===============================================================================================================#
 
 
-
-
-
-
-
-
-
-
-
-
-#-------------------------------------------------------------------------------------
-#         functions involving single vertex and lazy calculate  its properties, act as keys for higher level functions
-# ------------------------------------------------------------------------------------
-
-
-"""
-    get_idx(bnc::Bnc, idx::Integer; check=false) -> Integer
-
-Return the vertex index, optionally validating it.
-"""
-function get_idx(Bnc::Bnc, idx::T;check::Bool=false) where T<:Integer
-    if check
-        find_all_regimes!(Bnc)
-        @assert idx ≥ 1 && idx ≤ n_regimes(Bnc) "The given index is out of range."
-    end
-   return idx
-end
-get_idx(Bnc::Bnc,perm::AbstractVector;kwargs...)=(get_bind_regimes_dict(Bnc)[get_perm(Bnc, perm)])
-get_idx(vtx::BindRegime) = vtx.idx
-get_idx(Bnc::Bnc, vtx::BindRegime;kwargs...)= get_idx(vtx)
-
-"""
-    get_perm(bnc::Bnc, perm; check=false) -> Vector
-
-Return the permutation vector, optionally validating it.
-"""
-function get_perm(Bnc::Bnc,perm::Vector{<:Integer};check::Bool=false)
-    if check
-        @assert haskey(get_bind_regimes_dict(Bnc), perm) "The given perm is not in Bnc"
-    end
-    return perm
-end
-get_perm(Bnc::Bnc, perm::AbstractVector) = get_perm(Bnc, locate_sym_x.(Ref(Bnc), perm))
-get_perm(Bnc::Bnc, idx::Integer; kwargs...)=(find_all_regimes!(Bnc); _bind_regimes_data(Bnc)[idx].perm)
-get_perm(vtx::BindRegime) = vtx.perm
-get_perm(Bnc::Bnc, vtx::BindRegime;kwargs...)= get_perm(vtx)
-
-
-"""
-    get_regime(bnc::Bnc, perm; check=false, kwargs...) -> BindRegime
-
-Retrieve a vertex from cache or create it if missing.
-"""
-function get_regime(Bnc::Bnc, perm; check::Bool=false, kwargs...)::BindRegime
-    find_all_regimes!(Bnc) #initialize perm_data
-    
-    vtx = begin
-        idx = get_idx(Bnc, perm; check=check)          
-        _initialize_regime!(_bind_regimes_data(Bnc)[idx])
-    end
-    return get_regime(vtx; kwargs...)
-end
-"""
-    get_regime(vtx::BindRegime; inv_info=true, kwargs...) -> BindRegime
-
-Ensure a vertex has requested cached fields and return it.
-"""
-function get_regime(vtx::BindRegime; inv_info::Bool=true,kwargs...)::BindRegime
-    _initialize_regime!(vtx)
-    if inv_info
-        _fill_all_info!(vtx)
-    end
-    return vtx
-end
-
-
 #---------------------------------------------------------------------------------------------
 #   Functions involving vertices relationships, (neighbors finding and changedir finding)
 #---------------------------------------------------------------------------------------------
@@ -403,198 +327,7 @@ function get_volumes(Bnc::Bnc,vtxs::Union{AbstractVector,Nothing}=nothing;
 end
 
 
-
-#-------------------------------------------------------------------------------------------------------------
-
-
-
-
-"""
-    have_perm(bnc::Bnc, perm_or_idx) -> Bool
-
-Return `true` when a permutation or index exists in the model.
-"""
-have_perm(Bnc::Bnc, perm::AbstractVector) = haskey(get_bind_regimes_dict(Bnc), get_perm(Bnc, perm))
-have_perm(Bnc::Bnc, idx::Integer) = (find_all_regimes!(Bnc); 1 <= idx <= n_regimes(Bnc))
-have_perm(Bnc::Bnc, rgm::BindRegime) = have_perm(Bnc, get_idx(rgm))
-
-
-# --------------------------These properties are stored in Bnc as vector form when finding regimes, so we can access them directly.----------------------------
-# """
-# Gets the nullity of a vertex
-# eg: get_nullity(model,perm)
-#     get_nullity(vtx)
-# """
-# get_nullity(args...) = begin
-#     model = get_binding_network(args...)
-#     find_all_regimes!(model)
-#     return model.vertices_nullity[get_idx(args...)]
-# end::Integer
-
-"""
-    is_singular(args...) -> Bool
-
-Return `true` if the vertex has nonzero nullity.
-"""
-is_singular(args...)= get_nullity(args...) > 0
-
-
-"""
-    is_asymptotic(args...) -> Bool
-
-Return `true` if the vertex is asymptotic (real).
-"""
-is_asymptotic(args...) = begin
-    model = get_binding_network(args...)
-    find_all_regimes!(model)
-    return _bind_regimes_data(model)[get_idx(args...)].is_asymptotic
-end::Bool
-is_asymptotic(vtx::BindRegime) = vtx.is_asymptotic
-
-
-
 #---------------------------------These properties are calculate when creating BindRegime object---------------------------------------
-"""
-    get_P_P0(args...) -> (SparseMatrixCSC, Vector)
-
-Return `(P, P0)` for a vertex, creating it if needed.
-"""
-get_P_P0(args...) = get_regime(args...; inv_info=false) |> vtx -> (vtx.P, vtx.P0)
-"""
-    get_P(args...) -> SparseMatrixCSC
-
-Return `P` for a vertex.
-"""
-get_P(args...) = get_P_P0(args...)[1]
-"""
-    get_P0(args...) -> Vector
-
-Return `P0` for a vertex.
-"""
-get_P0(args...) = get_P_P0(args...)[2]
-
-"""
-    get_M_M0(args...) -> (SparseMatrixCSC, Vector)
-
-Return `(M, M0)` for a vertex, creating it if needed.
-"""
-get_M_M0(args...) = get_regime(args...; inv_info=false) |> vtx -> (vtx.M, vtx.M0)
-"""
-    get_M(args...) -> SparseMatrixCSC
-
-Return `M` for a vertex.
-"""
-get_M(args...) = get_M_M0(args...)[1]
-"""
-    get_M0(args...) -> Vector
-
-Return `M0` for a vertex.
-"""
-get_M0(args...) = get_M_M0(args...)[2]
-
-"""
-    get_C_C0_x(args...) -> (SparseMatrixCSC, Vector)
-
-Return `(C_x, C0_x)` for a vertex.
-"""
-get_C_C0_x(args...) = get_regime(args...; inv_info=false) |> vtx -> (vtx.C_x, vtx.C0_x)
-"""
-    get_C_x(args...) -> SparseMatrixCSC
-
-Return `C_x` for a vertex.
-"""
-get_C_x(args...) = get_C_C0_x(args...)[1]
-"""
-    get_C0_x(args...) -> Vector
-
-Return `C0_x` for a vertex.
-"""
-get_C0_x(args...) = get_C_C0_x(args...)[2]
-
-
-"""
-    get_C_C0_nullity_qK(args...) -> (SparseMatrixCSC, Vector, Int)
-
-Return `(C_qK, C0_qK, nullity)` for a vertex.
-"""
-get_C_C0_nullity_qK(args...) = get_regime(args...; inv_info=true) |> vtx -> (vtx.C_qK, vtx.C0_qK, vtx.nullity)
-"""
-    get_C_C0_qK(args...) -> (SparseMatrixCSC, Vector)
-
-Return `(C_qK, C0_qK)` for a vertex.
-"""
-get_C_C0_qK(args...) = get_C_C0_nullity_qK(args...)[1:2]
-"""
-    get_C_qK(args...) -> SparseMatrixCSC
-
-Return `C_qK` for a vertex.
-"""
-get_C_qK(args...) = get_C_C0_nullity_qK(args...)[1]
-"""
-    get_C0_qK(args...) -> Vector
-
-Return `C0_qK` for a vertex.
-"""
-get_C0_qK(args...) = get_C_C0_nullity_qK(args...)[2]
-
-"""
-    get_nullity(args...) -> Int
-
-Return the nullity of a vertex.
-"""
-get_nullity(args...) = get_regime(args...; inv_info=false).nullity
-
-"""
-    get_H_H0(args...) -> (SparseMatrixCSC, Vector)
-
-Return `(H, H0)` for a regime with nullity at most 1.
-"""
-get_H_H0(args...) = get_nullity(args...) > 1 ? @error("BindRegime's nullity is bigger than 1, cannot get H0") : get_regime(args...; inv_info=true) |> rgm -> (rgm.H, rgm.H0)
-"""
-    get_H(args...) -> SparseMatrixCSC
-
-Return `H` for a vertex when nullity <= 1.
-"""
-get_H(args...) = get_nullity(args...) > 1 ? @error("BindRegime's nullity is bigger than 1, cannot get H") : get_regime(args...; inv_info=true).H
-"""
-    get_H0(args...) -> Vector
-
-Return `H0` for a vertex.
-"""
-get_H0(args...) = get_H_H0(args...)[2]
-
-"""
-    get_C_C0_nullity(args...; kwargs...) -> (Matrix, Vector, Int)
-
-Return `(C, C0, nullity)` for a vertex or polyhedron.
-"""
-get_C_C0_nullity(args...;kwargs...) = get_C_C0_nullity_qK(args...;kwargs...)
-"""
-    get_C_C0(args...; kwargs...) -> (Matrix, Vector)
-
-Return `(C, C0)` for a vertex or polyhedron.
-"""
-get_C_C0(args...;kwargs...) = get_C_C0_nullity(args...;kwargs...) |> x->(x[1], x[2]) 
-"""
-    get_C(args...; kwargs...) -> Matrix
-
-Return `C` for a vertex or polyhedron.
-"""
-get_C(args...;kwargs...) = get_C_C0_nullity(args...;kwargs...)[1]
-"""
-    get_C0(args...; kwargs...) -> Vector
-
-Return `C0` for a vertex or polyhedron.
-"""
-get_C0(args...;kwargs...) = get_C_C0_nullity(args...;kwargs...)[2]
-
-
-"""
-    n_regimes(bnc::Bnc) -> Int
-
-Return the number of vertices in the model.
-"""
-n_regimes(Bnc::Bnc) = (find_all_regimes!(Bnc); length(_bind_regimes_data(Bnc)))
 
 """
     get_volume(args...; kwargs...) -> Volume
@@ -611,23 +344,6 @@ end
 #--------------------------------------------------------------------------------------------------------------------------------------
 #          relationships between two vertices, based on regime graphs.
 #----------------------------------------------------------------------------------------------------------------------------------------
-
-"""
-    _is_regime_graph_neighbor(bnc, vtx1, vtx2) -> Bool
-
-Return `true` if vertices are neighbors in the vertex graph.
-"""
-function _is_regime_graph_neighbor(Bnc, vtx1, vtx2)::Bool
-    grh = get_regimes_graph!(Bnc; full=true)
-    edge = get_edge(grh, vtx1, vtx2; full=true)
-    if edge === nothing || !_edge_has_qK_interface(edge)
-        return false
-    else
-        return true
-    end
-end
-
-
 
 """
     get_interface_qK(bnc, from, to) -> (SparseVector, Float64)
@@ -722,205 +438,19 @@ Return neighbors of a vertex filtered by singularity and asymptotic flags.
 - `asymptotic`: `true`, `false`, or `nothing`.
 - `return_idx`: Return indices when `true`; otherwise return permutations.
 """
-function get_neighbors(args...; singular::Union{Bool,Int,Nothing}=nothing, asymptotic::Union{Bool,Nothing}=nothing, return_idx::Bool=false)
-    Bnc = get_binding_network(args...)
-    grh = get_regimes_graph!(Bnc;full=true)
+function get_neighbors(args...; kwargs..., return_idx::Bool=false)
+    model = get_binding_network(args...)
+    grh = get_regimes_graph!(model;full=true)
     rgm_idx = get_idx(args...)
 
     idx = keys(grh.edge_pos[rgm_idx]) |> collect
     
-    vertices = _bind_regimes_data(Bnc)
-    idx = filter(idx) do i
-        vtx = vertices[i]
-        nlt = vtx.nullity
-        flag_asym = vtx.is_asymptotic
-
-        ok_singular = isnothing(singular) || (
-            (singular === true  && nlt > 0) ||
-            (singular === false && nlt == 0) ||
-            (singular isa Int   && nlt ≤ singular)
-        )
-
-        ok_asym = isnothing(asymptotic) || (asymptotic == flag_asym)
-        return ok_singular && ok_asym 
-    end
-
+    vertices = _bind_regimes_data(model)
+    rgms = vertices[idx]
+    idx = get_indices(rgms; kwargs...)
     sort!(idx)
-
     return return_idx ? idx : getfield.(vertices[idx], :perm)
 end
-
-
-
-
-#-------------------------------------------------------------------------------------
-#         functions of getting regimes with certain properties
-# -------------------------------------------------------------------------------------
-
-# if pass vector of regimes
-@inline function _match_regime_filter(
-    nlt::Integer,
-    flag_asym::Bool;
-    singular::Union{Bool,Integer,Nothing}=nothing,
-    asymptotic::Union{Bool,Nothing}=nothing,
-)::Bool
-    ok_singular = isnothing(singular) || (
-        (singular === true  && nlt > 0) ||
-        (singular === false && nlt == 0) ||
-        (singular isa Int   && nlt ≤ singular)
-    )
-    ok_asym = isnothing(asymptotic) || (asymptotic == flag_asym)
-    return ok_singular && ok_asym
-end
-
-function _get_mask(
-    rgms::AbstractVector{<:BindRegime};
-    singular::Union{Bool,Integer,Nothing}=nothing,
-    asymptotic::Union{Bool,Nothing}=nothing,
-)::BitVector
-    masks = falses(length(rgms))
-    @inbounds for i in eachindex(rgms)
-        rgm = rgms[i]
-        masks[i] = _match_regime_filter(
-            get_nullity(rgm),
-            is_asymptotic(rgm);
-            singular=singular,
-            asymptotic=asymptotic,
-        )
-    end
-    return masks
-end
-
-function filter_regimes(
-    rgms::AbstractVector{<:BindRegime};
-    return_mask::Bool=false,
-    kwargs...,
-)
-    masks = _get_mask(rgms; kwargs...)
-    filtered = rgms[masks]
-    return return_mask ? (filtered, masks) : filtered
-end
-
-
-function _get_mask(
-    model::Bnc,
-    vtxs::AbstractVector{<:Integer};
-    singular::Union{Bool,Integer,Nothing}=nothing,
-    asymptotic::Union{Bool,Nothing}=nothing,
-)::BitVector
-    find_all_regimes!(model)
-    vertices = _bind_regimes_data(model)
-    masks = falses(length(vtxs))
-    @inbounds for i in eachindex(vtxs)
-        rgm = vertices[Int(vtxs[i])]
-        masks[i] = _match_regime_filter(
-            rgm.nullity,
-            rgm.is_asymptotic;
-            singular=singular,
-            asymptotic=asymptotic,
-        )
-    end
-    return masks
-end
-
-function _get_mask(
-    model::Bnc,
-    vtxs::AbstractVector;
-    singular::Union{Bool,Integer,Nothing}=nothing,
-    asymptotic::Union{Bool,Nothing}=nothing,
-)::BitVector
-    find_all_regimes!(model)
-    vertices = _bind_regimes_data(model)
-    masks = falses(length(vtxs))
-    @inbounds for i in eachindex(vtxs)
-        rgm = vertices[get_idx(model, vtxs[i])]
-        masks[i] = _match_regime_filter(
-            rgm.nullity,
-            rgm.is_asymptotic;
-            singular=singular,
-            asymptotic=asymptotic,
-        )
-    end
-    return masks
-end
-
-function filter_regimes(
-    model::Bnc,
-    vtxs::AbstractVector{T};
-    return_mask::Bool=false,
-    kwargs...,
-) where T
-    masks = _get_mask(model, vtxs; kwargs...)
-    filtered = vtxs[masks]
-    return return_mask ? (filtered, masks) : filtered
-end
-
-_get_regimes_mask(args...; kwargs...) = _get_mask(args...; kwargs...)
-get_idxes(args...; kwargs...) = get_indices(args...; kwargs...)
-
-
-
-"""
-    get_indices(bnc::Bnc; singular=nothing, asymptotic=nothing) -> Vector{Int}
-
-Return regime indices that satisfy singularity/asymptotic filters.
-"""
-function get_indices(Bnc::Bnc; kwargs...)
-    find_all_regimes!(Bnc)
-    idx_all = eachindex(_bind_regimes_data(Bnc))
-    masks = _get_mask(Bnc, idx_all; kwargs...)
-    return findall(masks)
-end
-
-"""
-    get_perms(bnc::Bnc; singular=nothing, asymptotic=nothing) -> Vector
-
-Return regime permutations that satisfy singularity/asymptotic filters.
-"""
-function get_perms(Bnc::Bnc; kwargs...)
-    idxs = get_indices(Bnc; kwargs...)
-    return getfield.(_bind_regimes_data(Bnc)[idxs], :perm)
-end
-
-get_perms(rgms::AbstractVector{<:BindRegime};kwargs...) = let
-    rgms = filter_regimes(rgms; kwargs...)
-    return getfield.(rgms, :perm)
-end
-
-get_indices(rgms::AbstractVector{<:BindRegime};kwargs...) = let
-    rgms = filter_regimes(rgms; kwargs...)
-    return getfield.(rgms, :idx)
-end
-
-"""
-    get_regimes(bnc::Bnc; singular=nothing, asymptotic=nothing, return_idx=false) -> Vector
-
-Return cached `BindRegime`s that satisfy singularity/asymptotic filters.
-Use `get_perms` or `get_indices` for permutation/index lists.
-"""
-function get_regimes(Bnc::Bnc; return_idx::Bool=false, kwargs...)
-    idxs = get_indices(Bnc; kwargs...)
-    return return_idx ? idxs : _bind_regimes_data(Bnc)[idxs]
-end
-
-"""
-    get_nullities(bnc::Bnc, rgms=nothing) -> Vector
-
-Return nullity values for selected regimes.
-"""
-function get_nullities(Bnc::Bnc, rgms::Union{AbstractVector,Nothing}=nothing; kwargs...) 
-    all_rgms = isnothing(rgms) ? get_regimes(Bnc; return_idx=true,kwargs...) : [get_idx(Bnc, rgm) for rgm in rgms]
-    [get_nullity(Bnc, idx) for idx in all_rgms]
-end
-
-
-
-
-
-
-
-
-
 
 
 #-------------------------------------------------------------
@@ -990,28 +520,20 @@ function Base.show(io::IO, ::MIME"text/plain", rgm::BindRegime)
 end
 
 
-# function summary_vertices(Bnc::Bnc;kwargs...)
-#     vtx = get_regimes(Bnc;kwargs...)
-#     vtx .|> x->summary_regime(Bnc,x)
-#     return nothing
-# end
-
 
 function get_function(vtx::BindRegime)
     H,H0 = get_H_H0(vtx)
-    
     f = function(qK::AbstractArray{<:Real}; input_logspace::Bool=false, output_logspace::Bool=false)
             lgqK = input_logspace ? qK : log10.(qK)
             lgx = H * lgqK .+ H0
         return output_logspace ? lgx : exp10.(lgx)
     end
-
     return f
 end
 
 
 
-
+is_stable(rgm::BindRegime)=true
 
 
 
@@ -1049,12 +571,15 @@ function get_polyhedron(
 )::Polyhedron
     return _build_polyhedron_from_C_C0(C, C0, nullity; canonicalize=canonicalize)
 end
+
+
 """
     get_polyhedron(args...; kwargs...) -> Polyhedron
 
 Convenience wrapper that pulls constraints from a vertex or model.
 """
 get_polyhedron(args...; kwargs...)=get_polyhedron(get_C_C0_nullity_qK(args...)...; kwargs...)
+
 
 function get_polyhedra(
     model::Bnc,

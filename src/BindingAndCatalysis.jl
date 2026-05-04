@@ -332,8 +332,8 @@ mutable struct CatalysisData <:AbstractBnc
     L_Γ::SparseMatrixCSC{Int,Int} # the left null space of Γ such that L_Γ^⊤ * Γ = 0
 
     # Derived parameters
-    r_v::Int # number of independent catalysis reactions
-    n_v::Int # number of flux
+    r_v::Int # number of independent catalysis reactions, L_w = L[r_v+1:end, :]
+    n_v::Int # number of flux, typically equal to the number of k 
     d_w::Int # total number of reduced conserved quantities collected into w
     a_w::Int # split row: L_w[1:a_w, :] is old dependent-part, L_w[a_w+1:end, :] is former parameter part
 
@@ -361,7 +361,7 @@ mutable struct CatalysisData <:AbstractBnc
         @assert n == bn.n "Π's column number have to meet with the number of species n in the binding network"
         L_Γ, pivits = left_nullspace_integer(Γ)
 
-        r_v = length(pivits)
+        r_v = length(pivits) # Maximum of non-redundant flux, also the number of independent catalysis reactions.
         a_w = size(L_Γ,2)
         d_w = bn.d - r_v
 
@@ -505,6 +505,7 @@ include(joinpath(@__DIR__,"volume_calc_impl.jl"))
 include(joinpath(@__DIR__,"numeric.jl"))
 
 # three different level of regime
+include(joinpath(@__DIR__,"RegimeCore.jl"))
 include(joinpath(@__DIR__,"BindingRegime.jl"))
 include(joinpath(@__DIR__,"CatalysisRegime.jl"))
 include(joinpath(@__DIR__,"BncRegime.jl"))

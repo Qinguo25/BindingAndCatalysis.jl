@@ -8,6 +8,12 @@ export judge_stability!, is_stable
 
 
 
+function Base.getproperty(model::BncRegime, sym::Symbol)
+    if sym === :perm
+        return get_bind_perm(model), get_catalysis_perm(model)
+    end
+    return getfield(model, sym)
+end
 
 
 @inline _spI(T, n) = spdiagm(0 => ones(T, n))
@@ -21,95 +27,17 @@ end
 
 
 
-get_binding_regime(rgm::BncRegime) = rgm.bind_rgm
-get_catalysis_regime(rgm::BncRegime) = rgm.catalysis_rgm
-
-get_binding_perm(rgm::BncRegime) = get_perm(rgm.bind_rgm)
-get_catalysis_perm(rgm::BncRegime) = get_perm(rgm.catalysis_rgm)
-
-function get_perm(rgm::BncRegime)
-    r_v = size(rgm.catalysis_rgm.P, 1)
-    return rgm.bind_rgm.perm[r_v + 1:end]
+get_fixed_point_perm(args...;kwargs...) = let
+    bindperm, catalysisperm = get_bnc_perm(args...;kwargs...)
+    r_v = get_catalysis_network(args...;kwargs...).r_v
+    return bindperm[r_v+1:end], catalysisperm
 end
-
-get_steady_state_perm(rgm::BncRegime) = get_perm(rgm)
-
-get_idx(rgm::BncRegime) = CartesianIndex(get_idx(rgm.catalysis_rgm), get_idx(rgm.bind_rgm))
-
-@inline is_bnc_regimes_built(model::Bnc) = !isnothing(model.BncRegimes)
+is_fixed_point_singular(args...;kwargs...)=is_bnc_singular(args...;kwargs...)
 
 
 
-get_nullity(rgm::BncRegime) = rgm.nlt
-is_singular(rgm::BncRegime) = get_nullity(rgm) > 0
 
-
-function get_idx(model::Bnc, bind, cat; check::Bool=false)
-    cat_idx = get_idx(get_catalysis_network(model), cat; check=check)
-    bind_idx = get_idx(model, bind; check=check)
-    return CartesianIndex(cat_idx, bind_idx)
-end
-
-function have_perm(model::Bnc, bind, cat)
-    if !have_perm(model, bind)
-        return false
-    end
-    cn = get_catalysis_network(model)
-    if isnothing(cn) || !have_perm(cn, cat)
-        return false
-    end
-    match_regimes!(model)
-    return !isnothing(model.BncRegimes[get_idx(model, bind, cat)])
-end
-
-
-function get_bnc_regime(model::Bnc, bind, cat; check::Bool=false)
-    match_regimes!(model)
-    idx = get_idx(model, bind, cat; check=check)
-    rgm = model.BncRegimes[idx]
-    if isnothing(rgm)
-        check && error("No BncRegime is stored for the requested binding/catalysis pair.")
-        return nothing
-    end
-    return rgm
-end
-
-get_regime(model::Bnc, bind, cat; kwargs...) = get_bnc_regime(model, bind, cat; kwargs...)
-get_regime(rgm::BncRegime; kwargs...) = rgm
-
-function get_bnc_regimes(model::Bnc; return_idx::Bool=false, singular::Union{Bool,Integer,Nothing}=nothing)
-    match_regimes!(model)
-    idxs = CartesianIndex[]
-    rgms = BncRegime[]
-
-    for I in CartesianIndices(model.BncRegimes)
-        rgm = model.BncRegimes[I]
-        isnothing(rgm) && continue
-
-        nlt = rgm.nlt
-        keep = isnothing(singular) || (
-            (singular === true && nlt > 0) ||
-            (singular === false && nlt == 0) ||
-            (singular isa Int && nlt <= singular)
-        )
-        keep || continue
-
-        push!(idxs, I)
-        push!(rgms, rgm)
-    end
-
-    return return_idx ? idxs : rgms
-end
-
-function get_H_H0(rgm::BncRegime)
-    rgm.nlt <= 1 || error("BncRegime nullity is bigger than 1, cannot get H0.")
-    (isnothing(rgm.H) || isnothing(rgm.H0)) && error("BncRegime affine map is not available.")
-    return rgm.H, rgm.H0
-end
-get_H(rgm::BncRegime) = get_H_H0(rgm)[1]
-get_H0(rgm::BncRegime) = get_H_H0(rgm)[2]
 get_H_bd(rgm::BncRegime) = rgm.H_bd
-
 
 
 # Get an H_bd numerically if the inner binding regime is singular.
@@ -125,13 +53,8 @@ end
 
 
 
-
-
 # Determine the stability of a mixed regime
 function judge_stability!(rgm::BncRegime; kwargs...)
-    # if is_singular(rgm)
-    #     return (rgm.is_stable = Int8(0))
-    # end
 
     if is_singular(get_binding_regime(rgm))
         rgm.H_bd = get_H_bd_numerically(rgm)
@@ -174,98 +97,6 @@ end
 is_stable(model::Bnc, bind, cat; kwargs...) = is_stable(get_bnc_regime(model, bind, cat; check=true); kwargs...)
 
 
-
-
-
-
-
-function _binding_C_qKk(bind_rgm::BindRegime, n_v::Int)
-    C_qK, C0_qK, nlt = get_C_C0_nullity_qK(bind_rgm)
-    C = hcat(C_qK, _zeros_like(C_qK, size(C_qK, 1), n_v))
-    return C, C0_qK, nlt
-end
-
-
-
-
-
-function get_C_C0_nullity_xk(rgm::BncRegime, kind::Symbol=:combined)
-    bind_rgm = rgm.bind_rgm
-    cat_rgm = rgm.catalysis_rgm
-    n_v = size(cat_rgm.P, 2)
-
-    if kind === :binding
-        C_x, C0_x = get_C_C0_x(bind_rgm)
-        C = hcat(C_x, _zeros_like(C_x, size(C_x, 1), n_v))
-        return C, C0_x, 0
-    elseif kind === :catalysis
-        return get_C_C0_nullity_xk(cat_rgm)
-    elseif kind === :combined
-        Ceq = get_P_xk(cat_rgm)
-        Ccat = get_C_xk(cat_rgm)
-        Cbind_x, C0bind_x = get_C_C0_x(bind_rgm)
-        Cbind = hcat(Cbind_x, _zeros_like(Cbind_x, size(Cbind_x, 1), n_v))
-        C = vcat(Ceq, Cbind, Ccat)
-        C0 = vcat(get_P0(cat_rgm), C0bind_x, get_C0(cat_rgm))
-        return C, C0, size(Ceq, 1)
-    else
-        error("Unsupported kind=$kind. Use :binding, :catalysis, or :combined.")
-    end
-end
-
-
-
-
-function get_C_C0_xk(rgm::BncRegime, kind::Symbol=:combined)
-    C, C0, _ = get_C_C0_nullity_xk(rgm, kind)
-    return C, C0
-end
-get_C_xk(rgm::BncRegime, kind::Symbol=:combined) = get_C_C0_nullity_xk(rgm, kind)[1]
-get_C0_xk(rgm::BncRegime, kind::Symbol=:combined) = get_C_C0_nullity_xk(rgm, kind)[2]
-
-
-
-
-
-function get_C_C0_nullity_qKk(rgm::BncRegime, kind::Symbol=:combined)
-    n_v = size(rgm.catalysis_rgm.P, 2)
-
-    if kind === :binding
-        return _binding_C_qKk(rgm.bind_rgm, n_v)
-    elseif kind === :catalysis
-        return _calc_C_qKk_catalysis_only(rgm.bind_rgm, rgm.catalysis_rgm)
-    elseif kind === :combined
-        return rgm.C_qKk_cat, rgm.C0_qKk_cat, rgm.nlt_qKk_cat
-    else
-        error("Unsupported kind=$kind. Use :binding, :catalysis, or :combined.")
-    end
-end
-
-function get_C_C0_qKk(rgm::BncRegime, kind::Symbol=:combined)
-    C, C0, _ = get_C_C0_nullity_qKk(rgm, kind)
-    return C, C0
-end
-get_C_qKk(rgm::BncRegime, kind::Symbol=:combined) = get_C_C0_nullity_qKk(rgm, kind)[1]
-get_C0_qKk(rgm::BncRegime, kind::Symbol=:combined) = get_C_C0_nullity_qKk(rgm, kind)[2]
-
-
-
-
-
-
-function get_C_C0_nullity_wKk(rgm::BncRegime)
-    return rgm.C_wKk, rgm.C0_wKk, rgm.nlt
-end
-
-function get_C_C0_wKk(rgm::BncRegime)
-    C, C0, _ = get_C_C0_nullity_wKk(rgm)
-    return C, C0
-end
-get_C_wKk(rgm::BncRegime) = get_C_C0_nullity_wKk(rgm)[1]
-get_C0_wKk(rgm::BncRegime) = get_C_C0_nullity_wKk(rgm)[2]
-
-
-
 function get_qcat_F_F0(rgm::BncRegime)
     rgm.nlt == 0 || error("The reduced steady-state system is singular, so q_cat has no affine expression in (w, K, k).")
     r_v = size(rgm.catalysis_rgm.P, 1)
@@ -285,39 +116,7 @@ end
 
 
 
-
-
-
-
-# Initialization of BncRegime
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+# The following functions is required to digging into to help fix the problem
 #========================================================================================#
     #  Functions for  Calcalating conditions.
 #========================================================================================#
@@ -333,49 +132,6 @@ function _project_bnc_singular_condition(
     return get_C_C0_nullity(p2)
 end
 
-function _calc_C_qKk_catalysis_only_regular(bind_rgm::BindRegime, cat_rgm::CatalysisRegime)
-    H, H0 = get_H_H0(bind_rgm)
-    CΠ = get_CΠ(cat_rgm)
-    Cθ = get_C_k(cat_rgm)
-    C0θ = get_C0(cat_rgm)
-    C = hcat(CΠ * H, Cθ)
-    C0 = CΠ * H0 + C0θ
-    return C, _materialize_real_vector(C0), 0
-end
-
-function _calc_C_qKk_catalysis_only_singular(bind_rgm::BindRegime, cat_rgm::CatalysisRegime)
-    CΠ = get_CΠ(cat_rgm)
-    Cθ = get_C_k(cat_rgm)
-    C0θ = get_C0(cat_rgm)
-    M, M0 = get_M_M0(bind_rgm)
-
-    n_qK = size(M, 1)
-    n_x = size(M, 2)
-    n_v = size(Cθ, 2)
-    d_cat = size(CΠ, 1)
-
-    Eq = hcat(-_spI(Int, n_qK), _zeros_like(M, n_qK, n_v), M)
-    In_cat = hcat(_zeros_like(CΠ, d_cat, n_qK), Cθ, CΠ)
-
-    C = vcat(Eq, In_cat)
-    C0 = vcat(M0, C0θ)
-
-    return _project_bnc_singular_condition(
-        bind_rgm.network,
-        C,
-        C0,
-        n_qK,
-        BitSet((n_qK + n_v + 1):(n_qK + n_v + n_x)),
-    )
-end
-
-function _calc_C_qKk_catalysis_only(bind_rgm::BindRegime, cat_rgm::CatalysisRegime)
-    if is_singular(bind_rgm)
-        return _calc_C_qKk_catalysis_only_singular(bind_rgm, cat_rgm)
-    else
-        return _calc_C_qKk_catalysis_only_regular(bind_rgm, cat_rgm)
-    end
-end
 
 function _first_nonempty_regime(rgms::AbstractMatrix{<:Union{BncRegime,Nothing}})
     pos = findfirst(x -> !isnothing(x), rgms)
@@ -535,19 +291,6 @@ function _calc_C_wKk_singular(bind_rgm::BindRegime, cat_rgm::CatalysisRegime)
         BitSet((d_w + r + n_v + 1):(d_w + r + n_v + n_x)),
     )
 end
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
