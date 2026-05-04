@@ -7,9 +7,9 @@
     @test length(show_equilibrium(model; log_space = false)) == model.r
 
     find_all_vertices!(model)
-    @test !isempty(model.vertices_perm)
+    @test !isempty(_bind_regimes(model))
 
-    first_perm = model.vertices_perm[1]
+    first_perm = _bind_regimes_perms(model)[1]
     first_idx = get_idx(model, first_perm)
     @test have_perm(model, first_perm)
     @test have_perm(model, first_idx)

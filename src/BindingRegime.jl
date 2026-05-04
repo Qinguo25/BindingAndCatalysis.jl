@@ -248,25 +248,11 @@ end
 #===============================================================================================================#
 
 
-"""
-    get_binding_network(bnc_or_vertex, args...) -> Bnc
-
-Return the binding network associated with a vertex or the model itself.
-"""
 
 
 
-"""
-    get_bind_regimes_dict(args...;kwargs...) -> Dict
 
-Return a dictionary mapping permutation vectors to vertex indices.
-"""
-get_regimes_dict(model::Regimes) = model.vertices_perm_dict
-get_bind_regimes_dict(args...; kwargs...) =let 
-    bn = get_binding_network(args...; kwargs...)
-    find_all_regimes!(bn; kwargs...)
-    _bind_regimes_perm_dict(bn)
-end
+
 
 
 

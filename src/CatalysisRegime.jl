@@ -3,97 +3,15 @@ export get_PΠ, get_CΠ, get_P_pos_neg, get_P0_pos_neg
 export get_C_k, get_C_C0_xk, get_C0_xk, get_C_xk, get_C_C0_nullity_xk
 
 
-function get_binding_network(model::CatalysisData)
-    if isnothing(model.bn)
-        @warn "Binding Network not found in the model"
-        return nothing
-    end
-    return model.bn
-end
-get_binding_network(rgm::BncRegime) = get_binding_network(rgm.bind_rgm)
-
-
-
-```
-Get the catalysis network from the model.
-```
-get_catalysis_network(model::CatalysisData) = model
-get_catalysis_network(rgm::BindRegime) = get_catalysis_network(rgm.network)
-get_catalysis_network(rgm::CatalysisRegime) = rgm.network
-get_catalysis_network(rgm::BncRegime) = get_catalysis_network(rgm.catalysis_rgm)
-function get_catalysis_network(model::Bnc)
-    if isnothing(model.catalysis)
-        @warn "Catalysis Network not found in the model"
-        return nothing
-    end
-    return model.catalysis
-end
-
-
-
-@inline function _catalysis_regimes_data(model::CatalysisData)
-    regimes = getfield(model, :CatalysisRegimes)
-    return isnothing(regimes) ? CatalysisRegime[] : regimes.vertices_data
-end
-
-
-
-
-@inline function _catalysis_regimes_perm_dict(model::CatalysisData)
-    regimes = getfield(model, :CatalysisRegimes)
-    return isnothing(regimes) ? Dict{Vector{Int},Int}() : regimes.vertices_perm_dict
-end
-
-
-
-@inline _catalysis_regimes_perm(model::CatalysisData) = getfield.(_catalysis_regimes_data(model), :perm)
-@inline _catalysis_regimes_asymptotic_flag(model::CatalysisData) = getfield.(_catalysis_regimes_data(model), :is_asymptotic)
-@inline _catalysis_regimes_initialized(model::CatalysisData) = BitVector(.!isnothing.(getfield.(_catalysis_regimes_data(model), :P_pos_neg)))
-function Base.getproperty(model::CatalysisData, sym::Symbol)
-    if sym === :d_para
-        return getfield(model, :d_w) - getfield(model, :a_w)
-    elseif sym === :vertices_perm
-        return _catalysis_regimes_perm(model)
-    elseif sym === :vertices_perm_dict
-        return _catalysis_regimes_perm_dict(model)
-    elseif sym === :vertices_asymptotic_flag
-        return _catalysis_regimes_asymptotic_flag(model)
-    elseif sym === :vertices_data
-        return _catalysis_regimes_data(model)
-    elseif sym === :_vertices_is_initialized
-        return _catalysis_regimes_initialized(model)
-    end
-    return getfield(model, sym)
-end
-function Base.propertynames(model::CatalysisData, private::Bool=false)
-    names = Symbol[fieldnames(typeof(model))...,
-        :d_para,
-        :vertices_perm,
-        :vertices_perm_dict,
-        :vertices_asymptotic_flag,
-        :vertices_data,
-        :_vertices_is_initialized,
-    ]
-    return private ? Tuple(unique(names)) : Tuple(sym for sym in unique(names) if !startswith(String(sym), "_"))
-end
-
-
-
-
-
 
 # ------------------------------------------------------------------------------------------------------------------------------------
 #                            CORE FUNCTIONS FOR CATALYSIS REGIMES
 #-------------------------------------------------------------------------------------------------------------------------------------
 
 
-find_all_regimes!(model::CatalysisData) = find_catalysis_regimes!(model)
-function find_catalysis_regimes!(model::Bnc)
-    cn = get_catalysis_network(model)
-    isnothing(cn) && error("Catalysis network not found in the model.")
-    return find_catalysis_regimes!(cn)
-end
 
+find_catalysis_regimes!(args...; kwargs...) = find_catalysis_regimes!(get_catalysis_network(args...; kwargs...))
+find_all_regimes!(model::CatalysisData) = find_catalysis_regimes!(model)
 function find_catalysis_regimes!(model::CatalysisData)
     if !isnothing(getfield(model, :CatalysisRegimes))
         return nothing

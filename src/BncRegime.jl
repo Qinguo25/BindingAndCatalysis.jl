@@ -1,4 +1,4 @@
-export match_regimes!, get_bnc_regime, get_bnc_regimes, n_bnc_regimes
+export match_regimes!, get_bnc_regime, get_bnc_regimes
 export get_binding_regime, get_binding_perm, get_catalysis_perm, get_steady_state_perm
 export get_C_C0_xk, get_C0_xk, get_C_xk
 export get_C_C0_qKk, get_C0_qKk, get_C_qKk, get_C_C0_nullity_qKk
@@ -17,9 +17,6 @@ export judge_stability!, is_stable
     detA = _bareiss_det_big(Matrix{Int}(A))
     return detA > 0 ? 1 : detA < 0 ? -1 : 0
 end
-
-
-
 
 
 
@@ -103,8 +100,6 @@ function get_bnc_regimes(model::Bnc; return_idx::Bool=false, singular::Union{Boo
 
     return return_idx ? idxs : rgms
 end
-
-n_bnc_regimes(model::Bnc; kwargs...) = length(get_bnc_regimes(model; kwargs...))
 
 function get_H_H0(rgm::BncRegime)
     rgm.nlt <= 1 || error("BncRegime nullity is bigger than 1, cannot get H0.")
@@ -561,14 +556,14 @@ end
   # Functions for initializing BncRegimes
 #========================================================================================#
 function _build_BncRegime(cat_rgms::Regimes, bind_rgms::Regimes)
-    n_cat_rgms = length(cat_rgms.vertices_data)
-    n_bind_rgms = length(bind_rgms.vertices_data)
-    bncrgms = Matrix{Union{BncRegime,Nothing}}(undef, n_cat_rgms, n_bind_rgms)
+    n_cat = n_catalysis_regimes(cat_rgms)
+    n_bind = n_binding_regimes(bind_rgms)
+    bncrgms = Matrix{BncRegime}(undef, n_cat, n_bind)
 
     @info "Matching Catalysis Regimes and Binding Regimes to build BncRegimes..."
-    Threads.@threads for i in 1:n_cat_rgms
+    Threads.@threads for i in 1:n_cat
         cat_rgm = cat_rgms.vertices_data[i]
-        for j in 1:n_bind_rgms
+        for j in 1:n_bind
             bind_rgm = bind_rgms.vertices_data[j]
             bncrgms[i, j] = BncRegime(bind_rgm, cat_rgm)
         end 

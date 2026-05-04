@@ -62,6 +62,8 @@ function _poly_intersect_eliminate(
     return _poly_eliminate(poly, delset; canonicalize=canonicalize)
 end
 
+
+# Seems this function is redundent to _calc_C_C0_nullily
 function _poly_project_hrep(
     C::AbstractMatrix{<:Real},
     C0::AbstractVector,

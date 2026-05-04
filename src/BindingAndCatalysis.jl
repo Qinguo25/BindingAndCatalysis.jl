@@ -483,42 +483,6 @@ mutable struct Bnc{T} <: AbstractBnc # T is the int type to save all the indices
     end
 end
 
-
-@inline _bind_regimes(model::Bnc) = getfield(model, :BindRegimes)
-@inline _bind_regimes_built(model::Bnc) = !isnothing(_bind_regimes(model))
-@inline _bind_regimes_data(model::Bnc)= _bind_regimes(model).vertices_data
-
-
-@inline function _bind_regimes_perm_dict(model::Bnc{T}) where T
-    regimes = _bind_regimes(model)
-    return isnothing(regimes) ? Dict{Vector{T},Int}() : regimes.vertices_perm_dict
-end
-
-function Base.getproperty(model::Bnc{T}, sym::Symbol) where {T}
-    sym === :vertices_perm && return getfield.(_bind_regimes_data(model), :perm)
-    sym === :vertices_perm_dict && return _bind_regimes_perm_dict(model)
-    sym === :vertices_data && return _bind_regimes_data(model)
-    return getfield(model, sym)
-end
-function Base.propertynames(model::Bnc, private::Bool=false)
-    names = Symbol[fieldnames(typeof(model))...,
-        :vertices_perm,
-        :vertices_perm_dict,
-        :vertices_data,
-    ]
-    return private ? Tuple(unique(names)) : Tuple(sym for sym in unique(names) if !startswith(String(sym), "_"))
-end
-
-function get_Lcat(model)
-    bn = get_binding_network(model)
-    cn = model.catalysis
-    if isnothing(cn)
-        return spzeros(Int,0, n)
-    else
-        r_v = cn.r_v
-        return bn.L[r_v + 1:end, :]
-    end
-end
     
 
 
