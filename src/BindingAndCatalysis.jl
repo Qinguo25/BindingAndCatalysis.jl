@@ -285,7 +285,7 @@ mutable struct BncRegime <:AbstractRegime
     C_wKk::Union{AbstractMatrix{<:Real}, Nothing}
     C0_wKk::Union{AbstractVector{<:Real}, Nothing}
     function BncRegime(bind_rgm, catalysis_rgm)
-        H_bd = if bind_rgm.nullity <= 1
+        H_bd = if bind_rgm.nullity == 0
             PΠ = get_PΠ(catalysis_rgm)
             H_bind = get_H(bind_rgm)
             r_v = size(PΠ, 1)
@@ -540,11 +540,17 @@ include(joinpath(@__DIR__,"regime_assign.jl"))
 include(joinpath(@__DIR__,"volume_calc_impl.jl"))
 include(joinpath(@__DIR__,"numeric.jl"))
 
-include(joinpath(@__DIR__,"regimes.jl"))
-include(joinpath(@__DIR__,"Catalysis_regime.jl"))
-include(joinpath(@__DIR__,"Bnc_regime.jl"))
+# three different level of regime
+include(joinpath(@__DIR__,"BindingRegime.jl"))
+include(joinpath(@__DIR__,"CatalysisRegime.jl"))
+include(joinpath(@__DIR__,"BncRegime.jl"))
 
-include(joinpath(@__DIR__,"regime_graphs.jl"))
+# three different level of regime graph
+include(joinpath(@__DIR__,"BindingRegimeGraph.jl"))
+include(joinpath(@__DIR__,"CatalysisRegimeGraph.jl"))
+include(joinpath(@__DIR__,"BncRegimeGraph.jl"))
+
+
 include(joinpath(@__DIR__,"SIMO.jl"))
 include(joinpath(@__DIR__,"symbolics.jl"))
 include(joinpath(@__DIR__,"additional_constrain.jl"))

@@ -8,7 +8,7 @@ export show_dominant_condition, show_conservation, show_equilibrium, show_interf
 export show_catalysis_dynamics, show_reduced_catalysis_dynamics
 export sym_direction, print_path, print_paths, format_arrow
 
-include(joinpath(@__DIR__, "output/symbolic_symbols.jl"))
-include(joinpath(@__DIR__, "output/symbolic_renderers.jl"))
-include(joinpath(@__DIR__, "output/symbolic_api.jl"))
-include(joinpath(@__DIR__, "output/symbolic_paths.jl"))
+include(joinpath(@__DIR__, "symbolic/symbolic_symbols.jl"))
+include(joinpath(@__DIR__, "symbolic/symbolic_renderers.jl"))
+include(joinpath(@__DIR__, "symbolic/symbolic_api.jl"))
+include(joinpath(@__DIR__, "symbolic/symbolic_paths.jl"))

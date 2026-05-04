@@ -13,8 +13,10 @@ export get_polyhedron, get_volume, get_polyhedra
 export is_neighbor, get_interface, get_change_dir
 export get_function
 
-#--------------Core computation functions-------------------------
 
+#========================================================================================#
+#--------------Core computation functions-------------------------
+#========================================================================================#
 
 """
     _calc_C_C0_qK_singular(bnc::Bnc, vtx) -> (SparseMatrixCSC, Vector, Int)
@@ -85,6 +87,9 @@ function _regime_graph_to_sparse(G::RegimeGraph; weight_fn = e -> 1)
 end
 
 @inline is_bind_regimes_built(model::Bnc) = !isnothing(model.BindRegimes)
+
+
+
 
 #------------------------------------------------------------------------------
 #             1. Functions find all regimes and return properties
@@ -175,13 +180,15 @@ function _initialize_regime!(vtx::BindRegime)::BindRegime
 
     P, P0 = _calc_P_P0(perm, helper)
     C_x, C0_x = _calc_C_C0(perm, helper)
+    M = vcat(P, Bnc.N)
+    M0 = vcat(P0, zeros(eltype(P0), Bnc.r))
 
-    vtx.P = P
     vtx.P0 = P0
     vtx.C_x = C_x
     vtx.C0_x = C0_x
-    vtx.M = vcat(P, Bnc.N)
-    vtx.M0 = vcat(P0, zeros(eltype(P0), Bnc.r))
+    vtx.M0 = M0
+    vtx.M = M
+    vtx.P = P
     return vtx
 end
 
@@ -246,8 +253,7 @@ end
 
 Return the binding network associated with a vertex or the model itself.
 """
-get_binding_network(Bnc::Bnc,args...)=Bnc
-get_binding_network(vtx::BindRegime,args...)=vtx.network
+
 
 
 """
