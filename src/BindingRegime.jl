@@ -28,8 +28,8 @@ function _calc_C_C0_qK_singular(Bnc::Bnc, vtx)
     M,M0 = get_M_M0(Bnc,vtx)
     C,C0 = get_C_C0_x(Bnc,vtx)
     C,C0,nlt = _affine_mapping_polyhedra(C,C0,0,M,M0)
-    C = sparse(C)
-    droptol!(C, 1e-10)
+    # C = sparse(C)
+    # droptol!(C, 1e-10)
     return C, C0, nlt    
 end
 
@@ -85,11 +85,6 @@ function _regime_graph_to_sparse(G::RegimeGraph; weight_fn = e -> 1)
     end
     return sparse(I,J,V, n, n) |> dropzeros!
 end
-
-@inline is_bind_regimes_built(model::Bnc) = !isnothing(model.BindRegimes)
-
-
-
 
 #------------------------------------------------------------------------------
 #             1. Functions find all regimes and return properties
@@ -414,8 +409,10 @@ function get_interface_x(Bnc::Bnc, from, to)
         @error("Vertices $get_perm(Bnc, from) and $get_perm(Bnc, to) are not neighbors in x space.")
     else 
         grh = get_regimes_graph!(Bnc; full=false)
-        hp = grh.x_interface_pool[edge.c_c0_x_idx]
-        return sparsevec(hp, Bnc.n, edge.c_c0_x_sign), hp.c0 * edge.c_c0_x_sign
+        x_idx, x_sign = _edge_idx_sign(edge, _EDGE_SPACE_X)
+        hp = get_hyperplane(grh.hp_data[_EDGE_SPACE_X], x_idx)
+        c, c0 = _calc_c_c0(hp, Bnc.n, x_sign)
+        return c[:, 1], c0
     end
 end
 
@@ -438,7 +435,7 @@ Return neighbors of a vertex filtered by singularity and asymptotic flags.
 - `asymptotic`: `true`, `false`, or `nothing`.
 - `return_idx`: Return indices when `true`; otherwise return permutations.
 """
-function get_neighbors(args...; kwargs..., return_idx::Bool=false)
+function get_neighbors(args...; return_idx::Bool=false, kwargs...)
     model = get_binding_network(args...)
     grh = get_regimes_graph!(model;full=true)
     rgm_idx = get_idx(args...)
@@ -534,7 +531,7 @@ end
 
 
 is_stable(rgm::BindRegime)=true
-
+get_affine_x2K(model::Bnc) = (model.N, zeros(eltype(model.N), model.r)) # will the intersection fine ?
 
 
 #===============================================================================================================#

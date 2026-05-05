@@ -260,6 +260,10 @@ mutable struct BncRegime <:AbstractRegime
     H_bd::Union{SparseMatrixCSC{Float64, Int}, Nothing}
     is_stable::Int8 # 1 for stable, -1 for unstable, 0 for unknown # mapped from d_stable
 
+    # wKk̃2x mapping, the core matrix
+    H_inner::Union{SparseMatrixCSC{Float64, Int}, Nothing}
+    H0_inner::Union{Vector{Float64}, Nothing}
+
     nlt::Int  
     H::Union{AbstractMatrix{<:Real}, Nothing} # x's reaction order to w,K,k
     H0::Union{AbstractVector{<:Real}, Nothing} # Intersection
@@ -285,19 +289,24 @@ mutable struct BncRegime <:AbstractRegime
     C_wKk::Union{AbstractMatrix{<:Real}, Nothing}
     C0_wKk::Union{AbstractVector{<:Real}, Nothing}
     function BncRegime(bind_rgm, catalysis_rgm)
+        
         H_bd = if bind_rgm.nullity == 0
             PΠ = get_PΠ(catalysis_rgm)
-            H_bind = get_H(bind_rgm)
+            H_bind, _ = get_affine_qK2x(bind_rgm)
             r_v = size(PΠ, 1)
             sparse(Float64.(PΠ * H_bind[:, 1:r_v]))
         else
             nothing
         end
+
         return new(
             bind_rgm, 
             catalysis_rgm, 
             H_bd, 
             Int8(0), #is_stable
+            nothing, # H_inner
+            nothing, # H0_inner
+            
             -1, # nlt
             
             nothing, 
@@ -334,7 +343,7 @@ mutable struct CatalysisData <:AbstractBnc
     # Derived parameters
     r_v::Int # number of independent catalysis reactions, L_w = L[r_v+1:end, :]
     n_v::Int # number of flux, typically equal to the number of k 
-    d_w::Int # total number of reduced conserved quantities collected into w
+    d_w::Int # total number of reduced conserved quantities collected into w, (r_v+d_w = d)
     a_w::Int # split row: L_w[1:a_w, :] is old dependent-part, L_w[a_w+1:end, :] is former parameter part
 
     # symbols of k
@@ -350,6 +359,7 @@ mutable struct CatalysisData <:AbstractBnc
     _S_helper::AbstractHelper
 
     CatalysisRegimes::Union{Regimes,Nothing} # Using Any for placeholder for CatalysisRegimes
+    vertices_graph::Union{Any,Nothing}
 
     function CatalysisData(bn,Γ, Π, k_sym, w_sym=nothing)
         Γ = sparse(Γ)
@@ -383,7 +393,7 @@ mutable struct CatalysisData <:AbstractBnc
         new(bn, Γ, Π, S, L_Γ,
             r_v, nv, d_w, a_w,
             k_sym, _S_sparse, _Π_sparse,
-            S_pos_neg, _S_helper, nothing)
+            S_pos_neg, _S_helper, nothing,nothing)
     end
 end
 

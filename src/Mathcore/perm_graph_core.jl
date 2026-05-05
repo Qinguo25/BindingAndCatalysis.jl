@@ -8,16 +8,79 @@ mutable struct RegimeEdge
     to::Int
     i ::Int # different row index
 
-    c_c0_x_idx::Int
-    c_c0_x_sign::Int8
-      
-    qK_interface_idx::Int
-    qK_interface_sign::Int8
+    idx_sign::Vector{Tuple{Int,Int8}}
 
     function RegimeEdge(to::Int, i::Int, c_c0_x_idx::Int, c_c0_x_sign::Int8)
-        return new(to, i, c_c0_x_idx, c_c0_x_sign, 0, 0)
+        return new(to, i, Tuple{Int,Int8}[(c_c0_x_idx, c_c0_x_sign), (0, 0)])
     end
 
+    function RegimeEdge(to::Int, i::Int, idx_sign::Vector{Tuple{Int,Int8}})
+        return new(to, i, idx_sign)
+    end
+
+end
+
+# Seems not elegant, but we keep it for now.
+const _EDGE_SPACE_PRIMARY = 1
+const _EDGE_SPACE_SECONDARY = 2
+const _EDGE_SPACE_TERTIARY = 3
+
+const _EDGE_SPACE_X = _EDGE_SPACE_PRIMARY
+const _EDGE_SPACE_V = _EDGE_SPACE_PRIMARY
+const _EDGE_SPACE_XK = _EDGE_SPACE_SECONDARY
+const _EDGE_SPACE_QK = _EDGE_SPACE_SECONDARY
+const _EDGE_SPACE_BNC_XK = _EDGE_SPACE_PRIMARY
+const _EDGE_SPACE_QKK = _EDGE_SPACE_SECONDARY
+const _EDGE_SPACE_WKK = _EDGE_SPACE_TERTIARY
+
+@inline function _ensure_edge_space!(edge::RegimeEdge, space::Int)
+    while length(edge.idx_sign) < space
+        push!(edge.idx_sign, (0, Int8(0)))
+    end
+    return edge
+end
+
+@inline _edge_idx_sign(edge::RegimeEdge, space::Int) =
+    length(edge.idx_sign) < space ? (0, Int8(0)) : edge.idx_sign[space]
+
+@inline function _set_edge_idx_sign!(edge::RegimeEdge, space::Int, idx::Int, sign::Integer)
+    _ensure_edge_space!(edge, space)
+    edge.idx_sign[space] = (idx, Int8(sign))
+    return edge
+end
+
+@inline _edge_has_space(edge::RegimeEdge, space::Int) = _edge_idx_sign(edge, space)[1] != 0
+
+function Base.getproperty(edge::RegimeEdge, sym::Symbol)
+    if sym === :c_c0_x_idx
+        return _edge_idx_sign(edge, _EDGE_SPACE_X)[1]
+    elseif sym === :c_c0_x_sign
+        return _edge_idx_sign(edge, _EDGE_SPACE_X)[2]
+    elseif sym === :qK_interface_idx
+        return _edge_idx_sign(edge, _EDGE_SPACE_QK)[1]
+    elseif sym === :qK_interface_sign
+        return _edge_idx_sign(edge, _EDGE_SPACE_QK)[2]
+    end
+    return getfield(edge, sym)
+end
+
+function Base.setproperty!(edge::RegimeEdge, sym::Symbol, value)
+    if sym === :c_c0_x_idx
+        _, sign = _edge_idx_sign(edge, _EDGE_SPACE_X)
+        _set_edge_idx_sign!(edge, _EDGE_SPACE_X, value, sign)
+    elseif sym === :c_c0_x_sign
+        idx, _ = _edge_idx_sign(edge, _EDGE_SPACE_X)
+        _set_edge_idx_sign!(edge, _EDGE_SPACE_X, idx, value)
+    elseif sym === :qK_interface_idx
+        _, sign = _edge_idx_sign(edge, _EDGE_SPACE_QK)
+        _set_edge_idx_sign!(edge, _EDGE_SPACE_QK, value, sign)
+    elseif sym === :qK_interface_sign
+        idx, _ = _edge_idx_sign(edge, _EDGE_SPACE_QK)
+        _set_edge_idx_sign!(edge, _EDGE_SPACE_QK, idx, value)
+    else
+        setfield!(edge, sym, value)
+    end
+    return value
 end
 
 
@@ -35,10 +98,13 @@ mutable struct RegimeGraph{Tv}
 
     edge_pos::Vector{Dict{Int, Int}}  # (u,v) -> (u,edge_pos[u][v]) to locate the RegimeEdge.
 
-    qK_hp_data::RegimeToHyperplanePool
-    x_hp_data::MatrixHelper
+    hp_data::Vector{Any}
 
     qK_classifier_full::Any # numeric classifier for classifying regimes based on qK hyperplanes, to be filled when needed.
+
+    function RegimeGraph{Tv}(bn, neighbors, edge_pos, hp_data, qK_classifier_full) where {Tv}
+        return new{Tv}(bn, neighbors, edge_pos, hp_data, qK_classifier_full)
+    end
 
     function RegimeGraph(L_helper::MatrixHelper{Tv}, neighbors::Vector{Vector{RegimeEdge}}) where {Tv}
         
@@ -60,11 +126,32 @@ mutable struct RegimeGraph{Tv}
             nothing,
             neighbors,
             edge_pos,
-            RegimeToHyperplanePool(L_helper.n),
-            L_helper,
+            Any[L_helper, RegimeToHyperplanePool(L_helper.n)],
             nothing,
         )
     end
+end
+
+function RegimeGraph(neighbors::Vector{Vector{RegimeEdge}}, hp_data::Vector{Any}; bn=nothing)
+    edge_pos = Vector{Dict{Int,Int}}(undef, length(neighbors))
+    for i in eachindex(neighbors)
+        d = Dict{Int,Int}()
+        sizehint!(d, length(neighbors[i]))
+        for (k, e) in enumerate(neighbors[i])
+            d[e.to] = k
+        end
+        edge_pos[i] = d
+    end
+    return RegimeGraph{Int}(bn, neighbors, edge_pos, hp_data, nothing)
+end
+
+function Base.getproperty(grh::RegimeGraph, sym::Symbol)
+    if sym === :x_hp_data
+        return getfield(grh, :hp_data)[_EDGE_SPACE_X]
+    elseif sym === :qK_hp_data
+        return getfield(grh, :hp_data)[_EDGE_SPACE_QK]
+    end
+    return getfield(grh, sym)
 end
 
 
@@ -147,17 +234,18 @@ end
 
 
 
-@inline _edge_has_qK_interface(edge::RegimeEdge) = edge.qK_interface_idx != 0
+@inline _edge_has_qK_interface(edge::RegimeEdge) = _edge_has_space(edge, _EDGE_SPACE_QK)
 
-function _edge_qK_interface(grh::RegimeGraph, edge::RegimeEdge)
-    idx = edge.qK_interface_idx
+function _edge_interface(grh::RegimeGraph, edge::RegimeEdge, space::Int)
+    idx, dir = _edge_idx_sign(edge, space)
     idx == 0 && return nothing
     
-    hp = get_hyperplane(grh.qK_hp_data, idx)
-    dir = edge.qK_interface_sign
+    hp = get_hyperplane(grh.hp_data[space], idx)
 
     return _calc_c_c0(hp, dir)
 end
+
+_edge_qK_interface(grh::RegimeGraph, edge::RegimeEdge) = _edge_interface(grh, edge, _EDGE_SPACE_QK)
 
 
 
@@ -171,7 +259,7 @@ Compute qK-space change directions for edges in the vertex graph.
 function _fulfill_regimes_graph!(vtx_graph::RegimeGraph)
     Bnc = vtx_graph.bn
     regimes = _bind_regimes_data(Bnc)
-    db = vtx_graph.qK_hp_data
+    db = vtx_graph.hp_data[_EDGE_SPACE_QK]
 
     I = Int[]     # row indices: polyhedron id
     J = Int[]     # col indices: hyperplane id
@@ -200,8 +288,8 @@ function _fulfill_regimes_graph!(vtx_graph::RegimeGraph)
 
             src_rgm = regimes[p1]
 
-            c_c0 = get_hyperplane(vtx_graph.x_hp_data, e.c_c0_x_idx)
-            dir_x = e.c_c0_x_sign
+            x_idx, dir_x = _edge_idx_sign(e, _EDGE_SPACE_X)
+            c_c0 = get_hyperplane(vtx_graph.hp_data[_EDGE_SPACE_X], x_idx)
 
             c_qK, c0_qK = _calc_dir(
                 src_rgm.nullity,
@@ -222,11 +310,9 @@ function _fulfill_regimes_graph!(vtx_graph::RegimeGraph)
             push!(J, hid)
             push!(V, dir)
 
-            e.qK_interface_idx = hid
-            e.qK_interface_sign = dir
+            _set_edge_idx_sign!(e, _EDGE_SPACE_QK, hid, dir)
 
-            e_rev.qK_interface_idx = hid
-            e_rev.qK_interface_sign = -dir
+            _set_edge_idx_sign!(e_rev, _EDGE_SPACE_QK, hid, -dir)
         end
     end
 

@@ -61,12 +61,12 @@ function _rank1_step_update_from_regular(
         H0_to = H0 - H[:, i] .* (scale * c0_qK)
         nlt_to = 0
         
-        if a < 0 
-            @show a
-            @show inv(float.(H))
-            @show inv(float.(H_to))
-            @warn "H Determinant is changing sign in rank-1 update"
-        end
+        # if a < 0
+        #     @show a
+        #     @show inv(float.(H))
+        #     @show inv(float.(H_to))
+        #     @warn "H Determinant is changing sign in rank-1 update"
+        # end
 
     end
 
@@ -696,12 +696,13 @@ function _propagate_from_regular_seed!(
 end
 
 @inline function propagate_regime!(rgm1::BindRegime, rgm2::BindRegime, edge::RegimeEdge)
+    x_idx, x_sign = _edge_idx_sign(edge, _EDGE_SPACE_X)
     H_to, H0_to, nlt_to, _, _ = _rank1_step_update_from_regular(
         rgm1.H,
         rgm1.H0,
         edge.i,
-        rgm1.network._L_helper.hyperplanes[edge.c_c0_x_idx],
-        edge.c_c0_x_sign,
+        rgm1.network._L_helper.hyperplanes[x_idx],
+        x_sign,
     )
 
     rgm2.H = H_to

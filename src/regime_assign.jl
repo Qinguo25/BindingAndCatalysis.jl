@@ -208,8 +208,8 @@ function _get_regime_qK_hyperplane_id_signs(grh::RegimeGraph, regime)
 
     for edge in grh.neighbors[idx]
         _edge_has_qK_interface(edge) || continue
-        hid = edge.qK_interface_idx
-        dir = -edge.qK_interface_sign
+        hid, sign = _edge_idx_sign(edge, _EDGE_SPACE_QK)
+        dir = -sign
 
         old = get(Hpid_dir, hid, dir)
         old == dir || error("Inconsistent qK hyperplane sign, BUGGY code: regime=$idx, hyperplane_id=$hid")
@@ -231,9 +231,10 @@ function _build_qK_hyperplane_classifier(
         [get_idx(model, rgm) for rgm in filter_regimes(model, candidates; singular=false)]
     end
 
+    qK_hp_data = grh.hp_data[_EDGE_SPACE_QK]
     return compile_classifier(
-        grh.qK_hp_data.hyperplanes,
-        grh.qK_hp_data.hp_to_poly.M,
+        qK_hp_data.hyperplanes,
+        qK_hp_data.hp_to_poly.M,
         regimes,
     )
 end
