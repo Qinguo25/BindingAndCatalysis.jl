@@ -20,11 +20,12 @@ mutable struct RegimeEdge
 
 end
 
-# Seems not elegant, but we keep it for now.
 const _EDGE_SPACE_PRIMARY = 1
 const _EDGE_SPACE_SECONDARY = 2
 const _EDGE_SPACE_TERTIARY = 3
 
+# Integer aliases kept for low-level callers. Each RegimeGraph now records the
+# meaning of these slots in `space_idx`, e.g. Dict(:x => 1, :qK => 2).
 const _EDGE_SPACE_X = _EDGE_SPACE_PRIMARY
 const _EDGE_SPACE_V = _EDGE_SPACE_PRIMARY
 const _EDGE_SPACE_XK = _EDGE_SPACE_SECONDARY
@@ -99,14 +100,19 @@ mutable struct RegimeGraph{Tv}
     edge_pos::Vector{Dict{Int, Int}}  # (u,v) -> (u,edge_pos[u][v]) to locate the RegimeEdge.
 
     hp_data::Vector{Any}
+    space_idx::Dict{Symbol,Int}
 
     qK_classifier_full::Any # numeric classifier for classifying regimes based on qK hyperplanes, to be filled when needed.
 
-    function RegimeGraph{Tv}(bn, neighbors, edge_pos, hp_data, qK_classifier_full) where {Tv}
-        return new{Tv}(bn, neighbors, edge_pos, hp_data, qK_classifier_full)
+    function RegimeGraph{Tv}(bn, neighbors, edge_pos, hp_data, space_idx, qK_classifier_full) where {Tv}
+        return new{Tv}(bn, neighbors, edge_pos, hp_data, Dict{Symbol,Int}(space_idx), qK_classifier_full)
     end
 
-    function RegimeGraph(L_helper::MatrixHelper{Tv}, neighbors::Vector{Vector{RegimeEdge}}) where {Tv}
+    function RegimeGraph(
+        L_helper::MatrixHelper{Tv},
+        neighbors::Vector{Vector{RegimeEdge}};
+        space_idx::Dict{Symbol,Int}=Dict(:x => _EDGE_SPACE_X, :qK => _EDGE_SPACE_QK),
+    ) where {Tv}
         
         edge_pos = let
             edge_pos = Vector{Dict{Int,Int}}(undef, length(neighbors))
@@ -127,12 +133,18 @@ mutable struct RegimeGraph{Tv}
             neighbors,
             edge_pos,
             Any[L_helper, RegimeToHyperplanePool(L_helper.n)],
+            space_idx,
             nothing,
         )
     end
 end
 
-function RegimeGraph(neighbors::Vector{Vector{RegimeEdge}}, hp_data::Vector{Any}; bn=nothing)
+function RegimeGraph(
+    neighbors::Vector{Vector{RegimeEdge}},
+    hp_data::Vector{Any};
+    bn=nothing,
+    space_idx::Dict{Symbol,Int}=Dict(Symbol("space$i") => i for i in eachindex(hp_data)),
+)
     edge_pos = Vector{Dict{Int,Int}}(undef, length(neighbors))
     for i in eachindex(neighbors)
         d = Dict{Int,Int}()
@@ -142,16 +154,43 @@ function RegimeGraph(neighbors::Vector{Vector{RegimeEdge}}, hp_data::Vector{Any}
         end
         edge_pos[i] = d
     end
-    return RegimeGraph{Int}(bn, neighbors, edge_pos, hp_data, nothing)
+    return RegimeGraph{Int}(bn, neighbors, edge_pos, hp_data, space_idx, nothing)
 end
 
 function Base.getproperty(grh::RegimeGraph, sym::Symbol)
     if sym === :x_hp_data
-        return getfield(grh, :hp_data)[_EDGE_SPACE_X]
+        return getfield(grh, :hp_data)[get(getfield(grh, :space_idx), :x, _EDGE_SPACE_X)]
     elseif sym === :qK_hp_data
-        return getfield(grh, :hp_data)[_EDGE_SPACE_QK]
+        return getfield(grh, :hp_data)[get(getfield(grh, :space_idx), :qK, _EDGE_SPACE_QK)]
     end
     return getfield(grh, sym)
+end
+
+@inline function _edge_space_index(grh::RegimeGraph, space::Symbol)
+    return get(grh.space_idx, space) do
+        throw(ArgumentError("RegimeGraph does not have edge space :$space. Available spaces: $(sort!(collect(keys(grh.space_idx))))"))
+    end
+end
+@inline _edge_space_index(::RegimeGraph, space::Integer) = Int(space)
+@inline _edge_idx_sign(edge::RegimeEdge, grh::RegimeGraph, space) = _edge_idx_sign(edge, _edge_space_index(grh, space))
+@inline _set_edge_idx_sign!(edge::RegimeEdge, grh::RegimeGraph, space, idx::Int, sign::Integer) =
+    _set_edge_idx_sign!(edge, _edge_space_index(grh, space), idx, sign)
+@inline _edge_has_space(edge::RegimeEdge, grh::RegimeGraph, space) =
+    _edge_has_space(edge, _edge_space_index(grh, space))
+@inline _has_edge_space(grh::RegimeGraph, space::Symbol) = haskey(grh.space_idx, space)
+
+function _default_edge_space(grh::RegimeGraph)
+    for space in (:qK, :qKk, :xk, :wKk, :v, :x)
+        _has_edge_space(grh, space) && return space
+    end
+    return first(keys(grh.space_idx))
+end
+
+function _default_layout_edge_space(grh::RegimeGraph)
+    for space in (:x, :v, :xk, :qK, :qKk, :wKk)
+        _has_edge_space(grh, space) && return space
+    end
+    return _default_edge_space(grh)
 end
 
 
@@ -169,7 +208,12 @@ Base.show(io::IO, grh::RegimeGraph) = print(io, "RegimeGraph with $(length(grh.n
 Build a `RegimeGraph` from regime permutations, connecting regimes that differ
 in exactly one row.
 """
-function _calc_regimes_graph(helper::MatrixHelper, perms::Vector{<:AbstractVector{T}}) where {T<:Integer}
+function _calc_regimes_graph(
+    helper::MatrixHelper,
+    perms::Vector{<:AbstractVector{T}};
+    primary_space::Symbol=:x,
+    secondary_space::Symbol=:qK,
+) where {T<:Integer}
     # n = helper.n
     n_vtxs = length(perms)
     d = length(perms[1])
@@ -221,7 +265,11 @@ function _calc_regimes_graph(helper::MatrixHelper, perms::Vector{<:AbstractVecto
     for (from, e) in all_edges
         push!(neighbors[from], e)
     end
-    return RegimeGraph(helper, neighbors)
+    return RegimeGraph(
+        helper,
+        neighbors;
+        space_idx=Dict(primary_space => _EDGE_SPACE_PRIMARY, secondary_space => _EDGE_SPACE_SECONDARY),
+    )
 end
 
 
@@ -244,8 +292,10 @@ function _edge_interface(grh::RegimeGraph, edge::RegimeEdge, space::Int)
 
     return _calc_c_c0(hp, dir)
 end
+_edge_interface(grh::RegimeGraph, edge::RegimeEdge, space::Symbol) =
+    _edge_interface(grh, edge, _edge_space_index(grh, space))
 
-_edge_qK_interface(grh::RegimeGraph, edge::RegimeEdge) = _edge_interface(grh, edge, _EDGE_SPACE_QK)
+_edge_qK_interface(grh::RegimeGraph, edge::RegimeEdge) = _edge_interface(grh, edge, :qK)
 
 
 
@@ -259,7 +309,9 @@ Compute qK-space change directions for edges in the vertex graph.
 function _fulfill_regimes_graph!(vtx_graph::RegimeGraph)
     Bnc = vtx_graph.bn
     regimes = _bind_regimes_data(Bnc)
-    db = vtx_graph.hp_data[_EDGE_SPACE_QK]
+    qK_space = _edge_space_index(vtx_graph, :qK)
+    x_space = _edge_space_index(vtx_graph, :x)
+    db = vtx_graph.hp_data[qK_space]
 
     I = Int[]     # row indices: polyhedron id
     J = Int[]     # col indices: hyperplane id
@@ -288,8 +340,8 @@ function _fulfill_regimes_graph!(vtx_graph::RegimeGraph)
 
             src_rgm = regimes[p1]
 
-            x_idx, dir_x = _edge_idx_sign(e, _EDGE_SPACE_X)
-            c_c0 = get_hyperplane(vtx_graph.hp_data[_EDGE_SPACE_X], x_idx)
+            x_idx, dir_x = _edge_idx_sign(e, x_space)
+            c_c0 = get_hyperplane(vtx_graph.hp_data[x_space], x_idx)
 
             c_qK, c0_qK = _calc_dir(
                 src_rgm.nullity,
@@ -310,9 +362,9 @@ function _fulfill_regimes_graph!(vtx_graph::RegimeGraph)
             push!(J, hid)
             push!(V, dir)
 
-            _set_edge_idx_sign!(e, _EDGE_SPACE_QK, hid, dir)
+            _set_edge_idx_sign!(e, qK_space, hid, dir)
 
-            _set_edge_idx_sign!(e_rev, _EDGE_SPACE_QK, hid, -dir)
+            _set_edge_idx_sign!(e_rev, qK_space, hid, -dir)
         end
     end
 

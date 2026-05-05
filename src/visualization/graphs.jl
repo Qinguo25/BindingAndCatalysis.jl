@@ -200,6 +200,78 @@ end
     return hide_nullity_ge_2 ? [i for i in 1:n_regimes(model) if get_nullity(model, i) <= 1] : collect(1:n_regimes(model))
 end
 
+function _regime_graph_kind(grh::RegimeGraph)
+    _has_edge_space(grh, :qKk) && return :bnc
+    _has_edge_space(grh, :v) && return :catalysis
+    return :binding
+end
+
+function _regime_graph_node_labels(grh::RegimeGraph)
+    kind = _regime_graph_kind(grh)
+    if kind === :binding
+        return get_node_labels(get_binding_network(grh))
+    elseif kind === :catalysis
+        return get_catalysis_perms(grh.bn) .|> repr .|> strip_before_bracket
+    else
+        rgms = grh.bn.BncRegimes
+        n_cat, n_bind = size(rgms)
+        return ["B$(b)/C$(c)" for c in 1:n_cat for b in 1:n_bind]
+    end
+end
+
+function _regime_graph_node_colors(
+    grh::RegimeGraph;
+    singular_color="#CCCCFF",
+    asymptotic_color="#FFCCCC",
+    regular_color="#CCFFCC",
+)
+    kind = _regime_graph_kind(grh)
+    if kind === :binding
+        return get_node_colors(
+            get_binding_network(grh);
+            singular_color=singular_color,
+            asymptotic_color=asymptotic_color,
+            regular_color=regular_color,
+        )
+    elseif kind === :catalysis
+        return [is_asymptotic(rgm) ? asymptotic_color : regular_color for rgm in get_catalysis_regimes(grh.bn)]
+    else
+        return map(vec(grh.bn.BncRegimes)) do rgm
+            if is_singular(rgm)
+                singular_color
+            elseif any(is_asymptotic(rgm))
+                asymptotic_color
+            else
+                regular_color
+            end
+        end
+    end
+end
+
+function _regime_graph_node_size(grh::RegimeGraph; default_node_size=50, kwargs...)
+    _regime_graph_kind(grh) === :binding && return get_node_size(get_binding_network(grh); default_node_size=default_node_size, kwargs...)
+    return fill(default_node_size, length(grh.neighbors))
+end
+
+function _node_subset_by_nullity(grh::RegimeGraph; hide_nullity_ge_2::Bool=false)
+    hide_nullity_ge_2 || return collect(1:length(grh.neighbors))
+    kind = _regime_graph_kind(grh)
+    if kind === :binding
+        model = get_binding_network(grh)
+        return [i for i in 1:length(grh.neighbors) if get_nullity(model, i) <= 1]
+    elseif kind === :bnc
+        return [i for i in eachindex(vec(grh.bn.BncRegimes)) if get_nullity(vec(grh.bn.BncRegimes)[i]) <= 1]
+    else
+        return collect(1:length(grh.neighbors))
+    end
+end
+
+function _regime_graph_title(grh::RegimeGraph, edge_space::Symbol)
+    kind = _regime_graph_kind(grh)
+    prefix = kind === :binding ? "Binding" : kind === :catalysis ? "Catalysis" : "Bnc"
+    return "$prefix regime graph (:$edge_space)"
+end
+
 function _filter_edge_labels_for_nodes(edge_labels, grh::AbstractGraph, keep_nodes::Vector{Int})
     keep_set = Set(keep_nodes)
     old_to_new = Dict(keep_nodes[i] => i for i in eachindex(keep_nodes))
@@ -238,6 +310,8 @@ function _materialize_node_sizes(raw_node_size, node_indices::AbstractVector{<:I
 end
 
 draw_graph(model; kwargs...) = draw_graph(get_binding_network(model), get_neighbor_graph_qK(model); kwargs...)
+draw_graph(model::CatalysisData, grh=nothing; kwargs...) =
+    draw_graph(isnothing(grh) ? get_catalysis_regimes_graph!(model) : grh; kwargs...)
 
 """
     draw_graph(grh::SIMOPaths; kwargs...) -> (Figure, Axis/Axis3, GraphPlot)
@@ -281,6 +355,101 @@ function draw_graph(
         plot_dim=plot_dim,
         kwargs...,
     )
+end
+
+"""
+    draw_graph(grh::RegimeGraph; edge_space=nothing, kwargs...)
+
+Draw a binding, catalysis, or Bnc `RegimeGraph`.
+
+`edge_space` selects which edge layer to render. Useful values are:
+- binding graph: `:x`, `:qK`
+- catalysis graph: `:v`, `:xk`
+- Bnc graph: `:xk`, `:qKk`, `:wKk`
+"""
+function draw_graph(
+    rgm_grh::RegimeGraph;
+    edge_space=nothing,
+    layout_edge_space=nothing,
+    default_node_size=50,
+    node_posi=nothing,
+    node_size=nothing,
+    edge_labels=nothing,
+    node_labels=nothing,
+    node_colors=nothing,
+    add_rgm_idx::Bool=true,
+    use_primary_space_neighbor_layout::Bool=true,
+    hide_isolated_nodes::Bool=false,
+    plot_dim::Integer=2,
+    hide_nullity_ge_2::Bool=false,
+    figsize=(1000, 1000),
+    layout=nothing,
+    kwargs...,
+)
+    plot_dim in (2, 3) || throw(ArgumentError("plot_dim must be 2 or 3."))
+    edge_space = isnothing(edge_space) ? _default_edge_space(rgm_grh) : Symbol(edge_space)
+    layout_edge_space = isnothing(layout_edge_space) ? _default_layout_edge_space(rgm_grh) : Symbol(layout_edge_space)
+
+    grh = get_neighbor_graph(rgm_grh; edge_space=edge_space)
+    full_grh = grh
+    layout_grh_full = use_primary_space_neighbor_layout ? get_neighbor_graph(rgm_grh; edge_space=layout_edge_space) : full_grh
+    layout = isnothing(layout) ? _default_graph_layout(plot_dim) : layout
+    P = _point_type(plot_dim)
+
+    edge_labels = isnothing(edge_labels) ? nothing : edge_labels
+    node_labels = isnothing(node_labels) ? _regime_graph_node_labels(rgm_grh) : collect(node_labels)
+    node_colors = isnothing(node_colors) ? _regime_graph_node_colors(rgm_grh) : collect(node_colors)
+    raw_node_size = isnothing(node_size) ? _regime_graph_node_size(rgm_grh; default_node_size=default_node_size) : node_size
+
+    keep_nodes = _node_subset_by_nullity(rgm_grh; hide_nullity_ge_2=hide_nullity_ge_2) |>
+        x -> _hide_isolated_nodes(full_grh, x; hide=hide_isolated_nodes)
+    node_indices = if length(keep_nodes) < nv(grh)
+        grh, _ = induced_subgraph(grh, keep_nodes)
+        layout_grh, _ = induced_subgraph(layout_grh_full, keep_nodes)
+        edge_labels = _filter_edge_labels_for_nodes(edge_labels, full_grh, keep_nodes)
+        posi = isnothing(node_posi) ? get_node_positions(layout_grh; layout=layout, plot_dim=plot_dim) : P.(node_posi)[keep_nodes]
+        node_labels = node_labels[keep_nodes]
+        node_colors = node_colors[keep_nodes]
+        keep_nodes
+    else
+        edge_labels isa Dict && (edge_labels = _filter_edge_labels_for_nodes(edge_labels, full_grh, collect(1:nv(full_grh))))
+        posi = isnothing(node_posi) ? get_node_positions(layout_grh_full; layout=layout, plot_dim=plot_dim) : P.(node_posi)
+        collect(1:length(node_labels))
+    end
+    node_size_vec = _materialize_node_sizes(raw_node_size, node_indices)
+    regime_idx_texts = "#" .* string.(node_indices)
+
+    f = Figure(size=figsize)
+    ax = plot_dim == 3 ?
+        Axis3(f[1, 1], title=_regime_graph_title(rgm_grh, edge_space)) :
+        Axis(f[1, 1], title=_regime_graph_title(rgm_grh, edge_space), titlealign=:right, titlegap=2)
+
+    p = graphplot!(
+        ax,
+        grh;
+        node_color=node_colors,
+        elabels=edge_labels,
+        node_size=node_size_vec,
+        ilabels=plot_dim == 3 ? nothing : node_labels,
+        layout=posi,
+        arrow_size=20,
+        arrow_shift=0.8,
+        edge_color=(:black, 0.7),
+        kwargs...,
+    )
+    if ax isa Axis
+        hidedecorations!(ax)
+        hidespines!(ax)
+    end
+    set_proper_bounds_for_graph_plot!(ax, p)
+
+    if plot_dim == 3
+        add_nodes_text!(ax, p, node_labels; align=(:center, :center), offset=(0, 0))
+        add_rgm_idx && add_nodes_text!(ax, p, regime_idx_texts; align=(:center, :bottom), offset=(0, 10))
+    else
+        add_rgm_idx && add_nodes_text!(ax, p, regime_idx_texts)
+    end
+    return f, ax, p
 end
 
 """
@@ -337,6 +506,25 @@ function draw_graph(
     kwargs...,
 )
     plot_dim in (2, 3) || throw(ArgumentError("plot_dim must be 2 or 3."))
+    if grh isa RegimeGraph
+        return draw_graph(
+            grh;
+            default_node_size=default_node_size,
+            node_posi=node_posi,
+            node_size=node_size,
+            edge_labels=edge_labels,
+            node_labels=node_labels,
+            node_colors=node_colors,
+            add_rgm_idx=add_rgm_idx,
+            use_primary_space_neighbor_layout=use_x_space_neighbor_layout,
+            hide_isolated_nodes=hide_isolated_nodes,
+            plot_dim=plot_dim,
+            hide_nullity_ge_2=hide_nullity_ge_2,
+            figsize=figsize,
+            layout=layout,
+            kwargs...,
+        )
+    end
     grh = isnothing(grh) ? get_neighbor_graph_qK(model) : grh
     full_grh = grh
     layout_grh_full = use_x_space_neighbor_layout ? get_neighbor_graph_x(model) : full_grh

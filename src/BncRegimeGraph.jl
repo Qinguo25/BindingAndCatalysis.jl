@@ -65,7 +65,8 @@ function _add_bnc_edge_pair!(neighbors, from::Int, to::Int, i::Int)
 end
 
 function _add_space_halfspace_pair!(db::RegimeToHyperplanePool, e::RegimeEdge, e_rev::RegimeEdge, space::Int, c, c0, sign::Integer)
-    hid, dir = add_halfspace!(db, _sparse_rational_vec(c), c0, Int8(sign); canonicalize=true)
+    c0_exact = c0 isa ExactLogExpr ? c0 : ExactLogExpr(rationalize(Int, c0; tol=1e-10))
+    hid, dir = add_halfspace!(db, _sparse_rational_vec(c), c0_exact, Int8(sign); canonicalize=true)
     hid == 0 && return nothing
     _set_edge_idx_sign!(e, space, hid, dir)
     _set_edge_idx_sign!(e_rev, space, hid, -dir)
@@ -73,8 +74,9 @@ function _add_space_halfspace_pair!(db::RegimeToHyperplanePool, e::RegimeEdge, e
 end
 
 function _binding_xk_interface(bind_grh::RegimeGraph, edge::RegimeEdge, n_x::Int, n_k::Int)
-    x_idx, x_sign = _edge_idx_sign(edge, _EDGE_SPACE_X)
-    hp = get_hyperplane(bind_grh.hp_data[_EDGE_SPACE_X], x_idx)
+    x_space = _edge_space_index(bind_grh, :x)
+    x_idx, x_sign = _edge_idx_sign(edge, x_space)
+    hp = get_hyperplane(bind_grh.hp_data[x_space], x_idx)
     c_x, c0_x = _calc_c_c0(hp, n_x, x_sign)
     return _extend_sparsevec(c_x[:, 1], n_k), c0_x
 end
@@ -101,7 +103,7 @@ function _copy_binding_edge!(
     c_xk, c0_xk = _binding_xk_interface(bind_grh, bind_edge, n_x, n_k)
     _add_space_halfspace_pair!(hp_xk, e, e_rev, _EDGE_SPACE_BNC_XK, c_xk, c0_xk, 1)
 
-    if _edge_has_space(bind_edge, _EDGE_SPACE_QK)
+    if _edge_has_space(bind_edge, bind_grh, :qK)
         c_qK, c0_qK = _edge_qK_interface(bind_grh, bind_edge)
         c_qKk = _extend_sparsevec(c_qK, n_k)
         _add_space_halfspace_pair!(hp_qKk, e, e_rev, _EDGE_SPACE_QKK, c_qKk, c0_qK, 1)
@@ -133,7 +135,7 @@ function _copy_catalysis_edge!(
     from < to || return nothing
 
     e, e_rev = _add_bnc_edge_pair!(neighbors, from, to, cat_edge.i)
-    c_xk, c0_xk = _edge_interface(cat_grh, cat_edge, _EDGE_SPACE_XK)
+    c_xk, c0_xk = _edge_interface(cat_grh, cat_edge, :xk)
     _add_space_halfspace_pair!(hp_xk, e, e_rev, _EDGE_SPACE_BNC_XK, c_xk, c0_xk, 1)
 
     r_from = rgms[cat_idx, bind_idx]
@@ -196,15 +198,20 @@ function get_bnc_regimes_graph!(model::Bnc)
         end
     end
 
-    grh = RegimeGraph(neighbors, Any[hp_xk, hp_qKk, hp_wKk]; bn=model)
+    grh = RegimeGraph(
+        neighbors,
+        Any[hp_xk, hp_qKk, hp_wKk];
+        bn=model,
+        space_idx=Dict(:xk => _EDGE_SPACE_BNC_XK, :qKk => _EDGE_SPACE_QKK, :wKk => _EDGE_SPACE_WKK),
+    )
     _finalize_bnc_hp_incidence!(grh, _EDGE_SPACE_BNC_XK)
     _finalize_bnc_hp_incidence!(grh, _EDGE_SPACE_QKK)
     _finalize_bnc_hp_incidence!(grh, _EDGE_SPACE_WKK)
     return grh
 end
 
-get_neighbor_graph_qKk(grh::RegimeGraph; kwargs...) = _neighbor_graph_by_space(grh, _EDGE_SPACE_QKK; kwargs...)
-get_neighbor_graph_wKk(grh::RegimeGraph; kwargs...) = _neighbor_graph_by_space(grh, _EDGE_SPACE_WKK; kwargs...)
+get_neighbor_graph_qKk(grh::RegimeGraph; kwargs...) = _neighbor_graph_by_space(grh, :qKk; kwargs...)
+get_neighbor_graph_wKk(grh::RegimeGraph; kwargs...) = _neighbor_graph_by_space(grh, :wKk; kwargs...)
 
 get_neighbor_graph_qKk(model::Bnc; kwargs...) = get_neighbor_graph_qKk(get_bnc_regimes_graph!(model); kwargs...)
 get_neighbor_graph_wKk(model::Bnc; kwargs...) = get_neighbor_graph_wKk(get_bnc_regimes_graph!(model); kwargs...)

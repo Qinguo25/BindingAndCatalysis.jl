@@ -459,17 +459,17 @@ get_affine_xk2qKk(rgm::BindRegime) = let
     return M_xk, M0_xk
 end
 get_affine_x2qcat(rgm::BindRegime) = let
-    n_v = get_catalysis_network(rgm).n_v
+    r_v = get_catalysis_network(rgm).r_v
     P, P0 = get_affine_x2q(rgm)
-    P = P[1:n_v, :]
-    P0 = P0[1:n_v]
+    P = P[1:r_v, :]
+    P0 = P0[1:r_v]
     return P, P0
 end
 get_affine_x2w(rgm::BindRegime) = let
-    n_v = get_catalysis_network(rgm).n_v
+    r_v = get_catalysis_network(rgm).r_v
     P, P0 = get_affine_x2q(rgm)
-    P = P[n_v+1:end, :]
-    P0 = P0[n_v+1:end:n_v]
+    P = P[r_v+1:end, :]
+    P0 = P0[r_v+1:end]
     return P, P0
 end
 get_affine_x2K(rgm::BindRegime) = get_affine_x2K(get_binding_network(rgm))
@@ -533,6 +533,10 @@ get_C0_v(rgm::CatalysisRegime) = get_C_C0_v(rgm)[2]
 function get_CΠ(rgm::CatalysisRegime)
     get_catalysis_regime(rgm)
     return rgm.CΠ
+end
+function get_PΠ(rgm::CatalysisRegime)
+    get_catalysis_regime(rgm)
+    return rgm.PΠ
 end
 get_C_k(rgm::CatalysisRegime) = get_C_v(rgm)
 get_P_xk(rgm::CatalysisRegime) = get_N_N0_xk(rgm)[1]
@@ -660,7 +664,7 @@ end
 get_affine_xk2wKk̃k(rgm::BncRegime) = let
     M,M0 = get_affine_x2wKk̃(rgm)
     n_k = get_catalysis_network(rgm).n_v
-    M_xk = hcat(M, spdiagm(0 => ones(Int, n_k)))
+    M_xk = blockdiag(M, spdiagm(0 => ones(Int, n_k)))
     M0_xk = vcat(M0,zeros(eltype(M0), n_k))
     return M_xk, M0_xk
 end
@@ -668,17 +672,27 @@ end
 get_affine_wKk2wKk̃k(rgm::BncRegime)= let 
     d_w = get_catalysis_network(rgm).d_w
     r = get_binding_network(rgm).r
-    r_v = get_catalysis_network(rgm).r_v
+    n_v = get_catalysis_network(rgm).n_v
     blk1 = spdiagm(0 => ones(Int, d_w))
     blk2 = spdiagm(0 => ones(Int, r))
     z,z0 = get_affine_k2k̃(get_catalysis_regime(rgm))
     blk3 = let
         upper = z
-        lower = spdiagm(0 => ones(Int, r_v))
+        lower = spdiagm(0 => ones(Int, n_v))
         vcat(upper, lower)
     end
     M = blockdiag(blk1, blk2, blk3)
-    M0 = vcat(zeros(eltype(z0), d_w + r), z0, zeros(eltype(z0), r_v))
+    M0 = vcat(zeros(eltype(z0), d_w + r), z0, zeros(eltype(z0), n_v))
+    return M, M0
+end
+get_affine_wKk2wKk̃(rgm::BncRegime)= let
+    d_w = get_catalysis_network(rgm).d_w
+    r = get_binding_network(rgm).r
+    blk1 = spdiagm(0 => ones(Int, d_w))
+    blk2 = spdiagm(0 => ones(Int, r))
+    z,z0 = get_affine_k2k̃(get_catalysis_regime(rgm))
+    M = blockdiag(blk1, blk2, z)
+    M0 = vcat(zeros(eltype(z0), d_w + r), z0)
     return M, M0
 end
 
@@ -692,7 +706,7 @@ get_affine_wKk̃k2xk(rgm::BncRegime)= let
     H = rgm.H_inner
     H0 = rgm.H0_inner
     n_v = get_catalysis_network(rgm).n_v
-    H_full = hcat(H, spdiagm(0 => ones(Int, n_v)))
+    H_full = blockdiag(H, spdiagm(0 => ones(Int, n_v)))
     H0_full = vcat(H0, zeros(eltype(H0), n_v))
     return H_full, H0_full
 end
