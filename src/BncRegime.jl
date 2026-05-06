@@ -46,19 +46,8 @@ end
 
 # Determine the stability of a mixed regime
 function judge_stability!(rgm::BncRegime; kwargs...)
-    # if rgm.nlt > 1
-    #     return (rgm.is_stable = Int8(0))
-    # end
-
-    if is_singular(get_binding_regime(rgm))
-        rgm.H_bd = get_H_bd_numerically(rgm)
-        H_bd = rgm.H_bd
-    elseif isnothing(rgm.H_bd)
-        rgm.H_bd = get_H_bd_numerically(rgm)
-        H_bd = rgm.H_bd
-    else
-        H_bd = rgm.H_bd
-    end
+    isnothing(rgm.H_bd) && (rgm.H_bd = get_H_bd_numerically(rgm))
+    H_bd = rgm.H_bd
 
     code = judge_dstable(H_bd; kwargs...)
 
@@ -109,24 +98,30 @@ end
 #========================================================================================#
 
 
-
-
-function _row_valid_columns(rgms::AbstractMatrix{<:Union{BncRegime,Nothing}}, i::Int)
-    return [j for j in axes(rgms, 2) if !isnothing(rgms[i, j])]
-end
-
 function _materialize_real_vector(v)
     vv = vec(v)
     T = isempty(vv) ? Int : foldl(promote_type, map(typeof, vv); init=Int)
     return T[convert(T, x) for x in vv]
 end
 
-function _steady_state_affine(bind_rgm::BindRegime, perm, N_ss, r_v::Int, direction::Int, nlt::Int)
+function _drop_trivial_true_rows(C, C0, nlt::Integer)
+    keep = trues(size(C, 1))
+    nlt_out = Int(nlt)
+    for i in 1:size(C, 1)
+        if nnz(C[i, :]) == 0 && Float64(C0[i]) >= -1e-10
+            keep[i] = false
+            i <= nlt && (nlt_out -= 1)
+        end
+    end
+    return C[keep, :], C0[keep], nlt_out
+end
+
+function _steady_state_affine(bind_rgm::BindRegime, perm, N_ss, N0_ss, r_v::Int, direction::Int, nlt::Int)
     nlt > 1 && return nothing
 
     _, P0_bind = get_affine_x2q(bind_rgm)
     P0_ss = P0_bind[r_v + 1:end]
-    M0_ss = vcat(P0_ss, zeros(eltype(P0_ss), size(N_ss, 1)))
+    M0_ss = vcat(P0_ss, zeros(eltype(P0_ss), size(get_binding_network(bind_rgm).N, 1)), N0_ss)
 
     H_ss = if nlt == 0
         _exact_calc_H_regular(perm, N_ss)
@@ -135,96 +130,64 @@ function _steady_state_affine(bind_rgm::BindRegime, perm, N_ss, r_v::Int, direct
     end
     isnothing(H_ss) && error("Failed to build steady-state affine map for a mixed regime with nullity $nlt.")
 
-    return H_ss, vec(-(H_ss * M0_ss))
+    return sparse(H_ss), vec(-(H_ss * M0_ss))
 end
 
-function _build_row_affine_cache(rgms, i, valid_js, perms, nlt_valid, N_ss, r_v, direction)
-    bn = get_binding_network(rgms[i, first(valid_js)]::BncRegime)
-    bind_grh = get_regimes_graph!(bn; full=false)
-    valid_pos = Dict(valid_js[k] => k for k in eachindex(valid_js))
-    affine_by_perm = Dict{Tuple{Vararg{Int}},Tuple{Any,Any}}()
-    affine_by_bind_idx = Dict{Int,Tuple{Any,Any}}()
+function _rank1_inner_update_from_regular(
+    H::AbstractMatrix{<:Real},
+    H0::AbstractVector{<:Real},
+    row::Int,
+    c::SparseVector,
+    c0;
+    atol::Float64=1e-12,
+)
+    H = sparse(Float64.(H))
+    H0 = Float64.(vec(H0))
+    c_float = sparsevec(c.nzind, Float64.(c.nzval), length(c))
+    cH_dense = zeros(Float64, size(H, 2))
+    @inbounds for p in eachindex(c_float.nzind)
+        cH_dense .+= c_float.nzval[p] .* Vector(H[c_float.nzind[p], :])
+    end
+    nz = findall(!iszero, cH_dense)
+    cH = sparsevec(nz, cH_dense[nz], length(cH_dense))
+    c0H = dot(c_float, H0) + Float64(c0)
+    a = 1 + cH[row]
 
-    for seed_pos in eachindex(valid_js)
-        seed_bind_idx = valid_js[seed_pos]
-        haskey(affine_by_bind_idx, seed_bind_idx) && continue
-        nlt_valid[seed_pos] == 0 || continue
-
-        seed_rgm = rgms[i, seed_bind_idx]::BncRegime
-        get_bind_regime(seed_rgm.bind_rgm; inv_info=false)
-        seed_pair = _steady_state_affine(seed_rgm.bind_rgm, perms[seed_pos], N_ss, r_v, direction, 0)
-        seed_rgm.H_inner = seed_pair[1]
-        seed_rgm.H0_inner = seed_pair[2]
-        affine_by_bind_idx[seed_bind_idx] = seed_pair
-        affine_by_perm[Tuple(Int.(perms[seed_pos]))] = seed_pair
-
-        queue = [seed_bind_idx]
-        while !isempty(queue)
-            from_bind_idx = popfirst!(queue)
-            from_pos = valid_pos[from_bind_idx]
-            from_pair = affine_by_bind_idx[from_bind_idx]
-            from_nlt = nlt_valid[from_pos]
-
-            for edge in bind_grh.neighbors[from_bind_idx]
-                to_bind_idx = edge.to
-                haskey(valid_pos, to_bind_idx) || continue
-                haskey(affine_by_bind_idx, to_bind_idx) && continue
-
-                to_pos = valid_pos[to_bind_idx]
-                to_nlt = nlt_valid[to_pos]
-                to_nlt > 1 && continue
-
-                pair = if edge.i <= r_v
-                    from_pair
-                elseif from_nlt == 0
-                    x_idx, x_sign = _edge_idx_sign(edge, _EDGE_SPACE_X)
-                    H_to, H0_to, _, _, _ = _rank1_step_update_from_regular(
-                        from_pair[1],
-                        from_pair[2],
-                        edge.i - r_v,
-                        bn._L_helper.hyperplanes[x_idx],
-                        x_sign,
-                    )
-                    (H_to, H0_to)
-                else
-                    nothing
-                end
-                pair === nothing && continue
-
-                to_rgm = rgms[i, to_bind_idx]::BncRegime
-                to_rgm.H_inner = pair[1]
-                to_rgm.H0_inner = pair[2]
-
-                affine_by_bind_idx[to_bind_idx] = pair
-                affine_by_perm[Tuple(Int.(perms[to_pos]))] = pair
-                to_nlt == 0 && push!(queue, to_bind_idx)
-            end
-        end
+    if abs(a) <= atol
+        H_to = _sparse_outer(H[:, row], cH, -1.0)
+        H0_to = Vector(-H[:, row] .* c0H)
+        return H_to, H0_to, 1, cH, c0H
     end
 
-    for k in eachindex(valid_js)
-        nlt = nlt_valid[k]
-        nlt > 1 && continue
-        key = Tuple(Int.(perms[k]))
-
-        rgm = rgms[i, valid_js[k]]::BncRegime
-        if haskey(affine_by_perm, key)
-            pair = affine_by_perm[key]
-            rgm.H_inner = pair[1]
-            rgm.H0_inner = pair[2]
-            continue
-        end
-
-        get_bind_regime(rgm.bind_rgm; inv_info=false)
-        pair = _steady_state_affine(rgm.bind_rgm, perms[k], N_ss, r_v, direction, nlt)
-        rgm.H_inner = pair[1]
-        rgm.H0_inner = pair[2]
-        affine_by_perm[key] = pair
-    end
-
-    return affine_by_perm
+    scale = inv(a)
+    H_to = H - _sparse_outer(H[:, row], cH, scale)
+    dropzeros!(H_to)
+    H0_to = H0 - H[:, row] .* (scale * c0H)
+    return H_to, Vector(H0_to), 0, cH, c0H
 end
 
+function _catalysis_inner_update_from_regular(
+    H::AbstractMatrix{<:Real},
+    H0::AbstractVector{<:Real},
+    edge::RegimeEdge,
+    cat_grh::RegimeGraph,
+    cn::CatalysisData,
+    bn::Bnc,
+)
+    v_idx, v_sign = _edge_idx_sign(edge, cat_grh, :v)
+    hp = get_hyperplane(cat_grh.hp_data[_space(cat_grh, :v)], v_idx)
+    c_v, c0_v = _calc_c_c0(hp, cn.n_v, v_sign)
+    c_x = _sparse_rational_vec(transpose(c_v[:, 1]) * cn.Π)
+
+    flux_row = edge.i <= cn.r_v ? edge.i : edge.i - cn.r_v
+    if edge.i > cn.r_v
+        c_x = -c_x
+        c0_v = -c0_v
+    end
+
+    row = cn.d_w + bn.r + flux_row
+    return _rank1_inner_update_from_regular(H, H0, row, c_x, c0_v)
+end
 
 function _init_regular_or_nullity1_bnc_regime!(vtx::BncRegime)
     C_qKk, C0_qKk, nlt_qKk = _calc_C_C0_qKk(vtx.bind_rgm, vtx.catalysis_rgm)
@@ -266,10 +229,9 @@ end
 
 function _calc_C_C0_qKk(bind_rgm::BindRegime, cat_rgm::CatalysisRegime)
 
-    C_xk_bind, C0_xk_bind = get_C_C0_xk(bind_rgm)
     C_xk_cat, C0_xk_cat = get_C_C0_xk(cat_rgm)
-    C= vcat(C_xk_bind, C_xk_cat)
-    C0 = vcat(C0_xk_bind,C0_xk_cat)
+    C = C_xk_cat
+    C0 = C0_xk_cat
 
     if is_singular(bind_rgm)
         M,M0 = get_affine_xk2qKk(bind_rgm)    
@@ -307,8 +269,133 @@ function _calc_C_C0_wKk(rgm::BncRegime)
     C_wKk = C_wKkk*Z
     droptol!(C_wKk, 1e-10)
     C0_wKk = C_wKkk*Z0 + C0_wKkk 
-    
+    C_wKk, C0_wKk, nlt = _drop_trivial_true_rows(C_wKk, C0_wKk, nlt)
     return C_wKk, C0_wKk, nlt # change bases back to wKk
+end
+
+function _assign_inner_affine!(rgm::BncRegime, H, H0)
+    rgm.H_inner = sparse(H)
+    rgm.H0_inner = vec(H0)
+    return rgm
+end
+
+function _direct_inner_affine(rgm::BncRegime)
+    bn = get_binding_network(rgm)
+    PΠ = get_PΠ(rgm.catalysis_rgm)
+    _, P0 = get_affine_x2k̃(rgm.catalysis_rgm)
+    N_ss = vcat(bn.N, PΠ)
+    direction = _det_sign_exact(vcat(get_Lcat(bn), N_ss))
+    perm = get_fixed_point_perm(rgm)[1]
+    return _steady_state_affine(rgm.bind_rgm, perm, N_ss, P0, get_catalysis_network(rgm).r_v, direction, rgm.nlt)
+end
+
+function _same_ray(H1::AbstractMatrix{<:Real}, H2::AbstractMatrix{<:Real}; atol::Float64=1e-8)
+    v1 = vec(Float64.(Matrix(H1)))
+    v2 = vec(Float64.(Matrix(H2)))
+    i = findfirst(x -> abs(x) > atol, v1)
+    isnothing(i) && return all(abs.(v2) .<= atol)
+    scale = v2[i] / v1[i]
+    scale > 0 || return false
+    return all(abs.(v2 .- scale .* v1) .<= atol .* max(1, norm(v2, Inf)))
+end
+
+function _initialize_inner_affine_by_graph!(rgms::AbstractVector{BncRegime})
+    isempty(rgms) && return NamedTuple[]
+
+    bn = get_binding_network(first(rgms))
+    cn = get_catalysis_network(bn)
+    n_bind = n_bind_regimes(bn)
+    n_cat = n_catalysis_regimes(bn)
+    bind_grh = get_regimes_graph!(bn; full=false)
+    cat_grh = get_catalysis_regimes_graph!(bn)
+    r_v = cn.r_v
+
+    for cat_idx in 1:n_cat
+        cat_rgm = get_catalysis_regime(bn, cat_idx)
+        N_ss = vcat(bn.N, get_PΠ(cat_rgm))
+        perms = [get_fixed_point_perm(rgms[_bnc_linear_index(n_bind, bind_idx, cat_idx)])[1] for bind_idx in 1:n_bind]
+        nlt, _ = _calc_nullity(perms, N_ss)
+        for bind_idx in 1:n_bind
+            rgms[_bnc_linear_index(n_bind, bind_idx, cat_idx)].nlt = nlt[bind_idx]
+        end
+    end
+
+    assigned = falses(length(rgms))
+    inconsistencies = NamedTuple[]
+
+    for seed in eachindex(rgms)
+        rgms[seed].nlt == 0 || continue
+        assigned[seed] && continue
+
+        pair = _direct_inner_affine(rgms[seed])
+        pair === nothing && continue
+        _assign_inner_affine!(rgms[seed], pair[1], pair[2])
+        assigned[seed] = true
+
+        queue = [seed]
+        while !isempty(queue)
+            from = popfirst!(queue)
+            from_rgm = rgms[from]
+            from_rgm.nlt == 0 || continue
+            bind_idx, cat_idx = _bnc_cart_index(n_bind, from)
+
+            for edge in bind_grh.neighbors[bind_idx]
+                to = _bnc_linear_index(n_bind, edge.to, cat_idx)
+                rgms[to].nlt <= 1 || continue
+
+                H_to, H0_to = if edge.i <= r_v
+                    from_rgm.H_inner, from_rgm.H0_inner
+                else
+                    x_idx, x_sign = _edge_idx_sign(edge, bind_grh, :x)
+                    hp = get_hyperplane(bind_grh.hp_data[_space(bind_grh, :x)], x_idx)
+                    _rank1_step_update_from_regular(from_rgm.H_inner, from_rgm.H0_inner, edge.i - r_v, hp, x_sign)[1:2]
+                end
+
+                if assigned[to]
+                    rgms[to].nlt == 1 && !_same_ray(rgms[to].H_inner, sparse(Float64.(H_to))) &&
+                        push!(inconsistencies, (node=to, from=from, kind=:binding))
+                    continue
+                end
+
+                _assign_inner_affine!(rgms[to], H_to, H0_to)
+                assigned[to] = true
+                rgms[to].nlt == 0 && push!(queue, to)
+            end
+
+            for edge in cat_grh.neighbors[cat_idx]
+                to = _bnc_linear_index(n_bind, bind_idx, edge.to)
+                rgms[to].nlt <= 1 || continue
+                H_to, H0_to = _catalysis_inner_update_from_regular(
+                    from_rgm.H_inner,
+                    from_rgm.H0_inner,
+                    edge,
+                    cat_grh,
+                    cn,
+                    bn,
+                )[1:2]
+
+                if assigned[to]
+                    rgms[to].nlt == 1 && !_same_ray(rgms[to].H_inner, sparse(Float64.(H_to))) &&
+                        push!(inconsistencies, (node=to, from=from, kind=:catalysis))
+                    continue
+                end
+
+                _assign_inner_affine!(rgms[to], H_to, H0_to)
+                assigned[to] = true
+                rgms[to].nlt == 0 && push!(queue, to)
+            end
+        end
+    end
+
+    for idx in eachindex(rgms)
+        rgms[idx].nlt <= 1 || continue
+        assigned[idx] && continue
+        pair = _direct_inner_affine(rgms[idx])
+        pair === nothing && continue
+        _assign_inner_affine!(rgms[idx], pair[1], pair[2])
+    end
+
+    return inconsistencies
 end
 
 
@@ -389,73 +476,37 @@ _build_BncRegime(cat_rgms::Regimes, bind_rgms::Regimes) =
 function _build_BncRegime(cat_rgms::AbstractVector{<:CatalysisRegime}, bind_rgms::AbstractVector{<:BindRegime})
     n_cat = length(cat_rgms)
     n_bind = length(bind_rgms)
-    bncrgms = Matrix{BncRegime}(undef, n_cat, n_bind)
+    bncrgms = Vector{BncRegime}(undef, n_cat * n_bind)
 
     @info "Matching Catalysis Regimes and Binding Regimes to build BncRegimes..."
-    Threads.@threads for i in 1:n_cat
-        cat_rgm = cat_rgms[i]
-        for j in 1:n_bind
-            bind_rgm = bind_rgms[j]
-            bncrgms[i, j] = BncRegime(bind_rgm, cat_rgm)
+    Threads.@threads for cat_idx in 1:n_cat
+        cat_rgm = cat_rgms[cat_idx]
+        for bind_idx in 1:n_bind
+            bind_rgm = bind_rgms[bind_idx]
+            bncrgms[_bnc_linear_index(n_bind, bind_idx, cat_idx)] = BncRegime(bind_rgm, cat_rgm)
         end
     end
     @info "Finished matching BncRegimes."
     return bncrgms
 end
 
-function _initialize_regime!(rgms::AbstractMatrix{BncRegime})
-    r_v = size(rgms[1,1].catalysis_rgm.P, 1)
+function _initialize_regime!(rgms::AbstractVector{BncRegime})
+    isempty(rgms) && return nothing
 
     @info "Initializing BncRegimes..."
-    for i in axes(rgms, 1)
-        rowctx = _build_row_context(rgms, i, r_v)
-        rowctx === nothing && continue
+    inconsistencies = _initialize_inner_affine_by_graph!(rgms)
+    isempty(inconsistencies) || @warn "Inconsistent singular BncRegime H_inner directions found during graph propagation: $(length(inconsistencies)) cases. See `_initialize_inner_affine_by_graph!` for details."
 
-        valid_js = rowctx.valid_js
-        perms = rowctx.perms
-        nlt_valid = rowctx.nlt_valid
-
-        @showprogress Threads.@threads for k in eachindex(valid_js)
-            j = valid_js[k]
-            vtx = rgms[i, j]::BncRegime
-            perm = perms[k]
-            nlt = nlt_valid[k]
-
-            vtx.nlt = nlt
-            if nlt <=1
-                _init_regular_or_nullity1_bnc_regime!(vtx)
-            else
-                _init_consistency_only_bnc_regime!(vtx)
-            end
+    @showprogress Threads.@threads for idx in eachindex(rgms)
+        vtx = rgms[idx]
+        if vtx.nlt <= 1
+            _init_regular_or_nullity1_bnc_regime!(vtx)
+        else
+            _init_consistency_only_bnc_regime!(vtx)
         end
     end
 
     @info "Finished initializing BncRegimes."
 
     return nothing
-end
-
-
-function _build_row_context(rgms::AbstractMatrix{<:Union{BncRegime,Nothing}}, i::Int, r_v::Int)
-    valid_js = _row_valid_columns(rgms, i)
-    isempty(valid_js) && return nothing
-
-    ref_vtx = rgms[i, first(valid_js)]::BncRegime
-    bn = get_binding_network(ref_vtx)
-    
-    L_cat = get_Lcat(bn)
-    N_ss = vcat(bn.N, get_PΠ(ref_vtx.catalysis_rgm)) # The shared N for 
-    
-    direction = _det_sign_exact(vcat(L_cat, N_ss))
-
-    perms = [get_fixed_point_perm(rgms[i, j]::BncRegime)[1] for j in valid_js]
-    nlt_valid, _ = _calc_nullity(perms, N_ss)
-    affine_by_perm = _build_row_affine_cache(rgms, i, valid_js, perms, nlt_valid, N_ss, r_v, direction)
-
-    return (
-        valid_js=valid_js,
-        perms=perms,
-        nlt_valid=nlt_valid,
-        affine_by_perm=affine_by_perm,
-    )
 end

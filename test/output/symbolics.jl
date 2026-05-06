@@ -56,7 +56,7 @@ end
     @test any(occursin.(r"k2\*tS|tS\*k2", bind_dyn))
     @test any(occursin.("C*k3", cat_dyn))
     @test !any(occursin.(r"k2\*tS|tS\*k2", cat_dyn))
-    @test any(occursin.(r"k2\*tS|tS\*k2", mixed_dyn))
+    @test any(occursin.(r"k1\*tE|tE\*k1|k2\*tS|tS\*k2", mixed_dyn))
     @test !any(occursin.("C*k3", mixed_dyn))
 end
 

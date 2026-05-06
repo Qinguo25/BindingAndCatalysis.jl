@@ -16,14 +16,22 @@ end
 function _fulfill_catalysis_regimes_graph!(grh::RegimeGraph)
     cn = get_catalysis_network(grh.bn)
     z, z0 = get_affine_xk2v(cn)
-    xk_space = _edge_space_index(grh, :xk)
-    v_space = _edge_space_index(grh, :v)
+    xk_space = _space(grh, :xk)
+    v_space = _space(grh, :v)
     grh.hp_data[xk_space] = RegimeToHyperplanePool(size(z, 2))
     db = grh.hp_data[xk_space]
+    src = grh.hp_data[v_space]
 
     I = Int[]
     J = Int[]
     V = Int8[]
+
+    for hp in src.hyperplanes
+        c_xk = _sparse_rational_vec(hp * z)
+        c0_xk = hp * z0
+        push!(db.hyperplanes, RegimeHyperplane(c_xk, c0_xk))
+        db.hp_dict[get_hp_key(db.hyperplanes[end])] = length(db.hyperplanes)
+    end
 
     for p1 in eachindex(grh.neighbors)
         for e in grh.neighbors[p1]
@@ -33,13 +41,7 @@ function _fulfill_catalysis_regimes_graph!(grh::RegimeGraph)
             rev_pos = grh.edge_pos[p2][p1]
             e_rev = grh.neighbors[p2][rev_pos]
 
-            # The key is to fill the xk half space according to the v edge, which is already filled by the catalysis regime graph. We can directly use the v edge's hyperplane to get the c and c0 for xk half space.
-            v_idx, dir_v = _edge_idx_sign(e, v_space)
-            hp = get_hyperplane(grh.hp_data[v_space], v_idx) # hyperplane_perm
-            c_xk = _sparse_rational_vec(hp * z)
-            c0_xk = hp * z0
-
-            hid, dir = add_halfspace!(db, c_xk, c0_xk, dir_v; canonicalize=true)
+            hid, dir = _edge_idx_sign(e, v_space)
             hid == 0 && continue
 
             push!(I, p1); push!(J, hid); push!(V, -dir)
@@ -71,7 +73,7 @@ function get_catalysis_regimes_graph!(args...; kwargs...)
 end
 
 function _neighbor_graph_by_space(grh::RegimeGraph, space; both_side::Bool=false)
-    space_idx = _edge_space_index(grh, space)
+    space_idx = _space(grh, Symbol(space))
     n = length(grh.neighbors)
     g = SimpleDiGraph(n)
     for (i, edges) in enumerate(grh.neighbors)
@@ -87,7 +89,7 @@ end
 get_neighbor_graph_v(grh::RegimeGraph; kwargs...) = _neighbor_graph_by_space(grh, :v; kwargs...)
 get_neighbor_graph_xk(grh::RegimeGraph; kwargs...) = _neighbor_graph_by_space(grh, :xk; kwargs...)
 get_neighbor_graph(grh::RegimeGraph; edge_space=nothing, kwargs...) =
-    _neighbor_graph_by_space(grh, isnothing(edge_space) ? _default_edge_space(grh) : edge_space; kwargs...)
+    _neighbor_graph_by_space(grh, isnothing(edge_space) ? _first_space(grh, (:qK, :qKk, :xk, :wKk, :v, :x)) : edge_space; kwargs...)
 
 get_neighbor_graph_v(args...; kwargs...) = get_neighbor_graph_v(get_catalysis_regimes_graph!(args...); kwargs...)
 get_neighbor_graph_xk(args...; kwargs...) = get_neighbor_graph_xk(get_catalysis_regimes_graph!(args...); kwargs...)

@@ -62,9 +62,9 @@ end
 
 @inline _calc_c_c0(hp::Hyperplane_perm,n::Int,sign::Int8) = let 
     if sign > 0 
-        return _calc_c(hp, n, sign), ExactLogExpr(hp.num//hp.den)
+        return _calc_c(hp, n, sign), hp.c0
     else
-        return _calc_c(hp, n, sign), -ExactLogExpr(hp.den//hp.num)
+        return _calc_c(hp, n, sign), -hp.c0
     end
 end
 
@@ -214,7 +214,6 @@ function add_halfspace!(db::RegimeToHyperplanePool, c::SparseVector{<:Rational},
     return hid, sign(dir*dir_inner)
 end
 add_halfspace!(db::RegimeToHyperplanePool, hp::RegimeHyperplane, dir::Int8; canonicalize::Bool=true) = add_halfspace!(db, hp.change_dir_qK, hp.intersect_qK, dir; canonicalize=canonicalize)
-
 
 
 

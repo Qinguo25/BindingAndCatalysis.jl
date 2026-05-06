@@ -507,7 +507,7 @@ function _calc_volume_via_classifier(
     end
 
     grh = get_regimes_graph!(Bnc; full=true)
-    qK_hp_data = grh.hp_data[_EDGE_SPACE_QK]
+    qK_hp_data = grh.hp_data[_space(grh, :qK)]
     classifier = compile_classifier(
         qK_hp_data.hyperplanes,
         qK_hp_data.hp_to_poly.M,

@@ -199,7 +199,7 @@ function get_SIMO_graph(grh::RegimeGraph, change_qK)::SimpleDiGraph
     for (i, edges) in enumerate(grh.neighbors)
         get_nullity(bn, i) > 1 && continue
         for e in edges
-            if !_edge_has_qK_interface(e) || e.to < i
+            if !_edge_has_qK_interface(grh, e) || e.to < i
                 continue
             end
             val = _edge_qK_interface(grh, e)[1][change_qK_idx]

@@ -264,7 +264,7 @@ Return the qK-space adjacency matrix of the vertex graph.
 """
 function get_regimes_neighbor_mat_qK(Bnc::Bnc)
     grh = get_regimes_graph!(Bnc;full=true)
-    f(x::RegimeEdge) = _edge_has_qK_interface(x) ? 1 : 0
+    f(x::RegimeEdge) = _edge_has_qK_interface(grh, x) ? 1 : 0
     spmat = _regime_graph_to_sparse(grh; weight_fn = f)
     return spmat
 end
@@ -351,7 +351,7 @@ function get_interface_qK(Bnc, from, to)::Tuple{SparseVector{Float64,Int}, Float
     if edge === nothing
         @info "No direct regime-graph edge found; falling back to direct interface reconstruction."
         return get_interface_direct(Bnc, from, to)
-    elseif !_edge_has_qK_interface(edge)
+    elseif !_edge_has_qK_interface(grh, edge)
         @error("Vertices $get_perm(Bnc, from) and $get_perm(Bnc, to) are neighbors in x space but not in qK space")
     else
         return _edge_qK_interface(grh, edge)
@@ -409,8 +409,9 @@ function get_interface_x(Bnc::Bnc, from, to)
         @error("Vertices $get_perm(Bnc, from) and $get_perm(Bnc, to) are not neighbors in x space.")
     else 
         grh = get_regimes_graph!(Bnc; full=false)
-        x_idx, x_sign = _edge_idx_sign(edge, _EDGE_SPACE_X)
-        hp = get_hyperplane(grh.hp_data[_EDGE_SPACE_X], x_idx)
+        x_space = _space(grh, :x)
+        x_idx, x_sign = _edge_idx_sign(edge, x_space)
+        hp = get_hyperplane(grh.hp_data[x_space], x_idx)
         c, c0 = _calc_c_c0(hp, Bnc.n, x_sign)
         return c[:, 1], c0
     end

@@ -3,6 +3,7 @@
 #------------------------------------------------------------------------------
 const VertexGraph = RegimeGraph
 const VertexEdge = RegimeEdge
+const SISOPaths = SIMOPaths
 
 find_all_vertices(args...; kwargs...) = find_all_regimes(args...; kwargs...)
 find_all_vertices!(args...; kwargs...) = find_all_regimes!(args...; kwargs...)
@@ -51,7 +52,7 @@ get_C_qssKk(args...; kwargs...) = get_C_wKk(args...; kwargs...)
 get_C0_qssKk(args...; kwargs...) = get_C0_wKk(args...; kwargs...)
 show_condition_qssKk(args...; kwargs...) = show_condition_wKk(args...; kwargs...)
 show_ss_condition(args...; kwargs...) = show_condition_wKk(args...; kwargs...)
-const SISOPaths = SIMOPaths
+
 SISOPaths(args...; kwargs...) = SIMOPaths(args...; kwargs...)
 get_SISO_graph(args...; kwargs...) = get_SIMO_graph(args...; kwargs...)
 SISO_plot(args...; kwargs...) = SIMO_plot(args...; kwargs...)

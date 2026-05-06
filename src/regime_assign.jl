@@ -207,8 +207,8 @@ function _get_regime_qK_hyperplane_id_signs(grh::RegimeGraph, regime)
     Hpid_dir = Dict{Int,Int8}()
 
     for edge in grh.neighbors[idx]
-        _edge_has_qK_interface(edge) || continue
-        hid, sign = _edge_idx_sign(edge, _EDGE_SPACE_QK)
+        _edge_has_qK_interface(grh, edge) || continue
+        hid, sign = _edge_idx_sign(edge, grh, :qK)
         dir = -sign
 
         old = get(Hpid_dir, hid, dir)
@@ -231,7 +231,7 @@ function _build_qK_hyperplane_classifier(
         [get_idx(model, rgm) for rgm in filter_regimes(model, candidates; singular=false)]
     end
 
-    qK_hp_data = grh.hp_data[_EDGE_SPACE_QK]
+    qK_hp_data = grh.hp_data[_space(grh, :qK)]
     return compile_classifier(
         qK_hp_data.hyperplanes,
         qK_hp_data.hp_to_poly.M,

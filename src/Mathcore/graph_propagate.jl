@@ -696,7 +696,7 @@ function _propagate_from_regular_seed!(
 end
 
 @inline function propagate_regime!(rgm1::BindRegime, rgm2::BindRegime, edge::RegimeEdge)
-    x_idx, x_sign = _edge_idx_sign(edge, _EDGE_SPACE_X)
+    x_idx, x_sign = _edge_idx_sign(edge, 1)
     H_to, H0_to, nlt_to, _, _ = _rank1_step_update_from_regular(
         rgm1.H,
         rgm1.H0,

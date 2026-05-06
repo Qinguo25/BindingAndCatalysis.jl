@@ -48,12 +48,6 @@ using ProgressMeter
 
 
 
-
-
-
-
-
-
 export Bnc, update_catalysis!
 export ExactLogExpr, exact_log10, exact_log10_ratio
 
@@ -261,8 +255,8 @@ mutable struct BncRegime <:AbstractRegime
     is_stable::Int8 # 1 for stable, -1 for unstable, 0 for unknown # mapped from d_stable
 
     # wKk̃2x mapping, the core matrix
-    H_inner::Union{SparseMatrixCSC{Float64, Int}, Nothing}
-    H0_inner::Union{Vector{Float64}, Nothing}
+    H_inner::Union{AbstractMatrix{<:Real}, Nothing}
+    H0_inner::Union{AbstractVector{<:Real}, Nothing}
 
     nlt::Int  
     H::Union{AbstractMatrix{<:Real}, Nothing} # x's reaction order to w,K,k
@@ -289,15 +283,14 @@ mutable struct BncRegime <:AbstractRegime
     C_wKk::Union{AbstractMatrix{<:Real}, Nothing}
     C0_wKk::Union{AbstractVector{<:Real}, Nothing}
     function BncRegime(bind_rgm, catalysis_rgm)
-        
-        H_bd = if bind_rgm.nullity == 0
-            PΠ = get_PΠ(catalysis_rgm)
-            H_bind, _ = get_affine_qK2x(bind_rgm)
-            r_v = size(PΠ, 1)
-            sparse(Float64.(PΠ * H_bind[:, 1:r_v]))
+        PΠ = get_PΠ(catalysis_rgm)
+        H_bind = if bind_rgm.nullity == 0
+            get_affine_qK2x(bind_rgm)[1]
         else
-            nothing
+            get_H_numerically(bind_rgm)
         end
+        r_v = size(PΠ, 1)
+        H_bd = sparse(Float64.(PΠ * H_bind[:, 1:r_v]))
 
         return new(
             bind_rgm, 
@@ -306,7 +299,7 @@ mutable struct BncRegime <:AbstractRegime
             Int8(0), #is_stable
             nothing, # H_inner
             nothing, # H0_inner
-            
+
             -1, # nlt
             
             nothing, 

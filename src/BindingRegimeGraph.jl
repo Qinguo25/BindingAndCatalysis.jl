@@ -113,7 +113,7 @@ get_neighbor_graph_qK(grh::RegimeGraph; both_side::Bool=false)::SimpleDiGraph = 
                 continue
             end
             for e in edges
-                if !_edge_has_qK_interface(e) || (!both_side && e.to < i)
+                if !_edge_has_qK_interface(grh, e) || (!both_side && e.to < i)
                     continue
                 end
                 add_edge!(g, i, e.to)

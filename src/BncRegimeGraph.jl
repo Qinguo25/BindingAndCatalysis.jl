@@ -1,8 +1,5 @@
 export get_bnc_regimes_graph!, get_neighbor_graph_qKk, get_neighbor_graph_wKk
 
-@inline _bnc_linear_index(n_bind::Int, bind_idx::Int, cat_idx::Int) = bind_idx + (cat_idx - 1) * n_bind
-@inline _bnc_cart_index(n_bind::Int, idx::Int) = ((idx - 1) % n_bind + 1, (idx - 1) ÷ n_bind + 1)
-
 function _sparse_dot(c::SparseVector, v)
     s = zero(eltype(v))
     @inbounds for p in eachindex(c.nzind)
@@ -74,7 +71,7 @@ function _add_space_halfspace_pair!(db::RegimeToHyperplanePool, e::RegimeEdge, e
 end
 
 function _binding_xk_interface(bind_grh::RegimeGraph, edge::RegimeEdge, n_x::Int, n_k::Int)
-    x_space = _edge_space_index(bind_grh, :x)
+    x_space = _space(bind_grh, :x)
     x_idx, x_sign = _edge_idx_sign(edge, x_space)
     hp = get_hyperplane(bind_grh.hp_data[x_space], x_idx)
     c_x, c0_x = _calc_c_c0(hp, n_x, x_sign)
@@ -87,7 +84,7 @@ function _copy_binding_edge!(
     hp_qKk::RegimeToHyperplanePool,
     hp_wKk::RegimeToHyperplanePool,
     bind_grh::RegimeGraph,
-    rgms::AbstractMatrix{BncRegime},
+    rgms::AbstractVector{BncRegime},
     bind_edge::RegimeEdge,
     bind_idx::Int,
     cat_idx::Int,
@@ -101,19 +98,22 @@ function _copy_binding_edge!(
 
     e, e_rev = _add_bnc_edge_pair!(neighbors, from, to, bind_edge.i)
     c_xk, c0_xk = _binding_xk_interface(bind_grh, bind_edge, n_x, n_k)
-    _add_space_halfspace_pair!(hp_xk, e, e_rev, _EDGE_SPACE_BNC_XK, c_xk, c0_xk, 1)
+    _add_space_halfspace_pair!(hp_xk, e, e_rev, 1, c_xk, c0_xk, 1)
 
     if _edge_has_space(bind_edge, bind_grh, :qK)
         c_qK, c0_qK = _edge_qK_interface(bind_grh, bind_edge)
         c_qKk = _extend_sparsevec(c_qK, n_k)
-        _add_space_halfspace_pair!(hp_qKk, e, e_rev, _EDGE_SPACE_QKK, c_qKk, c0_qK, 1)
+        _add_space_halfspace_pair!(hp_qKk, e, e_rev, 2, c_qKk, c0_qK, 1)
     end
 
-    r_from = rgms[cat_idx, bind_idx]
-    r_to = rgms[cat_idx, bind_edge.to]
-    if get_nullity(r_from) <= 1 && get_nullity(r_to) <= 1
+    r_from = rgms[_bnc_linear_index(n_bind, bind_idx, cat_idx)]
+    r_to = rgms[_bnc_linear_index(n_bind, bind_edge.to, cat_idx)]
+    if get_nullity(r_from) <= 1
         c_wKk, c0_wKk = _xk_to_wKk_edge(c_xk, c0_xk, r_from)
-        _add_space_halfspace_pair!(hp_wKk, e, e_rev, _EDGE_SPACE_WKK, c_wKk, c0_wKk, 1)
+        _add_space_halfspace_pair!(hp_wKk, e, e_rev, 3, c_wKk, c0_wKk, 1)
+    elseif get_nullity(r_to) <= 1
+        c_wKk, c0_wKk = _xk_to_wKk_edge(-c_xk, -c0_xk, r_to)
+        _add_space_halfspace_pair!(hp_wKk, e_rev, e, 3, c_wKk, c0_wKk, 1)
     end
     return nothing
 end
@@ -124,7 +124,7 @@ function _copy_catalysis_edge!(
     hp_qKk::RegimeToHyperplanePool,
     hp_wKk::RegimeToHyperplanePool,
     cat_grh::RegimeGraph,
-    rgms::AbstractMatrix{BncRegime},
+    rgms::AbstractVector{BncRegime},
     cat_edge::RegimeEdge,
     bind_idx::Int,
     cat_idx::Int,
@@ -136,19 +136,22 @@ function _copy_catalysis_edge!(
 
     e, e_rev = _add_bnc_edge_pair!(neighbors, from, to, cat_edge.i)
     c_xk, c0_xk = _edge_interface(cat_grh, cat_edge, :xk)
-    _add_space_halfspace_pair!(hp_xk, e, e_rev, _EDGE_SPACE_BNC_XK, c_xk, c0_xk, 1)
+    _add_space_halfspace_pair!(hp_xk, e, e_rev, 1, c_xk, c0_xk, 1)
 
-    r_from = rgms[cat_idx, bind_idx]
-    r_to = rgms[cat_edge.to, bind_idx]
+    r_from = rgms[_bnc_linear_index(n_bind, bind_idx, cat_idx)]
+    r_to = rgms[_bnc_linear_index(n_bind, bind_idx, cat_edge.to)]
     bind_rgm = get_binding_regime(r_from)
     if !is_singular(bind_rgm)
         c_qKk, c0_qKk = _xk_to_qKk_edge(c_xk, c0_xk, bind_rgm)
-        _add_space_halfspace_pair!(hp_qKk, e, e_rev, _EDGE_SPACE_QKK, c_qKk, c0_qKk, 1)
+        _add_space_halfspace_pair!(hp_qKk, e, e_rev, 2, c_qKk, c0_qKk, 1)
     end
 
-    if get_nullity(r_from) <= 1 && get_nullity(r_to) <= 1
+    if get_nullity(r_from) <= 1
         c_wKk, c0_wKk = _xk_to_wKk_edge(c_xk, c0_xk, r_from)
-        _add_space_halfspace_pair!(hp_wKk, e, e_rev, _EDGE_SPACE_WKK, c_wKk, c0_wKk, 1)
+        _add_space_halfspace_pair!(hp_wKk, e, e_rev, 3, c_wKk, c0_wKk, 1)
+    elseif get_nullity(r_to) <= 1
+        c_wKk, c0_wKk = _xk_to_wKk_edge(-c_xk, -c0_xk, r_to)
+        _add_space_halfspace_pair!(hp_wKk, e_rev, e, 3, c_wKk, c0_wKk, 1)
     end
     return nothing
 end
@@ -162,7 +165,7 @@ function _finalize_bnc_hp_incidence!(grh::RegimeGraph, space::Int)
         for e in edges
             idx, sign = _edge_idx_sign(e, space)
             idx == 0 && continue
-            push!(I, i); push!(J, idx); push!(V, sign)
+            push!(I, i); push!(J, idx); push!(V, -sign)
         end
     end
     db.hp_to_poly = FacetIncidence(
@@ -175,7 +178,8 @@ end
 function get_bnc_regimes_graph!(model::Bnc)
     match_regimes!(model)
     rgms = model.BncRegimes
-    n_cat, n_bind = size(rgms)
+    n_bind = n_bind_regimes(model)
+    n_cat = n_catalysis_regimes(model)
     n_nodes = length(rgms)
     cn = get_catalysis_network(model)
 
@@ -202,11 +206,11 @@ function get_bnc_regimes_graph!(model::Bnc)
         neighbors,
         Any[hp_xk, hp_qKk, hp_wKk];
         bn=model,
-        space_idx=Dict(:xk => _EDGE_SPACE_BNC_XK, :qKk => _EDGE_SPACE_QKK, :wKk => _EDGE_SPACE_WKK),
+        space_idx=Dict(:xk => 1, :qKk => 2, :wKk => 3),
     )
-    _finalize_bnc_hp_incidence!(grh, _EDGE_SPACE_BNC_XK)
-    _finalize_bnc_hp_incidence!(grh, _EDGE_SPACE_QKK)
-    _finalize_bnc_hp_incidence!(grh, _EDGE_SPACE_WKK)
+    _finalize_bnc_hp_incidence!(grh, 1)
+    _finalize_bnc_hp_incidence!(grh, 2)
+    _finalize_bnc_hp_incidence!(grh, 3)
     return grh
 end
 

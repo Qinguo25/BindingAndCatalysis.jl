@@ -625,6 +625,7 @@ function SIMO_plot(
     path_idx::Integer;
     title="Path $path_idx",
     extend::Real = 4.0,
+    show_regime_colorbar=nothing,
     kwargs...,
 )
     model = get_binding_network(grh)
@@ -648,4 +649,15 @@ function SIMO_plot(
         title=title,
         kwargs...,
     )
+end
+
+function SIMO_plot(
+    grh::SIMOPaths,
+    path_idxs::AbstractVector{<:Integer};
+    title="Paths $(collect(path_idxs))",
+    kwargs...,
+)
+    isempty(path_idxs) && throw(ArgumentError("path_idxs must not be empty."))
+    fig, _ = SIMO_plot(grh, first(path_idxs); title=title, kwargs...)
+    return fig
 end

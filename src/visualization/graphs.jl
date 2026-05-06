@@ -64,7 +64,7 @@ function get_edge_weight_vec(Bnc::Bnc, change_qK_idx)::Vector{Tuple{Edge,Dict{Sy
     for (i, edges) in enumerate(vg.neighbors)
         get_nullity(Bnc, i) > 1 && continue
         for e in edges
-            !_edge_has_qK_interface(e) && continue
+            !_edge_has_qK_interface(vg, e) && continue
             iface = _edge_qK_interface(vg, e)
             iface === nothing && continue
             val = iface[1][change_qK_idx]
@@ -128,7 +128,7 @@ function get_edge_labels(Bnc::Bnc; half::Bool=false, f=nothing, log_space::Bool=
     for (i, edges) in enumerate(vg.neighbors)
         get_nullity(Bnc, i) > 1 && continue
         for e in edges
-            if !_edge_has_qK_interface(e) || (half && e.to < i)
+            if !_edge_has_qK_interface(vg, e) || (half && e.to < i)
                 continue
             end
             labels[Edge(i, e.to)] = render(i, e.to)
@@ -201,8 +201,8 @@ end
 end
 
 function _regime_graph_kind(grh::RegimeGraph)
-    _has_edge_space(grh, :qKk) && return :bnc
-    _has_edge_space(grh, :v) && return :catalysis
+    haskey(grh.space_idx, :qKk) && return :bnc
+    haskey(grh.space_idx, :v) && return :catalysis
     return :binding
 end
 
@@ -213,8 +213,8 @@ function _regime_graph_node_labels(grh::RegimeGraph)
     elseif kind === :catalysis
         return get_catalysis_perms(grh.bn) .|> repr .|> strip_before_bracket
     else
-        rgms = grh.bn.BncRegimes
-        n_cat, n_bind = size(rgms)
+        n_bind = n_bind_regimes(grh.bn)
+        n_cat = n_catalysis_regimes(grh.bn)
         return ["B$(b)/C$(c)" for c in 1:n_cat for b in 1:n_bind]
     end
 end
@@ -260,7 +260,7 @@ function _node_subset_by_nullity(grh::RegimeGraph; hide_nullity_ge_2::Bool=false
         model = get_binding_network(grh)
         return [i for i in 1:length(grh.neighbors) if get_nullity(model, i) <= 1]
     elseif kind === :bnc
-        return [i for i in eachindex(vec(grh.bn.BncRegimes)) if get_nullity(vec(grh.bn.BncRegimes)[i]) <= 1]
+        return [i for i in eachindex(grh.bn.BncRegimes) if get_nullity(grh.bn.BncRegimes[i]) <= 1]
     else
         return collect(1:length(grh.neighbors))
     end
@@ -387,8 +387,8 @@ function draw_graph(
     kwargs...,
 )
     plot_dim in (2, 3) || throw(ArgumentError("plot_dim must be 2 or 3."))
-    edge_space = isnothing(edge_space) ? _default_edge_space(rgm_grh) : Symbol(edge_space)
-    layout_edge_space = isnothing(layout_edge_space) ? _default_layout_edge_space(rgm_grh) : Symbol(layout_edge_space)
+    edge_space = isnothing(edge_space) ? _first_space(rgm_grh, (:qK, :qKk, :xk, :wKk, :v, :x)) : Symbol(edge_space)
+    layout_edge_space = isnothing(layout_edge_space) ? _first_space(rgm_grh, (:x, :v, :xk, :qK, :qKk, :wKk)) : Symbol(layout_edge_space)
 
     grh = get_neighbor_graph(rgm_grh; edge_space=edge_space)
     full_grh = grh

@@ -1,5 +1,8 @@
 export n_bind_regimes, n_catalysis_regimes, n_bnc_regimes
 
+@inline _bnc_linear_index(n_bind::Int, bind_idx::Int, cat_idx::Int) = bind_idx + (cat_idx - 1) * n_bind
+@inline _bnc_cart_index(n_bind::Int, idx::Int) = ((idx - 1) % n_bind + 1, (idx - 1) ÷ n_bind + 1)
+
 # Network fetch
 """
     get_binding_network(bnc_or_vertex, args...) -> Bnc
@@ -29,13 +32,6 @@ end
 get_catalysis_network(rgm::CatalysisRegime) = get_catalysis_network(rgm.network)
 get_catalysis_network(rgm::BindRegime,args...) = get_catalysis_network(rgm.network)
 get_catalysis_network(rgm::BncRegime,args...) = get_catalysis_network(rgm.catalysis_rgm)
-
-
-
-
-
-
-
 
 
 
@@ -74,7 +70,7 @@ end
 # Is the following three functions really necessary?
 @inline _bind_regimes_data(args...; kwargs...) = _bind_regimes(args...; kwargs...).vertices_data
 @inline _catalysis_regimes_data(args...; kwargs...) = _catalysis_regimes(args...; kwargs...).vertices_data
-@inline _bnc_regimes_data(args...; kwargs...) = vec(_bnc_regimes(args...; kwargs...))
+@inline _bnc_regimes_data(args...; kwargs...) = _bnc_regimes(args...; kwargs...)
 
 n_bind_regimes(args...; kwargs...) = length(_bind_regimes_data(args...; kwargs...))
 n_catalysis_regimes(args...; kwargs...) = length(_catalysis_regimes_data(args...; kwargs...))
@@ -266,7 +262,6 @@ get_catalysis_perm(model::CatalysisData, idx::Integer; kwargs...) = (find_cataly
 #==============================get index of a specific regime==========================================================================================#
 get_bind_idx(args...; kwargs...) = get_bind_regime(args...; kwargs...).idx
 get_catalysis_idx(args...; kwargs...) = get_catalysis_regime(args...; kwargs...).idx
-get_bnc_idx(args...; kwargs...) = CartesianIndex(get_bind_idx(args...; kwargs...), get_catalysis_idx(args...; kwargs...))
 get_idx(rgm::BindRegime) = get_bind_idx(rgm)
 get_idx(rgm::CatalysisRegime) = get_catalysis_idx(rgm)
 get_idx(rgm::BncRegime) = get_bnc_idx(rgm)
@@ -302,9 +297,13 @@ get_catalysis_idx(model::CatalysisData, perm::AbstractVector; kwargs...)=(get_ca
 function get_bnc_idx(model::Bnc, bind, cat; check::Bool=false)
     cat_idx = get_catalysis_idx(model, cat; check=check)
     bind_idx = get_bind_idx(model, bind; check=check)
-    return CartesianIndex(cat_idx, bind_idx)
+    return _bnc_linear_index(n_bind_regimes(model), bind_idx, cat_idx)
 end
-get_bnc_idx(rgm::BncRegime) = CartesianIndex(get_catalysis_idx(rgm.catalysis_rgm), get_bind_idx(rgm.bind_rgm))
+get_bnc_idx(rgm::BncRegime) = _bnc_linear_index(
+    n_bind_regimes(get_binding_network(rgm)),
+    get_bind_idx(rgm.bind_rgm),
+    get_catalysis_idx(rgm.catalysis_rgm),
+)
 
 
 # ==============================get nullity of a specific regime============================================================#
@@ -385,19 +384,29 @@ function _get_mask(rgms::AbstractVector{<:AbstractRegime}; kwargs...)
     return masks
 end
 
+function _get_mask(model::AbstractBnc, rgms::AbstractVector; kwargs...)
+    bn = get_binding_network(model)
+    find_all_regimes!(bn)
+    bind_rgms = get_bind_regime.(Ref(bn), rgms)
+    return _get_mask(bind_rgms; kwargs...)
+end
 
 
-function get_bind_regimes(rgms::AbstractVector{<:BindRegime}; kwargs...)
+
+function get_bind_regimes(rgms::AbstractVector{<:BindRegime}; return_idx::Bool=false, kwargs...)
     filter_func = _get_filter(; kwargs...)
-    return filter(filter_func, rgms)
+    selected = filter(filter_func, rgms)
+    return return_idx ? get_bind_idx.(selected) : selected
 end
-function get_catalysis_regimes(rgms::AbstractVector{<:CatalysisRegime}; kwargs...)
+function get_catalysis_regimes(rgms::AbstractVector{<:CatalysisRegime}; return_idx::Bool=false, kwargs...)
     filter_func = _get_filter(; kwargs...)
-    return filter(filter_func, rgms)
+    selected = filter(filter_func, rgms)
+    return return_idx ? get_catalysis_idx.(selected) : selected
 end
-function get_bnc_regimes(rgms::AbstractArray{<:BncRegime}; kwargs...)
+function get_bnc_regimes(rgms::AbstractArray{<:BncRegime}; return_idx::Bool=false, kwargs...)
     filter_func = _get_filter(; kwargs...)
-    return filter(filter_func, vec(rgms))
+    selected = filter(filter_func, vec(rgms))
+    return return_idx ? get_bnc_idx.(selected) : selected
 end
 
 """
@@ -411,6 +420,16 @@ function get_bind_regimes(Bnc::AbstractBnc, rgms::Union{Nothing,AbstractVector}=
     find_all_regimes!(bn)
     rgms = isnothing(rgms) ? _bind_regimes_data(bn) : get_bind_regime.(Ref(bn),rgms)
     return get_bind_regimes(rgms; kwargs...)
+end
+
+function filter_regimes(model::Bnc, candidates::AbstractVector; return_mask::Bool=false, kwargs...)
+    bn = get_binding_network(model)
+    find_all_regimes!(bn)
+    idxs = [get_bind_idx(bn, x) for x in candidates]
+    rgms = [get_bind_regime(bn, i) for i in idxs]
+    mask = _get_mask(rgms; kwargs...)
+    selected = idxs[mask]
+    return return_mask ? (selected, mask) : selected
 end
 
 function get_catalysis_regimes(Bnc::AbstractBnc, rgms::Union{Nothing,AbstractVector}=nothing; kwargs...)
@@ -435,6 +454,7 @@ get_bnc_perms(args...; kwargs...) = get_bnc_perm.(get_bnc_regimes(args...; kwarg
 get_bnc_indices(args...; kwargs...) = get_bnc_idx.(get_bnc_regimes(args...; kwargs...))
 get_bind_nullities(args...; kwargs...) = get_bind_nullity.(get_bind_regimes(args...; kwargs...))
 get_bnc_nullities(args...; kwargs...) = get_bnc_nullity.(get_bnc_regimes(args...; kwargs...))
+get_nullities(args...; kwargs...) = get_bind_nullities(args...; kwargs...)
 
 
 #==============================Get C, C0, nullity under different reparameterization==================================#
@@ -783,6 +803,7 @@ get_C0_wKk(rgm) = get_C_C0_nullity_wKk(rgm)[2]
 
 
 get_P_P0_x(args...; kwargs...) = get_P_P0_x(get_bind_regime(args...; inv_info=false,kwargs...)) 
+get_P_P0(args...; kwargs...) = get_P_P0_x(args...; kwargs...)
 get_P(args...; kwargs...) = get_P_P0_x(args...; kwargs...)[1]
 get_P0(args...; kwargs...) = get_P_P0_x(args...; kwargs...)[2]
 
@@ -805,13 +826,6 @@ get_M0(args...) = get_M_M0(args...)[2]
 
 
 # Basic Condition matrix in x space and v space
-
-
-
-
-
-
-
 
 
 get_C_C0_x(args...) = get_C_C0_x(get_bind_regime(args...; inv_info=false)) 

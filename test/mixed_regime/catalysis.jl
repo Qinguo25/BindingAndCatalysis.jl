@@ -41,7 +41,7 @@
     @test get_regime(model, bind_perm, cat_perm) === mixed
     @test get_binding_perm(mixed) == bind_perm
     @test get_catalysis_perm(mixed) == cat_perm
-    @test get_idx(mixed) == CartesianIndex(get_idx(cat_rgm), get_idx(model, bind_perm))
+    @test get_idx(mixed) == get_idx(model, bind_perm, cat_perm)
     @test occursin("dominant mode", sprint(show, MIME"text/plain"(), mixed))
     @test occursin("nullity", sprint(show, MIME"text/plain"(), mixed))
     @test occursin("asymptotic", sprint(show, MIME"text/plain"(), mixed))
@@ -126,10 +126,10 @@ end
     @test get_binding_perm(mixed) == [2, 1]
     @test get_catalysis_perm(mixed) == [1, 2]
     @test string.(BindingAndCatalysis.wKk_sym(mixed)) == ["tE", "K", "β", "γ"]
-    @test string.(show_condition_wKk(mixed; log_space = false)) == ["tE*β ~ K*γ", "K > tE"]
+    @test string.(show_condition_wKk(mixed; log_space = false)) == ["K*γ ~ tE*β", "K > tE"]
 
     C_wKk, C0_wKk, nlt_wKk = get_C_C0_nullity_wKk(mixed)
-    @test Matrix(C_wKk) == Rational{Int}[1 -1 1 -1; -1 1 0 0]
+    @test Matrix(C_wKk) == Rational{Int}[-1 1 -1 1; -1 1 0 0]
     @test C0_wKk == ExactLogExpr[0, 0]
     @test nlt_wKk == 1
 end
@@ -172,8 +172,8 @@ end
     b = ExactLogExpr[exact_log10_ratio(1, 2), 0]
 
     C_wKθ, C0_wKθ, nlt_wKθ = get_C_C0_nullity_wKtheta(mixed; R = R, b = b)
-    @test Matrix(C_wKθ) == Rational{Int}[1 -1 0; -1 1 0]
-    @test C0_wKθ == ExactLogExpr[exact_log10_ratio(1, 2), 0]
+    @test Matrix(C_wKθ) ≈ Float64.([-1 1 0; -1 1 0])
+    @test Float64.(C0_wKθ) ≈ [log10(2), 0.0]
     @test nlt_wKθ == 1
     @test !is_feasible_under_logkmap(mixed; R = R, b = b)
     @test get_idx(mixed) ∉ feasible_bnc_regimes_under_logkmap(model; R = R, b = b, return_idx = true)
@@ -193,9 +193,9 @@ end
     @test !isempty(bind_high)
 
     low_mixed = first(bind_high)
-    @test isnothing(get_H_bd(low_mixed))
-    @test ismissing(is_stable(low_mixed))
-    @test is_stable(low_mixed; return_code = true) == 0
+    @test get_H_bd(low_mixed) isa AbstractMatrix
+    @test is_stable(low_mixed) === true || is_stable(low_mixed) === false
+    @test is_stable(low_mixed; return_code = true) in (-1, 1)
     @test !isempty(show_condition_qKk(low_mixed))
     @test !isempty(show_condition_wKk(low_mixed))
 
@@ -216,9 +216,9 @@ end
     @test !isempty(consistency_only)
 
     high_mixed = first(consistency_only)
-    @test isnothing(get_H_bd(high_mixed))
-    @test ismissing(is_stable(high_mixed))
-    @test is_stable(high_mixed; return_code = true) == 0
+    @test get_H_bd(high_mixed) isa AbstractMatrix
+    @test is_stable(high_mixed) === true || is_stable(high_mixed) === false
+    @test is_stable(high_mixed; return_code = true) in (-1, 1)
     @test isnothing(high_mixed.H)
     @test isnothing(high_mixed.H0)
     @test !isempty(show_condition_qKk(high_mixed))

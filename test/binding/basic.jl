@@ -7,9 +7,9 @@
     @test length(show_equilibrium(model; log_space = false)) == model.r
 
     find_all_vertices!(model)
-    @test !isempty(_bind_regimes(model))
+    @test !isempty(BindingAndCatalysis._bind_regimes_data(model))
 
-    first_perm = _bind_regimes_perms(model)[1]
+    first_perm = BindingAndCatalysis._bind_regimes_perms(model)[1]
     first_idx = get_idx(model, first_perm)
     @test have_perm(model, first_perm)
     @test have_perm(model, first_idx)
@@ -51,7 +51,8 @@ end
     @test get_perms(rgms) == perms
     @test get_indices(rgms) == idxs
     @test model.vertices_graph !== nothing
-    @test all(i -> !isnothing(model.vertices_data[i].H) && !isnothing(model.vertices_data[i].H0),
+    bind_data = BindingAndCatalysis._bind_regimes_data(model)
+    @test all(i -> !isnothing(bind_data[i].H) && !isnothing(bind_data[i].H0),
         filter(i -> get_nullity(model, i) <= 1, idxs))
 
     r1_perm = perms[1]
@@ -124,8 +125,10 @@ end
     @test get_edge(vg, r2_perm, r3_perm) === nothing
     edge_21 = get_edge(vg, r2_perm, r1_perm; full = true)
     edge_12 = get_edge(vg, r1_perm, r2_perm; full = true)
-    @test edge_21.qK_interface_idx == edge_12.qK_interface_idx != 0
-    @test edge_21.qK_interface_sign == -edge_12.qK_interface_sign
+    qK_21 = BindingAndCatalysis._edge_idx_sign(edge_21, vg, :qK)
+    qK_12 = BindingAndCatalysis._edge_idx_sign(edge_12, vg, :qK)
+    @test qK_21[1] == qK_12[1] != 0
+    @test qK_21[2] == -qK_12[2]
 
     inter = get_intersect(model, r2_perm, r1_perm)
     dir, ins = get_interface(model, r2_perm, r1_perm)
@@ -275,8 +278,10 @@ end
 
     edge_21 = get_edge(vg, perms[2], perms[1]; full = true)
     edge_12 = get_edge(vg, perms[1], perms[2]; full = true)
-    @test edge_21.qK_interface_idx == edge_12.qK_interface_idx != 0
-    @test edge_21.qK_interface_sign == -edge_12.qK_interface_sign
+    qK_21 = BindingAndCatalysis._edge_idx_sign(edge_21, vg, :qK)
+    qK_12 = BindingAndCatalysis._edge_idx_sign(edge_12, vg, :qK)
+    @test qK_21[1] == qK_12[1] != 0
+    @test qK_21[2] == -qK_12[2]
 
     singular_C, singular_C0, singular_nullity = get_C_C0_nullity_qK(model, rational_singular_idx)
     singular_poly = get_polyhedron(model, rational_singular_idx)

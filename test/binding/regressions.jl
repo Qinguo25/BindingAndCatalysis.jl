@@ -72,8 +72,9 @@ end
 
     info = BindingAndCatalysis._get_regime_qK_hyperplane_id_signs(grh, 1)
     edge_12 = get_edge(grh, 1, 2; full = true)
-    @test haskey(info, edge_12.qK_interface_idx)
-    @test info[edge_12.qK_interface_idx] == -edge_12.qK_interface_sign
+    qK_12 = BindingAndCatalysis._edge_idx_sign(edge_12, grh, :qK)
+    @test haskey(info, qK_12[1])
+    @test info[qK_12[1]] == -qK_12[2]
 
     dir, ins = get_interface(model, 2, 1)
     p_from = get_one_inner_point(model, 2)
