@@ -1,10 +1,10 @@
 """
     Bnc(; N=nothing, L=nothing, x_sym=nothing, q_sym=nothing, K_sym=nothing,
-        Γ=nothing, Π=nothing, k_sym=nothing, w_sym=nothing, cat_x_idx=nothing) -> Bnc
+        Γ=nothing, Π=nothing, k_sym=nothing, v_sym=nothing, w_sym=nothing, cat_x_idx=nothing) -> Bnc
 
 Construct a binding network model from stoichiometry (`N`) or conservation (`L`)
 matrices and optional symbol metadata. Catalysis data can be attached through
-`Γ`, `Π`, `k_sym`, and `w_sym`.
+`Γ`, `Π`, `k_sym`, `v_sym`, and `w_sym`.
 
 # Keyword Arguments
 - `N`: Stoichiometry matrix (reactions × species).
@@ -15,6 +15,7 @@ matrices and optional symbol metadata. Catalysis data can be attached through
 - `Γ`: Catalysis change matrix in qK space.
 - `Π`: Catalysis index and coefficient matrix.
 - `k_sym`: Symbols for catalysis rate constants.
+- `v_sym`: Symbols for catalysis fluxes.
 - `w_sym`: Symbols for the new conservation quantities induced by catalysis.
 - `cat_x_idx`: Index of catalytic species.
 
@@ -63,7 +64,7 @@ end
 
 
 """
-    update_catalysis!(bnc::Bnc; Γ=nothing, Π=nothing, k_sym=nothing, w_sym=nothing, cat_x_idx=nothing) -> Bnc
+    update_catalysis!(bnc::Bnc; Γ=nothing, Π=nothing, k_sym=nothing, v_sym=nothing, w_sym=nothing, cat_x_idx=nothing) -> Bnc
 
 Attach or update catalysis data on a `Bnc` model in-place.
 
@@ -74,6 +75,7 @@ Attach or update catalysis data on a `Bnc` model in-place.
 - `Γ`: Catalysis change matrix in qK space.
 - `Π`: Catalysis index and coefficient matrix.
 - `k_sym`: Symbols for catalysis rate constants.
+- `v_sym`: Symbols for catalysis fluxes, where `log v = Π log x + log k`.
 - `w_sym`: Symbols for the new conservation quantities induced by catalysis.
 - `cat_x_idx`: Index of catalytic species.
 
@@ -84,6 +86,7 @@ function update_catalysis!(model::Bnc;
     Γ::Union{<:AbstractMatrix{Int},Nothing}=nothing,
     Π::Union{<:AbstractMatrix{Int},Nothing}=nothing,
     k_sym::Union{<:AbstractVector,Nothing}=nothing,
+    v_sym::Union{<:AbstractVector,Nothing}=nothing,
     w_sym::Union{<:AbstractVector,Nothing}=nothing,
     x_picked::Union{<:AbstractVector,Nothing}=nothing,
     q_picked::Union{<:AbstractVector,Nothing}=nothing,
@@ -115,8 +118,9 @@ function update_catalysis!(model::Bnc;
     end
 
     k_sym = isnothing(k_sym) ? Symbolics.variables(:k, 1:size(Π,1)) : name_converter(k_sym)
+    v_sym = isnothing(v_sym) ? Symbolics.variables(:v, 1:size(Π,1)) : name_converter(v_sym)
     w_sym = isnothing(w_sym) ? nothing : name_converter(w_sym)
-    model.catalysis = CatalysisData(model, Γ, Π, k_sym, w_sym)
+    model.catalysis = CatalysisData(model, Γ, Π, k_sym, w_sym, v_sym)
     return nothing
 end
 
@@ -205,9 +209,9 @@ function summary(model::Bnc)
     println("Direction of binding reactions: ", model.direction > 0 ? "forward" : "backward")
     catalysis_str = isnothing(model.catalysis) ? "No" : "Yes"
     println("Catalysis involved: ", catalysis_str)
-    is_regimes_built = _bind_regimes_built(model) ? "Yes" : "No"
+    is_regimes_built = is_bind_regimes_built(model) ? "Yes" : "No"
     println("Regimes constructed: ", is_regimes_built)
-    if _bind_regimes_built(model)
+    if is_bind_regimes_built(model)
         vertices = _bind_regimes_data(model)
         map = countmap((vtx.is_asymptotic, vtx.nullity > 0) for vtx in vertices)
         println("Number of regimes: ", length(vertices))
@@ -234,9 +238,9 @@ function show(io::IO, ::MIME"text/plain", bnc::Bnc)
     println(io, "Direction of binding reactions: ", bnc.direction > 0 ? "forward" : "backward")
     catalysis_str = isnothing(bnc.catalysis) ? "No" : "Yes"
     println(io, "Catalysis involved: ", catalysis_str)
-    is_regimes_built = _bind_regimes_built(bnc) ? "Yes" : "No"
+    is_regimes_built = is_bind_regimes_built(bnc) ? "Yes" : "No"
     println(io, "Regimes constructed: ", is_regimes_built)
-    if _bind_regimes_built(bnc)
+    if is_bind_regimes_built(bnc)
         vertices = _bind_regimes_data(bnc)
         map = countmap((vtx.is_asymptotic, vtx.nullity > 0) for vtx in vertices)
         println(io, "Number of regimes: ", length(vertices))

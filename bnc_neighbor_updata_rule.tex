@@ -1,23 +1,104 @@
 \documentclass[11pt]{article}
 \usepackage[margin=1in]{geometry}
-\usepackage{amsmath,amssymb}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{booktabs}
 
+\newcommand{\mat}[1]{\mathbf{#1}}
 \newcommand{\logx}{\log x}
-\newcommand{\logwk}{\log(w,K,\tilde k)}
+\newcommand{\logv}{\log v}
+\newcommand{\logk}{\log k}
+\newcommand{\et}[1]{e_{#1}^{\top}}
 
-\title{Bnc Regime Neighbor Update Rule}
+\title{Neighbor Update Rule for Bnc Regimes}
 \author{}
 \date{}
 
 \begin{document}
 \maketitle
 
-\section{Inner Affine Map}
+\section{Problem}
 
-For a fixed Bnc regime, the fixed-point inner affine map is defined by
+A Bnc regime combines one binding dominance regime and one catalysis dominance
+regime.  For stability and fixed point analysis we need the inner affine map
+from steady-state parameters to species:
 \[
-    \logwk =
-    A \logx + A_0,
+    \logx = H_{\mathrm{inner}} y + H_{0,\mathrm{inner}} .
+\]
+The expensive direct way is to invert one matrix for every Bnc regime.  The goal
+is to propagate \(H_{\mathrm{inner}}\) and \(H_{0,\mathrm{inner}}\) along the Bnc
+regime graph by rank-one updates, just as in the binding-only graph.
+
+The complication is that a Bnc edge can come from two different sources:
+\begin{itemize}
+    \item a binding edge, which changes one dominance row of \(q=Lx\);
+    \item a catalysis edge, which changes one dominance row of \(f^+\) or \(f^-\).
+\end{itemize}
+Both cases still change only one row of the inner steady-state matrix, so the
+same Sherman--Morrison update applies.
+
+\section{Variables}
+
+The binding network has species \(x\in \mathbb{R}_{>0}^n\), binding constants
+\(K\), and equilibrium equation
+\[
+    N\logx=\log K .
+\]
+The binding conservation variables are split into catalysis variables
+\(q_{\mathrm{cat}}\) and catalysis-invariant variables \(w\).  In one binding
+dominance regime,
+\[
+    \log q_{\mathrm{cat}} = P_{\mathrm{cat}}\logx + P_{0,\mathrm{cat}},
+    \qquad
+    \log w = P_w\logx + P_{0,w}.
+\]
+
+The catalysis network has fluxes
+\[
+    \logv=\Pi\logx+\logk ,
+\]
+and reduced stoichiometry \(S=S^+-S^-\).  In one catalysis dominance regime,
+\[
+    \log f^+ = P^+\logv+P_0^+,
+    \qquad
+    \log f^- = P^-\logv+P_0^- .
+\]
+Define
+\[
+    P:=P^+-P^-,
+    \qquad
+    P_0:=P_0^+-P_0^- .
+\]
+At a fixed point, \(f^+=f^-\), so
+\[
+    P\logv+P_0=0 .
+\]
+Substituting \(\logv=\Pi\logx+\logk\) gives
+\[
+    P\Pi\logx + P\logk + P_0 = 0 .
+\]
+It is convenient to introduce
+\[
+    \tilde k := -P\logk .
+\]
+Then the balance equation becomes
+\[
+    \tilde k = P\Pi\logx+P_0 .
+\]
+
+\section{Inner Matrix}
+
+Collect the fixed-point coordinates
+\[
+    y :=
+    \begin{bmatrix}
+        \log w\\
+        \log K\\
+        \tilde k
+    \end{bmatrix}.
+\]
+Within one Bnc regime,
+\[
+    y = A\logx + A_0,
     \qquad
     A =
     \begin{bmatrix}
@@ -33,85 +114,175 @@ For a fixed Bnc regime, the fixed-point inner affine map is defined by
         P_0
     \end{bmatrix}.
 \]
-When \(A\) is nonsingular,
+If \(A\) is nonsingular, then
 \[
-    \logx = H_{\mathrm{inner}}\logwk + H_{0,\mathrm{inner}},
-    \qquad
     H_{\mathrm{inner}}=A^{-1},
     \qquad
-    H_{0,\mathrm{inner}}=-A^{-1}A_0.
+    H_{0,\mathrm{inner}}=-A^{-1}A_0 .
 \]
+If \(A\) has nullity one, \(H_{\mathrm{inner}}\) is treated as a ray giving the
+singular direction.  Regimes with nullity greater than one are not propagated.
 
-\section{One-Row Neighbor Update}
+The actual user-facing steady-state coordinates are \((w,K,k)\), not
+\((w,K,\tilde k)\).  The conversion is affine:
+\[
+    \begin{bmatrix}
+        \log w\\
+        \log K\\
+        \tilde k
+    \end{bmatrix}
+    =
+    Z
+    \begin{bmatrix}
+        \log w\\
+        \log K\\
+        \log k
+    \end{bmatrix},
+    \qquad
+    Z =
+    \begin{bmatrix}
+        I & 0 & 0\\
+        0 & I & 0\\
+        0 & 0 & -P
+    \end{bmatrix}.
+\]
+After \(H_{\mathrm{inner}}\) is known, the map in \((w,K,k)\)-space is
+\[
+    H = H_{\mathrm{inner}}Z,
+    \qquad
+    H_0 = H_{\mathrm{inner}}Z_0 + H_{0,\mathrm{inner}},
+\]
+where currently \(Z_0=0\).
 
-Every Bnc graph edge changes exactly one row of \(A\):
+\section{Generic One-Row Update}
+
+Suppose two neighboring Bnc regimes differ by one row of \(A\).  Write the
+source regime as
+\[
+    y=A\logx+A_0,
+\]
+and the target regime as
+\[
+    y=A'\logx+A_0',
+\]
+where
 \[
     A' = A + e_s c,
     \qquad
-    A_0' = A_0 + e_s c_0.
+    A_0'=A_0+e_s c_0 .
 \]
-Here \(s\) is the affected row of the inner system and \(c\log x+c_0=0\) is the crossing hyperplane in \(x\)-space.
+Here \(s\) is the changed row of \(A\), and
+\[
+    c\logx+c_0=0
+\]
+is the oriented hyperplane crossed in \(x\)-space.
 
-Let
+Assume the source is regular.  Let
 \[
-    h = cH_{\mathrm{inner}},
+    H=A^{-1},
     \qquad
-    h_0 = cH_{0,\mathrm{inner}} + c_0,
+    H_0=-HA_0 .
+\]
+Define
+\[
+    h := cH,
     \qquad
-    \alpha = \frac{1}{1+h_s}.
-\]
-If \(1+h_s\neq 0\), Sherman-Morrison gives
-\[
-    H_{\mathrm{inner}}'
-    =
-    H_{\mathrm{inner}}
-    -
-    \alpha\,
-    H_{\mathrm{inner}}e_s\,h,
-\]
-and
-\[
-    H_{0,\mathrm{inner}}'
-    =
-    H_{0,\mathrm{inner}}
-    -
-    \alpha\,
-    H_{\mathrm{inner}}e_s\,h_0.
-\]
-If \(1+h_s=0\), the target regime is singular with nullity one, and the limiting ray is
-\[
-    H_{\mathrm{inner}}' =
-    -H_{\mathrm{inner}}e_s\,h,
+    h_0 := cH_0+c_0,
     \qquad
-    H_{0,\mathrm{inner}}' =
-    -H_{\mathrm{inner}}e_s\,h_0.
+    a := 1+h_s .
 \]
+The quantity \(h\,y+h_0\) is exactly the same crossing hyperplane written in the
+source \(y\)-coordinates.
+
+If \(a\ne 0\), Sherman--Morrison gives
+\[
+    H'=(A+e_sc)^{-1}
+       =H-\frac{He_s\,cH}{1+cHe_s}
+       =H-\frac{He_s\,h}{a}.
+\]
+The affine offset updates as
+\[
+    H_0'=-H'A_0'
+        =H_0-\frac{He_s\,h_0}{a}.
+\]
+Therefore the regular-to-regular update is
+\[
+    \boxed{
+    H'=H-\frac{He_s\,h}{a},
+    \qquad
+    H_0'=H_0-\frac{He_s\,h_0}{a}.
+    }
+\]
+
+If \(a=0\), the target is singular with nullity one.  The limiting ray is
+\[
+    \boxed{
+    H'\sim -He_s\,h,
+    \qquad
+    H_0'\sim -He_s\,h_0.
+    }
+\]
+This is the rule used to assign singular \(H_{\mathrm{inner}}\) directions from
+regular neighbors.
 
 \section{Binding Edge}
 
-For a binding graph edge, only the binding permutation changes. If the changed binding row is a \(q_{\mathrm{cat}}\) row, then neither \(P_w\) nor \(P\Pi\) changes, so
+A binding edge changes one row of the binding dominance permutation.  Let the
+changed binding row be \(i\), with source dominant species \(j_1\) and target
+dominant species \(j_2\).  The oriented crossing hyperplane is
 \[
-    A'=A,\qquad H_{\mathrm{inner}}'=H_{\mathrm{inner}}.
+    c\logx+c_0=0,
+    \qquad
+    c=\et{j_2}-\et{j_1},
+    \qquad
+    c_0=\log\frac{L_{i,j_2}}{L_{i,j_1}},
 \]
-If the changed binding row is a \(w\) row, say row \(a\), then
+after applying the stored edge orientation.
+
+There are two cases.
+
+\subsection*{Changed row is in \(q_{\mathrm{cat}}\)}
+
+If \(i\le r_v\), the row belongs to \(P_{\mathrm{cat}}\).  The inner matrix
 \[
-    s=a,
-    \qquad
-    c=e_{j_2}^{\top}-e_{j_1}^{\top},
-    \qquad
-    c_0=\log\frac{L_{a,j_2}}{L_{a,j_1}},
+    A=\begin{bmatrix}P_w\\N\\P\Pi\end{bmatrix}
 \]
-after accounting for the stored edge orientation. The generic one-row update applies directly.
+does not contain \(P_{\mathrm{cat}}\).  Hence
+\[
+    A'=A,
+    \qquad
+    H_{\mathrm{inner}}'=H_{\mathrm{inner}}.
+\]
+This edge changes dominance conditions but not the fixed-point inner map.
+
+\subsection*{Changed row is in \(w\)}
+
+If \(i>r_v\), the row belongs to \(P_w\).  Its row index inside \(A\) is
+\[
+    s=i-r_v .
+\]
+Then
+\[
+    A'=A+e_s c,
+    \qquad
+    A_0'=A_0+e_sc_0,
+\]
+and the generic one-row update applies.
 
 \section{Catalysis Edge}
 
-A catalysis edge changes one row in the flux dominance matrix. Let its oriented flux-space hyperplane be
+A catalysis edge changes one row of \(P^+\) or \(P^-\).  Let its oriented
+hyperplane in \(v\)-space be
 \[
-    c_v\log v+c_{0,v}=0,
-    \qquad
-    \log v=\Pi\log x+\log k.
+    c_v\logv+c_{0,v}=0.
 \]
-If the edge changes the positive flux dominance of fixed-point equation \(a\), then
+Since \(\logv=\Pi\logx+\logk\), the \(x\)-part of this hyperplane is
+\[
+    c_v\Pi\logx+c_{0,v}.
+\]
+
+If the edge changes the positive flux dominance for fixed-point equation \(a\),
+then \(P=P^+-P^-\) changes with the same sign:
 \[
     s=d_w+r+a,
     \qquad
@@ -119,7 +290,8 @@ If the edge changes the positive flux dominance of fixed-point equation \(a\), t
     \qquad
     c_0=c_{0,v}.
 \]
-If it changes the negative flux dominance of fixed-point equation \(a\), then \(P=P^+-P^-\) changes with the opposite sign:
+If the edge changes the negative flux dominance, then \(P=P^+-P^-\) changes with
+the opposite sign:
 \[
     s=d_w+r+a,
     \qquad
@@ -127,10 +299,133 @@ If it changes the negative flux dominance of fixed-point equation \(a\), then \(
     \qquad
     c_0=-c_{0,v}.
 \]
-Again the same one-row update applies.
+Again \(A'=A+e_sc\) and \(A_0'=A_0+e_sc_0\), so the same one-row rule applies.
 
-\section{Singular Direction Check}
+\section{Why Singular Rays Can Disagree}
 
-For nullity-one targets, \(H_{\mathrm{inner}}\) is a ray. If two regular neighbors propagate into the same singular Bnc regime, the propagated matrices should be positive scalar multiples only when the determinant orientation is globally coherent. In mixed Bnc regimes this orientation is not guaranteed by the binding-network positivity argument, because the bottom block \(P\Pi\) is produced by catalysis dominance rather than conservation. The implementation therefore records when two propagated singular rays are not positive scalar multiples.
+In the binding-only graph, the matrix is
+\[
+    M=\begin{bmatrix}P\\N\end{bmatrix}.
+\]
+Because \(P\) comes from positive conservation laws and \(LN^\top=0\), the
+near-singular direction has a coherent orientation across the binding graph.
+For Bnc regimes, however,
+\[
+    A=\begin{bmatrix}P_w\\N\\P\Pi\end{bmatrix}.
+\]
+The lower block \(P\Pi\) comes from flux dominance, not from the binding
+conservation structure.  A singular Bnc node can therefore be reached through
+different regular neighbors whose limiting rays are not positive scalar
+multiples.  The implementation records these cases instead of silently choosing
+one as canonical.
+
+\section{Toggle Example}
+
+For the first toggle-switch model, one inconsistent singular node is Bnc node
+\(4\), with
+\[
+    \text{binding perm}=[1,2,6,5],
+    \qquad
+    \text{catalysis perm}=[3,4,1,2].
+\]
+The inner coordinate order is
+\[
+    (tD_1,tD_2,K_1,K_2,\tilde k_1,\tilde k_2),
+\]
+and the species order is
+\[
+    (P_1,P_2,D_1,D_2,C_1,C_2).
+\]
+
+\subsection*{Path A: binding neighbor}
+
+Path A comes from node \(2\), whose binding permutation is
+\([1,2,3,5]\), with the same catalysis permutation \([3,4,1,2]\).  The changed
+binding row is the first \(w\)-row, so \(s=1\).  The source inverse is
+\[
+H_A=
+\begin{bmatrix}
+ 1&0&0&0&-1&0\\
+-1&1&1&0&1&-1\\
+ 1&0&0&0&0&0\\
+-1&1&1&0&1&0\\
+ 0&1&0&0&0&0\\
+ 0&1&1&-1&1&-1
+\end{bmatrix}.
+\]
+The oriented hyperplane gives
+\[
+    h_A=cH_A=(-1,1,1,-1,1,-1),
+    \qquad
+    h_{0,A}=0,
+    \qquad
+    a_A=1+(h_A)_1=0.
+\]
+Thus the target is singular and
+\[
+    H_A'\sim -H_Ae_1h_A.
+\]
+Since \(H_Ae_1=(1,-1,1,-1,0,0)^\top\),
+\[
+H_A'=
+\begin{bmatrix}
+ 1&-1&-1&1&-1&1\\
+-1&1&1&-1&1&-1\\
+ 1&-1&-1&1&-1&1\\
+-1&1&1&-1&1&-1\\
+ 0&0&0&0&0&0\\
+ 0&0&0&0&0&0
+\end{bmatrix}.
+\]
+
+\subsection*{Path B: catalysis neighbor}
+
+Path B comes from node \(36\), whose binding permutation is already
+\([1,2,6,5]\), but whose catalysis permutation is \([3,4,5,2]\).  The changed
+catalysis row updates the first balance equation, so \(s=5\).  The source
+inverse is
+\[
+H_B=
+\begin{bmatrix}
+-1&2&1&-1&1&-1\\
+ 1&-1&0&1&-1&0\\
+ 0&1&0&0&1&0\\
+ 1&-1&0&1&-1&1\\
+ 0&1&0&0&0&0\\
+ 1&0&0&0&0&0
+\end{bmatrix}.
+\]
+The catalysis edge gives
+\[
+    h_B=cH_B=(1,-1,-1,1,-1,1),
+    \qquad
+    h_{0,B}=0,
+    \qquad
+    a_B=1+(h_B)_5=0.
+\]
+Therefore
+\[
+    H_B'\sim -H_Be_5h_B.
+\]
+Since \(H_Be_5=(1,-1,1,-1,0,0)^\top\),
+\[
+H_B'=
+\begin{bmatrix}
+-1&1&1&-1&1&-1\\
+ 1&-1&-1&1&-1&1\\
+-1&1&1&-1&1&-1\\
+ 1&-1&-1&1&-1&1\\
+ 0&0&0&0&0&0\\
+ 0&0&0&0&0&0
+\end{bmatrix}.
+\]
+
+Thus
+\[
+    H_B'=-H_A'.
+\]
+They describe the same one-dimensional linear subspace but opposite rays.  The
+current consistency check requires a positive scalar multiple, so this is
+reported as an inconsistent singular \(H_{\mathrm{inner}}\) direction.
 
 \end{document}

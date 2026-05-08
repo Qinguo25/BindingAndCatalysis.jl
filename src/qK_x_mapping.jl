@@ -1,4 +1,5 @@
-export x2qK, qK2x, x_traj_with_qK_change, x_traj_with_q_change, x_traj_cat, qK_traj_cat, q_traj_cat
+export x2qK, qK2x, qK2x_residual, benchmark_qK2x_methods
+export x_traj_with_qK_change, x_traj_with_q_change, x_traj_cat, qK_traj_cat, q_traj_cat, catalysis_logx
 
 # ----------------Functions for mapping between qK space and x space----------------------------------
 
@@ -82,7 +83,8 @@ Map from totals/binding constants (`qK`) to species concentrations `x`.
 - `startlogx`: Initial guess for log10(x).
 - `startlogqK`: Initial log10(qK) for homotopy.
 - `use_vtx`: Use regime-based closed form when `true`.
-- `method`: Solver method (`:homotopy` or NonlinearSolve symbol).
+- `method`: Solver method. Supported built-ins are `:homotopy`, `:free_energy`,
+  `:newton_nullspace`, `:nlsolve`, and `:regime`.
 - `reltol`, `abstol`: Solver tolerances.
 - `kwargs...`: Passed through to the solver.
 
@@ -100,30 +102,42 @@ function qK2x(Bnc::Bnc, qK::AbstractVector{<:Real};
     abstol = 1e-10,
     kwargs...
 )::Vector{Float64}
-    # Map from qK space to x space using homotopy or nonlinear solving.
-    #---Solve the homotopy ODE to find x from qK.---
-
-    # Define the start point 
-    
-
     endlogqK = input_logspace ? qK : log10.(qK)
 
-    helper = use_vtx ? nothing : _integration_helper!(Bnc)
-
     logx = if use_vtx
-            perm = assign_regime_qK(Bnc,endlogqK; input_logspace=true,asymptotic_only=false)
-            H,H0 = get_H_H0(Bnc,perm)
-            H* endlogqK .+ H0
-        elseif ismissing(method) || method != :homotopy
+            _logqK2logx_regime(Bnc, endlogqK)
+        elseif method === :regime
+            _logqK2logx_regime(Bnc, endlogqK)
+        elseif method === :free_energy
+            _logqK2logx_free_energy(
+                Bnc,
+                endlogqK;
+                startlogx=startlogx,
+                reltol=reltol,
+                abstol=abstol,
+                kwargs...,
+            )
+        elseif method === :newton_nullspace || method === :nullspace
+            _logqK2logx_nullspace_newton(
+                Bnc,
+                endlogqK;
+                startlogx=startlogx,
+                reltol=reltol,
+                abstol=abstol,
+                kwargs...,
+            )
+        elseif ismissing(method) || method !== :homotopy
+            helper = _integration_helper!(Bnc)
             _logqK2logx_nlsolve(Bnc,
                 endlogqK;
                 startlogx = isnothing(startlogx) ? copy(helper._anchor_log_x) : Float64.(startlogx),
-                method=method,
+                method=method === :nlsolve ? missing : method,
                 reltol=reltol,
                 abstol=abstol,
                 kwargs...
             )
         else
+            helper = _integration_helper!(Bnc)
             if isnothing(startlogqK) || isnothing(startlogx)
                 # If no starting point is provided, use the default
                 # Make deep copies to avoid shared state in threaded environment
@@ -200,54 +214,297 @@ Solve for `logx` given `logqK` using a nonlinear solver.
 function _logqK2logx_nlsolve(Bnc::Bnc, logqK::AbstractArray{<:Real,1};
     startlogx::Union{Vector{<:Real},Nothing}=nothing,
     method ::Union{Symbol,Missing} = missing,
+    reltol=1e-10,
+    abstol=1e-10,
+    maxiters::Integer=80,
+    damping::Bool=true,
     kwargs...
 )::Vector{<:Real}
     n = Bnc.n
     d = Bnc.d
-    #---Solve the nonlinear equation to find x from qK.---
     helper = _integration_helper!(Bnc)
 
-    startlogx = isnothing(startlogx) ? copy(helper._anchor_log_x) : startlogx
-
-    resid = Vector{Float64}(undef, n)
-
+    u = isnothing(startlogx) ? copy(helper._anchor_log_x) : Float64.(startlogx)
+    logqK = Float64.(logqK)
     logq = @view logqK[1:d]
     logK = @view logqK[d+1:end]
 
     J = copy(helper._LN_sparse)
     x = Vector{Float64}(undef, n)
     q = Vector{Float64}(undef, d)
-    x_M_view = @view x[helper._LN_top_cols] # view for faster updating J
-    q_M_view = @view q[helper._LN_top_rows] # view for faster updating J
-    M_top = @view J.nzval[helper._LN_top_idx] # view for faster updating J
+    resid = Vector{Float64}(undef, n)
+    x_M_view = @view x[helper._LN_top_cols]
+    q_M_view = @view q[helper._LN_top_rows]
+    M_top = @view J.nzval[helper._LN_top_idx]
     L_nzval = copy(helper._LN_sparse.nzval[helper._LN_top_idx])
+    target_tol = max(abstol, reltol * max(1.0, norm(logqK, Inf)))
+    prev_norm = Inf
 
-    params = (; x, q, logq, logK, J, x_M_view, q_M_view, M_top)
+    for _ in 1:maxiters
+        @. x = exp10(u)
+        mul!(q, Bnc.L, x)
+        @. q = max(q, 1e-300)
+        @views resid[1:d] .= log10.(q) .- logq
+        @views resid[d+1:end] .= Bnc.N * u .- logK
+        res_norm = norm(resid, Inf)
+        res_norm <= target_tol && return u
 
-
-    keep_manifold! = function(resid, u, p) 
-        logq, logK = p
-        resid[1:d] .= log10.(Bnc.L * exp10.(u)) .- logq
-        resid[d+1:end] .= Bnc.N * u .- logK
-        return resid
-    end
-
-    manifold_jac! = function(J,u,p) # to have the same signature as keep_manifold!()
-        @unpack x,q,logq,J,x_M_view,q_M_view, M_top = p
-        # update jac for the current logx     
-        @. x = exp10(u) # update x
-        q .= Bnc.L * x #update q
         @. M_top = x_M_view * L_nzval / q_M_view
-        return J
+        Δ = J \ resid
+
+        step = 1.0
+        if damping
+            accepted = false
+            while step >= 2.0^-40
+                u_try = u .- step .* Δ
+                trial_resid = qK2x_residual(Bnc, u_try, logqK; input_logspace=true)
+                trial_norm = norm(trial_resid, Inf)
+                if isfinite(trial_norm) && trial_norm < min(prev_norm, res_norm)
+                    u .= u_try
+                    prev_norm = trial_norm
+                    accepted = true
+                    break
+                end
+                step *= 0.5
+            end
+            accepted || (u .-= Δ)
+        else
+            u .-= Δ
+        end
     end
 
-    prob = NonlinearProblem(keep_manifold!, startlogx, params; resid_prototype=zeros(n), jac = manifold_jac!, jac_prototype=J)
-    
-    sol = solve(prob, method; kwargs...)
-    if !SciMLBase.successful_retcode(sol.retcode)
-        @warn("Nonlinear solver did not converge successfully. Retcode: $(sol.retcode)")
+    @warn "Full-space qK2x Newton iteration reached maxiters=$maxiters"
+    return u
+end
+
+function _logqK2logx_regime(Bnc::Bnc, logqK::AbstractArray{<:Real,1})::Vector{Float64}
+    perm = assign_regime_qK(Bnc, logqK; input_logspace=true, asymptotic_only=false)
+    H, H0 = get_H_H0(Bnc, perm)
+    return Vector{Float64}(H * logqK .+ H0)
+end
+
+function _logq_from_logx(Bnc::Bnc, logx::AbstractVector{<:Real})
+    logx = Float64.(logx)
+    L = Bnc.L
+    out = Vector{Float64}(undef, size(L, 1))
+    @inbounds for i in axes(L, 1)
+        best = -Inf
+        for j in axes(L, 2)
+            Lij = L[i, j]
+            iszero(Lij) && continue
+            best = max(best, log10(Float64(Lij)) + logx[j])
+        end
+        if !isfinite(best)
+            out[i] = -Inf
+            continue
+        end
+        s = 0.0
+        for j in axes(L, 2)
+            Lij = L[i, j]
+            iszero(Lij) && continue
+            s += exp10(log10(Float64(Lij)) + logx[j] - best)
+        end
+        out[i] = best + log10(s)
     end
-    return sol.u
+    return out
+end
+
+function qK2x_residual(Bnc::Bnc, logx::AbstractVector{<:Real}, qK::AbstractVector{<:Real}; input_logspace::Bool=false)
+    logqK = input_logspace ? Float64.(qK) : log10.(Float64.(qK))
+    d = Bnc.d
+    r = Bnc.r
+    resid = Vector{Float64}(undef, d + r)
+    resid[1:d] .= _logq_from_logx(Bnc, logx) .- @view(logqK[1:d])
+    resid[d+1:end] .= Bnc.N * Float64.(logx) .- @view(logqK[d+1:end])
+    return resid
+end
+
+function _logqK2logx_free_energy(
+    Bnc::Bnc,
+    logqK::AbstractVector{<:Real};
+    startlogx::Union{AbstractVector{<:Real},Nothing}=nothing,
+    reltol=1e-10,
+    abstol=1e-10,
+    maxiters::Integer=80,
+    damping::Bool=true,
+    warn_on_maxiters::Bool=true,
+    kwargs...,
+)::Vector{Float64}
+    d = Bnc.d
+    logqK = Float64.(logqK)
+    logq = @view logqK[1:d]
+    logK = @view logqK[d+1:end]
+    L = Matrix{Float64}(Bnc.L)
+    N = Matrix{Float64}(Bnc.N)
+    G = -transpose(N) * ((N * transpose(N)) \ Float64.(logK))
+    λ = if isnothing(startlogx)
+        zeros(Float64, d)
+    else
+        (L * transpose(L)) \ (L * (Float64.(startlogx) .+ G))
+    end
+
+    F = Vector{Float64}(undef, d)
+    q = Vector{Float64}(undef, d)
+    x = Vector{Float64}(undef, Bnc.n)
+    logx = Vector{Float64}(undef, Bnc.n)
+    J = Matrix{Float64}(undef, d, d)
+    target_tol = max(abstol, reltol * max(1.0, norm(logqK, Inf)))
+    prev_norm = Inf
+
+    for _ in 1:maxiters
+        logx .= transpose(L) * λ .- G
+        @. x = exp10(logx)
+        mul!(q, L, x)
+        @. q = max(q, 1e-300)
+        @. F = log10(q) - logq
+        res_norm = norm(F, Inf)
+        res_norm <= target_tol && return copy(logx)
+
+        J .= (L * Diagonal(x) * transpose(L))
+        @inbounds for i in axes(J, 1)
+            J[i, :] ./= (log(10.0) * q[i])
+        end
+        Δ = J \ F
+
+        step = 1.0
+        if damping
+            accepted = false
+            while step >= 2.0^-40
+                λ_try = λ .- step .* Δ
+                x_try = exp10.(transpose(L) * λ_try .- G)
+                q_try = max.(L * x_try, 1e-300)
+                F_try = log10.(q_try) .- logq
+                trial_norm = norm(F_try, Inf)
+                if isfinite(trial_norm) && trial_norm < min(prev_norm, res_norm)
+                    λ .= λ_try
+                    prev_norm = trial_norm
+                    accepted = true
+                    break
+                end
+                step *= 0.5
+            end
+            accepted || (λ .-= Δ)
+        else
+            λ .-= Δ
+        end
+    end
+
+    warn_on_maxiters && @warn "Free-energy qK2x Newton iteration reached maxiters=$maxiters"
+    return Vector{Float64}(transpose(L) * λ .- G)
+end
+
+function _logqK2logx_nullspace_newton(
+    Bnc::Bnc,
+    logqK::AbstractVector{<:Real};
+    startlogx::Union{AbstractVector{<:Real},Nothing}=nothing,
+    reltol=1e-10,
+    abstol=1e-10,
+    maxiters::Integer=80,
+    damping::Bool=true,
+    robust_start::Bool=true,
+    kwargs...,
+)::Vector{Float64}
+    d = Bnc.d
+    r = Bnc.r
+    logqK = Float64.(logqK)
+    q = exp10.(@view logqK[1:d])
+    logK = Float64.(view(logqK, d + 1:length(logqK)))
+    L = Matrix{Float64}(Bnc.L)
+    N = Matrix{Float64}(Bnc.N)
+    B = transpose(N)
+    x0 = transpose(L) * ((L * transpose(L)) \ q)
+    logx_start = if isnothing(startlogx) && robust_start
+        _logqK2logx_free_energy(Bnc, logqK; reltol=reltol, abstol=abstol, maxiters=maxiters)
+    elseif isnothing(startlogx)
+        log10.(max.(x0, eps()))
+    else
+        Float64.(startlogx)
+    end
+    m = (transpose(B) * B) \ (transpose(B) * (exp10.(logx_start) .- x0))
+
+    F = Vector{Float64}(undef, r)
+    J = Matrix{Float64}(undef, r, r)
+    target_tol = max(abstol, reltol * max(1.0, norm(logK, Inf)))
+    prev_norm = Inf
+
+    for _ in 1:maxiters
+        x = x0 .+ B * m
+        if any(x .<= 0)
+            robust_start || throw(ArgumentError("Nullspace Newton left the positive domain. Pass robust_start=true or a positive startlogx."))
+            return _logqK2logx_free_energy(Bnc, logqK; startlogx=logx_start, reltol=reltol, abstol=abstol, maxiters=maxiters)
+        end
+        F .= N * log10.(x) .- logK
+        res_norm = norm(F, Inf)
+        res_norm <= target_tol && return log10.(x)
+
+        J .= N * (Diagonal(1.0 ./ (log(10.0) .* x)) * B)
+        Δ = J \ F
+        step = 1.0
+        if damping
+            accepted = false
+            while step >= 2.0^-40
+                m_try = m .- step .* Δ
+                x_try = x0 .+ B * m_try
+                if all(>(0), x_try)
+                    trial_norm = norm(N * log10.(x_try) .- logK, Inf)
+                    if isfinite(trial_norm) && trial_norm < min(prev_norm, res_norm)
+                        m .= m_try
+                        prev_norm = trial_norm
+                        accepted = true
+                        break
+                    end
+                end
+                step *= 0.5
+            end
+            accepted || (m .-= Δ)
+        else
+            m .-= Δ
+        end
+    end
+
+    x = x0 .+ B * m
+    if robust_start
+        start = all(x .> 0) ? log10.(x) : logx_start
+        return _logqK2logx_free_energy(Bnc, logqK; startlogx=start, reltol=reltol, abstol=abstol, maxiters=maxiters, warn_on_maxiters=false)
+    end
+    @warn "Nullspace qK2x Newton iteration reached maxiters=$maxiters"
+    return log10.(x)
+end
+
+function benchmark_qK2x_methods(
+    Bnc::Bnc,
+    qKs;
+    methods=(:free_energy, :homotopy, :newton_nullspace, :nlsolve, :regime),
+    input_logspace::Bool=true,
+    reference_method::Symbol=:free_energy,
+    kwargs...,
+)
+    cols = qKs isa AbstractMatrix ? [qKs[:, i] for i in axes(qKs, 2)] : collect(qKs)
+    refs = Dict{Int,Vector{Float64}}()
+    for (i, qK) in pairs(cols)
+        refs[i] = qK2x(Bnc, qK; input_logspace=input_logspace, output_logspace=true, method=reference_method, kwargs...)
+    end
+
+    results = NamedTuple[]
+    for method in methods
+        failures = 0
+        max_resid = 0.0
+        max_ref_err = 0.0
+        elapsed = @elapsed begin
+            for (i, qK) in pairs(cols)
+                try
+                    logx = qK2x(Bnc, qK; input_logspace=input_logspace, output_logspace=true, method=method, kwargs...)
+                    resid = qK2x_residual(Bnc, logx, qK; input_logspace=input_logspace)
+                    max_resid = max(max_resid, norm(resid, Inf))
+                    max_ref_err = max(max_ref_err, norm(logx .- refs[i], Inf))
+                catch err
+                    failures += 1
+                end
+            end
+        end
+        push!(results, (; method, elapsed, failures, max_resid, max_ref_err, n=length(cols)))
+    end
+    return results
 end
 
 
@@ -569,14 +826,17 @@ end
     # M_lu: SparseArrays.UMFPACK.UmfpackLU{Float64,Int}  # LU decomposition of M
 Cache container for catalysis time-course integration.
 """
-struct TimecurveParam{V<:Vector{Float64}}
-    logk::V  # log10(k)
-    x::V 
-    q::V
-    v::V 
-    f::V 
+struct TimecurveParam{V<:Vector{Float64},SV<:SubArray}
+    logk::V
+    x_scaled::V
+    q_scaled::V
+    logv::V
+    v_scaled::V
+    qdot_scaled::V
+    rhs::V
     M::SparseMatrixCSC{Float64,Int}
     M_lu::SparseArrays.UMFPACK.UmfpackLU{Float64,Int}
+    M_top::SV
 end
 
 """
@@ -585,14 +845,18 @@ Get the catalysis parameter for ODE f construction
 function get_catalysis_param(model::Bnc, k)
     @assert have_catalysis(model) "Should fill catalysis data first"
     helper = _integration_helper!(model)
-    logk = log10.(k)
-    x = Vector{Float64}(undef, model.n)  # Buffer
-    q = Vector{Float64}(undef, model.d)  # Buffer
-    v = Vector{Float64}(undef, length(logk))  # Catalysis flux buffer (log scale)
-    f = zeros(model.n)  # Catalysis rate vector
-    M = copy(helper._LN_sparse)  # Sparse [L; N]
-    M_lu = deepcopy(helper._LN_lu)  # LU decomp
-    TimecurveParam(logk, x, q, v, f, M, M_lu)
+    logk = log10.(Float64.(k))
+    cn = model.catalysis
+    x_scaled = Vector{Float64}(undef, model.n)
+    q_scaled = Vector{Float64}(undef, model.d)
+    logv = Vector{Float64}(undef, cn.n_v)
+    v_scaled = Vector{Float64}(undef, cn.n_v)
+    qdot_scaled = Vector{Float64}(undef, cn.r_v)
+    rhs = zeros(Float64, model.n)
+    M = copy(helper._LN_sparse)
+    M_lu = lu(M)
+    M_top = @view M.nzval[helper._LN_top_idx]
+    TimecurveParam(logk, x_scaled, q_scaled, logv, v_scaled, qdot_scaled, rhs, M, M_lu, M_top)
 end
 
 """
@@ -601,77 +865,35 @@ return the f(du,u,p,t) for ODE solver
 function get_catalysis_ode(model::Bnc)
     @assert have_catalysis(model) "Should fill catalysis data first"
     helper = _integration_helper!(model)
-    # No longer need L_nzval as log10, since we avoid exp10 in matrix updates
+    cn = model.catalysis
+    L_nzval = Float64.(helper._LN_sparse.nzval[helper._LN_top_idx])
 
-    @inline function update_M_lu(M_lu, M, max_try=100)
+    function f(du, u, p::TimecurveParam, t)
+        @unpack logk, x_scaled, q_scaled, logv, v_scaled, qdot_scaled, rhs, M, M_lu, M_top = p
+
+        mul!(logv, cn._Π_sparse, u)
+        logv .+= logk
+
+        u_shift = maximum(u)
+        @. x_scaled = exp10(u - u_shift)
+        mul!(q_scaled, model.L, x_scaled)
+        @. q_scaled = max(q_scaled, 1e-300)
+        @. M_top = L_nzval * x_scaled[helper._LN_top_cols] / q_scaled[helper._LN_top_rows]
+
         lu!(M_lu, M, check=false)
-        try_count = 0
-        while !issuccess(M_lu) && try_count < max_try
-            # Clamp to prevent extreme values (though less needed now)
-            # clamp!(M.nzval, 1e-100, 1e100)
-            # Perturb diagonal elements slightly
-            @. M.nzval[helper._LN_top_diag_idx] += 1e-10 * rand()  # Random small perturbation
-            lu!(M_lu, M, check=false)
-            try_count += 1
-        end
-        if try_count == max_try
-            @error("M is still singular after maximum perturbation attempts.")
-        end
-    end
+        issuccess(M_lu) || error("Catalysis logx Jacobian is singular at t=$t.")
 
-    function f(du, u, p::TimecurveParam, t) 
-        @unpack logk, x, q, v, f, M, M_lu = p
+        v_shift = maximum(logv)
+        @. v_scaled = exp10(logv - v_shift)
+        mul!(qdot_scaled, cn.S, v_scaled)
 
-        # Compute v = Π * u + logk  (log10(v_cat))
-        mul!(v, model.catalysis._Π_sparse, u)
-        v .+= logk
+        fill!(rhs, 0.0)
+        scale = exp10(v_shift - u_shift) / log(10.0)
+        @views @. rhs[1:cn.r_v] = scale * qdot_scaled / q_scaled[1:cn.r_v]
 
-        # Stably compute f[1:d] = Λ_q^{-1} * Γ * 10^v  (where 10^v = v_cat)
-        # And simultaneously compute scaled x and q for M update
-        # Scale for x: exp10(u) = 10^{max_u} * exp10(u - max_u)
-        max_u = maximum(u)
-        @. x = exp10.(u - max_u)  # x_scaled in (0,1]
-        mul!(q, model.L, x)  # q_scaled = L * x_scaled
-        @. q = max(q, 1e-300)  # Floor to avoid div-by-zero or tiny denoms
-
-        # Update M top block: diag(1/q_scaled) * L * diag(x_scaled)
-        # This is equivalent to (L * exp10(u)) ./ q but scaled: since exp10(u) = 10^{max_u} x_scaled, q = 10^{max_u} q_scaled
-        # So (L exp10(u)) ./ q = (L * 10^{max_u} x_scaled) ./ (10^{max_u} q_scaled) = (L x_scaled) ./ q_scaled
-        # We scale L copy in-place for efficiency
-        # M_top = @view M[1:model.d, :]  # View of top block (L part)
-        # Reset M_top to original L values (assuming M was initialized with [L; N] as Float64)
-        M.nzval[helper._LN_top_idx] .= model.L.nzval  # Reset to L values
-        # Scale columns by x_scaled
-        for j = 1:model.n
-            for p = M.colptr[j]:(M.colptr[j+1]-1)
-                if M.rowval[p] <= model.d  # Only top block
-                    M.nzval[p] *= x[j]
-                end
-            end
-        end
-        # Scale rows by 1 ./ q
-        for j = 1:model.n
-            for p = M.colptr[j]:(M.colptr[j+1]-1)
-                row = M.rowval[p]
-                if row <= model.d
-                    M.nzval[p] /= q[row]
-                end
-            end
-        end
-        # Bottom block remains N (unchanged)
-
-        # Now update LU
-        update_M_lu(M_lu, M)
-
-        # Compute f[1:d] using stable_Linv_Γexp10: (Γ * 10^v) ./ (L * 10^u) = Λ_q^{-1} Γ v_cat
-        @view(f[1:model.d]) .= stable_Linv_Γexp10(model.L, model.catalysis._Γ_sparse, u, v)
-        fill!(@view(f[model.d+1:end]), 0.0)  # Last r are 0
-
-        # Solve du = M_lu \ f
-        ldiv!(du, M_lu, f)
-        if any(isnan, du)
-            @error("du has NaN values, cannot proceed.")
-        end
+        ldiv!(du, M_lu, rhs)
+        any(!isfinite, du) && error("Catalysis ODE produced non-finite du at t=$t.")
+        return nothing
     end
 end
 
@@ -722,7 +944,7 @@ function catalysis_logx(Bnc::Bnc, logx0::Vector{<:Real}, tspan::Tuple{Real,Real}
     f = get_catalysis_ode(Bnc)
     # Create the ODE problem
     prob = ODE.ODEProblem(f, logx0, tspan, p)
-    sol = ODE.solve(prob, alg; reltol=reltol, abstol=abstol, kwargs...)
+    sol = ODE.solve(prob, isnothing(alg) ? ODE.Tsit5() : alg; reltol=reltol, abstol=abstol, kwargs...)
     return sol
 end
 

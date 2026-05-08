@@ -1,12 +1,16 @@
 # BindingAndCatalysis.jl
 
-BindingAndCatalysis.jl models equilibrium binding networks and catalysis-driven dynamics. It provides tools to:
+BindingAndCatalysis.jl analyzes equilibrium binding networks and catalysis-driven
+slow dynamics in dominance-regime coordinates.
 
-- construct binding networks from stoichiometry or conservation laws
-- enumerate regimes (vertices) defined by dominant species
-- map between concentration space (`x`) and total/binding-constant space (`qK`)
-- analyze regime graphs and SIMO (single-input/multi-output) paths
-- visualize regimes, regime interfaces, and trajectories
+It provides tools for:
+
+- building binding models from `N` or `L`
+- mapping between species concentrations `x` and totals/constants `(q,K)`
+- enumerating binding, catalysis, and mixed Bnc regimes
+- constructing regime graphs in several charts
+- checking fixed-point consistency and structural stability
+- plotting regime graphs, SIMO sweeps, and 2D/3D regime partitions
 
 ## Installation
 
@@ -18,9 +22,7 @@ Pkg.develop(path="/path/to/BindingAndCatalysis.jl")
 Pkg.instantiate()
 ```
 
-多面体计算后端现在统一使用 `Polyhedra.jl` 与 `CDDLib.jl`，不再需要仓库内置的本地 `cdd/cddlog` 编译流程。
-
-To work with the examples, activate the Examples environment:
+For notebooks and plotting examples:
 
 ```julia
 using Pkg
@@ -28,104 +30,157 @@ Pkg.activate("Examples")
 Pkg.instantiate()
 ```
 
-## Quick start
+The polyhedral backend uses `Polyhedra.jl` and `CDDLib.jl`.
 
-Below is a minimal binding network for monomer-dimer binding:
+## Quick Start: Binding Model
 
 ```julia
 using BindingAndCatalysis
-using CairoMakie
 
-model = let
-    N = [1 1 -1]
-    x_sym = [:E, :S, :C]
-    q_sym = [:tE, :tS]
-    K_sym = [:K]
-    Bnc(N = N, x_sym = x_sym, q_sym = q_sym, K_sym = K_sym)
-end
+binding = Bnc(
+    N = [1 1 -1],
+    x_sym = [:S, :E, :C],
+    q_sym = [:tS, :tE],
+    K_sym = [:K],
+)
 
-show_conservation(model)           # q = Lx
-show_equilibrium(model)            # K and x equilibrium expressions
-summary(model)
+show_conservation(binding)
+show_equilibrium(binding)
 ```
 
-### Regime enumeration and queries
+Map between `qK` and `x` in log10 coordinates:
 
 ```julia
-find_all_vertices!(model)
-get_vertices_perm_dict(model)
-
-vtx = get_vertex(model, 1)
-show_condition_x(vtx)
-show_condition_qK(vtx)
-
-get_P_P0(vtx)
-get_H_H0(vtx)
-get_C_C0_nullity(vtx)
+logqK = [0.0, 0.0, -1.0]
+logx = qK2x(binding, logqK; input_logspace=true, output_logspace=true)
+qK2x_residual(binding, logx, logqK; input_logspace=true)
 ```
 
-### Regime graphs and SIMO paths
+Available `qK2x` methods:
 
 ```julia
-vtx_grh = get_vertices_graph!(model, full=true)
-
-# qK neighbor graph
-qk_graph = get_neighbor_graph_qK(model)
-
-# single-input/multi-output paths
-paths = SIMOPaths(model, :tS)
-summary(paths; show_volume=false)
-show_expression_path(paths, 1; log_space=false)
+qK2x(binding, logqK; method=:free_energy, input_logspace=true, output_logspace=true)
+qK2x(binding, logqK; method=:newton_nullspace, input_logspace=true, output_logspace=true)
+qK2x(binding, logqK; method=:homotopy, input_logspace=true, output_logspace=true)
+qK2x(binding, logqK; method=:nlsolve, input_logspace=true, output_logspace=true)
+qK2x(binding, logqK; method=:regime, input_logspace=true, output_logspace=true) # predictor
 ```
 
-### Mapping between qK and x
+`method=:free_energy` is the robust pointwise default.  `method=:homotopy` is
+for path-following when the path itself matters.
+
+## Regimes and Graphs
 
 ```julia
-logqK = randomize(model, 1; log_lower=-6, log_upper=6)[1]
-logx = qK2x(model, logqK; input_logspace=true, output_logspace=true)
-logqK_back = x2qK(model, logx; input_logspace=true, output_logspace=true)
+rgms = get_regimes(binding)
+grh = get_regimes_graph!(binding; full=true)
+
+draw_graph(grh; chart=:x)
+draw_graph(grh; chart=:qK)
 ```
 
-## Notebook walkthrough
+`draw_graph` uses `chart` to choose which edge hyperplanes to display.  Supported
+charts are:
 
-The best end-to-end tutorial is in [`Examples/Minimal_example.ipynb`](Examples/Minimal_example.ipynb). It walks through:
+- binding graphs: `:x`, `:qK`
+- catalysis graphs: `:v`, `:xk`
+- Bnc graphs: `:xk`, `:qKk`, `:wKk`
 
-- model construction and symbol helpers
-- regime enumeration and classification
-- regime graph visualization and interfaces
-- numerical mapping between `qK` and `x`
-- more advanced SIMO path analysis
-
-To run the notebook, make sure Jupyter is configured with Julia via IJulia.jl. Follow the official IJulia documentation to install and register the Julia kernel: <https://julialang.github.io/IJulia.jl/stable/>. When installing Julia for the first time, you may want to add a multi-threaded Jupyter kernel so the notebook can take advantage of multiple CPU threads. For example:
+## Adding Catalysis
 
 ```julia
-installkernel(
-    "Julia (multi threads)",
-    env = Dict(
-        "JULIA_NUM_THREADS" => "auto",
-        # Enable this if you are working on a remote machine (e.g. via SSH)
-        # and want changes in your package source code to take effect
-        # immediately in Jupyter via Revise.jl.
-        # "JULIA_REVISE_POLL" => "1"
-    )
+model = Bnc(
+    N = [1 0 1 -1 0;
+         0 1 1  0 -1],
+    x_sym = [:S, :P, :E, :C1, :C2],
+    q_sym = [:tS, :tP, :tE],
+    K_sym = [:K1, :K2],
+)
+
+Π = [1 0 0 0 0;
+     0 1 0 0 0]
+
+Γ = [1 -1;
+    -1  1]
+
+update_catalysis!(
+    model;
+    Π = Π,
+    Γ = Γ,
+    x_picked = [:C1, :C2],
+    q_picked = [:tP, :tS],
+    w_sym = [:TS],
+)
+
+bnc_rgms = get_bnc_regimes(model)
+bnc_grh = get_bnc_regimes_graph!(model)
+draw_graph(bnc_grh; chart=:wKk)
+```
+
+## Visualization
+
+Binding regime partition:
+
+```julia
+plot_binding_regime_partition(
+    model;
+    axes = [:TS, :tP],
+    fixed = Dict(:tE => 0, :K1 => -1, :K2 => 1),
+    ranges = (-6, 6),
+    n = 300,
+    chart = :x,
 )
 ```
 
-This creates a Jupyter kernel named “Julia (multi threads)” with automatic multi-thread configuration.
+Invalid or infeasible grid points are transparent.
 
-## API overview
+Bnc fixed-point partition:
 
-Core entry points:
+```julia
+plot_bnc_regime_partition(
+    model;
+    axes = [:K1, :k1],
+    fixed = Dict(:TS => 0, :tE => 0, :K2 => 0, :k2 => 0),
+    chart = :wKk,
+)
+```
 
-- `Bnc(; N, L, x_sym, q_sym, K_sym, S, aT, k, cat_x_idx)` for model creation
-- `find_all_vertices!(model)` to enumerate regimes
-- `get_vertex(model, idx_or_perm)` for regime objects
-- `get_vertices_graph!(model)` and `get_neighbor_graph_qK(model)` for graphs
-- `qK2x` / `x2qK` for numerical mapping
-- `show_condition_*` and `show_expression_*` for symbolic inspection
+SIMO sweep:
 
-See the inline docstrings in `src/` for full details.
+```julia
+SIMO_plot(
+    binding,
+    [0.0, -1.0],
+    :tS;
+    observe_x = [:S, :C],
+    show_regime_label = true,
+)
+```
+
+## Symbol Helpers
+
+Symbolic helpers return `Symbolics.Num` values:
+
+```julia
+x_sym(model), q_sym(model), K_sym(model), qK_sym(model)
+k_sym(model), v_sym(model), wKk_sym(model)
+```
+
+Plain-symbol helpers return `Vector{Symbol}`:
+
+```julia
+x_symbol(model), q_symbol(model), K_symbol(model), qK_symbol(model)
+k_symbol(model), v_symbol(model), wKk_symbol(model)
+```
+
+## Documentation
+
+- [Archetecture.md](Archetecture.md): current internal architecture
+- [Examples/Minimal_example.ipynb](Examples/Minimal_example.ipynb): step-by-step
+  binding-regime workflow
+- [noback/Visualization_demo.ipynb](noback/Visualization_demo.ipynb): generated
+  visualization examples
 
 ## License
 
-See [`LICENSE`](LICENSE).
+See [LICENSE](LICENSE).

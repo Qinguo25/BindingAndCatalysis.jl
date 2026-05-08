@@ -339,8 +339,9 @@ mutable struct CatalysisData <:AbstractBnc
     d_w::Int # total number of reduced conserved quantities collected into w, (r_v+d_w = d)
     a_w::Int # split row: L_w[1:a_w, :] is old dependent-part, L_w[a_w+1:end, :] is former parameter part
 
-    # symbols of k
+    # symbols of k and v, with log v = Π log x + log k
     k_sym::Vector{Num}
+    v_sym::Vector{Num}
 
 
     # helper parameters for fast calculation, used for fast calculation of H and C_qK
@@ -354,13 +355,15 @@ mutable struct CatalysisData <:AbstractBnc
     CatalysisRegimes::Union{Regimes,Nothing} # Using Any for placeholder for CatalysisRegimes
     vertices_graph::Union{Any,Nothing}
 
-    function CatalysisData(bn,Γ, Π, k_sym, w_sym=nothing)
+    function CatalysisData(bn,Γ, Π, k_sym, w_sym=nothing, v_sym=nothing)
         Γ = sparse(Γ)
         Π = sparse(Π)
         d_wv, nv = size(Γ)
         n = size(Π,2)
+        v_sym = isnothing(v_sym) ? Symbolics.variables(:v, 1:nv) : name_converter(v_sym)
         # Validation
         @assert size(Π,1) == length(k_sym) == nv "Γ's column number have to meet with total flux number and k_sym"
+        @assert length(v_sym) == nv "v_sym length must match the number of fluxes"
         @assert n == bn.n "Π's column number have to meet with the number of species n in the binding network"
         L_Γ, pivits = left_nullspace_integer(Γ)
 
@@ -385,7 +388,7 @@ mutable struct CatalysisData <:AbstractBnc
 
         new(bn, Γ, Π, S, L_Γ,
             r_v, nv, d_w, a_w,
-            k_sym, _S_sparse, _Π_sparse,
+            k_sym, v_sym, _S_sparse, _Π_sparse,
             S_pos_neg, _S_helper, nothing,nothing)
     end
 end

@@ -4,6 +4,7 @@ K_sym(args...) = get_binding_network(args...).K_sym
 qK_sym(args...) = [q_sym(args...); K_sym(args...)]
 
 k_sym(args...) = get_catalysis_network(args...).k_sym
+v_sym(args...) = get_catalysis_network(args...).v_sym
 
 function q_cat_sym(args...)
     bn = get_binding_network(args...)
@@ -20,6 +21,22 @@ end
 @inline xk_sym(args...) = [x_sym(args...); k_sym(args...)]
 @inline qKk_sym(args...) = [q_sym(args...); K_sym(args...); k_sym(args...)]
 @inline wKk_sym(args...) = [w_sym(args...); K_sym(args...); k_sym(args...)]
+
+_to_plain_symbol(x::Symbol) = x
+_to_plain_symbol(x::Num) = Symbol(x.val.name)
+_to_plain_symbol(x) = Symbol(x)
+
+x_symbol(args...) = _to_plain_symbol.(x_sym(args...))
+q_symbol(args...) = _to_plain_symbol.(q_sym(args...))
+K_symbol(args...) = _to_plain_symbol.(K_sym(args...))
+qK_symbol(args...) = _to_plain_symbol.(qK_sym(args...))
+k_symbol(args...) = _to_plain_symbol.(k_sym(args...))
+v_symbol(args...) = _to_plain_symbol.(v_sym(args...))
+q_cat_symbol(args...) = _to_plain_symbol.(q_cat_sym(args...))
+w_symbol(args...) = _to_plain_symbol.(w_sym(args...))
+xk_symbol(args...) = _to_plain_symbol.(xk_sym(args...))
+qKk_symbol(args...) = _to_plain_symbol.(qKk_sym(args...))
+wKk_symbol(args...) = _to_plain_symbol.(wKk_sym(args...))
 
 @inline _time_sym() = Symbolics.variable(:t)
 @inline _d_dt(syms) = Symbolics.Differential(_time_sym()).(syms)

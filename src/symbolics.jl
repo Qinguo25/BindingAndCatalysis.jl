@@ -1,4 +1,5 @@
-export x_sym, q_sym, K_sym, k_sym, qK_sym, q_cat_sym, w_sym, wKk_sym
+export x_sym, q_sym, K_sym, k_sym, v_sym, qK_sym, xk_sym, qKk_sym, q_cat_sym, w_sym, wKk_sym
+export x_symbol, q_symbol, K_symbol, k_symbol, v_symbol, qK_symbol, xk_symbol, qKk_symbol, q_cat_symbol, w_symbol, wKk_symbol
 export ∂logqK_∂logx_sym, ∂logx_∂logqK_sym, logder_qK_x_sym, logder_x_qK_sym
 export show_condition_poly, show_condition_x, show_condition_qK, show_condition
 export show_condition_xk, show_condition_qKk, show_condition_wKk, show_consistency_condition

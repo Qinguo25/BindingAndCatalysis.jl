@@ -49,8 +49,10 @@ function _xk_to_wKk_edge(c_xk::SparseVector, c0_xk, rgm::BncRegime)
     H, H0 = get_affine_wKk2x(rgm)
     c_x, c_k = _split_xk(c_xk, size(H, 1))
     c_wK = _sparse_rational_vec(transpose(c_x) * H)
+    k_offset = length(c_wK) - length(c_k)
+    c_wKk = c_wK + sparsevec(c_k.nzind .+ k_offset, c_k.nzval, length(c_wK))
     c0_wK = c0_xk + _sparse_dot(c_x, H0)
-    return _combine_prefix_suffix(c_wK, c_k), c0_wK
+    return c_wKk, c0_wK
 end
 
 function _add_bnc_edge_pair!(neighbors, from::Int, to::Int, i::Int)
