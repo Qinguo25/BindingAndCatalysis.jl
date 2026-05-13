@@ -1,4 +1,4 @@
-export n_bind_regimes, n_catalysis_regimes, n_bnc_regimes
+export n_bind_regimes, n_catalysis_regimes, n_bnc_regimes, get_binding_network, get_catalysis_network
 
 @inline _bnc_linear_index(n_bind::Int, bind_idx::Int, cat_idx::Int) = bind_idx + (cat_idx - 1) * n_bind
 @inline _bnc_cart_index(n_bind::Int, idx::Int) = ((idx - 1) % n_bind + 1, (idx - 1) ÷ n_bind + 1)
@@ -231,7 +231,10 @@ function get_bnc_regime(model::Bnc, bind, cat; check::Bool=false)
     rgm = model.BncRegimes[idx]
     return rgm
 end
-
+function get_bnc_regime(model::Bnc, idx::Integer; kwargs...)
+    match_regimes!(model)
+    return get_bnc_regimes(model)[idx]
+end
 
 
 

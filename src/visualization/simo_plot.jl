@@ -14,7 +14,27 @@ function _full_qK(params::AbstractVector{<:Real}, change_idx::Integer, q::Real)
     return out
 end
 
-function _simo_logx_grid(model::Bnc, params, change_idx, qvals; regime_line::Bool=false, method::Symbol=:free_energy)
+function _simo_logx_grid(model::Bnc, params, change_idx, qvals; method::Symbol=:free_energy, show_params::Bool=false)
+    if show_params
+        qK_syms = qK_symbol(model)
+        deleteat!(qK_syms, change_idx)
+        ps = Dict(zip(qK_syms, params))
+        println("Using parameters: ", ps)
+    end
+    if method === :homotopy
+        start_qK = _full_qK(params, change_idx, first(qvals))
+        end_qK = _full_qK(params, change_idx, last(qvals))
+        _, xs = x_traj_with_qK_change(
+            model,
+            start_qK,
+            end_qK;
+            input_logspace=true,
+            output_logspace=true,
+            npoints=length(qvals),
+        )
+        return reduce(hcat, xs)
+    end
+
     out = Matrix{Float64}(undef, model.n, length(qvals))
     Threads.@threads for i in eachindex(qvals)
         out[:, i] = qK2x(
@@ -22,7 +42,7 @@ function _simo_logx_grid(model::Bnc, params, change_idx, qvals; regime_line::Boo
             _full_qK(params, change_idx, qvals[i]);
             input_logspace=true,
             output_logspace=true,
-            method=regime_line ? :regime : method,
+            method= method,
         )
     end
     return out
@@ -86,6 +106,7 @@ function SIMO_plot(
     region_alpha::Real=0.12,
     region_colormap=:rainbow,
     size=(760, 500),
+    show_params::Bool=true,
     title=nothing,
 )
     change_idx = locate_sym_qK(model, change_idx)
@@ -98,8 +119,8 @@ function SIMO_plot(
     qvals = collect(range(Float64(start), Float64(stop); length=max(npoints, 2)))
     x_idx, xsyms, _ = _normalize_simo_observe_x(model, observe_x)
 
-    logx = _simo_logx_grid(model, params, change_idx, qvals; method=method)
-    rgm_logx = add_regime_line ? _simo_logx_grid(model, params, change_idx, qvals; regime_line=true) : nothing
+    logx = _simo_logx_grid(model, params, change_idx, qvals; method=method, show_params=show_params)
+    rgm_logx = add_regime_line ? _simo_logx_grid(model, params, change_idx, qvals; method=:regime) : nothing
     rgms = _simo_assign_rgms(model, logx)
     runs = _simo_rgm_runs(qvals, rgms)
     rgm_cmap = get_color_map(unique(rgms); colormap=region_colormap)

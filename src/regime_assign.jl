@@ -1,4 +1,5 @@
 export assign_regime, assign_regime_qK, assign_regime_x
+export condition_contains, solve_logx_checked, assign_bnc_regime_wKk
 
 #-----------------------------------------------------------------
 # Functions for assigning vertices
@@ -30,19 +31,7 @@ Base.length(c::CompiledClassifier) = length(c.regime_ids)
 
 # Given a point decide the signature of which side of each hyperplane it is on
 
-function _classifier_error(kind::Symbol, logqK, sig; candidate_ids=Int[])
-    msg =
-        kind === :nonunique ? "qK hyperplane classifier is not unique" :
-        kind === :nocandidate ? "qK hyperplane classifier found no candidate regime" :
-        error("unknown classifier error kind: $kind")
 
-    error(
-        msg * ": " *
-        "logqK=$(repr(collect(logqK))), " *
-        "signature=$(repr(collect(sig))), " *
-        "candidate_ids=$(repr(Int.(candidate_ids)))"
-    )
-end
 
 
 
@@ -264,7 +253,7 @@ function assign_regime_qK(Bnc::Bnc ; x::AbstractVector{<:Real}, input_logspace::
     return assign_regime_qK(Bnc, logqK; input_logspace=true, kwargs...)
 end
 """
-    assign_regime_qK(bnc::Bnc, qK; input_logspace=false, asymptotic_only=false, eps=0, return_idx=false, strict=true)
+    assign_regime_qK(bnc::Bnc, qK; input_logspace=false, asymptotic_only=false, eps=0, return_idx=false)
 
 Assign a regime given qK coordinates.
 """
@@ -290,21 +279,22 @@ function assign_regime_qK(
         idx = Int(candidate_ids[1])
         return return_idx ? idx : get_perm(Bnc, idx)
     elseif isempty(candidate_ids) 
-        _classifier_error(:nocandidate, logqK, sig)
+        msg = "qK hyperplane classifier found no candidate regime"
+        # @error(msg * ": logqK=$(repr(collect(logqK))), signature=$(repr(collect(sig)))")
+        return _assign_regime_qK_fallback(
+            Bnc,
+            logqK;
+            asymptotic_only=asymptotic_only,
+            eps=eps,
+            return_idx=return_idx,
+            warn_on_fallback=false,
+        )
     else
-        _classifier_error(:nonunique, logqK, sig; candidate_ids=candidate_ids)
+        msg = "qK hyperplane classifier is not unique"
+        error(msg * ": logqK=$(repr(collect(logqK))), signature=$(repr(collect(sig))), candidate_ids=$(repr(Int.(candidate_ids)))")
+        return nothing
     end
-
-    return _assign_regime_qK_fallback(
-        Bnc,
-        logqK;
-        asymptotic_only=asymptotic_only,
-        eps=eps,
-        return_idx=return_idx,
-        warn_on_fallback=true,
-    )
 end
-
 
 #-------------------------------------------------------------------------------------------------------------------------------------------------------
 
@@ -358,32 +348,49 @@ Alias for `assign_regime_qK`.
 """
 assign_regime(args...;kwargs...)=assign_regime_qK(args...;kwargs...)
 
-# function _assign_regime_qK_fallback(
-#     Bnc::Bnc,
-#     logqK::AbstractVector{<:Real};
-#     asymptotic_only::Bool=false,
-#     eps=0,
-#     return_idx::Bool=false,
-#     warn_on_fallback::Bool=true,
-# )
-#     real_only = asymptotic_only ? true : nothing
-#     all_vertice_idx = get_regimes(Bnc, singular=false, asymptotic = real_only, return_idx = true)
+function condition_contains(C, C0, nullity::Integer, z::AbstractVector{<:Real}; tol::Float64=1e-8)
+    vals = Vector{Float64}(C * z .+ C0)
+    nullity > 0 && any(abs.(vals[1:nullity]) .> tol) && return false
+    length(vals) > nullity && any(vals[nullity + 1:end] .< -tol) && return false
+    return true
+end
 
-#     record = Vector{Float64}(undef,length(all_vertice_idx))
-#     for (i, idx) in enumerate(all_vertice_idx)
-#         C, C0 = get_C_C0_qK(Bnc, idx)
-#         min_val = if !asymptotic_only
-#             minimum(C * logqK .+ C0)
-#         else
-#             minimum(C * logqK)
-#         end
-#         record[i] = min_val
+function assign_bnc_regime_wKk(model::Bnc, logwKk::AbstractVector{<:Real}; tol::Float64=1e-8, max_nullity::Integer=0)
+    rgms = get_bnc_regimes(model)
+    for (idx, rgm) in pairs(rgms)
+        C, C0, nlt = get_C_C0_nullity_wKk(rgm)
+        nlt <= max_nullity || continue
+        condition_contains(C, C0, nlt, logwKk; tol=tol) && return idx
+    end
+    return 0
+end
 
-#         if record[i] >= -eps
-#             return return_idx ? idx : get_perm(Bnc, idx)
-#         end
-#     end
-#     warn_on_fallback && @warn("All vertex conditions failed for logqK=$logqK. Returning the best-fit vertex.")
-#     idx = all_vertice_idx[findmax(record)[2]]
-#     return return_idx ? idx : get_perm(Bnc, idx)
-# end
+function _assign_regime_qK_fallback(
+    Bnc::Bnc,
+    logqK::AbstractVector{<:Real};
+    asymptotic_only::Bool=false,
+    eps=0,
+    return_idx::Bool=false,
+    warn_on_fallback::Bool=true,
+)
+    real_only = asymptotic_only ? true : nothing
+    all_vertice_idx = get_regimes(Bnc, singular=false, asymptotic = real_only, return_idx = true)
+
+    record = Vector{Float64}(undef,length(all_vertice_idx))
+    for (i, idx) in enumerate(all_vertice_idx)
+        C, C0 = get_C_C0_qK(Bnc, idx)
+        min_val = if !asymptotic_only
+            minimum(C * logqK .+ C0)
+        else
+            minimum(C * logqK)
+        end
+        record[i] = min_val
+
+        if record[i] >= -eps
+            return return_idx ? idx : get_perm(Bnc, idx)
+        end
+    end
+    warn_on_fallback && @warn("All vertex conditions failed for logqK=$logqK. Returning the best-fit vertex.")
+    idx = all_vertice_idx[findmax(record)[2]]
+    return return_idx ? idx : get_perm(Bnc, idx)
+end

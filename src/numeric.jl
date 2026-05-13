@@ -1,4 +1,4 @@
-export logder_x_qK, logder_qK_x, ∂logx_∂logqK, ∂logqK_∂logx
+export logder_x_qK, logder_qK_x, ∂logx_∂logqK, ∂logqK_∂logx, get_H_numerically
 
 #----------------Functions for calculates the derivative of log(x) with respect to log(qK) and vice versa----------------------
 
@@ -145,7 +145,7 @@ function get_H_numerically(rgm::BindRegime)
     bn = get_binding_network(rgm)
     C, C0 = get_C_C0_x(rgm)
     poly = get_polyhedron(C, C0, 0; canonicalize=true)
-    logx = get_one_inner_point(poly, rand_line=false, rand_ray=false, extend=3)
+    logx = get_one_inner_point(poly, rand_line=false, rand_ray=false, extend=4)
     H = logder_x_qK(bn; x=logx, input_logspace=true)
     return H
 end

@@ -97,17 +97,37 @@ function qK2x(Bnc::Bnc, qK::AbstractVector{<:Real};
     startlogx::Union{Vector{<:Real},Nothing}=nothing,
     startlogqK::Union{Vector{<:Real},Nothing}=nothing,
     use_vtx::Bool=false,
-    method::Union{Symbol,Missing} = :homotopy,
+    method::Symbol = :homotopy,
     reltol = 1e-8,
     abstol = 1e-10,
     kwargs...
 )::Vector{Float64}
     endlogqK = input_logspace ? qK : log10.(qK)
 
-    logx = if use_vtx
+    logx = if use_vtx || method === :regime
             _logqK2logx_regime(Bnc, endlogqK)
-        elseif method === :regime
-            _logqK2logx_regime(Bnc, endlogqK)
+        elseif method === :homotopy
+            helper = _integration_helper!(Bnc)
+            
+            if isnothing(startlogqK) || isnothing(startlogx)
+                # If no starting point is provided, use the default
+                # Make deep copies to avoid shared state in threaded environment
+                startlogx = copy(helper._anchor_log_x)
+                startlogqK = copy(helper._anchor_log_qK)
+            end
+
+            sol = _logx_traj_with_logqK_change(Bnc,
+                startlogqK,
+                endlogqK;
+                startlogx=startlogx,
+                alg=ODE.Tsit5(),
+                save_everystep=false,
+                save_start=false,
+                reltol = reltol,
+                abstol = abstol,
+                kwargs...
+            )
+            sol.u[end]
         elseif method === :free_energy
             _logqK2logx_free_energy(
                 Bnc,
@@ -126,36 +146,17 @@ function qK2x(Bnc::Bnc, qK::AbstractVector{<:Real};
                 abstol=abstol,
                 kwargs...,
             )
-        elseif ismissing(method) || method !== :homotopy
+        elseif method === :nlsolve
             helper = _integration_helper!(Bnc)
             _logqK2logx_nlsolve(Bnc,
                 endlogqK;
                 startlogx = isnothing(startlogx) ? copy(helper._anchor_log_x) : Float64.(startlogx),
-                method=method === :nlsolve ? missing : method,
                 reltol=reltol,
                 abstol=abstol,
                 kwargs...
             )
         else
-            helper = _integration_helper!(Bnc)
-            if isnothing(startlogqK) || isnothing(startlogx)
-                # If no starting point is provided, use the default
-                # Make deep copies to avoid shared state in threaded environment
-                startlogx = copy(helper._anchor_log_x)
-                startlogqK = copy(helper._anchor_log_qK)
-            end
-            sol = _logx_traj_with_logqK_change(Bnc,
-                startlogqK,
-                endlogqK;
-                startlogx=startlogx,
-                alg=ODE.Tsit5(),
-                save_everystep=false,
-                save_start=false,
-                reltol = reltol,
-                abstol = abstol,
-                kwargs...
-            )
-            sol.u[end]
+            throw(ArgumentError("unsupported qK2x method: $method"))
         end
 
     logx = output_logspace ? logx : exp10.(logx)
@@ -176,24 +177,6 @@ end
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-#----------------------------------------------------------------
-# Playground for mapping different methods for solving the nonlinear system
-# of equations to find x from qK.
-#-----------------------------------------------------------------
-
-
 """
     _logqK2logx_nlsolve(bnc::Bnc, logqK; startlogx=nothing, method=missing, kwargs...) -> Vector
 
@@ -205,7 +188,6 @@ Solve for `logx` given `logqK` using a nonlinear solver.
 
 # Keyword Arguments
 - `startlogx`: Initial guess for log10(x).
-- `method`: NonlinearSolve algorithm symbol.
 - `kwargs...`: Passed through to `solve`.
 
 # Returns
@@ -213,7 +195,6 @@ Solve for `logx` given `logqK` using a nonlinear solver.
 """
 function _logqK2logx_nlsolve(Bnc::Bnc, logqK::AbstractArray{<:Real,1};
     startlogx::Union{Vector{<:Real},Nothing}=nothing,
-    method ::Union{Symbol,Missing} = missing,
     reltol=1e-10,
     abstol=1e-10,
     maxiters::Integer=80,
@@ -277,47 +258,39 @@ function _logqK2logx_nlsolve(Bnc::Bnc, logqK::AbstractArray{<:Real,1};
     return u
 end
 
+
+
+
 function _logqK2logx_regime(Bnc::Bnc, logqK::AbstractArray{<:Real,1})::Vector{Float64}
     perm = assign_regime_qK(Bnc, logqK; input_logspace=true, asymptotic_only=false)
     H, H0 = get_H_H0(Bnc, perm)
     return Vector{Float64}(H * logqK .+ H0)
 end
 
-function _logq_from_logx(Bnc::Bnc, logx::AbstractVector{<:Real})
-    logx = Float64.(logx)
-    L = Bnc.L
-    out = Vector{Float64}(undef, size(L, 1))
-    @inbounds for i in axes(L, 1)
-        best = -Inf
-        for j in axes(L, 2)
-            Lij = L[i, j]
-            iszero(Lij) && continue
-            best = max(best, log10(Float64(Lij)) + logx[j])
-        end
-        if !isfinite(best)
-            out[i] = -Inf
-            continue
-        end
-        s = 0.0
-        for j in axes(L, 2)
-            Lij = L[i, j]
-            iszero(Lij) && continue
-            s += exp10(log10(Float64(Lij)) + logx[j] - best)
-        end
-        out[i] = best + log10(s)
+function _logqK2logx_regime_start(Bnc::Bnc, logqK::AbstractArray{<:Real,1})
+    try
+        return _logqK2logx_regime(Bnc, logqK)
+    catch
+        return nothing
     end
-    return out
 end
+
+
+
+
 
 function qK2x_residual(Bnc::Bnc, logx::AbstractVector{<:Real}, qK::AbstractVector{<:Real}; input_logspace::Bool=false)
     logqK = input_logspace ? Float64.(qK) : log10.(Float64.(qK))
     d = Bnc.d
     r = Bnc.r
     resid = Vector{Float64}(undef, d + r)
-    resid[1:d] .= _logq_from_logx(Bnc, logx) .- @view(logqK[1:d])
-    resid[d+1:end] .= Bnc.N * Float64.(logx) .- @view(logqK[d+1:end])
+    resid .= x2qK(Bnc, logx; input_logspace=true, output_logspace=true) .- logqK
     return resid
 end
+
+
+
+
 
 function _logqK2logx_free_energy(
     Bnc::Bnc,
@@ -326,6 +299,7 @@ function _logqK2logx_free_energy(
     reltol=1e-10,
     abstol=1e-10,
     maxiters::Integer=80,
+    robust_start::Bool=true,
     damping::Bool=true,
     warn_on_maxiters::Bool=true,
     kwargs...,
@@ -337,7 +311,14 @@ function _logqK2logx_free_energy(
     L = Matrix{Float64}(Bnc.L)
     N = Matrix{Float64}(Bnc.N)
     G = -transpose(N) * ((N * transpose(N)) \ Float64.(logK))
-    λ = if isnothing(startlogx)
+
+    startlogx = if isnothing(startlogx) && robust_start
+            _logqK2logx_regime_start(Bnc, logqK) # optional regime-based start
+        else
+            startlogx
+        end
+
+    λ = if isnothing(startlogx) 
         zeros(Float64, d)
     else
         (L * transpose(L)) \ (L * (Float64.(startlogx) .+ G))
@@ -393,6 +374,10 @@ function _logqK2logx_free_energy(
     return Vector{Float64}(transpose(L) * λ .- G)
 end
 
+
+
+
+
 function _logqK2logx_nullspace_newton(
     Bnc::Bnc,
     logqK::AbstractVector{<:Real};
@@ -414,12 +399,13 @@ function _logqK2logx_nullspace_newton(
     B = transpose(N)
     x0 = transpose(L) * ((L * transpose(L)) \ q)
     logx_start = if isnothing(startlogx) && robust_start
-        _logqK2logx_free_energy(Bnc, logqK; reltol=reltol, abstol=abstol, maxiters=maxiters)
-    elseif isnothing(startlogx)
-        log10.(max.(x0, eps()))
-    else
-        Float64.(startlogx)
-    end
+            start = _logqK2logx_regime_start(Bnc, logqK)
+            isnothing(start) ? log10.(max.(x0, eps())) : start
+        elseif isnothing(startlogx)
+            log10.(max.(x0, eps()))
+        else
+            startlogx
+        end
     m = (transpose(B) * B) \ (transpose(B) * (exp10.(logx_start) .- x0))
 
     F = Vector{Float64}(undef, r)
@@ -471,41 +457,45 @@ function _logqK2logx_nullspace_newton(
     return log10.(x)
 end
 
-function benchmark_qK2x_methods(
-    Bnc::Bnc,
-    qKs;
-    methods=(:free_energy, :homotopy, :newton_nullspace, :nlsolve, :regime),
-    input_logspace::Bool=true,
-    reference_method::Symbol=:free_energy,
-    kwargs...,
-)
-    cols = qKs isa AbstractMatrix ? [qKs[:, i] for i in axes(qKs, 2)] : collect(qKs)
-    refs = Dict{Int,Vector{Float64}}()
-    for (i, qK) in pairs(cols)
-        refs[i] = qK2x(Bnc, qK; input_logspace=input_logspace, output_logspace=true, method=reference_method, kwargs...)
-    end
 
-    results = NamedTuple[]
-    for method in methods
-        failures = 0
-        max_resid = 0.0
-        max_ref_err = 0.0
-        elapsed = @elapsed begin
-            for (i, qK) in pairs(cols)
-                try
-                    logx = qK2x(Bnc, qK; input_logspace=input_logspace, output_logspace=true, method=method, kwargs...)
-                    resid = qK2x_residual(Bnc, logx, qK; input_logspace=input_logspace)
-                    max_resid = max(max_resid, norm(resid, Inf))
-                    max_ref_err = max(max_ref_err, norm(logx .- refs[i], Inf))
-                catch err
-                    failures += 1
-                end
-            end
-        end
-        push!(results, (; method, elapsed, failures, max_resid, max_ref_err, n=length(cols)))
-    end
-    return results
-end
+
+
+
+# function benchmark_qK2x_methods(
+#     Bnc::Bnc,
+#     qKs;
+#     methods=(:free_energy, :homotopy, :newton_nullspace, :nlsolve, :regime),
+#     input_logspace::Bool=true,
+#     reference_method::Symbol=:free_energy,
+#     kwargs...,
+# )
+#     cols = qKs isa AbstractMatrix ? [qKs[:, i] for i in axes(qKs, 2)] : collect(qKs)
+#     refs = Dict{Int,Vector{Float64}}()
+#     for (i, qK) in pairs(cols)
+#         refs[i] = qK2x(Bnc, qK; input_logspace=input_logspace, output_logspace=true, method=reference_method, kwargs...)
+#     end
+
+#     results = NamedTuple[]
+#     for method in methods
+#         failures = 0
+#         max_resid = 0.0
+#         max_ref_err = 0.0
+#         elapsed = @elapsed begin
+#             for (i, qK) in pairs(cols)
+#                 try
+#                     logx = qK2x(Bnc, qK; input_logspace=input_logspace, output_logspace=true, method=method, kwargs...)
+#                     resid = qK2x_residual(Bnc, logx, qK; input_logspace=input_logspace)
+#                     max_resid = max(max_resid, norm(resid, Inf))
+#                     max_ref_err = max(max_ref_err, norm(logx .- refs[i], Inf))
+#                 catch err
+#                     failures += 1
+#                 end
+#             end
+#         end
+#         push!(results, (; method, elapsed, failures, max_resid, max_ref_err, n=length(cols)))
+#     end
+#     return results
+# end
 
 
 
@@ -640,7 +630,7 @@ function get_homotopy_param(Bnc::Bnc, startlogqK::Vector{<:Real}, endlogqK::Vect
 end
 
 
-function get_homotopy_ode(Bnc::Bnc)
+function get_homotopy_ode(Bnc::Bnc, p::HomotopyParams)
     # Constants helps for updating mutable datas
     helper = _integration_helper!(Bnc)
     L_nzval = log10.(helper._LN_sparse.nzval[helper._LN_top_idx]) # copy the nzval to avoid shared access
@@ -649,7 +639,7 @@ function get_homotopy_ode(Bnc::Bnc)
         lu!(M_lu, M,check=false) # recalculate the LU decomposition of J
         try_count = 0
         while !issuccess(M_lu) && try_count < max_try
-            @.M_top_diag += eps() # perturb the diagonal elements a bit to avoid singularity
+            @.p.M_top_diag += eps() # perturb the diagonal elements a bit to avoid singularity
             lu!(M_lu, M,check=false)
             try_count += 1
         end
@@ -700,7 +690,7 @@ function _logx_traj_with_logqK_change(Bnc::Bnc,
     # Prepare starting x if not given
     u0 = isnothing(startlogx) ? qK2x(Bnc, startlogqK; input_logspace=true, output_logspace=true) : startlogx
     p = get_homotopy_param(Bnc, startlogqK, endlogqK)
-    f! = get_homotopy_ode(Bnc)
+    f! = get_homotopy_ode(Bnc,p)
 
     callback = if !ensure_manifold
             CB.CallbackSet()

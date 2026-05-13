@@ -5,6 +5,7 @@ export get_C_C0_qKk, get_C0_qKk, get_C_qKk, get_C_C0_nullity_qKk
 export get_C_C0_wKk, get_C0_wKk, get_C_wKk, get_C_C0_nullity_wKk
 export get_H_bd, get_H_bd_numerically, get_qcat_F_F0
 export judge_stability!, is_stable
+export get_volume, get_volumes
 
 
 function Base.getproperty(model::BncRegime, sym::Symbol)
@@ -87,6 +88,11 @@ function get_polyhedron(rgm::BncRegime)
     C, C0, nullity = get_C_C0_nullity_wKk(rgm)
     return _build_polyhedron_from_C_C0(C, C0, nullity)
 end
+
+get_C_C0_nullity(rgm::BncRegime) = get_C_C0_nullity_wKk(rgm)
+get_C_C0(rgm::BncRegime) = get_C_C0_wKk(rgm)
+get_C(rgm::BncRegime) = get_C_wKk(rgm)
+get_C0(rgm::BncRegime) = get_C0_wKk(rgm)
 
 
 

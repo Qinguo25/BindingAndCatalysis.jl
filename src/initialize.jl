@@ -136,11 +136,41 @@ function fix_bn_catalysis!(bn::Bnc, new_ord::Vector{Int}, L_Γ::AbstractMatrix{I
     end
 
     if d_dep >0
-        @info "New conservation forms as catalysis involves"
-        #update the name of q_sym to make the first d_cat are q_cat, and the rest are q_dep
-        bn.q_sym[(d_cat+1):d_cat_full] = isnothing(w_sym) ? Symbolics.variables(:w, 1:d_dep) : w_sym
-        # Calculate the L_w
         L_w = L_Γ' * bn.L[1:d_cat_full,:]
+        if any(L_w .< 0)
+            repaired = _nonnegative_conservation_basis(L_Γ)
+            if !isnothing(repaired)
+                repaired_L_w = repaired' * bn.L[1:d_cat_full,:]
+                if all(repaired_L_w .>= 0)
+                    L_Γ = repaired
+                    L_w = repaired_L_w
+                end
+            end
+        end
+
+        @info "New conservation forms as catalysis involves"
+        old_q_sym = copy(bn.q_sym[1:d_cat_full])
+        w_names = isnothing(w_sym) ? Symbolics.variables(:w, 1:d_dep) : w_sym
+        for j in 1:d_dep
+            terms = String[]
+            for i in 1:d_cat_full
+                coeff = L_Γ[i, j]
+                coeff == 0 && continue
+                qname = string(old_q_sym[i])
+                term = if coeff == 1
+                    qname
+                elseif coeff == -1
+                    "-" * qname
+                else
+                    string(coeff) * "*" * qname
+                end
+                push!(terms, term)
+            end
+            relation = isempty(terms) ? "0" : join(terms, " + ")
+            @info "$(w_names[j]) = $relation"
+        end
+        #update the name of q_sym to make the first d_cat are q_cat, and the rest are q_dep
+        bn.q_sym[(d_cat+1):d_cat_full] = w_names
         @assert all(L_w .>=0) "L_w should be non-negative"
         #update L_w to replace L_dep
         bn.L[(d_cat+1):d_cat_full,:] = L_w
@@ -156,6 +186,87 @@ end
 @inline function _change_q_L_order!(bn::Bnc, new_ord::Vector{Int})
     bn.q_sym[1:length(new_ord)] = bn.q_sym[new_ord]
     bn.L[1:length(new_ord),:] = bn.L[new_ord, :]
+end
+
+function _primitive_int_vector(v::AbstractVector{<:Integer})
+    g = foldl(gcd, abs.(v); init=0)
+    g == 0 && return collect(v)
+    return collect(div.(v, g))
+end
+
+function _row_components_from_basis(B::AbstractMatrix{<:Integer})
+    n = size(B, 1)
+    parent = collect(1:n)
+    find_root(i) = begin
+        while parent[i] != i
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        end
+        i
+    end
+    union_root!(a, b) = begin
+        ra = find_root(a)
+        rb = find_root(b)
+        ra == rb || (parent[rb] = ra)
+        nothing
+    end
+
+    for j in 1:size(B, 2)
+        rows = findall(!iszero, B[:, j])
+        isempty(rows) && continue
+        first_row = first(rows)
+        for row in rows[2:end]
+            union_root!(first_row, row)
+        end
+    end
+
+    groups = Dict{Int, Vector{Int}}()
+    for i in 1:n
+        push!(get!(groups, find_root(i), Int[]), i)
+    end
+    return collect(values(groups))
+end
+
+function _nonnegative_conservation_basis(L_Γ::AbstractMatrix{<:Integer}; max_coeff::Int=3)
+    n_rows, n_basis = size(L_Γ)
+    n_basis == 0 && return Matrix{Int}(undef, n_rows, 0)
+
+    candidates = Vector{Vector{Int}}()
+    seen = Set{Tuple{Vararg{Int}}}()
+    components = _row_components_from_basis(L_Γ)
+
+    for radius in 1:max_coeff
+        ranges = ntuple(_ -> -radius:radius, n_basis)
+        for coeff_tuple in Iterators.product(ranges...)
+            all(iszero, coeff_tuple) && continue
+            y = _primitive_int_vector(vec(Matrix{Int}(L_Γ) * collect(Int, coeff_tuple)))
+            any(!iszero, y) || continue
+            all(>=(0), y) || continue
+            support = findall(!iszero, y)
+            any(component -> all(in(component), support), components) || continue
+            key = Tuple(y)
+            key in seen && continue
+            push!(seen, key)
+            push!(candidates, y)
+        end
+
+        component_rank(y) = begin
+            support = findall(!iszero, y)
+            idx = findfirst(component -> all(in(component), support), components)
+            isnothing(idx) ? typemax(Int) : minimum(components[idx])
+        end
+        sort!(candidates; by = y -> (component_rank(y), findfirst(!iszero, y), count(!iszero, y), sum(abs, y), y))
+        selected = Vector{Vector{Int}}()
+        for y in candidates
+            old_basis = isempty(selected) ? zeros(Int, n_rows, 0) : hcat(selected...)
+            new_basis = hcat(old_basis, y)
+            rank(Matrix{Float64}(new_basis)) > length(selected) || continue
+            push!(selected, y)
+            length(selected) == n_basis && return hcat(selected...)
+        end
+    end
+
+    return nothing
 end
 
 @inline function _rebuild_helper!(bn::Bnc)

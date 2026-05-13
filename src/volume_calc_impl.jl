@@ -661,6 +661,28 @@ function calc_volume(rgms::AbstractVector{<:BindRegime};
     return vals
 end
 
+function calc_volume(rgms::AbstractVector{<:BncRegime};
+    asymptotic::Bool=true,
+    kwargs...
+)
+    n_all = length(rgms)
+    vals = zeros(Volume, n_all)
+    n_all == 0 && return vals
+
+    asymptotic_filter = asymptotic ? true : nothing
+    idxs = findall(rgms) do rgm
+        rgm.nlt == 0 && (isnothing(asymptotic_filter) || _is_asymptotic(rgm) == asymptotic_filter)
+    end
+    isempty(idxs) && return vals
+
+    vals[idxs] .= _calc_selected_constraint_volumes(
+        rgms[idxs];
+        asymptotic=asymptotic,
+        kwargs...,
+    )
+    return vals
+end
+
 function calc_volume(rgms::AbstractVector{<:Polyhedron};
     # model::Bnc, perms=nothing;
     asymptotic::Bool=true,
@@ -692,3 +714,26 @@ end
 Compute the volume for a single polyhedron.
 """
 calc_volume(poly::Polyhedron;kwargs...) = calc_volume([poly]; kwargs...)[1]
+
+"""
+    get_volumes(rgms::AbstractVector{<:BncRegime}; recalculate=false, kwargs...) -> Vector{Volume}
+
+Return cached wKk-space volumes for mixed regimes, computing missing entries
+from each regime's `get_C_C0_nullity_wKk` polyhedron.
+"""
+function get_volumes(rgms::AbstractVector{<:BncRegime};
+    recalculate::Bool=false,
+    kwargs...
+)
+    idxs = recalculate ? collect(eachindex(rgms)) : findall(rgm -> isnothing(rgm.volume), rgms)
+    if !isempty(idxs)
+        vals = calc_volume(rgms[idxs]; kwargs...)
+        for (i, idx) in enumerate(idxs)
+            rgms[idx].volume = vals[i]
+        end
+    end
+    return [rgm.volume for rgm in rgms]
+end
+
+get_volume(rgm::BncRegime; recalculate::Bool=false, kwargs...) =
+    get_volumes(BncRegime[rgm]; recalculate=recalculate, kwargs...)[1]

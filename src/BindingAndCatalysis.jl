@@ -282,6 +282,9 @@ mutable struct BncRegime <:AbstractRegime
     ## w, K, k base
     C_wKk::Union{AbstractMatrix{<:Real}, Nothing}
     C0_wKk::Union{AbstractVector{<:Real}, Nothing}
+
+    volume::Union{Volume, Nothing}
+
     function BncRegime(bind_rgm, catalysis_rgm)
         PΠ = get_PΠ(catalysis_rgm)
         H_bind = if bind_rgm.nullity == 0
@@ -309,6 +312,7 @@ mutable struct BncRegime <:AbstractRegime
             -1,  
             
             nothing, 
+            nothing,
             nothing)
     end
 end

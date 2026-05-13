@@ -14,10 +14,21 @@ function show_condition_path(grh::SIMOPaths, pth_idx; kwargs...)
 end
 
 show_expression_x(args...; kwargs...) = begin
-    bn = get_binding_network(args...)
-    _render_expression_from(get_H_H0(args...), x_sym(bn), qK_sym(bn); kwargs...)
+    rgm = get_bind_regime(args...;kwargs...)
+    bn = get_binding_network(rgm)
+    if is_singular(rgm)
+        @error "The regime is singular. The expression is not valid."
+    end
+    _render_expression_from(get_H_H0(rgm), x_sym(bn), qK_sym(bn); kwargs...)
 end
-show_expression_x(rgm::BncRegime; kwargs...) = _render_expression_from(get_H_H0(rgm), x_sym(rgm), wKk_sym(rgm); kwargs...)
+
+show_expression_x(rgm::BncRegime; kwargs...) = let
+    if is_singular(rgm)
+        @error "The regime is singular. The expression is not valid."
+    end
+    _render_expression_from(get_H_H0(rgm), x_sym(rgm), wKk_sym(rgm); kwargs...)
+end
+
 show_expression_x(model::Bnc, bind, cat; kwargs...) = show_expression_x(get_bnc_regime(model, bind, cat; check=true); kwargs...)
 
 show_expression_qK(args...; kwargs...) = begin

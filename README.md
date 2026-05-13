@@ -178,8 +178,8 @@ k_symbol(model), v_symbol(model), wKk_symbol(model)
 - [Archetecture.md](Archetecture.md): current internal architecture
 - [Examples/Minimal_example.ipynb](Examples/Minimal_example.ipynb): step-by-step
   binding-regime workflow
-- [noback/Visualization_demo.ipynb](noback/Visualization_demo.ipynb): generated
-  visualization examples
+<!-- - [noback/Visualization_demo.ipynb](noback/Visualization_demo.ipynb): generated
+  visualization examples -->
 
 ## License
 
