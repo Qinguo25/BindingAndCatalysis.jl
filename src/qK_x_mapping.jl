@@ -1,5 +1,6 @@
 export x2qK, qK2x, qK2x_residual, benchmark_qK2x_methods
 export x_traj_with_qK_change, x_traj_with_q_change, x_traj_cat, qK_traj_cat, q_traj_cat, catalysis_logx
+export qcat_traj_cat, simulate_adaptation
 
 # ----------------Functions for mapping between qK space and x space----------------------------------
 
@@ -785,6 +786,312 @@ q_traj_cat(args...;kwargs...) = qK_traj_cat(args...;only_q=true,kwargs...)
 
 function have_catalysis(model::Bnc)
     return !isnothing(model.catalysis)
+end
+
+function _logqK_from_logqcat_logwKk(model::Bnc, logqcat::AbstractVector{<:Real}, logwKk::AbstractVector{<:Real})
+    cn = model.catalysis
+    logwKk = Float64.(logwKk)
+    logqK = Vector{Float64}(undef, model.d + model.r)
+    logqK[1:cn.r_v] .= Float64.(logqcat)
+    logqK[cn.r_v + 1:model.d] .= @view logwKk[1:cn.d_w]
+    logqK[model.d + 1:end] .= @view logwKk[cn.d_w + 1:cn.d_w + model.r]
+    return logqK
+end
+
+function _direct_logx_checked(
+    model::Bnc,
+    logqK::AbstractVector{<:Real};
+    method::Symbol=:free_energy,
+    tol::Float64=1e-6,
+    qK2x_maxiters::Integer=80,
+    startlogx=nothing,
+)
+    method = method === :homotopy ? :free_energy : method
+    logx = try
+        qK2x(
+            model,
+            logqK;
+            input_logspace=true,
+            output_logspace=true,
+            method=method,
+            startlogx=startlogx,
+            maxiters=qK2x_maxiters,
+            warn_on_maxiters=false,
+            robust_start=false,
+        )
+    catch
+        return nothing
+    end
+    maximum(abs.(qK2x_residual(model, logx, logqK; input_logspace=true))) <= tol || return nothing
+    return logx
+end
+
+function _homotopy_logx_checked(
+    model::Bnc,
+    from_logqK::AbstractVector{<:Real},
+    to_logqK::AbstractVector{<:Real},
+    from_logx::AbstractVector{<:Real};
+    tol::Float64=1e-6,
+    reltol::Real=1e-7,
+    abstol::Real=1e-9,
+    npoints::Integer=2,
+)
+    logx = try
+        _, xs = x_traj_with_qK_change(
+            model,
+            Vector{Float64}(from_logqK),
+            Vector{Float64}(to_logqK);
+            input_logspace=true,
+            output_logspace=true,
+            startlogx=Vector{Float64}(from_logx),
+            reltol=reltol,
+            abstol=abstol,
+            npoints=npoints,
+            ensure_manifold=false,
+        )
+        Vector{Float64}(xs[end])
+    catch
+        return nothing
+    end
+    maximum(abs.(qK2x_residual(model, logx, to_logqK; input_logspace=true))) <= tol || return nothing
+    return logx
+end
+
+function _logwKk_at(logwKk, t; input_logspace::Bool=true)
+    vals = logwKk isa Function ? logwKk(t) : logwKk
+    vals = Float64.(vals)
+    return input_logspace ? vals : log10.(vals)
+end
+
+"""
+    qcat_traj_cat(model, logqcat0, logwKk, tspan; kwargs...) -> (t, logqcat)
+
+Simulate reduced catalysis dynamics for `qcat` while `w`, `K`, and `k` are
+held fixed or supplied by a time-dependent `logwKk(t)` function.  The ODE state
+is `log10(qcat)`.  Inside the RHS, `method=:homotopy` is deliberately treated
+as `:free_energy`, because using homotopy there would nest one ODE solve inside
+another ODE solve.
+"""
+function qcat_traj_cat(
+    model::Bnc,
+    logqcat0::AbstractVector{<:Real},
+    logwKk,
+    tspan::Tuple{<:Real,<:Real};
+    input_logspace::Bool=true,
+    output_logspace::Bool=true,
+    method::Symbol=:free_energy,
+    tol::Float64=1e-6,
+    qK2x_maxiters::Integer=80,
+    alg=nothing,
+    reltol::Real=1e-7,
+    abstol::Real=1e-9,
+    maxiters::Integer=100_000,
+    saveat=range(Float64(tspan[1]), Float64(tspan[2]), length=500),
+    max_log10_scale::Real=300.0,
+    fail_on_binding_error::Bool=false,
+    homotopy_fallback::Bool=true,
+    fallback_reltol::Real=reltol,
+    fallback_abstol::Real=abstol,
+    kwargs...,
+)
+    have_catalysis(model) || throw(ArgumentError("model has no catalysis data."))
+    cn = model.catalysis
+    inner_method = method === :homotopy ? :free_energy : method
+    method === :homotopy && @warn "qcat_traj_cat does not use homotopy inside the ODE RHS; using :free_energy for qK -> x solves."
+    first_logwKk = _logwKk_at(logwKk, Float64(tspan[1]); input_logspace=input_logspace)
+    expected_wKk_len = cn.d_w + model.r + cn.n_v
+    length(first_logwKk) == expected_wKk_len || throw(ArgumentError("logwKk length must be $expected_wKk_len, got $(length(first_logwKk)). Available wKk symbols: $(wKk_symbol(model))."))
+
+    u0 = input_logspace ? Vector{Float64}(logqcat0) : log10.(Float64.(logqcat0))
+    length(u0) == cn.r_v || throw(ArgumentError("logqcat0 length must be $(cn.r_v)."))
+
+    logv = Vector{Float64}(undef, cn.n_v)
+    vscaled = Vector{Float64}(undef, cn.n_v)
+    qdot_scaled = Vector{Float64}(undef, cn.r_v)
+    last_logqK = Ref{Union{Nothing,Vector{Float64}}}(nothing)
+    last_logx = Ref{Union{Nothing,Vector{Float64}}}(nothing)
+
+    function rhs!(du, u, _, t)
+        current_logwKk = _logwKk_at(logwKk, t; input_logspace=input_logspace)
+        logqK = _logqK_from_logqcat_logwKk(model, u, current_logwKk)
+        logx = _direct_logx_checked(
+            model,
+            logqK;
+            method=inner_method,
+            tol=tol,
+            qK2x_maxiters=qK2x_maxiters,
+            startlogx=last_logx[],
+        )
+        if isnothing(logx) && homotopy_fallback && !isnothing(last_logqK[]) && !isnothing(last_logx[])
+            logx = _homotopy_logx_checked(
+                model,
+                last_logqK[],
+                logqK,
+                last_logx[];
+                tol=tol,
+                reltol=fallback_reltol,
+                abstol=fallback_abstol,
+            )
+        end
+        if isnothing(logx) && homotopy_fallback
+            helper = _integration_helper!(model)
+            logx = _homotopy_logx_checked(
+                model,
+                helper._anchor_log_qK,
+                logqK,
+                helper._anchor_log_x;
+                tol=tol,
+                reltol=fallback_reltol,
+                abstol=fallback_abstol,
+                npoints=8,
+            )
+        end
+        if isnothing(logx)
+            fail_on_binding_error && error("qK -> x solve failed at t=$t.")
+            fill!(du, 0.0)
+            return nothing
+        end
+        last_logqK[] = Vector{Float64}(logqK)
+        last_logx[] = Vector{Float64}(logx)
+
+        logk = @view current_logwKk[cn.d_w + model.r + 1:cn.d_w + model.r + cn.n_v]
+        mul!(logv, cn._Π_sparse, logx)
+        logv .+= logk
+
+        vshift = maximum(logv)
+        @. vscaled = exp10(logv - vshift)
+        mul!(qdot_scaled, cn.S, vscaled)
+
+        @inbounds for i in 1:cn.r_v
+            scale_log = vshift - u[i]
+            abs(scale_log) > max_log10_scale && error("qcat ODE scale overflow at t=$t, component=$i, log10 scale=$scale_log.")
+            du[i] = qdot_scaled[i] * exp10(scale_log) / log(10.0)
+        end
+        any(!isfinite, du) && error("qcat ODE produced non-finite derivative at t=$t.")
+        return nothing
+    end
+
+    prob = ODE.ODEProblem(rhs!, u0, (Float64(tspan[1]), Float64(tspan[2])))
+    sol = ODE.solve(
+        prob,
+        isnothing(alg) ? ODE.Tsit5() : alg;
+        saveat=saveat,
+        reltol=Float64(reltol),
+        abstol=Float64(abstol),
+        maxiters=maxiters,
+        isoutofdomain=(u, _, _) -> any(!isfinite, u),
+        kwargs...,
+    )
+    us = output_logspace ? sol.u : [exp10.(u) for u in sol.u]
+    return collect(sol.t), us
+end
+
+function _default_logqcat0_for_adaptation(model::Bnc, logwKk::AbstractVector{<:Real})
+    cn = model.catalysis
+    out = fill(-3.0, cn.r_v)
+    for s in q_cat_symbol(model)
+        i = locate_sym_qcat(model, s)
+        if s === :tAstar && :tAtotal in wKk_symbol(model)
+            out[i] = logwKk[locate_sym_wKk(model, :tAtotal)] - 2
+        elseif s === :tBstar && :tBtotal in wKk_symbol(model)
+            out[i] = logwKk[locate_sym_wKk(model, :tBtotal)] - 2
+        end
+    end
+    return out
+end
+
+function _observe_adaptation_value(model::Bnc, logqcat, logwKk; observe=:Astar, method::Symbol=:free_energy, tol::Float64=1e-6, qK2x_maxiters::Integer=80)
+    if observe in q_cat_symbol(model)
+        return logqcat[locate_sym_qcat(model, observe)]
+    end
+    logqK = _logqK_from_logqcat_logwKk(model, logqcat, logwKk)
+    logx = _direct_logx_checked(model, logqK; method=method, tol=tol, qK2x_maxiters=qK2x_maxiters)
+    isnothing(logx) && return NaN
+    return logx[locate_sym_x(model, observe)]
+end
+
+"""
+    simulate_adaptation(model; p, logtI, logqcat0=nothing, observe=:Astar, kwargs...)
+
+Convenience wrapper for step/input-response simulations where `p` is a log10
+`wKk` vector and `logtI(t)` replaces the `:tI` entry over time.  Long dynamic
+simulations should use this direct reduced ODE instead of repeatedly calling
+`qK2x(...; method=:homotopy)` inside a notebook RHS.
+"""
+function simulate_adaptation(
+    model::Bnc;
+    p,
+    logtI,
+    input_sym=:tI,
+    logqcat0=nothing,
+    tspan=(0.0, 200.0),
+    observe=:Astar,
+    method::Symbol=:free_energy,
+    tol::Float64=1e-6,
+    qK2x_maxiters::Integer=80,
+    saveat=range(Float64(tspan[1]), Float64(tspan[2]), length=500),
+    kwargs...,
+)
+    base_logwKk = Vector{Float64}(p)
+    input_idx = locate_sym_wKk(model, input_sym)
+    logwKk_fun = t -> begin
+        vals = copy(base_logwKk)
+        vals[input_idx] = Float64(logtI(t))
+        vals
+    end
+    initial_wKk = logwKk_fun(tspan[1])
+    q0 = isnothing(logqcat0) ? _default_logqcat0_for_adaptation(model, initial_wKk) : Vector{Float64}(logqcat0)
+
+    t, us = qcat_traj_cat(
+        model,
+        q0,
+        logwKk_fun,
+        tspan;
+        input_logspace=true,
+        output_logspace=true,
+        method=method,
+        tol=tol,
+        qK2x_maxiters=qK2x_maxiters,
+        saveat=saveat,
+        kwargs...,
+    )
+    logqcat = reduce(hcat, us)
+    obs = Vector{Float64}(undef, length(t))
+    logtI_vals = Vector{Float64}(undef, length(t))
+    inner_method = method === :homotopy ? :free_energy : method
+    observe_is_qcat = observe in q_cat_symbol(model)
+    last_logx = nothing
+    for (j, tj) in pairs(t)
+        current_wKk = logwKk_fun(tj)
+        logtI_vals[j] = current_wKk[input_idx]
+        if observe_is_qcat
+            obs[j] = logqcat[locate_sym_qcat(model, observe), j]
+        else
+            logqK = _logqK_from_logqcat_logwKk(model, @view(logqcat[:, j]), current_wKk)
+            logx = try
+                qK2x(
+                    model,
+                    logqK;
+                    input_logspace=true,
+                    output_logspace=true,
+                    method=inner_method,
+                    startlogx=last_logx,
+                    maxiters=qK2x_maxiters,
+                    warn_on_maxiters=false,
+                    robust_start=false,
+                )
+            catch
+                nothing
+            end
+            if isnothing(logx) || maximum(abs.(qK2x_residual(model, logx, logqK; input_logspace=true))) > tol
+                obs[j] = NaN
+            else
+                last_logx = logx
+                obs[j] = logx[locate_sym_x(model, observe)]
+            end
+        end
+    end
+    return (; t, logqcat, logtI=logtI_vals, logobserve=obs, observe)
 end
 
 

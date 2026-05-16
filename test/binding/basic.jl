@@ -36,6 +36,34 @@
     @test isapprox(logqK_back, logqK; atol = 1e-6, rtol = 1e-6)
 end
 
+@testset "Uniform Box Per-Dimension Sampling" begin
+    sampling = BindingAndCatalysis._prepare_sampling_config(
+        :uniform_box,
+        2;
+        log_lower = [-1, -2],
+        log_upper = [1, 4],
+    )
+
+    @test sampling.log_lower == [-1.0, -2.0]
+    @test sampling.box_width == [2.0, 6.0]
+    @test sampling.sample_weight == 12.0
+
+    rng = MersenneTwister(123)
+    x = zeros(2)
+    for _ in 1:100
+        BindingAndCatalysis._draw_sample!(x, rng, sampling)
+        @test -1.0 <= x[1] <= 1.0
+        @test -2.0 <= x[2] <= 4.0
+    end
+
+    @test_throws AssertionError BindingAndCatalysis._prepare_sampling_config(
+        :uniform_box,
+        2;
+        log_lower = [-1],
+        log_upper = [1, 4],
+    )
+end
+
 @testset "Minimal Notebook Workflow" begin
     model = minimal_model()
 

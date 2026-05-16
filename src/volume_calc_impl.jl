@@ -16,17 +16,38 @@ export calc_volume
     return center, margin
 end
 
+# 把标量或逐维向量参数整理成 Float64 向量。
+function _dimension_vector(
+    value::Union{Real,AbstractVector{<:Real}},
+    n_dim::Integer,
+    name::AbstractString,
+)
+    if value isa Real
+        return fill(Float64(value), n_dim)
+    end
+
+    @assert length(value) == n_dim "length($name) must equal the sample dimension"
+    out = Vector{Float64}(undef, n_dim)
+    @inbounds for k in 1:n_dim
+        out[k] = Float64(value[k])
+    end
+    return out
+end
+
 # 把采样参数整理成统一的配置对象。
 function _prepare_sampling_config(
     sampler::Symbol, # should be :gaussian or :uniform_box
     n_dim::Integer;
     μ::Union{Nothing,AbstractVector{<:Real}}=nothing,
     σ::Float64=1.0,
-    log_lower::Float64=-6.0,
-    log_upper::Float64=6.0,
+    log_lower::Union{Real,AbstractVector{<:Real}}=-6.0,
+    log_upper::Union{Real,AbstractVector{<:Real}}=6.0,
     μ_length_message::AbstractString="length(μ) must equal the sample dimension",
 )
     μ64 = fill(0.0, n_dim)
+    log_lower64 = fill(0.0, n_dim)
+    box_width64 = fill(0.0, n_dim)
+    sample_weight = 1.0
 
     if sampler === :gaussian
         if !isnothing(μ)
@@ -37,7 +58,11 @@ function _prepare_sampling_config(
         end
         @assert σ > 0 "σ must be > 0"
     elseif sampler === :uniform_box
-        @assert log_upper > log_lower "log_upper must be > log_lower"
+        log_lower64 = _dimension_vector(log_lower, n_dim, "log_lower")
+        log_upper64 = _dimension_vector(log_upper, n_dim, "log_upper")
+        box_width64 = log_upper64 .- log_lower64
+        @assert all(>(0.0), box_width64) "each log_upper must be > log_lower"
+        sample_weight = prod(box_width64)
     else
         error("sampler must be :gaussian or :uniform_box, got $sampler")
     end
@@ -46,8 +71,9 @@ function _prepare_sampling_config(
         sampler,
         μ64,
         σ,
-        log_lower,
-        box_width=log_upper - log_lower,
+        log_lower=log_lower64,
+        box_width=box_width64,
+        sample_weight,
     )
 end
 
@@ -60,7 +86,7 @@ end
         end
     else
         @inbounds @simd for k in eachindex(x)
-            x[k] = sampling.log_lower + sampling.box_width * rand(rng)
+            x[k] = sampling.log_lower[k] + sampling.box_width[k] * rand(rng)
         end
     end
     return x
@@ -109,16 +135,19 @@ function _update_volume_stats!(
     z::Float64,
     rel_tol::Float64,
     abs_tol::Float64,
+    sample_weight::Float64,
 )
     new_active = Int[]
     sizehint!(new_active, length(active_ids))
 
     @inbounds for idx in active_ids
         center, margin = _wilson_center_margin(total_counts[idx], total_N, z)
-        stats[idx] = Volume(center, margin^2)
+        scaled_center = sample_weight * center
+        scaled_margin = sample_weight * margin
+        stats[idx] = Volume(scaled_center, scaled_margin^2)
 
-        rel_error = center == 0.0 ? Inf : (margin / center)
-        if rel_error > rel_tol && margin > abs_tol
+        rel_error = scaled_center == 0.0 ? Inf : (scaled_margin / scaled_center)
+        if rel_error > rel_tol && scaled_margin > abs_tol
             push!(new_active, idx)
         end
     end
@@ -133,8 +162,8 @@ function _estimate_volumes(
     sampler::Symbol = :gaussian,
     μ::Union{Nothing,AbstractVector{<:Real}} = nothing,
     σ::Float64 = 1.0,
-    log_lower::Float64 = -6.0,
-    log_upper::Float64 = 6.0,
+    log_lower::Union{Real,AbstractVector{<:Real}} = -6.0,
+    log_upper::Union{Real,AbstractVector{<:Real}} = 6.0,
     confidence_level::Float64 = 0.95,
     batch_size::Int = 100_000,
     abs_tol::Float64 = 1.0e-8,
@@ -193,6 +222,7 @@ function _estimate_volumes(
             z,
             rel_tol,
             abs_tol,
+            sampling.sample_weight,
         )
 
         show_progress && next!(p, step = length(active_ids) - length(new_active))
@@ -307,8 +337,8 @@ function calc_volume(
     sampler::Symbol = :gaussian,               # :gaussian (default) or :uniform_box
     μ::Union{Nothing,AbstractVector{<:Real}} = nothing,
     σ::Float64 = 1.0,                          # for gaussian: std (isotropic)
-    log_lower::Float64 = -6.0,                 # for uniform_box
-    log_upper::Float64 = 6.0,                  # for uniform_box
+    log_lower::Union{Real,AbstractVector{<:Real}} = -6.0,  # for uniform_box; scalar or per dimension
+    log_upper::Union{Real,AbstractVector{<:Real}} = 6.0,   # for uniform_box; scalar or per dimension
 
     # --- estimation control ---
     confidence_level::Float64 = 0.95,
@@ -482,8 +512,8 @@ function _calc_volume_via_classifier(
     sampler::Symbol = :gaussian,
     μ::Union{Nothing,AbstractVector{<:Real}} = nothing,
     σ::Float64 = 1.0,
-    log_lower::Float64 = -6.0,
-    log_upper::Float64 = 6.0,
+    log_lower::Union{Real,AbstractVector{<:Real}} = -6.0,
+    log_upper::Union{Real,AbstractVector{<:Real}} = 6.0,
     confidence_level::Float64 = 0.95,
     regime_judge_tol::Float64 = 0.0,
     batch_size::Int = 100_000,
