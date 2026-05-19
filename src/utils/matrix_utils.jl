@@ -48,22 +48,203 @@ function rowmask_indices(A::SparseMatrixCSC, start_row::Int, end_row::Int)
     return rows, cols, idxs
 end
 
-"""
-    diag_indices(A::SparseMatrixCSC, end_row::Int) -> Vector{Int}
+function _sparse_top_incidence(A::SparseMatrixCSC, end_row::Int)
+    rows_for_col = [Int[] for _ in axes(A, 2)]
+    nzidx_for_pair = Dict{Tuple{Int,Int},Int}()
 
-Return indices into `A.nzval` for diagonal entries up to `end_row`.
-"""
-function diag_indices(A::SparseMatrixCSC, end_row::Int)
-    idxs = Int[]
-    for j in 1:size(A, 2)
-        for k in A.colptr[j]:(A.colptr[j + 1] - 1)
-            i = A.rowval[k]
-            if i == j && i <= end_row
-                push!(idxs, k)
+    for col in axes(A, 2)
+        for nzidx in A.colptr[col]:(A.colptr[col + 1] - 1)
+            row = A.rowval[nzidx]
+            if row <= end_row && !iszero(A.nzval[nzidx])
+                push!(rows_for_col[col], row)
+                nzidx_for_pair[(row, col)] = nzidx
             end
         end
     end
-    return idxs
+
+    return rows_for_col, nzidx_for_pair
+end
+
+function _transversal_independent(
+    rows_for_col::AbstractVector{<:AbstractVector{<:Integer}},
+    cols::AbstractVector{<:Integer},
+    end_row::Int,
+)
+    length(cols) <= end_row || return false
+    row_to_col = zeros(Int, end_row)
+
+    function try_match(col::Int, seen::AbstractVector{Bool})
+        for row in rows_for_col[col]
+            seen[row] && continue
+            seen[row] = true
+            if row_to_col[row] == 0 || try_match(row_to_col[row], seen)
+                row_to_col[row] = col
+                return true
+            end
+        end
+        return false
+    end
+
+    for col in cols
+        try_match(col, falses(end_row)) || return false
+    end
+    return true
+end
+
+function _dual_bottom_independent(
+    A::SparseMatrixCSC,
+    selected_cols::AbstractVector{<:Integer},
+    end_row::Int,
+)
+    n_rows, n_cols = size(A)
+    bottom_rank = n_rows - end_row
+    bottom_rank < 0 && throw(ArgumentError("end_row must be <= size(A, 1)"))
+    bottom_rank == 0 && return true
+
+    selected = falses(n_cols)
+    selected[selected_cols] .= true
+    kept_cols = findall(!, selected)
+    length(kept_cols) >= bottom_rank || return false
+
+    bottom = Matrix(A[(end_row + 1):n_rows, kept_cols])
+    return rank(bottom) == bottom_rank
+end
+
+function _with_added_col(cols::Vector{Int}, col::Int)
+    out = copy(cols)
+    push!(out, col)
+    return out
+end
+
+function _with_swapped_col(cols::Vector{Int}, old_col::Int, new_col::Int)
+    out = copy(cols)
+    idx = findfirst(==(old_col), out)
+    idx === nothing && error("old_col must be selected")
+    out[idx] = new_col
+    return out
+end
+
+function _matroid_intersection_diag_cols(A::SparseMatrixCSC, end_row::Int)
+    n_rows, n_cols = size(A)
+    n_rows == n_cols || throw(ArgumentError("A must be square"))
+    0 <= end_row <= n_rows || throw(ArgumentError("end_row must be between 0 and size(A, 1)"))
+    end_row == 0 && return Int[]
+
+    rows_for_col, _ = _sparse_top_incidence(A, end_row)
+    ground_cols = [col for col in axes(A, 2) if !isempty(rows_for_col[col])]
+    selected = Int[]
+
+    m1(cols) = _transversal_independent(rows_for_col, cols, end_row)
+    m2(cols) = _dual_bottom_independent(A, cols, end_row)
+
+    while length(selected) < end_row
+        selected_set = Set(selected)
+        unselected = [col for col in ground_cols if !(col in selected_set)]
+
+        prev = Dict{Int,Int}()
+        queue = Int[]
+        found = 0
+
+        for col in unselected
+            if m1(_with_added_col(selected, col))
+                prev[col] = 0
+                push!(queue, col)
+            end
+        end
+
+        head = 1
+        while head <= length(queue) && found == 0
+            col = queue[head]
+            head += 1
+
+            if col in selected_set
+                for new_col in unselected
+                    haskey(prev, new_col) && continue
+                    if m1(_with_swapped_col(selected, col, new_col))
+                        prev[new_col] = col
+                        push!(queue, new_col)
+                    end
+                end
+            else
+                if m2(_with_added_col(selected, col))
+                    found = col
+                    break
+                end
+                for old_col in selected
+                    haskey(prev, old_col) && continue
+                    if m2(_with_swapped_col(selected, old_col, col))
+                        prev[old_col] = col
+                        push!(queue, old_col)
+                    end
+                end
+            end
+        end
+
+        found == 0 && throw(ArgumentError("Could not find a nonsingular top-row perturbation pattern."))
+
+        path = Int[]
+        col = found
+        while col != 0
+            push!(path, col)
+            col = prev[col]
+        end
+
+        selected_set = Set(selected)
+        for path_col in path
+            if path_col in selected_set
+                filter!(!=(path_col), selected)
+                delete!(selected_set, path_col)
+            else
+                push!(selected, path_col)
+                push!(selected_set, path_col)
+            end
+        end
+    end
+
+    return selected
+end
+
+function _perfect_top_matching(
+    rows_for_col::AbstractVector{<:AbstractVector{<:Integer}},
+    cols::AbstractVector{<:Integer},
+    end_row::Int,
+)
+    row_to_col = zeros(Int, end_row)
+
+    function try_match(col::Int, seen::AbstractVector{Bool})
+        for row in rows_for_col[col]
+            seen[row] && continue
+            seen[row] = true
+            if row_to_col[row] == 0 || try_match(row_to_col[row], seen)
+                row_to_col[row] = col
+                return true
+            end
+        end
+        return false
+    end
+
+    for col in cols
+        try_match(col, falses(end_row)) || throw(ArgumentError("Selected columns do not match all top rows."))
+    end
+
+    all(!iszero, row_to_col) || throw(ArgumentError("Selected columns do not match all top rows."))
+    return row_to_col
+end
+
+"""
+    diag_indices(A::SparseMatrixCSC, end_row::Int) -> Vector{Int}
+
+Return indices into `A.nzval` for one nonzero entry in each of the first
+`end_row` rows such that perturbing those entries keeps the bottom rows'
+complementary columns nonsingular. The selected pattern is found by matroid
+intersection between the top-row transversal matroid and the dual column
+matroid of the bottom block.
+"""
+function diag_indices(A::SparseMatrixCSC, end_row::Int)
+    rows_for_col, nzidx_for_pair = _sparse_top_incidence(A, end_row)
+    cols = _matroid_intersection_diag_cols(A, end_row)
+    matched_cols = _perfect_top_matching(rows_for_col, cols, end_row)
+    return [nzidx_for_pair[(row, matched_cols[row])] for row in 1:end_row]
 end
 
 """

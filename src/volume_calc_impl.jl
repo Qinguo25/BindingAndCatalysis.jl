@@ -12,7 +12,7 @@ Returns a named tuple with:
 - `source_only`, `sink_only`, `both`: dimensions grouped by their role across all rows.
 - `sources`, `sinks`: all dimensions that ever appear as source/sink.
 """
-function calc_chainlength(C::AbstractMatrix{<:Real})
+function calc_chainlength(C::AbstractMatrix{<:Real};eps = 1e-5)
     n_dim = size(C, 2)
     g = SimpleDiGraph(n_dim)
     sources = Set{Int}()
@@ -24,10 +24,10 @@ function calc_chainlength(C::AbstractMatrix{<:Real})
 
         for col_idx in axes(C, 2)
             val = C[row_idx, col_idx]
-            if val > 0
+            if val > eps
                 push!(row_sources, col_idx)
                 push!(sources, col_idx)
-            elseif val < 0
+            elseif val < -eps
                 push!(row_sinks, col_idx)
                 push!(sinks, col_idx)
             end

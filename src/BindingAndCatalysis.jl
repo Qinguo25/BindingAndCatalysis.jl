@@ -87,7 +87,7 @@ mutable struct IntegrationHelper
     _LN_bottom_idx::Vector{Int} # last r row index of _LN_sparse
     _LN_bottom_rows::Vector{Int} # the corresponding row number in N for _LN_bottom_idx
     _LN_bottom_cols::Vector{Int} # the corresponding column number in N for _LN_bottom_idx
-    _LN_top_diag_idx::Vector{Int} # the diagonal index of the top d rows of _LN_sparse, used for fast calculation
+    _LN_top_diag_idx::Vector{Int} # one perturbation nzval index per top row, chosen to preserve nonsingularity
 
     _LN_sparse::SparseMatrixCSC{Float64,Int} # cached Float64.(sparse([L; N])) for numerical integration
     _LN_lu::Union{SparseArrays.UMFPACK.UmfpackLU{Float64,Int}, Nothing} # LU decomposition of _LNt_sparse, used for fast calculation

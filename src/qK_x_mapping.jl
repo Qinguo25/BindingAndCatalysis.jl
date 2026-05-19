@@ -621,7 +621,7 @@ function get_homotopy_param(Bnc::Bnc, startlogqK::Vector{<:Real}, endlogqK::Vect
     logx_M_view = @view logx[helper._LN_top_cols] # view for faster updating J
     logq_M_view = @view logqK[helper._LN_top_rows] # view for faster updating J
     M_top = @view M.nzval[helper._LN_top_idx] # view for faster updating J
-    M_top_diag = @view M.nzval[helper._LN_top_diag_idx] # view for perturb when J is singular
+    M_top_diag = @view M.nzval[helper._LN_top_diag_idx] # top-row entries to perturb when J is singular
 
     p = HomotopyParams(startlogqK, ΔlogqK, logx, logqK,logq,logK, logqK_max, M, M_lu, 
         logx_M_view, logq_M_view, M_top, M_top_diag
