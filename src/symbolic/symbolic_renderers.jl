@@ -5,7 +5,15 @@ function show_condition_poly(
     syms::AbstractVector{Num},
     log_space::Bool=false,
     asymptotic::Bool=false,
+    remove_h_redundancy::Bool=false,
 )
+    C, C0, nullity = _maybe_remove_h_redundancy(
+        C,
+        C0,
+        nullity;
+        remove_h_redundancy=remove_h_redundancy,
+    )
+
     make_expr(Crow, C0v) = if log_space
         expr = Crow * log10.(syms)
         asymptotic ? expr : expr .+ C0v
@@ -35,7 +43,12 @@ function show_condition_poly(
     end
 end
 
-show_condition_poly(poly::Polyhedron; kwargs...) = show_condition_poly(get_C_C0_nullity(poly)...; kwargs...)
+show_condition_poly(poly::Polyhedron; remove_h_redundancy::Bool=false, kwargs...) =
+    show_condition_poly(
+        get_C_C0_nullity(poly)...;
+        remove_h_redundancy=remove_h_redundancy,
+        kwargs...,
+    )
 show_condition_poly(C_qK::AbstractVector{<:Real}, C0_qK::Real, args...; kwargs...) =
     show_condition_poly(C_qK', [C0_qK], args...; kwargs...)[1]
 

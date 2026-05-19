@@ -1,4 +1,71 @@
-export calc_volume
+export calc_volume, calc_chainlength
+
+"""
+    calc_chainlength(C::AbstractMatrix{<:Real})
+
+Build a directed graph from rows of `C`: positive entries are sources, negative
+entries are sinks, and every source in a row points to every sink in that row.
+
+Returns a named tuple with:
+- `chainlength`: longest directed path length in edge count, or `Inf` if cyclic.
+- `graph`: the constructed `SimpleDiGraph`.
+- `source_only`, `sink_only`, `both`: dimensions grouped by their role across all rows.
+- `sources`, `sinks`: all dimensions that ever appear as source/sink.
+"""
+function calc_chainlength(C::AbstractMatrix{<:Real})
+    n_dim = size(C, 2)
+    g = SimpleDiGraph(n_dim)
+    sources = Set{Int}()
+    sinks = Set{Int}()
+
+    @inbounds for row_idx in axes(C, 1)
+        row_sources = Int[]
+        row_sinks = Int[]
+
+        for col_idx in axes(C, 2)
+            val = C[row_idx, col_idx]
+            if val > 0
+                push!(row_sources, col_idx)
+                push!(sources, col_idx)
+            elseif val < 0
+                push!(row_sinks, col_idx)
+                push!(sinks, col_idx)
+            end
+        end
+
+        for src in row_sources
+            for dst in row_sinks
+                add_edge!(g, src, dst)
+            end
+        end
+    end
+
+    chainlength = if is_cyclic(g)
+        Inf
+    else
+        dist = zeros(Int, n_dim)
+        for v in topological_sort_by_dfs(g)
+            for dst in outneighbors(g, v)
+                dist[dst] = max(dist[dst], dist[v] + 1)
+            end
+        end
+        isempty(dist) ? 0 : maximum(dist)
+    end
+
+    source_only = setdiff(sources, sinks)
+    sink_only = setdiff(sinks, sources)
+    both = intersect(sources, sinks)
+
+    return (;
+        chainlength,
+        graph=g,
+        sources,
+        sinks,
+        source_only,
+        sink_only,
+        both,
+    )
+end
 
 
 #=====================================================================================#

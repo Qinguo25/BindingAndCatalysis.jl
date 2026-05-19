@@ -227,7 +227,19 @@ function get_path(grh::SIMOPaths, pth::AbstractVector; return_idx::Bool=false)
 end
 
 get_binding_network(grh::SIMOPaths, args...) = grh.bn
-get_C_C0_nullity_qK(grh::SIMOPaths, pth_idx) = get_polyhedron(grh, pth_idx) |> get_C_C0_nullity
+function get_C_C0_nullity_qK(
+    grh::SIMOPaths,
+    pth_idx;
+    remove_h_redundancy::Bool=false,
+)
+    C, C0, nullity = get_polyhedron(grh, pth_idx) |> get_C_C0_nullity
+    return _maybe_remove_h_redundancy(
+        C,
+        C0,
+        nullity;
+        remove_h_redundancy=remove_h_redundancy,
+    )
+end
 
 get_idx(grh::SIMOPaths, pth::AbstractVector) = let
     bn = get_binding_network(grh)

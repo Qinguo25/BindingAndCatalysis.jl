@@ -1,5 +1,15 @@
-show_condition_x(args...; kwargs...) = _render_condition_from(get_C_C0_x(args...), x_sym(args...); kwargs...)
-show_condition_qK(args...; kwargs...) = _render_condition_from(get_C_C0_nullity_qK(args...), qK_sym(args...); kwargs...)
+show_condition_x(args...; remove_h_redundancy::Bool=false, kwargs...) =
+    _render_condition_from(
+        get_C_C0_x(args...; remove_h_redundancy=remove_h_redundancy),
+        x_sym(args...);
+        kwargs...,
+    )
+show_condition_qK(args...; remove_h_redundancy::Bool=false, kwargs...) =
+    _render_condition_from(
+        get_C_C0_nullity_qK(args...; remove_h_redundancy=remove_h_redundancy),
+        qK_sym(args...);
+        kwargs...,
+    )
 show_condition(args...; kwargs...) = show_condition_qK(args...; kwargs...)
 
 function show_condition_path(Bnc::Bnc, path::AbstractVector{<:Integer}, change_qK; kwargs...)
@@ -102,27 +112,69 @@ show_catalysis_dynamics(model::Bnc, bind, cat; reduced::Bool=true) =
 
 show_reduced_catalysis_dynamics(args...; kwargs...) = show_catalysis_dynamics(args...; reduced=true, kwargs...)
 
-function show_condition_xk(rgm::CatalysisRegime; kind::Symbol=:all, kwargs...)
+function show_condition_xk(
+    rgm::CatalysisRegime;
+    kind::Symbol=:all,
+    remove_h_redundancy::Bool=false,
+    kwargs...,
+)
     syms = xk_sym(rgm)
     if kind === :steady_state
-        return show_condition_poly(get_P_xk(rgm), get_P0(rgm), size(get_P(rgm), 1); syms=syms, kwargs...)
+        data = _maybe_remove_h_redundancy(
+            get_P_xk(rgm),
+            get_P0(rgm),
+            size(get_P(rgm), 1);
+            remove_h_redundancy=remove_h_redundancy,
+        )
+        return show_condition_poly(data...; syms=syms, kwargs...)
     elseif kind === :dominance
-        return show_condition_poly(get_C_xk(rgm), get_C0(rgm); syms=syms, kwargs...)
+        return _render_condition_from(
+            get_C_C0_xk(rgm; remove_h_redundancy=remove_h_redundancy),
+            syms;
+            kwargs...,
+        )
     elseif kind === :all || kind === :combined
-        return _render_condition_from(get_C_C0_nullity_xk(rgm), syms; kwargs...)
+        return _render_condition_from(
+            get_C_C0_nullity_xk(rgm; remove_h_redundancy=remove_h_redundancy),
+            syms;
+            kwargs...,
+        )
     else
         error("Unsupported kind=$kind. Use :steady_state, :dominance, or :all.")
     end
 end
 show_condition_xk(model::CatalysisData, perm_or_idx; kwargs...) = show_condition_xk(get_catalysis_regime(model, perm_or_idx; check=true); kwargs...)
 show_condition_xk(model::AbstractBnc, perm_or_idx; kwargs...) = show_condition_xk(get_catalysis_regime(model, perm_or_idx; check=true); kwargs...)
-show_condition_xk(rgm::BncRegime; kind::Symbol=:combined, kwargs...) = _render_condition_from(get_C_C0_nullity_xk(rgm, kind), xk_sym(rgm); kwargs...)
+show_condition_xk(
+    rgm::BncRegime;
+    kind::Symbol=:combined,
+    remove_h_redundancy::Bool=false,
+    kwargs...,
+) = _render_condition_from(
+    get_C_C0_nullity_xk(rgm, kind; remove_h_redundancy=remove_h_redundancy),
+    xk_sym(rgm);
+    kwargs...,
+)
 show_condition_xk(model::Bnc, bind, cat; kwargs...) = show_condition_xk(get_bnc_regime(model, bind, cat; check=true); kwargs...)
 
-show_condition_qKk(rgm::BncRegime; kind::Symbol=:combined, kwargs...) = _render_condition_from(get_C_C0_nullity_qKk(rgm, kind), qKk_sym(rgm); kwargs...)
+show_condition_qKk(
+    rgm::BncRegime;
+    kind::Symbol=:combined,
+    remove_h_redundancy::Bool=false,
+    kwargs...,
+) = _render_condition_from(
+    get_C_C0_nullity_qKk(rgm, kind; remove_h_redundancy=remove_h_redundancy),
+    qKk_sym(rgm);
+    kwargs...,
+)
 show_condition_qKk(model::Bnc, bind, cat; kwargs...) = show_condition_qKk(get_bnc_regime(model, bind, cat; check=true); kwargs...)
 
-show_condition_wKk(rgm::BncRegime; kwargs...) = _render_condition_from(get_C_C0_nullity_wKk(rgm), wKk_sym(rgm); kwargs...)
+show_condition_wKk(rgm::BncRegime; remove_h_redundancy::Bool=false, kwargs...) =
+    _render_condition_from(
+        get_C_C0_nullity_wKk(rgm; remove_h_redundancy=remove_h_redundancy),
+        wKk_sym(rgm);
+        kwargs...,
+    )
 show_condition_wKk(model::Bnc, bind, cat; kwargs...) = show_condition_wKk(get_bnc_regime(model, bind, cat; check=true); kwargs...)
 show_consistency_condition(args...; kwargs...) = show_condition_wKk(args...; kwargs...)
 

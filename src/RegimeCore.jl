@@ -537,22 +537,59 @@ get_affine_qKk2v(rgm::BncRegime) = let
 end
 
 
-function get_C_C0_x(rgm::BindRegime)
-    get_bind_regime(rgm; inv_info=false)
-    return rgm.C_x, rgm.C0_x
+@inline function _maybe_remove_h_redundancy(
+    C::AbstractMatrix{<:Real},
+    C0::AbstractVector,
+    nullity::Integer=0;
+    remove_h_redundancy::Bool=false,
+)
+    remove_h_redundancy || return C, C0, nullity
+    poly = _build_polyhedron_from_C_C0(C, C0, nullity; canonicalize=true)
+    return _polyhedron_to_C_C0_nullity(poly)
 end
-get_C_C0_xk(rgm::BindRegime) = let 
+
+@inline function _maybe_remove_h_redundancy_pair(
+    C::AbstractMatrix{<:Real},
+    C0::AbstractVector;
+    remove_h_redundancy::Bool=false,
+)
+    C_new, C0_new, _ = _maybe_remove_h_redundancy(
+        C,
+        C0,
+        0;
+        remove_h_redundancy=remove_h_redundancy,
+    )
+    return C_new, C0_new
+end
+
+function get_C_C0_x(rgm::BindRegime; remove_h_redundancy::Bool=false)
+    get_bind_regime(rgm; inv_info=false)
+    return _maybe_remove_h_redundancy_pair(
+        rgm.C_x,
+        rgm.C0_x;
+        remove_h_redundancy=remove_h_redundancy,
+    )
+end
+get_C_C0_xk(rgm::BindRegime; remove_h_redundancy::Bool=false) = let
     n_k = get_catalysis_network(rgm).n_v
     C_x, C0_x = get_C_C0_x(rgm)
     C_xk = hcat(C_x, spzeros(eltype(C_x), size(C_x, 1), n_k))
-    return C_xk, C0_x
+    return _maybe_remove_h_redundancy_pair(
+        C_xk,
+        C0_x;
+        remove_h_redundancy=remove_h_redundancy,
+    )
 end
-function get_C_C0_v(rgm::CatalysisRegime)
+function get_C_C0_v(rgm::CatalysisRegime; remove_h_redundancy::Bool=false)
     get_catalysis_regime(rgm)
-    return rgm.C, rgm.C0
+    return _maybe_remove_h_redundancy_pair(
+        rgm.C,
+        rgm.C0;
+        remove_h_redundancy=remove_h_redundancy,
+    )
 end
-get_C_v(rgm::CatalysisRegime) = get_C_C0_v(rgm)[1]
-get_C0_v(rgm::CatalysisRegime) = get_C_C0_v(rgm)[2]
+get_C_v(rgm::CatalysisRegime; kwargs...) = get_C_C0_v(rgm; kwargs...)[1]
+get_C0_v(rgm::CatalysisRegime; kwargs...) = get_C_C0_v(rgm; kwargs...)[2]
 function get_CΠ(rgm::CatalysisRegime)
     get_catalysis_regime(rgm)
     return rgm.CΠ
@@ -563,24 +600,33 @@ function get_PΠ(rgm::CatalysisRegime)
 end
 get_C_k(rgm::CatalysisRegime) = get_C_v(rgm)
 get_P_xk(rgm::CatalysisRegime) = get_N_N0_xk(rgm)[1]
-get_C_xk(rgm::CatalysisRegime) = get_C_C0_xk(rgm)[1]
-get_C0_xk(rgm::CatalysisRegime) = get_C_C0_xk(rgm)[2]
-get_C_C0_xk(rgm::CatalysisRegime)=let 
+get_C_xk(rgm::CatalysisRegime; kwargs...) = get_C_C0_xk(rgm; kwargs...)[1]
+get_C0_xk(rgm::CatalysisRegime; kwargs...) = get_C_C0_xk(rgm; kwargs...)[2]
+get_C_C0_xk(rgm::CatalysisRegime; remove_h_redundancy::Bool=false)=let
     C, C0 = get_C_C0_v(rgm)
     z, z0 = get_affine_xk2v(rgm)
     C_xk = C * z
     C0_xk = C * z0 + C0
-    return C_xk, C0_xk
+    return _maybe_remove_h_redundancy_pair(
+        C_xk,
+        C0_xk;
+        remove_h_redundancy=remove_h_redundancy,
+    )
 end
 
 # This is the steady-state.
-get_C_C0_nullity_xk(rgm::CatalysisRegime) = let
+get_C_C0_nullity_xk(rgm::CatalysisRegime; remove_h_redundancy::Bool=false) = let
     P_xk, P0 = get_N_N0_xk(rgm)
     C_xk, C0 = get_C_C0_xk(rgm)
-    return vcat(P_xk, C_xk), vcat(P0, C0), size(P_xk, 1)
+    return _maybe_remove_h_redundancy(
+        vcat(P_xk, C_xk),
+        vcat(P0, C0),
+        size(P_xk, 1);
+        remove_h_redundancy=remove_h_redundancy,
+    )
 end
 
-get_C_C0_xk(rgm::BncRegime) = let 
+get_C_C0_xk(rgm::BncRegime; remove_h_redundancy::Bool=false) = let
     bind_rgm = get_bind_regime(rgm.bind_rgm; inv_info=false)
     catalysis_rgm = get_catalysis_regime(rgm.catalysis_rgm)
 
@@ -588,43 +634,91 @@ get_C_C0_xk(rgm::BncRegime) = let
     C_cat, C0_cat = get_C_C0_xk(catalysis_rgm)
     C_xk = vcat(C_bind, C_cat)
     C0_xk = vcat(C0_bind, C0_cat)
-    return C_xk, C0_xk
+    return _maybe_remove_h_redundancy_pair(
+        C_xk,
+        C0_xk;
+        remove_h_redundancy=remove_h_redundancy,
+    )
 end
 
-function get_C_C0_nullity_xk(rgm::BncRegime, kind::Symbol=:combined)
+function get_C_C0_nullity_xk(
+    rgm::BncRegime,
+    kind::Symbol=:combined;
+    remove_h_redundancy::Bool=false,
+)
     if kind === :binding
         C, C0 = get_C_C0_xk(get_bind_regime(rgm))
-        return C, C0, 0
+        return _maybe_remove_h_redundancy(
+            C,
+            C0,
+            0;
+            remove_h_redundancy=remove_h_redundancy,
+        )
     elseif kind === :catalysis
-        return get_C_C0_nullity_xk(get_catalysis_regime(rgm))
+        return get_C_C0_nullity_xk(
+            get_catalysis_regime(rgm);
+            remove_h_redundancy=remove_h_redundancy,
+        )
     elseif kind === :combined || kind === :all
         C_bind, C0_bind = get_C_C0_xk(get_bind_regime(rgm))
         C_cat, C0_cat, nlt_cat = get_C_C0_nullity_xk(get_catalysis_regime(rgm))
-        return vcat(C_bind, C_cat), vcat(C0_bind, C0_cat), nlt_cat
+        return _maybe_remove_h_redundancy(
+            vcat(C_bind, C_cat),
+            vcat(C0_bind, C0_cat),
+            nlt_cat;
+            remove_h_redundancy=remove_h_redundancy,
+        )
     else
         error("Unsupported kind=$kind. Use :binding, :catalysis, or :combined.")
     end
 end
 
-function get_C_C0_nullity_qK(rgm::BindRegime)
+function get_C_C0_nullity_qK(rgm::BindRegime; remove_h_redundancy::Bool=false)
     get_bind_regime(rgm; inv_info=true)
-    return rgm.C_qK, rgm.C0_qK, rgm.nullity
+    return _maybe_remove_h_redundancy(
+        rgm.C_qK,
+        rgm.C0_qK,
+        rgm.nullity;
+        remove_h_redundancy=remove_h_redundancy,
+    )
 end
-get_C_C0_nullity_qKk(rgm::BindRegime) = let 
+get_C_C0_nullity_qKk(rgm::BindRegime; remove_h_redundancy::Bool=false) = let
     C_qK, C0_qK, nullity = get_C_C0_nullity_qK(rgm)
     n_k = get_catalysis_network(rgm).n_v
     C = hcat(C_qK, spzeros(eltype(C_qK), size(C_qK, 1), n_k))
-    return C, C0_qK, nullity
+    return _maybe_remove_h_redundancy(
+        C,
+        C0_qK,
+        nullity;
+        remove_h_redundancy=remove_h_redundancy,
+    )
 end
-function get_C_C0_nullity_qKk(rgm::BncRegime, kind::Symbol=:combined)
+function get_C_C0_nullity_qKk(
+    rgm::BncRegime,
+    kind::Symbol=:combined;
+    remove_h_redundancy::Bool=false,
+)
     if kind === :binding
-        return get_C_C0_nullity_qKk(get_bind_regime(rgm))
+        return get_C_C0_nullity_qKk(
+            get_bind_regime(rgm);
+            remove_h_redundancy=remove_h_redundancy,
+        )
     elseif kind === :catalysis
-        return rgm.C_qKk_cat, rgm.C0_qKk_cat, rgm.nlt_qKk_cat
+        return _maybe_remove_h_redundancy(
+            rgm.C_qKk_cat,
+            rgm.C0_qKk_cat,
+            rgm.nlt_qKk_cat;
+            remove_h_redundancy=remove_h_redundancy,
+        )
     elseif kind === :combined || kind === :all
         C_bind, C0_bind, nlt_bind = get_C_C0_nullity_qKk(get_bind_regime(rgm))
         C_cat, C0_cat, nlt_cat = rgm.C_qKk_cat, rgm.C0_qKk_cat, rgm.nlt_qKk_cat
-        return vcat(C_bind, C_cat), vcat(C0_bind, C0_cat), max(nlt_bind, nlt_cat)
+        return _maybe_remove_h_redundancy(
+            vcat(C_bind, C_cat),
+            vcat(C0_bind, C0_cat),
+            max(nlt_bind, nlt_cat);
+            remove_h_redundancy=remove_h_redundancy,
+        )
     else
         error("Unsupported kind=$kind. Use :binding, :catalysis, or :combined.")
     end
@@ -778,7 +872,13 @@ end
 get_F_F0(rgm::BncRegime) = get_affine_wKk2qcat(rgm)
 
 ## Consistency condition
-get_C_C0_nullity_wKk(rgm::BncRegime) = rgm.C_wKk, rgm.C0_wKk, rgm.nlt
+get_C_C0_nullity_wKk(rgm::BncRegime; remove_h_redundancy::Bool=false) =
+    _maybe_remove_h_redundancy(
+        rgm.C_wKk,
+        rgm.C0_wKk,
+        rgm.nlt;
+        remove_h_redundancy=remove_h_redundancy,
+    )
 
 
 
@@ -796,12 +896,12 @@ get_C0(rgm::CatalysisRegime) = get_C0_v(rgm)
 get_H_H0(rgm::BindRegime) = get_affine_qK2x(rgm)
 get_H_H0(rgm::BncRegime) = get_affine_wKk2x(rgm)
 
-get_C_C0_qKk(rgm, args...) = get_C_C0_nullity_qKk(rgm, args...)[1:2]
-get_C_qKk(rgm, args...) = get_C_C0_nullity_qKk(rgm, args...)[1]
-get_C0_qKk(rgm, args...) = get_C_C0_nullity_qKk(rgm, args...)[2]
-get_C_C0_wKk(rgm) = get_C_C0_nullity_wKk(rgm)[1:2]
-get_C_wKk(rgm) = get_C_C0_nullity_wKk(rgm)[1]
-get_C0_wKk(rgm) = get_C_C0_nullity_wKk(rgm)[2]
+get_C_C0_qKk(rgm, args...; kwargs...) = get_C_C0_nullity_qKk(rgm, args...; kwargs...)[1:2]
+get_C_qKk(rgm, args...; kwargs...) = get_C_C0_nullity_qKk(rgm, args...; kwargs...)[1]
+get_C0_qKk(rgm, args...; kwargs...) = get_C_C0_nullity_qKk(rgm, args...; kwargs...)[2]
+get_C_C0_wKk(rgm; kwargs...) = get_C_C0_nullity_wKk(rgm; kwargs...)[1:2]
+get_C_wKk(rgm; kwargs...) = get_C_C0_nullity_wKk(rgm; kwargs...)[1]
+get_C0_wKk(rgm; kwargs...) = get_C_C0_nullity_wKk(rgm; kwargs...)[2]
 
 
 
@@ -831,16 +931,28 @@ get_M0(args...) = get_M_M0(args...)[2]
 # Basic Condition matrix in x space and v space
 
 
-get_C_C0_x(args...) = get_C_C0_x(get_bind_regime(args...; inv_info=false)) 
-get_C_x(args...) = get_C_C0_x(args...)[1]
-get_C0_x(args...) = get_C_C0_x(args...)[2]
+get_C_C0_x(args...; remove_h_redundancy::Bool=false, kwargs...) =
+    get_C_C0_x(
+        get_bind_regime(args...; inv_info=false, kwargs...);
+        remove_h_redundancy=remove_h_redundancy,
+    )
+get_C_x(args...; kwargs...) = get_C_C0_x(args...; kwargs...)[1]
+get_C0_x(args...; kwargs...) = get_C_C0_x(args...; kwargs...)[2]
 
-get_C_C0_xk(args...) = get_C_C0_xk(get_bind_regime(args...; inv_info=false))
+get_C_C0_xk(args...; remove_h_redundancy::Bool=false, kwargs...) =
+    get_C_C0_xk(
+        get_bind_regime(args...; inv_info=false, kwargs...);
+        remove_h_redundancy=remove_h_redundancy,
+    )
 
-get_C_C0_nullity_qK(args...; kwargs...) = get_bind_regime(args...; inv_info=true, kwargs...) |> vtx -> (vtx.C_qK, vtx.C0_qK, vtx.nullity)
-get_C_C0_qK(args...) = get_C_C0_nullity_qK(args...)[1:2]
-get_C_qK(args...) = get_C_C0_nullity_qK(args...)[1]
-get_C0_qK(args...) = get_C_C0_nullity_qK(args...)[2]
+get_C_C0_nullity_qK(args...; remove_h_redundancy::Bool=false, kwargs...) =
+    get_C_C0_nullity_qK(
+        get_bind_regime(args...; inv_info=true, kwargs...);
+        remove_h_redundancy=remove_h_redundancy,
+    )
+get_C_C0_qK(args...; kwargs...) = get_C_C0_nullity_qK(args...; kwargs...)[1:2]
+get_C_qK(args...; kwargs...) = get_C_C0_nullity_qK(args...; kwargs...)[1]
+get_C0_qK(args...; kwargs...) = get_C_C0_nullity_qK(args...; kwargs...)[2]
 
 get_C_C0_nullity(args...;kwargs...) = get_C_C0_nullity_qK(args...;kwargs...)
 get_C_C0(args...;kwargs...) = get_C_C0_nullity(args...;kwargs...) |> x->(x[1], x[2]) 
