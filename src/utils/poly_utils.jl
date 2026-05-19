@@ -1,4 +1,4 @@
-export get_one_inner_point
+export get_one_inner_point, polyhedra_hrep_library, polyhedra_regime_graph
 
 
 function same_polyhedron(P, Q)
@@ -12,6 +12,199 @@ function same_polyhedron(P, Q)
            all(h -> issubset(Q, h), allhalfspaces(HP)) &&
            all(h -> issubset(Q, h), hyperplanes(HP))
 end
+
+function _poly_canonical_copy(poly::Polyhedron; canonicalize::Bool=true)
+    out = polyhedron(hrep(poly), POLY_BACK_END)
+    if canonicalize
+        removehredundancy!(out)
+    end
+    detecthlinearity!(out)
+    return out
+end
+
+function _poly_exact_log_constant(x; tol::Float64=1.0e-10)
+    x isa ExactLogExpr && return x
+    x isa Integer && return ExactLogExpr(x)
+    x isa Rational && return ExactLogExpr(x)
+    return ExactLogExpr(rationalize(Int, Float64(x); tol=tol))
+end
+
+function _poly_sparse_rational_vec(v; tol::Float64=1.0e-10)
+    vv = vec(v)
+    I = Int[]
+    V = Rational{Int}[]
+    for i in eachindex(vv)
+        val = vv[i]
+        abs(Float64(val)) <= tol && continue
+        push!(I, i)
+        push!(V, val isa Rational{Int} ? val : rationalize(Int, Float64(val); tol=tol))
+    end
+    return sparsevec(I, V, length(vv))
+end
+
+function _poly_add_halfspace!(
+    db::RegimeToHyperplanePool,
+    c,
+    c0,
+    sign::Integer=1;
+    tol::Float64=1.0e-10,
+)
+    return add_halfspace!(
+        db,
+        _poly_sparse_rational_vec(c; tol=tol),
+        _poly_exact_log_constant(c0; tol=tol),
+        Int8(sign);
+        canonicalize=true,
+    )
+end
+
+function _poly_add_hrep_to_library!(
+    db::RegimeToHyperplanePool,
+    poly::Polyhedron,
+    poly_idx::Int,
+    I::Vector{Int},
+    J::Vector{Int},
+    V::Vector{Int8};
+    tol::Float64=1.0e-10,
+)
+    C, C0, _ = get_C_C0_nullity(poly)
+    for row in axes(C, 1)
+        hid, dir = _poly_add_halfspace!(db, @view(C[row, :]), C0[row], 1; tol=tol)
+        hid == 0 && continue
+        push!(I, poly_idx)
+        push!(J, hid)
+        push!(V, dir)
+    end
+    return db
+end
+
+function _poly_finalize_incidence!(
+    db::RegimeToHyperplanePool,
+    I::Vector{Int},
+    J::Vector{Int},
+    V::Vector{Int8},
+    n_polys::Int,
+)
+    M = sparse(I, J, V, n_polys, length(db.hyperplanes))
+    MT = sparse(J, I, V, length(db.hyperplanes), n_polys)
+    db.hp_to_poly = FacetIncidence(M, MT)
+    return db
+end
+
+function _poly_validate_same_ambient_dim(polys::AbstractVector{<:Polyhedron})
+    isempty(polys) && throw(ArgumentError("polys must not be empty"))
+    ambient_dim = fulldim(first(polys))
+    for (i, poly) in enumerate(polys)
+        fulldim(poly) == ambient_dim ||
+            throw(ArgumentError("polys[$i] has fulldim=$(fulldim(poly)); expected $ambient_dim"))
+    end
+    return ambient_dim
+end
+
+"""
+    polyhedra_hrep_library(polys; canonicalize=true, tol=1e-10) -> RegimeToHyperplanePool
+
+Build a hyperplane library from the H-representations of `polys`. Rows of
+`library.hp_to_poly.M` correspond to polyhedron indices, so each input
+polyhedron is represented as one indexed regime in the library.
+"""
+function polyhedra_hrep_library(
+    polys::AbstractVector{<:Polyhedron};
+    canonicalize::Bool=true,
+    tol::Float64=1.0e-10,
+)
+    ambient_dim = _poly_validate_same_ambient_dim(polys)
+    db = RegimeToHyperplanePool(ambient_dim)
+    I = Int[]
+    J = Int[]
+    V = Int8[]
+
+    for (poly_idx, poly) in enumerate(polys)
+        canonical_poly = _poly_canonical_copy(poly; canonicalize=canonicalize)
+        _poly_add_hrep_to_library!(db, canonical_poly, poly_idx, I, J, V; tol=tol)
+    end
+
+    return _poly_finalize_incidence!(db, I, J, V, length(polys))
+end
+
+function _poly_intersection_dim(poly1::Polyhedron, poly2::Polyhedron)
+    ins = intersect(poly1, poly2)
+    try
+        detecthlinearity!(ins)
+        return dim(ins), ins
+    catch
+        return typemin(Int), ins
+    end
+end
+
+function _poly_interface_from_intersection(ins::Polyhedron; tol::Float64=1.0e-10)
+    hplanes = collect(hyperplanes(ins))
+    isempty(hplanes) && return nothing
+    hp = hplanes[end]
+    c = droptol!(sparse(hp.a), tol)
+    c0 = -hp.β
+    return c, c0
+end
+
+"""
+    polyhedra_regime_graph(polys; canonicalize=true, tol=1e-10, edge_space=:poly) -> RegimeGraph
+
+Construct a `RegimeGraph` whose nodes are the input polyhedra. Two nodes are
+connected when their intersection has dimension `fulldim(polys[1]) - 1`.
+The graph carries a reconstructed H-rep hyperplane library so existing
+`draw_graph(::RegimeGraph)` machinery can render nodes and edge labels.
+"""
+function polyhedra_regime_graph(
+    polys::AbstractVector{<:Polyhedron};
+    canonicalize::Bool=true,
+    tol::Float64=1.0e-10,
+    edge_space::Symbol=:poly,
+)
+    ambient_dim = _poly_validate_same_ambient_dim(polys)
+    canonical_polys = [_poly_canonical_copy(poly; canonicalize=canonicalize) for poly in polys]
+    db = RegimeToHyperplanePool(ambient_dim)
+    I = Int[]
+    J = Int[]
+    V = Int8[]
+
+    for (poly_idx, poly) in enumerate(canonical_polys)
+        _poly_add_hrep_to_library!(db, poly, poly_idx, I, J, V; tol=tol)
+    end
+
+    n = length(canonical_polys)
+    neighbors = [RegimeEdge[] for _ in 1:n]
+    target_dim = ambient_dim - 1
+
+    for i in 1:(n - 1)
+        for j in (i + 1):n
+            ins_dim, ins = _poly_intersection_dim(canonical_polys[i], canonical_polys[j])
+            ins_dim == target_dim || continue
+
+            interface = _poly_interface_from_intersection(ins; tol=tol)
+            isnothing(interface) && continue
+            c, c0 = interface
+            hid, dir = _poly_add_halfspace!(db, c, c0, 1; tol=tol)
+            hid == 0 && continue
+
+            push!(neighbors[i], RegimeEdge(j, 0, Tuple{Int,Int8}[(hid, dir)]))
+            push!(neighbors[j], RegimeEdge(i, 0, Tuple{Int,Int8}[(hid, -dir)]))
+        end
+    end
+
+    _poly_finalize_incidence!(db, I, J, V, n)
+    return RegimeGraph(
+        neighbors,
+        Any[db];
+        bn=nothing,
+        space_idx=Dict(edge_space => 1),
+    )
+end
+
+get_neighbor_graph(polys::AbstractVector{<:Polyhedron}; kwargs...) =
+    get_neighbor_graph(polyhedra_regime_graph(polys); kwargs...)
+
+draw_graph(polys::AbstractVector{<:Polyhedron}; kwargs...) =
+    draw_graph(polyhedra_regime_graph(polys); kwargs...)
 
 
 

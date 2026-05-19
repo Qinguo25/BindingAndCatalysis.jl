@@ -5,6 +5,8 @@ export get_idx, get_perm, get_regime, get_neighbors, get_nullity
 export get_P_P0, get_P, get_P0
 export get_M_M0, get_M, get_M0
 export get_H_H0, get_H, get_H0
+export get_affine_x2q, get_affine_x2qK, get_affine_x2qcat, get_affine_x2w, get_affine_x2K
+export get_affine_qK2x, get_affine_xk2qKk, get_affine_qKk2xk
 export get_C_C0_x, get_C_x, get_C0_x
 export get_C_C0_nullity_qK, get_C_C0_qK, get_C_qK, get_C0_qK
 export get_C_C0_nullity, get_C_C0, get_C, get_C0

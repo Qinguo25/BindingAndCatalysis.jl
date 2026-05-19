@@ -1,5 +1,6 @@
 export find_catalysis_regimes!, get_catalysis_network, get_catalysis_regime, get_catalysis_regimes, get_catalysis_regimes_dict
 export get_PΠ, get_CΠ, get_P_pos_neg, get_P0_pos_neg
+export get_affine_xk2v, get_affine_v2f, get_affine_xk2f, get_affine_x2k̃, get_affine_k2k̃
 export get_C_k, get_C_C0_xk, get_C0_xk, get_C_xk, get_C_C0_nullity_xk
 
 

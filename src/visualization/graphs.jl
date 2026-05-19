@@ -36,7 +36,7 @@ function add_rgm_colorbar!(F, cmap::RegimeColorMap)::Nothing
     return nothing
 end
 
-function get_color_map(vec::AbstractArray; colormap=:rainbow, render_func=nothing, appendix="#")::RegimeColorMap
+function get_color_map(vec::AbstractArray; colormap=:Pastel1_9, render_func=nothing, appendix="#")::RegimeColorMap
     keys = sort!(unique(vec))
     col_map_dict = Dict(keys[i] => i for i in eachindex(keys))
     cmap_disc = let
@@ -56,7 +56,7 @@ function get_color_map(vec::AbstractArray; colormap=:rainbow, render_func=nothin
     return RegimeColorMap(keys, col_map_dict, cmap_disc, render)
 end
 
-get_color_map(model::Bnc, args...; colormap=:rainbow, kwargs...) = get_color_map(get_perms(model, args...; kwargs...), colormap=colormap)
+get_color_map(model::Bnc, args...; colormap=:Pastel1_9, kwargs...) = get_color_map(get_perms(model, args...; kwargs...), colormap=colormap)
 
 function get_edge_weight_vec(Bnc::Bnc, change_qK_idx)::Vector{Tuple{Edge,Dict{Symbol,Any}}}
     vg = get_regimes_graph!(Bnc; full=true)
@@ -201,6 +201,7 @@ end
 end
 
 function _regime_graph_kind(grh::RegimeGraph)
+    isnothing(grh.bn) && return :polyhedron
     haskey(grh.space_idx, :qKk) && return :bnc
     haskey(grh.space_idx, :v) && return :catalysis
     return :binding
@@ -292,7 +293,9 @@ end
 
 function _regime_graph_node_labels(grh::RegimeGraph)
     kind = _regime_graph_kind(grh)
-    if kind === :binding
+    if kind === :polyhedron
+        return string.(1:length(grh.neighbors))
+    elseif kind === :binding
         return get_node_labels(get_binding_network(grh))
     elseif kind === :catalysis
         return _catalysis_node_label.(get_catalysis_regimes(grh.bn))
@@ -321,7 +324,9 @@ function _regime_graph_node_colors(
     regular_color="#CCFFCC",
 )
     kind = _regime_graph_kind(grh)
-    if kind === :binding
+    if kind === :polyhedron
+        return fill(regular_color, length(grh.neighbors))
+    elseif kind === :binding
         return get_node_colors(
             get_binding_network(grh);
             singular_color=singular_color,
@@ -344,6 +349,7 @@ function _regime_graph_node_colors(
 end
 
 function _regime_graph_node_size(grh::RegimeGraph; default_node_size=50, kwargs...)
+    _regime_graph_kind(grh) === :polyhedron && return fill(default_node_size, length(grh.neighbors))
     _regime_graph_kind(grh) === :binding && return get_node_size(get_binding_network(grh); default_node_size=default_node_size, kwargs...)
     return fill(default_node_size, length(grh.neighbors))
 end
@@ -355,7 +361,9 @@ function _node_subset_by_nullity(
 )
     hide_nullity_ge_2 || return collect(1:length(grh.neighbors))
     kind = _regime_graph_kind(grh)
-    if kind === :binding
+    if kind === :polyhedron
+        return collect(1:length(grh.neighbors))
+    elseif kind === :binding
         model = get_binding_network(grh)
         return [i for i in 1:length(grh.neighbors) if get_nullity(model, i) <= 1]
     elseif kind === :bnc
@@ -367,7 +375,7 @@ end
 
 function _regime_graph_title(grh::RegimeGraph, edge_space::Symbol)
     kind = _regime_graph_kind(grh)
-    prefix = kind === :binding ? "Binding" : kind === :catalysis ? "Catalysis" : "Bnc"
+    prefix = kind === :polyhedron ? "Polyhedron" : kind === :binding ? "Binding" : kind === :catalysis ? "Catalysis" : "Bnc"
     return "$prefix regime graph (:$edge_space)"
 end
 

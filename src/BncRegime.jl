@@ -4,6 +4,9 @@ export get_C_C0_xk, get_C0_xk, get_C_xk
 export get_C_C0_qKk, get_C0_qKk, get_C_qKk, get_C_C0_nullity_qKk
 export get_C_C0_wKk, get_C0_wKk, get_C_wKk, get_C_C0_nullity_wKk
 export get_H_bd, get_H_bd_numerically, get_qcat_F_F0
+export get_affine_qKk2v, get_affine_x2Kk̃, get_affine_x2wKk̃, get_affine_xk2wKk̃k
+export get_affine_wKk2wKk̃k, get_affine_wKk2wKk̃, get_affine_wKk̃2x, get_affine_wKk̃k2xk
+export get_affine_wKk2x, get_affine_wKk2xk, get_affine_wKk2v, get_affine_wKk2qcat
 export judge_stability!, is_stable
 export get_volume, get_volumes
 

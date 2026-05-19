@@ -1,10 +1,10 @@
 """
     Bnc(; N=nothing, L=nothing, x_sym=nothing, q_sym=nothing, K_sym=nothing,
-        Γ=nothing, Π=nothing, k_sym=nothing, v_sym=nothing, w_sym=nothing, cat_x_idx=nothing) -> Bnc
+        Γ=nothing, Π=nothing, k_sym=nothing, v_sym=nothing, w_sym=nothing, x_picked=nothing, q_picked=nothing) -> Bnc
 
 Construct a binding network model from stoichiometry (`N`) or conservation (`L`)
 matrices and optional symbol metadata. Catalysis data can be attached through
-`Γ`, `Π`, `k_sym`, `v_sym`, and `w_sym`.
+`Γ`, `Π`, `k_sym`, `v_sym`, `w_sym`, `x_picked`, and `q_picked`.
 
 # Keyword Arguments
 - `N`: Stoichiometry matrix (reactions × species).
@@ -13,11 +13,13 @@ matrices and optional symbol metadata. Catalysis data can be attached through
 - `q_sym`: Symbols for total concentrations.
 - `K_sym`: Symbols for binding constants.
 - `Γ`: Catalysis change matrix in qK space.
-- `Π`: Catalysis index and coefficient matrix.
+- `Π`: Catalysis index and coefficient matrix. If omitted while `Γ` and
+  `x_picked` are supplied, defaults to the identity on the picked species.
 - `k_sym`: Symbols for catalysis rate constants.
 - `v_sym`: Symbols for catalysis fluxes.
 - `w_sym`: Symbols for the new conservation quantities induced by catalysis.
-- `cat_x_idx`: Index of catalytic species.
+- `x_picked`: Picked species for catalysis flux monomials.
+- `q_picked`: Picked qK coordinates affected by catalysis.
 
 # Returns
 - A `Bnc` model with derived matrices and caches initialized.
@@ -57,14 +59,37 @@ function Bnc(;N=nothing,L=nothing,
     K_sym = isnothing(K_sym) ? Symbolics.variables(:K, 1:r) : name_converter(K_sym) # convert K_sym to a vector of symbols
 
     model = Bnc{Int}(N, L, x_sym, q_sym, K_sym, nothing)
+    _warn_if_free_energy_qK2x_disabled(model)
     update_catalysis!(model; kwargs...)
     return model
+end
+
+function _free_energy_qK2x_allowed(model::Bnc; tol::Real=0)
+    residual = dropzeros(model.L * transpose(model.N))
+    if tol <= 0
+        return nnz(residual) == 0
+    end
+    nz = nonzeros(residual)
+    return isempty(nz) || maximum(abs.(nz)) <= tol
+end
+
+_default_method(model::Bnc) = _free_energy_qK2x_allowed(model) ? :free_energy : :homotopy
+
+function _resolve_qK2x_method(model::Bnc, method::Union{Symbol,Nothing})
+    resolved = isnothing(method) ? _default_method(model) : method
+    return (resolved === :free_energy && !_free_energy_qK2x_allowed(model)) ? :homotopy : resolved
+end
+
+function _warn_if_free_energy_qK2x_disabled(model::Bnc)
+    _free_energy_qK2x_allowed(model) && return nothing
+    @warn "L * N' is nonzero; qK2x defaults to :homotopy and :free_energy requests are redirected to :homotopy for this model."
+    return nothing
 end
 
 
 
 """
-    update_catalysis!(bnc::Bnc; Γ=nothing, Π=nothing, k_sym=nothing, v_sym=nothing, w_sym=nothing, cat_x_idx=nothing) -> Bnc
+    update_catalysis!(bnc::Bnc; Γ=nothing, Π=nothing, k_sym=nothing, v_sym=nothing, w_sym=nothing, x_picked=nothing, q_picked=nothing) -> Bnc
 
 Attach or update catalysis data on a `Bnc` model in-place.
 
@@ -73,11 +98,13 @@ Attach or update catalysis data on a `Bnc` model in-place.
 
 # Keyword Arguments
 - `Γ`: Catalysis change matrix in qK space.
-- `Π`: Catalysis index and coefficient matrix.
+- `Π`: Catalysis index and coefficient matrix. If omitted while `Γ` and
+  `x_picked` are supplied, defaults to the identity on the picked species.
 - `k_sym`: Symbols for catalysis rate constants.
 - `v_sym`: Symbols for catalysis fluxes, where `log v = Π log x + log k`.
 - `w_sym`: Symbols for the new conservation quantities induced by catalysis.
-- `cat_x_idx`: Index of catalytic species.
+- `x_picked`: Picked species for catalysis flux monomials.
+- `q_picked`: Picked qK coordinates affected by catalysis.
 
 # Returns
 - The updated `bnc`.
@@ -93,8 +120,13 @@ function update_catalysis!(model::Bnc;
     )
     if isnothing(Γ) && isnothing(Π)
         return nothing
-    else 
-        @assert !isnothing(Γ) && !isnothing(Π) "You shall provide both Γ and Π"
+    elseif isnothing(Γ)
+        throw(ArgumentError("You shall provide Γ when providing Π."))
+    elseif isnothing(Π)
+        isnothing(x_picked) && throw(ArgumentError("You shall provide Π, or provide x_picked so Π can default to the identity on picked species."))
+        n_flux = size(Γ, 2)
+        length(x_picked) == n_flux || throw(ArgumentError("When Π is omitted, length(x_picked) must match the number of catalysis fluxes, got $(length(x_picked)) and $n_flux."))
+        Π = Matrix{Int}(I, n_flux, n_flux)
     end
 
     Π = if isnothing(x_picked)
@@ -121,6 +153,7 @@ function update_catalysis!(model::Bnc;
     v_sym = isnothing(v_sym) ? Symbolics.variables(:v, 1:size(Π,1)) : name_converter(v_sym)
     w_sym = isnothing(w_sym) ? nothing : name_converter(w_sym)
     model.catalysis = CatalysisData(model, Γ, Π, k_sym, w_sym, v_sym)
+    _warn_if_free_energy_qK2x_disabled(model)
     return nothing
 end
 

@@ -67,7 +67,7 @@ end
 
 """
     qK2x(bnc::Bnc, qK; K=nothing, logK=nothing, input_logspace=false, output_logspace=false,
-        startlogx=nothing, startlogqK=nothing, use_vtx=false, method=:homotopy,
+        startlogx=nothing, startlogqK=nothing, use_vtx=false, method=nothing,
         reltol=1e-8, abstol=1e-10, kwargs...) -> Vector
 
 Map from totals/binding constants (`qK`) to species concentrations `x`.
@@ -85,7 +85,9 @@ Map from totals/binding constants (`qK`) to species concentrations `x`.
 - `startlogqK`: Initial log10(qK) for homotopy.
 - `use_vtx`: Use regime-based closed form when `true`.
 - `method`: Solver method. Supported built-ins are `:homotopy`, `:free_energy`,
-  `:newton_nullspace`, `:nlsolve`, and `:regime`.
+  `:newton_nullspace`, `:nlsolve`, and `:regime`. If omitted, `_default_method`
+  chooses `:free_energy` only when the conservation and reaction matrices are
+  orthogonal; otherwise it chooses `:homotopy`.
 - `reltol`, `abstol`: Solver tolerances.
 - `kwargs...`: Passed through to the solver.
 
@@ -98,11 +100,12 @@ function qK2x(Bnc::Bnc, qK::AbstractVector{<:Real};
     startlogx::Union{Vector{<:Real},Nothing}=nothing,
     startlogqK::Union{Vector{<:Real},Nothing}=nothing,
     use_vtx::Bool=false,
-    method::Symbol = :homotopy,
+    method::Union{Symbol,Nothing}=nothing,
     reltol = 1e-8,
     abstol = 1e-10,
     kwargs...
 )::Vector{Float64}
+    method = _resolve_qK2x_method(Bnc, method)
     endlogqK = input_logspace ? qK : log10.(qK)
 
     logx = if use_vtx || method === :regime
@@ -801,12 +804,12 @@ end
 function _direct_logx_checked(
     model::Bnc,
     logqK::AbstractVector{<:Real};
-    method::Symbol=:free_energy,
+    method::Union{Symbol,Nothing}=nothing,
     tol::Float64=1e-6,
     qK2x_maxiters::Integer=80,
     startlogx=nothing,
 )
-    method = method === :homotopy ? :free_energy : method
+    method = _resolve_qK2x_method(model, method)
     logx = try
         qK2x(
             model,
@@ -868,9 +871,7 @@ end
 
 Simulate reduced catalysis dynamics for `qcat` while `w`, `K`, and `k` are
 held fixed or supplied by a time-dependent `logwKk(t)` function.  The ODE state
-is `log10(qcat)`.  Inside the RHS, `method=:homotopy` is deliberately treated
-as `:free_energy`, because using homotopy there would nest one ODE solve inside
-another ODE solve.
+is `log10(qcat)`.
 """
 function qcat_traj_cat(
     model::Bnc,
@@ -879,7 +880,7 @@ function qcat_traj_cat(
     tspan::Tuple{<:Real,<:Real};
     input_logspace::Bool=true,
     output_logspace::Bool=true,
-    method::Symbol=:free_energy,
+    method::Union{Symbol,Nothing}=nothing,
     tol::Float64=1e-6,
     qK2x_maxiters::Integer=80,
     alg=nothing,
@@ -896,8 +897,7 @@ function qcat_traj_cat(
 )
     have_catalysis(model) || throw(ArgumentError("model has no catalysis data."))
     cn = model.catalysis
-    inner_method = method === :homotopy ? :free_energy : method
-    method === :homotopy && @warn "qcat_traj_cat does not use homotopy inside the ODE RHS; using :free_energy for qK -> x solves."
+    inner_method = _resolve_qK2x_method(model, method)
     first_logwKk = _logwKk_at(logwKk, Float64(tspan[1]); input_logspace=input_logspace)
     expected_wKk_len = cn.d_w + model.r + cn.n_v
     length(first_logwKk) == expected_wKk_len || throw(ArgumentError("logwKk length must be $expected_wKk_len, got $(length(first_logwKk)). Available wKk symbols: $(wKk_symbol(model))."))
@@ -1000,7 +1000,7 @@ function _default_logqcat0_for_adaptation(model::Bnc, logwKk::AbstractVector{<:R
     return out
 end
 
-function _observe_adaptation_value(model::Bnc, logqcat, logwKk; observe=:Astar, method::Symbol=:free_energy, tol::Float64=1e-6, qK2x_maxiters::Integer=80)
+function _observe_adaptation_value(model::Bnc, logqcat, logwKk; observe=:Astar, method::Union{Symbol,Nothing}=nothing, tol::Float64=1e-6, qK2x_maxiters::Integer=80)
     if observe in q_cat_symbol(model)
         return logqcat[locate_sym_qcat(model, observe)]
     end
@@ -1026,7 +1026,7 @@ function simulate_adaptation(
     logqcat0=nothing,
     tspan=(0.0, 200.0),
     observe=:Astar,
-    method::Symbol=:free_energy,
+    method::Union{Symbol,Nothing}=nothing,
     tol::Float64=1e-6,
     qK2x_maxiters::Integer=80,
     saveat=range(Float64(tspan[1]), Float64(tspan[2]), length=500),
@@ -1058,7 +1058,7 @@ function simulate_adaptation(
     logqcat = reduce(hcat, us)
     obs = Vector{Float64}(undef, length(t))
     logtI_vals = Vector{Float64}(undef, length(t))
-    inner_method = method === :homotopy ? :free_energy : method
+    inner_method = _resolve_qK2x_method(model, method)
     observe_is_qcat = observe in q_cat_symbol(model)
     last_logx = nothing
     for (j, tj) in pairs(t)

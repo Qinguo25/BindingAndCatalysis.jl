@@ -100,6 +100,20 @@ end
     @test string.(q_sym(model)) == ["tE", "wtot"]
 end
 
+@testset "Catalysis Default Identity Pi From Picked Species" begin
+    model = minimal_model()
+    update_catalysis!(
+        model;
+        Γ = [1 -1; -1 1],
+        x_picked = [:E, :S],
+        q_picked = [:tE, :tS],
+        k_sym = [:β, :γ],
+    )
+
+    @test Matrix(get_catalysis_network(model).Π) == [1 0 0; 0 1 0]
+    @test string.(q_cat_sym(model)) == ["tE"]
+end
+
 @testset "Minimal Binding-Catalysis wKk Example" begin
     L = [
         0 1 1

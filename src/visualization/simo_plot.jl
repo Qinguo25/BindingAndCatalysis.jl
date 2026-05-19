@@ -14,7 +14,8 @@ function _full_qK(params::AbstractVector{<:Real}, change_idx::Integer, q::Real)
     return out
 end
 
-function _simo_logx_grid(model::Bnc, params, change_idx, qvals; method::Symbol=:free_energy, show_params::Bool=false)
+function _simo_logx_grid(model::Bnc, params, change_idx, qvals; method::Union{Symbol,Nothing}=nothing, show_params::Bool=false)
+    method = _resolve_qK2x_method(model, method)
     if show_params
         qK_syms = qK_symbol(model)
         deleteat!(qK_syms, change_idx)
@@ -98,13 +99,13 @@ function SIMO_plot(
     stop::Real=6,
     observe_x=nothing,
     npoints::Integer=300,
-    method::Symbol=:free_energy,
+    method::Union{Symbol,Nothing}=nothing,
     add_regime_line::Bool=true,
     shade_background::Bool=true,
     show_regime_label::Bool=true,
     show_regime_colorbar::Bool=false,
     region_alpha::Real=0.12,
-    region_colormap=:rainbow,
+    region_colormap=:Pastel1_9,
     size=(760, 500),
     show_params::Bool=true,
     title=nothing,

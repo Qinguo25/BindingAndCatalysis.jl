@@ -8,7 +8,8 @@ function _axis_indices(syms, axes)
     return Int[locate_sym(syms, ax) for ax in axes]
 end
 
-function solve_logx_checked(model::Bnc, logqK::AbstractVector{<:Real}; method::Symbol=:free_energy, tol::Float64=1e-6)
+function solve_logx_checked(model::Bnc, logqK::AbstractVector{<:Real}; method::Union{Symbol,Nothing}=nothing, tol::Float64=1e-6)
+    method = _resolve_qK2x_method(model, method)
     logx = try
         method === :free_energy ?
             qK2x(model, logqK; input_logspace=true, output_logspace=true, method=method, warn_on_maxiters=false) :
@@ -66,7 +67,7 @@ function _axis_ranges(naxes::Int; ranges=(-3.0, 3.0), n::Integer=80, input_logsp
     end
 end
 
-function _partition_color_matrix(vals; colormap=:rainbow)
+function _partition_color_matrix(vals; colormap=:Pastel1_9)
     valid = [v for v in vec(vals) if !(v == 0)]
     isempty(valid) && return fill(RGBAf(0, 0, 0, 0), size(vals)), nothing
     cmap = get_color_map(valid; colormap=colormap, appendix="#")
@@ -77,7 +78,7 @@ function _partition_color_matrix(vals; colormap=:rainbow)
     return colors, cmap
 end
 
-function _draw_partition_2d(xs, ys, vals; xlabel="", ylabel="", title="", colormap=:rainbow, categorical::Bool=true, colorrange=nothing)
+function _draw_partition_2d(xs, ys, vals; xlabel="", ylabel="", title="", colormap=:Pastel1_9, categorical::Bool=true, colorrange=nothing)
     fig = Figure(size=(760, 620))
     ax = Axis(fig[1, 1], xlabel=xlabel, ylabel=ylabel, title=title)
     if categorical
@@ -92,7 +93,7 @@ function _draw_partition_2d(xs, ys, vals; xlabel="", ylabel="", title="", colorm
     return fig, ax
 end
 
-function _draw_partition_3d(xs, ys, zs, vals; xlabel="", ylabel="", zlabel="", title="", colormap=:rainbow, categorical::Bool=true, colorrange=nothing)
+function _draw_partition_3d(xs, ys, zs, vals; xlabel="", ylabel="", zlabel="", title="", colormap=:Pastel1_9, categorical::Bool=true, colorrange=nothing)
     fig = Figure(size=(820, 720))
     ax = Axis3(fig[1, 1], xlabel=xlabel, ylabel=ylabel, zlabel=zlabel, title=title)
     coords = Point3f[]
@@ -118,7 +119,7 @@ function _binding_partition_value(
     logqK::AbstractVector{<:Real};
     chart::Symbol,
     value_func,
-    method::Symbol,
+    method::Union{Symbol,Nothing},
     asymptotic_only::Bool,
     tol::Float64,
 )
@@ -142,7 +143,7 @@ function _fill_binding_partition_direct!(
     rgs;
     chart::Symbol,
     value_func,
-    method::Symbol,
+    method::Union{Symbol,Nothing},
     asymptotic_only::Bool,
     tol::Float64,
     categorical::Bool,
@@ -241,7 +242,7 @@ end
 
 """
     plot_binding_regime_partition(model; axes, fixed=nothing, ranges=(-6,6), n=100,
-        chart=:qK, value_func=nothing, method=:free_energy)
+        chart=:qK, value_func=nothing, method=nothing)
 
 Plot a 2D or 3D partition over selected `qK` coordinates. `chart=:qK`
 classifies by `assign_regime_qK`; `chart=:x` first solves `qK -> x` and
@@ -256,13 +257,14 @@ function plot_binding_regime_partition(
     n::Integer=100,
     chart::Symbol=:qK,
     value_func=nothing,
-    method::Symbol=:free_energy,
+    method::Union{Symbol,Nothing}=nothing,
     input_logspace::Bool=true,
-    colormap=:rainbow,
+    colormap=:Pastel1_9,
     colorrange=nothing,
     asymptotic_only::Bool=false,
     tol::Float64=1e-6,
 )
+    method = _resolve_qK2x_method(model, method)
     syms = qK_sym(model)
     idxs = _axis_indices(syms, axes)
     rgs = _axis_ranges(length(idxs); ranges=ranges, n=n, input_logspace=input_logspace)
@@ -311,7 +313,7 @@ function plot_bnc_regime_partition(
     n::Integer=100,
     chart::Symbol=:wKk,
     input_logspace::Bool=true,
-    colormap=:rainbow,
+    colormap=:Pastel1_9,
     tol::Float64=1e-6,
     max_nullity::Integer=0,
 )
@@ -343,28 +345,288 @@ function plot_bnc_regime_partition(
     return fig, ax, (; axes=idxs, ranges=rgs, values=vals)
 end
 
-function _fixed_points_qcat(model::Bnc, logwKk; tol::Float64=1e-6)
-    pts = NamedTuple[]
-    for (idx, rgm) in pairs(get_bnc_regimes(model))
-        get_nullity(rgm) == 0 || continue
-        try
-            F, F0 = get_qcat_F_F0(rgm)
-            logqcat = Vector{Float64}(F * logwKk .+ F0)
-            C, C0, nlt = get_C_C0_nullity_wKk(rgm)
-            condition_contains(C, C0, nlt, logwKk; tol=tol) || continue
-            push!(pts, (; idx, logqcat, stable=is_stable(rgm)))
+function _qcat_flux_at(
+    model::Bnc,
+    logqcat::AbstractVector{<:Real},
+    logwKk::AbstractVector{<:Real};
+    method::Union{Symbol,Nothing}=nothing,
+    tol::Float64=1e-6,
+)
+    method = _resolve_qK2x_method(model, method)
+    cn = model.catalysis
+    logqK = _logqK_from_logqcat_logwKk(model, logqcat, logwKk)
+    logx = solve_logx_checked(model, logqK; method=method, tol=tol)
+    isnothing(logx) && return nothing
+
+    logk = @view logwKk[cn.d_w + model.r + 1:cn.d_w + model.r + cn.n_v]
+    logv = cn.Π * logx .+ logk
+    vshift = maximum(logv)
+    vscaled = exp10.(logv .- vshift)
+    qdot_scaled = Vector{Float64}(cn.S * vscaled)
+    qdot_log = qdot_scaled .* exp10.(vshift .- Float64.(logqcat)) ./ log(10.0)
+    return (; qdot_scaled, qdot_log)
+end
+
+function _finite_difference_jacobian(f, x::Vector{Float64}; h::Float64=1e-4)
+    fx = f(x)
+    isnothing(fx) && return nothing
+    J = Matrix{Float64}(undef, length(fx), length(x))
+    for j in eachindex(x)
+        xp = copy(x)
+        xm = copy(x)
+        xp[j] += h
+        xm[j] -= h
+        fp = f(xp)
+        fm = f(xm)
+        (isnothing(fp) || isnothing(fm)) && return nothing
+        J[:, j] .= (fp .- fm) ./ (2h)
+    end
+    return J
+end
+
+
+function _newton_refine_qcat_root(
+    model::Bnc,
+    seed::AbstractVector{<:Real},
+    logwKk::AbstractVector{<:Real},
+    bounds;
+    method::Union{Symbol,Nothing}=nothing,
+    tol::Float64=1e-6,
+    root_tol::Float64=1e-7,
+    maxiters::Integer=30,
+)
+    x = Vector{Float64}(seed)
+    f_scaled(u) = begin
+        out = _qcat_flux_at(model, u, logwKk; method=method, tol=tol)
+        isnothing(out) ? nothing : out.qdot_scaled
+    end
+    for _ in 1:maxiters
+        fx = f_scaled(x)
+        isnothing(fx) && return nothing
+        norm(fx, Inf) <= root_tol && break
+        J = _finite_difference_jacobian(f_scaled, x)
+        isnothing(J) && return nothing
+        step = try
+            -(J \ fx)
         catch
+            return nothing
+        end
+        all(isfinite, step) || return nothing
+
+        accepted = false
+        fx_norm = norm(fx, Inf)
+        damping = 1.0
+        while damping >= 1 / 64
+            trial = x .+ damping .* step
+            in_bounds = all(i -> bounds[i][1] <= trial[i] <= bounds[i][2], eachindex(trial))
+            if in_bounds
+                ftrial = f_scaled(trial)
+                if !isnothing(ftrial) && norm(ftrial, Inf) <= fx_norm
+                    x = trial
+                    accepted = true
+                    break
+                end
+            end
+            damping /= 2
+        end
+        accepted || return nothing
+    end
+    out = _qcat_flux_at(model, x, logwKk; method=method, tol=tol)
+    (isnothing(out) || norm(out.qdot_scaled, Inf) > root_tol) && return nothing
+    return x
+end
+
+function _is_numerically_stable_qcat_root(
+    model::Bnc,
+    logqcat::Vector{Float64},
+    logwKk::AbstractVector{<:Real};
+    method::Union{Symbol,Nothing}=nothing,
+    tol::Float64=1e-6,
+)
+    f_log(u) = begin
+        out = _qcat_flux_at(model, u, logwKk; method=method, tol=tol)
+        isnothing(out) ? nothing : out.qdot_log
+    end
+    J = _finite_difference_jacobian(f_log, logqcat)
+    isnothing(J) && return missing
+    vals = eigvals(J)
+    all(real.(vals) .< 0) ? true : false
+end
+
+function _push_unique_qcat_root!(
+    roots::Vector{Vector{Float64}},
+    root::Vector{Float64};
+    dedup_tol::Float64=1e-3,
+)
+    any(r -> norm(r .- root, Inf) <= dedup_tol, roots) && return false
+    push!(roots, root)
+    return true
+end
+
+function _qcat_root_seeds(rgs, flux, feasible; max_norm_seeds::Integer=80)
+    seeds = Vector{Vector{Float64}}()
+    if length(rgs) == 1
+        xs = collect(rgs[1])
+        for i in eachindex(xs)
+            feasible[i] && push!(seeds, [xs[i]])
+        end
+        return seeds
+    end
+
+    xs = collect(rgs[1])
+    ys = collect(rgs[2])
+    for i in 1:length(xs)-1, j in 1:length(ys)-1
+        all(feasible[i + di, j + dj] for di in 0:1, dj in 0:1) || continue
+        f1s = [flux[i + di, j + dj][1] for di in 0:1, dj in 0:1]
+        f2s = [flux[i + di, j + dj][2] for di in 0:1, dj in 0:1]
+        minimum(f1s) <= 0 <= maximum(f1s) || continue
+        minimum(f2s) <= 0 <= maximum(f2s) || continue
+        push!(seeds, [(xs[i] + xs[i + 1]) / 2, (ys[j] + ys[j + 1]) / 2])
+    end
+
+    norms = Tuple{Float64,Int,Int}[]
+    for i in eachindex(xs), j in eachindex(ys)
+        feasible[i, j] || continue
+        push!(norms, (norm(flux[i, j], Inf), i, j))
+    end
+    sort!(norms; by=first)
+    for (_, i, j) in Iterators.take(norms, max_norm_seeds)
+        push!(seeds, [xs[i], ys[j]])
+    end
+    return seeds
+end
+
+function _numeric_fixed_points_qcat(
+    model::Bnc,
+    logwKk,
+    rgs,
+    flux,
+    feasible;
+    method::Union{Symbol,Nothing}=nothing,
+    tol::Float64=1e-6,
+    root_tol::Float64=1e-7,
+)
+    bounds = [(Float64(first(rg)), Float64(last(rg))) for rg in rgs]
+    roots = Vector{Vector{Float64}}()
+    if length(rgs) == 1
+        xs = collect(rgs[1])
+        fvals = [feasible[i] ? flux[i][1] : NaN for i in eachindex(xs)]
+        for i in 1:length(xs)-1
+            isfinite(fvals[i]) && abs(fvals[i]) <= root_tol && _push_unique_qcat_root!(roots, [xs[i]])
+            (isfinite(fvals[i]) && isfinite(fvals[i + 1])) || continue
+            fvals[i] == 0 && continue
+            sign(fvals[i]) == sign(fvals[i + 1]) && continue
+            lo, hi = xs[i], xs[i + 1]
+            flo, fhi = fvals[i], fvals[i + 1]
+            for _ in 1:60
+                mid = (lo + hi) / 2
+                out = _qcat_flux_at(model, [mid], logwKk; method=method, tol=tol)
+                isnothing(out) && break
+                fmid = out.qdot_scaled[1]
+                abs(fmid) <= root_tol && (lo = hi = mid; break)
+                if sign(flo) == sign(fmid)
+                    lo, flo = mid, fmid
+                else
+                    hi, fhi = mid, fmid
+                end
+                abs(hi - lo) <= 1e-8 && break
+            end
+            _push_unique_qcat_root!(roots, [(lo + hi) / 2])
         end
     end
+
+    for seed in _qcat_root_seeds(rgs, flux, feasible)
+        root = _newton_refine_qcat_root(
+            model,
+            seed,
+            logwKk,
+            bounds;
+            method=method,
+            tol=tol,
+            root_tol=root_tol,
+        )
+        isnothing(root) && continue
+        _push_unique_qcat_root!(roots, root)
+    end
+
+    sort!(roots; by=x -> Tuple(x))
+    pts = NamedTuple[]
+    for (i, root) in pairs(roots)
+        stable = _is_numerically_stable_qcat_root(model, root, logwKk; method=method, tol=tol)
+        push!(pts, (; idx=i, logqcat=root, stable, source=:numeric))
+    end
     return pts
+end
+
+function _draw_qcat_nullclines!(ax, rgs, flux, feasible; colors=(:red, :blue), linewidth::Real=2.5)
+    length(rgs) == 2 || return nothing
+    xs = collect(rgs[1])
+    ys = collect(rgs[2])
+    for component in 1:2
+        field = [feasible[i, j] ? flux[i, j][component] : NaN for i in eachindex(xs), j in eachindex(ys)]
+        contour!(
+            ax,
+            xs,
+            ys,
+            field;
+            levels=[0.0],
+            color=colors[component],
+            linewidth=linewidth,
+        )
+    end
+    return nothing
+end
+
+function _draw_qcat_fixed_points!(
+    ax,
+    fixed_points;
+    label_prefix::AbstractString="FP",
+    labels::Bool=true,
+    markersize::Real=14,
+)
+    isempty(fixed_points) && return nothing
+    if length(first(fixed_points).logqcat) == 1
+        xs = [pt.logqcat[1] for pt in fixed_points]
+        ys = zeros(length(xs))
+        colors = [pt.stable === true ? :black : :white for pt in fixed_points]
+        scatter!(ax, xs, ys; color=colors, strokecolor=:black, strokewidth=1.5, markersize=markersize)
+        labels && text!(
+            ax,
+            xs,
+            ys;
+            text=["$label_prefix$(pt.idx)" for pt in fixed_points],
+            align=(:left, :bottom),
+            offset=(6, 6),
+            color=:black,
+            fontsize=12,
+        )
+    else
+        xs = [pt.logqcat[1] for pt in fixed_points]
+        ys = [pt.logqcat[2] for pt in fixed_points]
+        colors = [pt.stable === true ? :black : :white for pt in fixed_points]
+        scatter!(ax, xs, ys; color=colors, strokecolor=:black, strokewidth=1.5, markersize=markersize)
+        labels && text!(
+            ax,
+            xs,
+            ys;
+            text=["$label_prefix$(pt.idx)" for pt in fixed_points],
+            align=(:left, :bottom),
+            offset=(6, 6),
+            color=:black,
+            fontsize=12,
+        )
+    end
+    return nothing
 end
 
 """
     plot_qcat_slice_with_flux(model; wKk, ranges=(-3,3), n=45, chart=:qK)
 
 For fixed `(w,K,k)`, plot the regime partition over `q_cat` coordinates,
-overlay the catalysis flux direction, and mark Bnc fixed points. Supports one
-or two `q_cat` dimensions for compact plots.
+overlay the catalysis flux direction, and mark fixed points found by numerical
+root solving of the catalysis flux. Supports one or two `q_cat` dimensions for
+compact plots. In 2D, `show_nullclines=true` overlays the two zero-flux
+nullclines before fixed-point markers and labels are drawn.
 """
 function plot_qcat_slice_with_flux(
     model::Bnc;
@@ -372,12 +634,18 @@ function plot_qcat_slice_with_flux(
     ranges=(-3.0, 3.0),
     n::Integer=45,
     chart::Symbol=:qK,
-    method::Symbol=:free_energy,
+    method::Union{Symbol,Nothing}=nothing,
     input_logspace::Bool=true,
-    colormap=:rainbow,
+    colormap=:Pastel1_9,
     arrow_stride::Integer=5,
     tol::Float64=1e-6,
+    show_nullclines::Bool=false,
+    nullcline_colors=(:red, :blue),
+    fixed_point_labels::Bool=true,
+    fixed_point_label_prefix::AbstractString="FP",
+    fixed_point_root_tol::Float64=1e-7,
 )
+    method = _resolve_qK2x_method(model, method)
     cn = model.catalysis
     cn.r_v <= 2 || throw(ArgumentError("plot_qcat_slice_with_flux currently keeps plots readable for q_cat dimension <= 2."))
     logwKk = _fixed_log_values(wKk_sym(model), wKk; input_logspace=input_logspace)
@@ -423,11 +691,24 @@ function plot_qcat_slice_with_flux(
         ys = [flux[i][1] for i in eachindex(xs)]
         lines!(ax, xs, ys; color=:black)
         hlines!(ax, [0.0]; color=(:gray, 0.5), linestyle=:dash)
-        for pt in _fixed_points_qcat(model, logwKk; tol=tol)
-            color = pt.stable === true ? :black : :white
-            scatter!(ax, [pt.logqcat[1]], [0.0]; color=color, strokecolor=:black, strokewidth=1.5, markersize=12)
-        end
-        return fig, ax, (; ranges=rgs, values=vals, flux=flux, feasible=feasible)
+        fixed_points = _numeric_fixed_points_qcat(
+            model,
+            logwKk,
+            rgs,
+            flux,
+            feasible;
+            method=method,
+            tol=tol,
+            root_tol=fixed_point_root_tol,
+        )
+        _draw_qcat_fixed_points!(
+            ax,
+            fixed_points;
+            labels=fixed_point_labels,
+            label_prefix=fixed_point_label_prefix,
+            markersize=12,
+        )
+        return fig, ax, (; ranges=rgs, values=vals, flux=flux, feasible=feasible, fixed_points)
     end
 
     fig, ax = _draw_partition_2d(rgs[1], rgs[2], vals; xlabel=labels[1], ylabel=labels[2], title="q_cat regime and flux slice", colormap=colormap)
@@ -444,12 +725,27 @@ function plot_qcat_slice_with_flux(
         push!(arrow_dirs, Vec2f(f[1], f[2]) / scale * 0.15)
     end
     arrows2d!(ax, arrow_points, arrow_dirs; color=(:black, 0.65), shaftwidth=2, tipwidth=8, tiplength=10)
-    for pt in _fixed_points_qcat(model, logwKk; tol=tol)
-        in_x = first(rgs[1]) <= pt.logqcat[1] <= last(rgs[1])
-        in_y = first(rgs[2]) <= pt.logqcat[2] <= last(rgs[2])
-        (in_x && in_y) || continue
-        color = pt.stable === true ? :black : :white
-        scatter!(ax, [pt.logqcat[1]], [pt.logqcat[2]]; color=color, strokecolor=:black, strokewidth=1.5, markersize=14)
+    show_nullclines && _draw_qcat_nullclines!(ax, rgs, flux, feasible; colors=nullcline_colors)
+    fixed_points = _numeric_fixed_points_qcat(
+        model,
+        logwKk,
+        rgs,
+        flux,
+        feasible;
+        method=method,
+        tol=tol,
+        root_tol=fixed_point_root_tol,
+    )
+    fixed_points = filter(fixed_points) do pt
+        first(rgs[1]) <= pt.logqcat[1] <= last(rgs[1]) &&
+            first(rgs[2]) <= pt.logqcat[2] <= last(rgs[2])
     end
-    return fig, ax, (; ranges=rgs, values=vals, flux=flux, feasible=feasible)
+    _draw_qcat_fixed_points!(
+        ax,
+        fixed_points;
+        labels=fixed_point_labels,
+        label_prefix=fixed_point_label_prefix,
+        markersize=14,
+    )
+    return fig, ax, (; ranges=rgs, values=vals, flux=flux, feasible=feasible, fixed_points)
 end

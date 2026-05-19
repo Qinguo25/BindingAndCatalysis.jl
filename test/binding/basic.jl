@@ -36,6 +36,18 @@
     @test isapprox(logqK_back, logqK; atol = 1e-6, rtol = 1e-6)
 end
 
+@testset "Default qK2x Method Avoids Free Energy For Nonorthogonal L N" begin
+    model = Bnc(N = [1 0], L = [1 1])
+
+    @test BindingAndCatalysis._default_method(model) === :homotopy
+    @test BindingAndCatalysis._resolve_qK2x_method(model, :free_energy) === :homotopy
+
+    logqK = [0.0, 0.0]
+    logx_default = qK2x(model, logqK; input_logspace = true, output_logspace = true)
+    logx_explicit = qK2x(model, logqK; input_logspace = true, output_logspace = true, method = :free_energy)
+    @test isapprox(logx_default, logx_explicit; atol = 1e-8, rtol = 1e-8)
+end
+
 @testset "Uniform Box Per-Dimension Sampling" begin
     sampling = BindingAndCatalysis._prepare_sampling_config(
         :uniform_box,
