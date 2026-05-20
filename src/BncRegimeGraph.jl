@@ -179,19 +179,192 @@ function _finalize_bnc_hp_incidence!(grh::RegimeGraph, space::Int)
     return nothing
 end
 
+function _bnc_xk_dominance_polyhedron(rgm::BncRegime)
+    C, C0 = get_C_C0_xk(rgm; remove_h_redundancy=true)
+    return get_polyhedron(C, C0, 0; canonicalize=true)
+end
+
+function _bnc_feasible_xk_polyhedra(rgms::AbstractVector{BncRegime})
+    poly_by_idx = Dict{Int,Polyhedron}()
+    for idx in eachindex(rgms)
+        is_feasible(rgms[idx]) || continue
+        poly = _bnc_xk_dominance_polyhedron(rgms[idx])
+        isempty(poly) && continue
+        dim(poly) == fulldim(poly) || continue
+        poly_by_idx[idx] = poly
+    end
+    return poly_by_idx
+end
+
+function _try_add_qKk_edge_from_xk!(
+    hp_qKk::RegimeToHyperplanePool,
+    e::RegimeEdge,
+    e_rev::RegimeEdge,
+    c_xk,
+    c0_xk,
+    rgm::BncRegime,
+)
+    bind_rgm = get_binding_regime(rgm)
+    is_singular(bind_rgm) && return nothing
+    c_qKk, c0_qKk = _xk_to_qKk_edge(c_xk, c0_xk, bind_rgm)
+    return _add_space_halfspace_pair!(hp_qKk, e, e_rev, 2, c_qKk, c0_qKk, 1)
+end
+
+function _try_add_wKk_edge_from_xk!(
+    hp_wKk::RegimeToHyperplanePool,
+    e::RegimeEdge,
+    e_rev::RegimeEdge,
+    c_xk,
+    c0_xk,
+    r_from::BncRegime,
+    r_to::BncRegime,
+)
+    if get_nullity(r_from) <= 1
+        c_wKk, c0_wKk = _xk_to_wKk_edge(c_xk, c0_xk, r_from)
+        return _add_space_halfspace_pair!(hp_wKk, e, e_rev, 3, c_wKk, c0_wKk, 1)
+    elseif get_nullity(r_to) <= 1
+        c_wKk, c0_wKk = _xk_to_wKk_edge(-c_xk, -c0_xk, r_to)
+        return _add_space_halfspace_pair!(hp_wKk, e_rev, e, 3, c_wKk, c0_wKk, 1)
+    end
+    return nothing
+end
+
+function _edge_sign_from_source_polyhedron(poly::Polyhedron, c, c0; tol::Float64=1.0e-8)
+    c_dense = Float64.(collect(vec(c)))
+    c0_float = Float64(c0)
+    any(abs.(c_dense) .> tol) || return Int8(1)
+
+    C, C0, _ = get_C_C0_nullity(poly)
+    for row in axes(C, 1)
+        a = Float64.(collect(vec(C[row, :])))
+        scale = nothing
+        is_parallel = true
+        for idx in eachindex(c_dense)
+            ci = c_dense[idx]
+            ai = a[idx]
+            if abs(ci) > tol
+                ratio = ai / ci
+                if isnothing(scale)
+                    scale = ratio
+                elseif abs(ratio - scale) > tol * max(1, abs(scale))
+                    is_parallel = false
+                    break
+                end
+            elseif abs(ai) > tol
+                is_parallel = false
+                break
+            end
+        end
+        (is_parallel && !isnothing(scale) && abs(scale) > tol) || continue
+
+        b = Float64(C0[row])
+        if abs(b - scale * c0_float) <= tol * max(1, abs(b), abs(scale * c0_float))
+            return scale > 0 ? Int8(-1) : Int8(1)
+        end
+    end
+
+    point = get_one_inner_point(poly; rand_line=false, rand_ray=false)
+    val = dot(c_dense, Float64.(point)) + c0_float
+    return val > tol ? Int8(-1) : Int8(1)
+end
+
+function _try_add_reduced_xk_bnc_edge!(
+    neighbors,
+    hp_xk::RegimeToHyperplanePool,
+    hp_qKk::RegimeToHyperplanePool,
+    hp_wKk::RegimeToHyperplanePool,
+    rgms::AbstractVector{BncRegime},
+    poly_by_idx::Dict{Int,Polyhedron},
+    from::Int,
+    to::Int,
+    ambient_dim::Int,
+)
+    ins_dim, ins = _poly_intersection_dim(poly_by_idx[from], poly_by_idx[to])
+    ins_dim == ambient_dim - 1 || return false
+
+    interface = _poly_interface_from_intersection(ins)
+    isnothing(interface) && return false
+    c_xk_raw, c0_xk_raw = interface
+    edge_sign = _edge_sign_from_source_polyhedron(poly_by_idx[from], c_xk_raw, c0_xk_raw)
+
+    e, e_rev = _add_bnc_edge_pair!(neighbors, from, to, 0)
+    hid = _add_space_halfspace_pair!(hp_xk, e, e_rev, 1, c_xk_raw, c0_xk_raw, edge_sign)
+    if isnothing(hid)
+        pop!(neighbors[from])
+        pop!(neighbors[to])
+        return false
+    end
+
+    idx, sign = _edge_idx_sign(e, 1)
+    hp = get_hyperplane(hp_xk, idx)
+    c_xk, c0_xk = _calc_c_c0(hp, sign)
+
+    r_from = rgms[from]
+    r_to = rgms[to]
+    _try_add_qKk_edge_from_xk!(hp_qKk, e, e_rev, c_xk, c0_xk, r_from)
+    _try_add_wKk_edge_from_xk!(hp_wKk, e, e_rev, c_xk, c0_xk, r_from, r_to)
+    return true
+end
+
+function _build_reduced_xk_bnc_regimes_graph!(model::Bnc)
+    match_regimes!(model)
+    rgms = model.BncRegimes
+    n_nodes = length(rgms)
+    cn = get_catalysis_network(model)
+    dim_xk = model.n + cn.n_k
+
+    poly_by_idx = _bnc_feasible_xk_polyhedra(rgms)
+    hp_xk = RegimeToHyperplanePool(dim_xk)
+    hp_qKk = RegimeToHyperplanePool(model.d + model.r + cn.n_k)
+    hp_wKk = RegimeToHyperplanePool(cn.d_w + model.r + cn.n_k)
+    neighbors = [RegimeEdge[] for _ in 1:n_nodes]
+
+    feasible = sort!(collect(keys(poly_by_idx)))
+    for i in 1:(length(feasible) - 1)
+        from = feasible[i]
+        for j in (i + 1):length(feasible)
+            to = feasible[j]
+            _try_add_reduced_xk_bnc_edge!(
+                neighbors,
+                hp_xk,
+                hp_qKk,
+                hp_wKk,
+                rgms,
+                poly_by_idx,
+                from,
+                to,
+                dim_xk,
+            )
+        end
+    end
+
+    grh = RegimeGraph(
+        neighbors,
+        Any[hp_xk, hp_qKk, hp_wKk];
+        bn=model,
+        space_idx=Dict(:xk => 1, :qKk => 2, :wKk => 3),
+    )
+    _finalize_bnc_hp_incidence!(grh, 1)
+    _finalize_bnc_hp_incidence!(grh, 2)
+    _finalize_bnc_hp_incidence!(grh, 3)
+    return grh
+end
+
 function get_bnc_regimes_graph!(model::Bnc)
     match_regimes!(model)
     rgms = model.BncRegimes
+    cn = get_catalysis_network(model)
+    _has_nontrivial_k_constraints(cn) && return _build_reduced_xk_bnc_regimes_graph!(model)
+
     n_bind = n_bind_regimes(model)
     n_cat = n_catalysis_regimes(model)
     n_nodes = length(rgms)
-    cn = get_catalysis_network(model)
 
     bind_grh = get_regimes_graph!(model; full=true)
     cat_grh = get_catalysis_regimes_graph!(model)
 
     hp_xk = RegimeToHyperplanePool(model.n + cn.n_k)
-    hp_qKk = RegimeToHyperplanePool(model.n + cn.n_k)
+    hp_qKk = RegimeToHyperplanePool(model.d + model.r + cn.n_k)
     hp_wKk = RegimeToHyperplanePool(cn.d_w + model.r + cn.n_k)
     neighbors = [RegimeEdge[] for _ in 1:n_nodes]
 

@@ -173,6 +173,58 @@ end
     @test size(get_C_C0_nullity_wKk(mixed)[1], 2) == cn.d_w + model.r + cn.n_k
 end
 
+@testset "Affine K Constraint Bnc Graph Uses Reduced xk Facets" begin
+    N = [
+        1 0 0 1 -1 0
+        0 1 1 0 0 -1
+    ]
+    model = Bnc(
+        N = N,
+        x_sym = [:P1, :P2, :D1, :D2, :C1, :C2],
+        q_sym = [:tP1, :tP2, :tD1, :tD2],
+        K_sym = [:K1, :K2],
+    )
+    Pi = diagm(ones(Int, 6))
+    Gamma = [
+        -1 0 1 0 -1 0
+        0 -1 0 1 0 -1
+    ]
+    F = [
+        1 0
+        1 0
+        0 1
+        0 1
+        1 0
+        1 0
+    ]
+
+    update_catalysis!(
+        model;
+        Π = Pi,
+        Γ = Gamma,
+        q_picked = [1, 2],
+        F = F,
+        F0 = zeros(6),
+        k_sym = [:gamma, :beta],
+    )
+    match_regimes!(model)
+
+    @test n_bnc_regimes(model) == 16
+    @test count(!is_feasible, model.BncRegimes) == 48
+
+    grh = get_bnc_regimes_graph!(model)
+    n_bind = n_bind_regimes(model)
+    edges = [(i, e.to) for i in eachindex(grh.neighbors) for e in grh.neighbors[i] if i < e.to]
+    simultaneous = count(edges) do (i, j)
+        bind_i, cat_i = BindingAndCatalysis._bnc_cart_index(n_bind, i)
+        bind_j, cat_j = BindingAndCatalysis._bnc_cart_index(n_bind, j)
+        bind_i != bind_j && cat_i != cat_j
+    end
+
+    @test length(edges) == 32
+    @test simultaneous == 16
+end
+
 @testset "Catalysis Exact Mixed Mode" begin
     model = minimal_catalysis_model()
     find_all_regimes!(model)
