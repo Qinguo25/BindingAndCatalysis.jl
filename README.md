@@ -1,28 +1,54 @@
 # BindingAndCatalysis.jl
 
-BindingAndCatalysis.jl analyzes equilibrium binding networks and catalysis-driven
-slow dynamics in dominance-regime coordinates.
+This branch is the supplementary-information code snapshot for the paper
+associated with the `ifac2026` branch.  It contains the Julia package and
+notebooks used to reproduce the regime calculations, R-index estimates, and
+adaptation checks reported in the paper.
 
-It provides tools for:
+`BindingAndCatalysis.jl` analyzes biochemical systems with a fast binding
+equilibrium layer and an optional slower catalysis layer.  The package works in
+dominance-regime coordinates: it enumerates asymptotic regimes, transports
+dominance conditions between coordinate charts, builds regime graphs, and
+computes volume-based realizability indices.
 
-- building binding models from `N` or `L`
-- mapping between species concentrations `x` and totals/constants `(q,K)`
-- enumerating binding, catalysis, and mixed Bnc regimes
-- constructing regime graphs in several charts
-- checking fixed-point consistency and structural stability
-- plotting regime graphs, SIMO sweeps, and 2D/3D regime partitions
+## SI Contents
 
-## Installation
+- [`Examples/ifac2026_MM_and_HIll_part.ipynb`](Examples/ifac2026_MM_and_HIll_part.ipynb):
+  Michaelis-Menten and Hill-function regime analysis.  This notebook enumerates
+  binding dominance regimes, identifies the regimes matching the limiting
+  Michaelis-Menten and Hill expressions, plots regime partitions, and computes
+  R-index quantities for sequential Hill functions.
+- [`Examples/ifac2026_Adaptation_circuit_part.ipynb`](Examples/ifac2026_Adaptation_circuit_part.ipynb):
+  competitive negative-feedback adaptation.  This notebook builds the coupled
+  binding-catalysis model, filters full-dimensional stable BNC regimes by
+  invariance and responsiveness criteria, estimates the accepted-regime R-index,
+  inspects the representative regime highlighted in the paper, and runs the
+  numerical adaptation check.
+- [`Archetecture.md`](Archetecture.md): implementation notes for the package
+  internals, including binding regimes, catalysis regimes, BNC regimes, graph
+  charts, numerical solvers, and visualization utilities.
 
-For local development:
+All parameter coordinates used in the SI notebooks are `log10` coordinates.
+
+## Reproducing The Notebooks
+
+Start from this branch:
+
+```bash
+git clone git@github.com:Qinguo25/BindingAndCatalysis.jl.git
+cd BindingAndCatalysis.jl
+git checkout ifac2026
+```
+
+Instantiate the package environment:
 
 ```julia
 using Pkg
-Pkg.develop(path="/path/to/BindingAndCatalysis.jl")
+Pkg.activate(".")
 Pkg.instantiate()
 ```
 
-For notebooks and plotting examples:
+Instantiate the notebook environment:
 
 ```julia
 using Pkg
@@ -30,157 +56,91 @@ Pkg.activate("Examples")
 Pkg.instantiate()
 ```
 
-The polyhedral backend uses `Polyhedra.jl` and `CDDLib.jl`.
+Then open the notebooks in `Examples/` with a Julia kernel, for example through
+VS Code or Jupyter.  The notebook environment uses the package source from the
+repository root:
 
-## Quick Start: Binding Model
+```toml
+[sources]
+BindingAndCatalysis = {path = ".."}
+```
+
+The R-index cells use numerical volume estimates.  Re-running them may give
+small differences within the reported tolerances.
+
+## Package Capabilities
+
+The package provides tools for:
+
+- constructing binding models from `N` or `L`;
+- mapping between species concentrations `x` and totals/constants `(q,K)`;
+- enumerating binding, catalysis, and mixed BNC regimes;
+- transporting regime inequalities between `x`, `qK`, `xk`, `qKk`, and `wKk`
+  coordinate charts;
+- checking fixed-point consistency and structural stability;
+- computing regime-cone volumes and R-index sums;
+- plotting regime graphs, SIMO sweeps, and 2D/3D regime partitions.
+
+## Minimal Usage
 
 ```julia
 using BindingAndCatalysis
 
-binding = Bnc(
+model = Bnc(
     N = [1 1 -1],
     x_sym = [:S, :E, :C],
     q_sym = [:tS, :tE],
     K_sym = [:K],
 )
 
-show_conservation(binding)
-show_equilibrium(binding)
-```
+show_conservation(model)
+show_equilibrium(model)
 
-Map between `qK` and `x` in log10 coordinates:
-
-```julia
-logqK = [0.0, 0.0, -1.0]
-logx = qK2x(binding, logqK; input_logspace=true, output_logspace=true)
-qK2x_residual(binding, logx, logqK; input_logspace=true)
-```
-
-Available `qK2x` methods:
-
-```julia
-qK2x(binding, logqK; method=:free_energy, input_logspace=true, output_logspace=true)
-qK2x(binding, logqK; method=:newton_nullspace, input_logspace=true, output_logspace=true)
-qK2x(binding, logqK; method=:homotopy, input_logspace=true, output_logspace=true)
-qK2x(binding, logqK; method=:nlsolve, input_logspace=true, output_logspace=true)
-qK2x(binding, logqK; method=:regime, input_logspace=true, output_logspace=true) # predictor
-```
-
-`method=:free_energy` is the robust pointwise default.  `method=:homotopy` is
-for path-following when the path itself matters.
-
-## Regimes and Graphs
-
-```julia
-rgms = get_regimes(binding)
-grh = get_regimes_graph!(binding; full=true)
-
-draw_graph(grh; chart=:x)
+rgms = get_regimes(model)
+grh = get_regimes_graph!(model; full=true)
 draw_graph(grh; chart=:qK)
 ```
 
-`draw_graph` uses `chart` to choose which edge hyperplanes to display.  Supported
-charts are:
-
-- binding graphs: `:x`, `:qK`
-- catalysis graphs: `:v`, `:xk`
-- Bnc graphs: `:xk`, `:qKk`, `:wKk`
-
-## Adding Catalysis
+For coupled binding-catalysis systems, attach the catalysis layer with the
+model-specific flux-exponent matrix `Π` and stoichiometry matrix `Γ`, then
+enumerate mixed regimes:
 
 ```julia
-model = Bnc(
-    N = [1 0 1 -1 0;
-         0 1 1  0 -1],
-    x_sym = [:S, :P, :E, :C1, :C2],
-    q_sym = [:tS, :tP, :tE],
-    K_sym = [:K1, :K2],
-)
-
-Π = [1 0 0 0 0;
-     0 1 0 0 0]
-
-Γ = [1 -1;
-    -1  1]
-
 update_catalysis!(
-    model;
+    bnc_model;
     Π = Π,
     Γ = Γ,
-    x_picked = [:C1, :C2],
-    q_picked = [:tP, :tS],
-    w_sym = [:TS],
+    x_picked = x_picked,
+    q_picked = q_picked,
+    w_sym = w_symbols,
 )
 
-bnc_rgms = get_bnc_regimes(model)
-bnc_grh = get_bnc_regimes_graph!(model)
+bnc_rgms = get_bnc_regimes(bnc_model)
+bnc_grh = get_bnc_regimes_graph!(bnc_model)
 draw_graph(bnc_grh; chart=:wKk)
 ```
 
-## Visualization
+See the adaptation notebook for a complete coupled binding-catalysis model.
 
-Binding regime partition:
+Supported graph charts are:
 
-```julia
-plot_binding_regime_partition(
-    model;
-    axes = [:TS, :tP],
-    fixed = Dict(:tE => 0, :K1 => -1, :K2 => 1),
-    ranges = (-6, 6),
-    n = 300,
-    chart = :x,
-)
-```
+- binding graphs: `:x`, `:qK`;
+- catalysis graphs: `:v`, `:xk`;
+- BNC graphs: `:xk`, `:qKk`, `:wKk`.
 
-Invalid or infeasible grid points are transparent.
+## Development Checks
 
-Bnc fixed-point partition:
+Run the package test suite from the repository root:
 
 ```julia
-plot_bnc_regime_partition(
-    model;
-    axes = [:K1, :k1],
-    fixed = Dict(:TS => 0, :tE => 0, :K2 => 0, :k2 => 0),
-    chart = :wKk,
-)
+using Pkg
+Pkg.activate(".")
+Pkg.test()
 ```
 
-SIMO sweep:
-
-```julia
-SIMO_plot(
-    binding,
-    [0.0, -1.0],
-    :tS;
-    observe_x = [:S, :C],
-    show_regime_label = true,
-)
-```
-
-## Symbol Helpers
-
-Symbolic helpers return `Symbolics.Num` values:
-
-```julia
-x_sym(model), q_sym(model), K_sym(model), qK_sym(model)
-k_sym(model), v_sym(model), wKk_sym(model)
-```
-
-Plain-symbol helpers return `Vector{Symbol}`:
-
-```julia
-x_symbol(model), q_symbol(model), K_symbol(model), qK_symbol(model)
-k_symbol(model), v_symbol(model), wKk_symbol(model)
-```
-
-## Documentation
-
-- [Archetecture.md](Archetecture.md): current internal architecture
-- [Examples/Minimal_example.ipynb](Examples/Minimal_example.ipynb): step-by-step
-  binding-regime workflow
-<!-- - [noback/Visualization_demo.ipynb](noback/Visualization_demo.ipynb): generated
-  visualization examples -->
+The polyhedral computations use `Polyhedra.jl` with `CDDLib.jl`; plotting
+examples use Makie/CairoMakie through the notebook environment.
 
 ## License
 
-See [LICENSE](LICENSE).
+See [`LICENSE`](LICENSE).
