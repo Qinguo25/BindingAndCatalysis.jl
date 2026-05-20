@@ -116,8 +116,8 @@ update_catalysis!(
 )
 
 bnc_rgms = get_bnc_regimes(bnc_model)
-bnc_grh = get_bnc_regimes_graph!(bnc_model)
-draw_graph(bnc_grh; chart=:wKk)
+bnc_grh = get_bnc_regimes_graph!(bnc_model) # not fully tested 
+draw_graph(bnc_grh; chart=:wKk) # not fully tested
 ```
 
 See the adaptation notebook for a complete coupled binding-catalysis model.
