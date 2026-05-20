@@ -201,7 +201,6 @@ end
 function _init_regular_or_nullity1_bnc_regime!(vtx::BncRegime)
     C_qKk, C0_qKk, nlt_qKk = _calc_C_C0_qKk(vtx.bind_rgm, vtx.catalysis_rgm)
     C_wKk, C0_wKk, nlt_wKk = _calc_C_C0_wKk(vtx)
-    @assert nlt_wKk == vtx.nlt
     H_inner, H0_inner = get_affine_wKk̃2x(vtx)
 
     H_wKk, H0_wKk = let
@@ -218,12 +217,13 @@ function _init_regular_or_nullity1_bnc_regime!(vtx::BncRegime)
     vtx.nlt_qKk_cat = nlt_qKk
     vtx.C_wKk = C_wKk
     vtx.C0_wKk = C0_wKk
+    vtx.nlt_wKk = nlt_wKk
     return nothing
 end
 
 function _init_consistency_only_bnc_regime!(vtx::BncRegime)
     C_qKk_cat, C0_qKk_cat, nlt_qKk_cat = _calc_C_C0_qKk(vtx.bind_rgm, vtx.catalysis_rgm)
-    C_wKk, C0_wKk, _ = _calc_C_C0_wKk(vtx)
+    C_wKk, C0_wKk, nlt_wKk = _calc_C_C0_wKk(vtx)
 
     vtx.H = nothing
     vtx.H0 = nothing
@@ -232,6 +232,7 @@ function _init_consistency_only_bnc_regime!(vtx::BncRegime)
     vtx.nlt_qKk_cat = nlt_qKk_cat
     vtx.C_wKk = C_wKk
     vtx.C0_wKk = _materialize_real_vector(C0_wKk)
+    vtx.nlt_wKk = nlt_wKk
     return nothing
 end
 
@@ -329,6 +330,16 @@ function _initialize_inner_affine_by_graph!(rgms::AbstractVector{BncRegime})
         end
     end
 
+    if _has_nontrivial_k_constraints(cn)
+        for idx in eachindex(rgms)
+            rgms[idx].nlt <= 1 || continue
+            pair = _direct_inner_affine(rgms[idx])
+            pair === nothing && continue
+            _assign_inner_affine!(rgms[idx], pair[1], pair[2])
+        end
+        return NamedTuple[]
+    end
+
     assigned = falses(length(rgms))
     inconsistencies = NamedTuple[]
 
@@ -405,6 +416,35 @@ function _initialize_inner_affine_by_graph!(rgms::AbstractVector{BncRegime})
     end
 
     return inconsistencies
+end
+
+function _is_feasible_under_current_k_map(rgm::BncRegime)
+    C, C0 = get_C_C0_xk(rgm)
+    for i in 1:size(C, 1)
+        if nnz(C[i, :]) == 0 && Float64(C0[i]) <= 1e-10
+            return false
+        end
+    end
+    poly = _build_polyhedron_from_C_C0(C, C0, 0; canonicalize=true)
+    return !isempty(poly) && dim(poly) == fulldim(poly)
+end
+
+function _mark_feasible_bnc_regimes!(rgms::AbstractVector{BncRegime})
+    isempty(rgms) && return 0
+    cn = get_catalysis_network(first(rgms))
+    if !_has_nontrivial_k_constraints(cn)
+        for rgm in rgms
+            rgm.is_feasible = true
+        end
+        return 0
+    end
+
+    n_removed = 0
+    for rgm in rgms
+        rgm.is_feasible = _is_feasible_under_current_k_map(rgm)
+        n_removed += rgm.is_feasible ? 0 : 1
+    end
+    return n_removed
 end
 
 
@@ -514,6 +554,9 @@ function _initialize_regime!(rgms::AbstractVector{BncRegime})
             _init_consistency_only_bnc_regime!(vtx)
         end
     end
+
+    n_removed = _mark_feasible_bnc_regimes!(rgms)
+    n_removed == 0 || @info "Removed $n_removed infeasible BncRegimes under affine k constraints."
 
     @info "Finished initializing BncRegimes."
 

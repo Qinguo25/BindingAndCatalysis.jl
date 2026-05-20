@@ -79,7 +79,8 @@ end
     cn = get_catalysis_network(cat_rgm)
     P_pos_neg = get_P_pos_neg(cat_rgm)
     P0_pos_neg = get_P0_pos_neg(cat_rgm)
-    flux_terms = handle_log_weighted_sum(hcat(P_pos_neg * cn.Π, P_pos_neg), xk_sym(args...), P0_pos_neg)
+    z, z0 = get_affine_xk2v(cn)
+    flux_terms = handle_log_weighted_sum(P_pos_neg * z, xk_sym(args...), P_pos_neg * z0 + P0_pos_neg)
     return flux_terms[1:cn.r_v], flux_terms[cn.r_v + 1:end]
 end
 

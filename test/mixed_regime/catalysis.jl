@@ -148,6 +148,31 @@ end
     @test nlt_wKk == 1
 end
 
+@testset "Affine K Constraint Initialization" begin
+    model = minimal_model()
+    update_catalysis!(
+        model;
+        Γ = [1 -1],
+        Π = [1 0 0; 0 1 0],
+        q_picked = [:tE],
+        F = reshape([1, 1], 2, 1),
+        F0 = zeros(2),
+        k_sym = [:κ],
+    )
+
+    cn = get_catalysis_network(model)
+    @test cn.n_v == 2
+    @test cn.n_k == 1
+    @test string.(k_sym(model)) == ["κ"]
+    @test length(wKk_sym(model)) == cn.d_w + model.r + cn.n_k
+
+    match_regimes!(model)
+    mixed = first(get_bnc_regimes(model))
+    @test all(is_feasible, get_bnc_regimes(model))
+    @test size(get_C_C0_nullity_xk(mixed)[1], 2) == model.n + cn.n_k
+    @test size(get_C_C0_nullity_wKk(mixed)[1], 2) == cn.d_w + model.r + cn.n_k
+end
+
 @testset "Catalysis Exact Mixed Mode" begin
     model = minimal_catalysis_model()
     find_all_regimes!(model)
@@ -163,34 +188,6 @@ end
     @test !isempty(show_condition_qKk(mixed))
     @test !isempty(show_condition_wKk(mixed))
     @test !isempty(show_expression_qcat(regular))
-end
-
-@testset "Log-k Reparameterization Helpers" begin
-    L = [
-        0 1 1
-        1 0 1
-    ]
-    N = [1 1 -1]
-    model = Bnc(L = L, N = N, x_sym = [:E, :S, :C], q_sym = [:tS, :tE], K_sym = [:K])
-    update_catalysis!(
-        model;
-        Γ = [1 -1],
-        Π = [0 0 1; 0 1 0],
-        q_picked = [:tS],
-        k_sym = [:β, :γ],
-    )
-
-    match_regimes!(model)
-    mixed = get_bnc_regime(model, 1, 1; check = true)
-    R = reshape(Rational{Int}[1, 1], 2, 1)
-    b = ExactLogExpr[exact_log10_ratio(1, 2), 0]
-
-    C_wKθ, C0_wKθ, nlt_wKθ = get_C_C0_nullity_wKtheta(mixed; R = R, b = b)
-    @test Matrix(C_wKθ) ≈ Float64.([-1 1 0; -1 1 0])
-    @test Float64.(C0_wKθ) ≈ [log10(2), 0.0]
-    @test nlt_wKθ == 1
-    @test !is_feasible_under_logkmap(mixed; R = R, b = b)
-    @test get_idx(mixed) ∉ feasible_bnc_regimes_under_logkmap(model; R = R, b = b, return_idx = true)
 end
 
 @testset "High-Nullity Mixed Regimes Keep Consistency" begin

@@ -7,7 +7,7 @@ function _sparse_rational_vec(v)
     for i in eachindex(vv)
         iszero(vv[i]) && continue
         push!(I, i)
-        push!(V, vv[i] isa Rational{Int} ? vv[i] : Rational{Int}(vv[i]))
+        push!(V, vv[i] isa Rational{Int} ? vv[i] : rationalize(Int, vv[i]; tol=1e-10))
     end
     return sparsevec(I, V, length(vv))
 end

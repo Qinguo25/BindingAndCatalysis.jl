@@ -97,6 +97,9 @@ function _copy_binding_edge!(
     from = _bnc_linear_index(n_bind, bind_idx, cat_idx)
     to = _bnc_linear_index(n_bind, bind_edge.to, cat_idx)
     from < to || return nothing
+    r_from = rgms[_bnc_linear_index(n_bind, bind_idx, cat_idx)]
+    r_to = rgms[_bnc_linear_index(n_bind, bind_edge.to, cat_idx)]
+    (is_feasible(r_from) && is_feasible(r_to)) || return nothing
 
     e, e_rev = _add_bnc_edge_pair!(neighbors, from, to, bind_edge.i)
     c_xk, c0_xk = _binding_xk_interface(bind_grh, bind_edge, n_x, n_k)
@@ -108,8 +111,6 @@ function _copy_binding_edge!(
         _add_space_halfspace_pair!(hp_qKk, e, e_rev, 2, c_qKk, c0_qK, 1)
     end
 
-    r_from = rgms[_bnc_linear_index(n_bind, bind_idx, cat_idx)]
-    r_to = rgms[_bnc_linear_index(n_bind, bind_edge.to, cat_idx)]
     if get_nullity(r_from) <= 1
         c_wKk, c0_wKk = _xk_to_wKk_edge(c_xk, c0_xk, r_from)
         _add_space_halfspace_pair!(hp_wKk, e, e_rev, 3, c_wKk, c0_wKk, 1)
@@ -135,13 +136,14 @@ function _copy_catalysis_edge!(
     from = _bnc_linear_index(n_bind, bind_idx, cat_idx)
     to = _bnc_linear_index(n_bind, bind_idx, cat_edge.to)
     from < to || return nothing
+    r_from = rgms[_bnc_linear_index(n_bind, bind_idx, cat_idx)]
+    r_to = rgms[_bnc_linear_index(n_bind, bind_idx, cat_edge.to)]
+    (is_feasible(r_from) && is_feasible(r_to)) || return nothing
 
     e, e_rev = _add_bnc_edge_pair!(neighbors, from, to, cat_edge.i)
     c_xk, c0_xk = _edge_interface(cat_grh, cat_edge, :xk)
     _add_space_halfspace_pair!(hp_xk, e, e_rev, 1, c_xk, c0_xk, 1)
 
-    r_from = rgms[_bnc_linear_index(n_bind, bind_idx, cat_idx)]
-    r_to = rgms[_bnc_linear_index(n_bind, bind_idx, cat_edge.to)]
     bind_rgm = get_binding_regime(r_from)
     if !is_singular(bind_rgm)
         c_qKk, c0_qKk = _xk_to_qKk_edge(c_xk, c0_xk, bind_rgm)
@@ -188,15 +190,15 @@ function get_bnc_regimes_graph!(model::Bnc)
     bind_grh = get_regimes_graph!(model; full=true)
     cat_grh = get_catalysis_regimes_graph!(model)
 
-    hp_xk = RegimeToHyperplanePool(model.n + cn.n_v)
-    hp_qKk = RegimeToHyperplanePool(model.n + cn.n_v)
-    hp_wKk = RegimeToHyperplanePool(cn.d_w + model.r + cn.n_v)
+    hp_xk = RegimeToHyperplanePool(model.n + cn.n_k)
+    hp_qKk = RegimeToHyperplanePool(model.n + cn.n_k)
+    hp_wKk = RegimeToHyperplanePool(cn.d_w + model.r + cn.n_k)
     neighbors = [RegimeEdge[] for _ in 1:n_nodes]
 
     for cat_idx in 1:n_cat
         for bind_idx in 1:n_bind
             for e in bind_grh.neighbors[bind_idx]
-                _copy_binding_edge!(neighbors, hp_xk, hp_qKk, hp_wKk, bind_grh, rgms, e, bind_idx, cat_idx, n_bind, model.n, cn.n_v)
+                _copy_binding_edge!(neighbors, hp_xk, hp_qKk, hp_wKk, bind_grh, rgms, e, bind_idx, cat_idx, n_bind, model.n, cn.n_k)
             end
             for e in cat_grh.neighbors[cat_idx]
                 _copy_catalysis_edge!(neighbors, hp_xk, hp_qKk, hp_wKk, cat_grh, rgms, e, bind_idx, cat_idx, n_bind)

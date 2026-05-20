@@ -866,6 +866,21 @@ function _logwKk_at(logwKk, t; input_logspace::Bool=true)
     return input_logspace ? vals : log10.(vals)
 end
 
+function _old_logk_from_logk(cn::CatalysisData, logk::AbstractVector{<:Real})
+    length(logk) == cn.n_k || throw(ArgumentError("logk length must be $(cn.n_k), got $(length(logk))."))
+    logk_old = Vector{Float64}(undef, cn.n_v)
+    mul!(logk_old, cn.F, Float64.(logk))
+    logk_old .+= Float64.(cn.F0)
+    return logk_old
+end
+
+function _old_logk_from_logwKk(model::Bnc, logwKk::AbstractVector{<:Real})
+    cn = model.catalysis
+    first = cn.d_w + model.r + 1
+    last = cn.d_w + model.r + cn.n_k
+    return _old_logk_from_logk(cn, @view logwKk[first:last])
+end
+
 """
     qcat_traj_cat(model, logqcat0, logwKk, tspan; kwargs...) -> (t, logqcat)
 
@@ -899,7 +914,7 @@ function qcat_traj_cat(
     cn = model.catalysis
     inner_method = _resolve_qK2x_method(model, method)
     first_logwKk = _logwKk_at(logwKk, Float64(tspan[1]); input_logspace=input_logspace)
-    expected_wKk_len = cn.d_w + model.r + cn.n_v
+    expected_wKk_len = cn.d_w + model.r + cn.n_k
     length(first_logwKk) == expected_wKk_len || throw(ArgumentError("logwKk length must be $expected_wKk_len, got $(length(first_logwKk)). Available wKk symbols: $(wKk_symbol(model))."))
 
     u0 = input_logspace ? Vector{Float64}(logqcat0) : log10.(Float64.(logqcat0))
@@ -954,9 +969,8 @@ function qcat_traj_cat(
         last_logqK[] = Vector{Float64}(logqK)
         last_logx[] = Vector{Float64}(logx)
 
-        logk = @view current_logwKk[cn.d_w + model.r + 1:cn.d_w + model.r + cn.n_v]
         mul!(logv, cn._Π_sparse, logx)
-        logv .+= logk
+        logv .+= _old_logk_from_logwKk(model, current_logwKk)
 
         vshift = maximum(logv)
         @. vscaled = exp10(logv - vshift)
@@ -1112,7 +1126,7 @@ end
 """
     TimecurveParam
     ### Constant
-    # logk: R^rcat  # Changed to log10(k) for stability
+    # logk: R^n_v old-rate log10(k_old), after applying any affine k constraints
 
     ### Cache
     # x: R^n  # Now used as buffer for scaled computations
@@ -1142,8 +1156,8 @@ Get the catalysis parameter for ODE f construction
 function get_catalysis_param(model::Bnc, k)
     @assert have_catalysis(model) "Should fill catalysis data first"
     helper = _integration_helper!(model)
-    logk = log10.(Float64.(k))
     cn = model.catalysis
+    logk = _old_logk_from_logk(cn, log10.(Float64.(k)))
     x_scaled = Vector{Float64}(undef, model.n)
     q_scaled = Vector{Float64}(undef, model.d)
     logv = Vector{Float64}(undef, cn.n_v)

@@ -1,6 +1,7 @@
 """
     Bnc(; N=nothing, L=nothing, x_sym=nothing, q_sym=nothing, K_sym=nothing,
-        Γ=nothing, Π=nothing, k_sym=nothing, v_sym=nothing, w_sym=nothing, x_picked=nothing, q_picked=nothing) -> Bnc
+        Γ=nothing, Π=nothing, F=nothing, F0=nothing, k_sym=nothing,
+        v_sym=nothing, w_sym=nothing, x_picked=nothing, q_picked=nothing) -> Bnc
 
 Construct a binding network model from stoichiometry (`N`) or conservation (`L`)
 matrices and optional symbol metadata. Catalysis data can be attached through
@@ -15,6 +16,8 @@ matrices and optional symbol metadata. Catalysis data can be attached through
 - `Γ`: Catalysis change matrix in qK space.
 - `Π`: Catalysis index and coefficient matrix. If omitted while `Γ` and
   `x_picked` are supplied, defaults to the identity on the picked species.
+- `F`, `F0`: Optional affine constraints on old catalysis rate constants,
+  `log k_old = F * log k + F0`.
 - `k_sym`: Symbols for catalysis rate constants.
 - `v_sym`: Symbols for catalysis fluxes.
 - `w_sym`: Symbols for the new conservation quantities induced by catalysis.
@@ -89,7 +92,7 @@ end
 
 
 """
-    update_catalysis!(bnc::Bnc; Γ=nothing, Π=nothing, k_sym=nothing, v_sym=nothing, w_sym=nothing, x_picked=nothing, q_picked=nothing) -> Bnc
+    update_catalysis!(bnc::Bnc; Γ=nothing, Π=nothing, F=nothing, F0=nothing, k_sym=nothing, v_sym=nothing, w_sym=nothing, x_picked=nothing, q_picked=nothing) -> Bnc
 
 Attach or update catalysis data on a `Bnc` model in-place.
 
@@ -100,8 +103,10 @@ Attach or update catalysis data on a `Bnc` model in-place.
 - `Γ`: Catalysis change matrix in qK space.
 - `Π`: Catalysis index and coefficient matrix. If omitted while `Γ` and
   `x_picked` are supplied, defaults to the identity on the picked species.
+- `F`, `F0`: Optional affine constraints on old catalysis rate constants,
+  `log k_old = F * log k + F0`.
 - `k_sym`: Symbols for catalysis rate constants.
-- `v_sym`: Symbols for catalysis fluxes, where `log v = Π log x + log k`.
+- `v_sym`: Symbols for catalysis fluxes, where `log v = Π log x + F log k + F0`.
 - `w_sym`: Symbols for the new conservation quantities induced by catalysis.
 - `x_picked`: Picked species for catalysis flux monomials.
 - `q_picked`: Picked qK coordinates affected by catalysis.
@@ -112,6 +117,8 @@ Attach or update catalysis data on a `Bnc` model in-place.
 function update_catalysis!(model::Bnc;
     Γ::Union{<:AbstractMatrix{Int},Nothing}=nothing,
     Π::Union{<:AbstractMatrix{Int},Nothing}=nothing,
+    F::Union{<:AbstractMatrix{<:Real},Nothing}=nothing,
+    F0::Union{<:AbstractVector{<:Real},Nothing}=nothing,
     k_sym::Union{<:AbstractVector,Nothing}=nothing,
     v_sym::Union{<:AbstractVector,Nothing}=nothing,
     w_sym::Union{<:AbstractVector,Nothing}=nothing,
@@ -149,10 +156,12 @@ function update_catalysis!(model::Bnc;
         @info "q_cat is not picked, the catalysis will involve the first r_v q by default"
     end
 
-    k_sym = isnothing(k_sym) ? Symbolics.variables(:k, 1:size(Π,1)) : name_converter(k_sym)
+    n_old_k = size(Π, 1)
+    n_independent_k = isnothing(F) ? n_old_k : size(F, 2)
+    k_sym = isnothing(k_sym) ? Symbolics.variables(:k, 1:n_independent_k) : name_converter(k_sym)
     v_sym = isnothing(v_sym) ? Symbolics.variables(:v, 1:size(Π,1)) : name_converter(v_sym)
     w_sym = isnothing(w_sym) ? nothing : name_converter(w_sym)
-    model.catalysis = CatalysisData(model, Γ, Π, k_sym, w_sym, v_sym)
+    model.catalysis = CatalysisData(model, Γ, Π, k_sym, w_sym, v_sym, F, F0)
     _warn_if_free_energy_qK2x_disabled(model)
     return nothing
 end

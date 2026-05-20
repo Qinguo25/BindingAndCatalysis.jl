@@ -253,6 +253,7 @@ mutable struct BncRegime <:AbstractRegime
     # Fixed point information:
     H_bd::Union{SparseMatrixCSC{Float64, Int}, Nothing}
     is_stable::Int8 # 1 for stable, -1 for unstable, 0 for unknown # mapped from d_stable
+    is_feasible::Bool
 
     # wKk̃2x mapping, the core matrix
     H_inner::Union{AbstractMatrix{<:Real}, Nothing}
@@ -282,6 +283,7 @@ mutable struct BncRegime <:AbstractRegime
     ## w, K, k base
     C_wKk::Union{AbstractMatrix{<:Real}, Nothing}
     C0_wKk::Union{AbstractVector{<:Real}, Nothing}
+    nlt_wKk::Int
 
     volume::Union{Volume, Nothing}
 
@@ -300,6 +302,7 @@ mutable struct BncRegime <:AbstractRegime
             catalysis_rgm, 
             H_bd, 
             Int8(0), #is_stable
+            true, # is_feasible
             nothing, # H_inner
             nothing, # H0_inner
 
@@ -313,6 +316,7 @@ mutable struct BncRegime <:AbstractRegime
             
             nothing, 
             nothing,
+            -1,
             nothing)
     end
 end
@@ -331,7 +335,9 @@ mutable struct CatalysisData <:AbstractBnc
 
     # Catalysis determining Matrix
     Γ::SparseMatrixCSC{Int,Int} # catalysis change in qK space, each column is a reaction
-    Π::SparseMatrixCSC{Int,Int} # catalysis index and coefficients, rate will be vⱼ=kⱼ∏xᵢ^Π_{j,i}, denote what species catalysis the reaction.
+    Π::SparseMatrixCSC{Int,Int} # catalysis index and coefficients, rate will be vⱼ=k_oldⱼ∏xᵢ^Π_{j,i}, denote what species catalysis the reaction.
+    F::SparseMatrixCSC{Rational{Int},Int} # affine map from independent log k to old flux log k: log k_old = F log k + F0
+    F0::Vector{ExactLogExpr}
 
     # Derived matrices 
     S::SparseMatrixCSC{Int,Int} # the full row rank version of Γ
@@ -339,11 +345,12 @@ mutable struct CatalysisData <:AbstractBnc
 
     # Derived parameters
     r_v::Int # number of independent catalysis reactions, L_w = L[r_v+1:end, :]
-    n_v::Int # number of flux, typically equal to the number of k 
+    n_v::Int # number of fluxes / old rate constants
+    n_k::Int # number of independent rate constants after affine k constraints
     d_w::Int # total number of reduced conserved quantities collected into w, (r_v+d_w = d)
     a_w::Int # split row: L_w[1:a_w, :] is old dependent-part, L_w[a_w+1:end, :] is former parameter part
 
-    # symbols of k and v, with log v = Π log x + log k
+    # symbols of independent k and flux v, with log v = Π log x + F log k + F0
     k_sym::Vector{Num}
     v_sym::Vector{Num}
 
@@ -359,14 +366,22 @@ mutable struct CatalysisData <:AbstractBnc
     CatalysisRegimes::Union{Regimes,Nothing} # Using Any for placeholder for CatalysisRegimes
     vertices_graph::Union{Any,Nothing}
 
-    function CatalysisData(bn,Γ, Π, k_sym, w_sym=nothing, v_sym=nothing)
+    function CatalysisData(bn,Γ, Π, k_sym, w_sym=nothing, v_sym=nothing, F=nothing, F0=nothing)
         Γ = sparse(Γ)
         Π = sparse(Π)
         d_wv, nv = size(Γ)
         n = size(Π,2)
+        F = isnothing(F) ? Matrix{Rational{Int}}(I, nv, nv) : rationalize.(Int, Float64.(F); tol=1e-10)
+        size(F, 1) == nv || throw(ArgumentError("F must have one row per catalysis flux/rate constant: expected $nv, got $(size(F, 1))."))
+        nk = size(F, 2)
+        F0 = isnothing(F0) ? fill(zero(ExactLogExpr), nv) :
+            [x isa ExactLogExpr ? x : ExactLogExpr(rationalize(Int, Float64(x); tol=1e-10)) for x in vec(F0)]
+        length(F0) == nv || throw(ArgumentError("F0 length must match the number of catalysis fluxes/rate constants: expected $nv, got $(length(F0))."))
+        F = sparse(F)
         v_sym = isnothing(v_sym) ? Symbolics.variables(:v, 1:nv) : name_converter(v_sym)
         # Validation
-        @assert size(Π,1) == length(k_sym) == nv "Γ's column number have to meet with total flux number and k_sym"
+        @assert size(Π,1) == nv "Γ's column number must match Π's row number."
+        @assert length(k_sym) == nk "k_sym length must match the number of independent rate constants (size(F, 2))."
         @assert length(v_sym) == nv "v_sym length must match the number of fluxes"
         @assert n == bn.n "Π's column number have to meet with the number of species n in the binding network"
         L_Γ, pivits = left_nullspace_integer(Γ)
@@ -390,8 +405,8 @@ mutable struct CatalysisData <:AbstractBnc
         S_pos_neg = S_to_S_pos_neg(S)
         _S_helper = _build_matrix_helper(S_pos_neg)
 
-        new(bn, Γ, Π, S, L_Γ,
-            r_v, nv, d_w, a_w,
+        new(bn, Γ, Π, F, F0, S, L_Γ,
+            r_v, nv, nk, d_w, a_w,
             k_sym, v_sym, _S_sparse, _Π_sparse,
             S_pos_neg, _S_helper, nothing,nothing)
     end

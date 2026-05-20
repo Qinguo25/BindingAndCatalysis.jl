@@ -358,8 +358,7 @@ function _qcat_flux_at(
     logx = solve_logx_checked(model, logqK; method=method, tol=tol)
     isnothing(logx) && return nothing
 
-    logk = @view logwKk[cn.d_w + model.r + 1:cn.d_w + model.r + cn.n_v]
-    logv = cn.Π * logx .+ logk
+    logv = cn.Π * logx .+ _old_logk_from_logwKk(model, logwKk)
     vshift = maximum(logv)
     vscaled = exp10.(logv .- vshift)
     qdot_scaled = Vector{Float64}(cn.S * vscaled)
@@ -653,7 +652,7 @@ function plot_qcat_slice_with_flux(
     qK_base = zeros(Float64, model.d + model.r)
     qK_base[cn.r_v + 1:model.d] .= logwKk[1:cn.d_w]
     qK_base[model.d + 1:end] .= logwKk[cn.d_w + 1:cn.d_w + model.r]
-    logk = logwKk[cn.d_w + model.r + 1:end]
+    logk_old = _old_logk_from_logwKk(model, logwKk)
 
     rgs = _axis_ranges(cn.r_v; ranges=ranges, n=n, input_logspace=input_logspace)
     vals = Array{Int}(undef, length.(rgs)...)
@@ -672,7 +671,7 @@ function plot_qcat_slice_with_flux(
             vals[I] = chart === :x ?
                 assign_regime_x(model, logx; input_logspace=true, asymptotic_only=false, return_idx=true) :
                 assign_regime_qK(model, logqK; input_logspace=true, asymptotic_only=false, return_idx=true)
-            logv = cn.Π * logx .+ logk
+            logv = cn.Π * logx .+ logk_old
             vshift = maximum(logv)
             vscaled = exp10.(logv .- vshift)
             flux[I] = Vector{Float64}(cn.S * vscaled)

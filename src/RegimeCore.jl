@@ -1,4 +1,4 @@
-export n_bind_regimes, n_catalysis_regimes, n_bnc_regimes, get_binding_network, get_catalysis_network
+export n_bind_regimes, n_catalysis_regimes, n_bnc_regimes, get_binding_network, get_catalysis_network, is_feasible
 
 @inline _bnc_linear_index(n_bind::Int, bind_idx::Int, cat_idx::Int) = bind_idx + (cat_idx - 1) * n_bind
 @inline _bnc_cart_index(n_bind::Int, idx::Int) = ((idx - 1) % n_bind + 1, (idx - 1) ÷ n_bind + 1)
@@ -80,7 +80,8 @@ n_regimes(rgms::Regimes) = length(rgms.vertices_data)
 n_bind_regimes(rgms::Regimes) = n_regimes(rgms::Regimes)
 n_catalysis_regimes(rgms::Regimes) = n_regimes(rgms::Regimes)
 
-n_bnc_regimes(rgms::AbstractArray{<:BncRegime}) = length(rgms)
+n_bnc_regimes(rgms::AbstractArray{<:BncRegime}; feasible::Union{Bool,Nothing}=true, kwargs...) =
+    count(rgm -> isnothing(feasible) || is_feasible(rgm) == feasible, vec(rgms))
 
 
 
@@ -321,6 +322,10 @@ is_singular(rgm::BindRegime) = get_nullity(rgm) > 0
 is_singular(::CatalysisRegime) = false
 is_singular(rgm::BncRegime) = get_nullity(rgm) > 0
 
+is_feasible(::BindRegime) = true
+is_feasible(::CatalysisRegime) = true
+is_feasible(rgm::BncRegime) = rgm.is_feasible
+
 is_bind_singular(args...; kwargs...) = is_singular(get_bind_regime(args...; kwargs...))
 is_bnc_singular(args...; kwargs...) = is_singular(get_bnc_regime(args...; kwargs...))
 
@@ -358,6 +363,7 @@ function _get_filter(; singular::Union{Bool,Nothing}=nothing,
     max_nullity::Union{Integer,Nothing}=nothing,
     asymptotic::Union{Bool,Nothing}=nothing,
     stable::Union{Bool,Nothing}=nothing,
+    feasible::Union{Bool,Nothing}=nothing,
     add_filter::Union{Function,Nothing}=nothing,
 )
     judge_asymptotic(x) = isnothing(asymptotic) || is_asymptotic(x) == asymptotic
@@ -370,8 +376,9 @@ function _get_filter(; singular::Union{Bool,Nothing}=nothing,
     end
     judge_singular(x) = isnothing(singular) || (singular ? get_nullity(x) > 0 : get_nullity(x) == 0)
     judge_stable(x) = isnothing(stable) || is_stable(x) == stable
+    judge_feasible(x) = isnothing(feasible) || is_feasible(x) == feasible
     add_filter_func = isnothing(add_filter) ? (x -> true) : add_filter
-    return x -> judge_asymptotic(x) && judge_nullity(x) && judge_singular(x) && judge_stable(x) && add_filter_func(x)
+    return x -> judge_asymptotic(x) && judge_nullity(x) && judge_singular(x) && judge_stable(x) && judge_feasible(x) && add_filter_func(x)
 end
 
 
@@ -406,9 +413,8 @@ function get_catalysis_regimes(rgms::AbstractVector{<:CatalysisRegime}; return_i
     selected = filter(filter_func, rgms)
     return return_idx ? get_catalysis_idx.(selected) : selected
 end
-function get_bnc_regimes(rgms::AbstractArray{<:BncRegime}; return_idx::Bool=false, kwargs...)
-    filter_func = _get_filter(; kwargs...)
-    selected = filter(filter_func, vec(rgms))
+function get_bnc_regimes(rgms::AbstractArray{<:BncRegime}; return_idx::Bool=false, feasible::Union{Bool,Nothing}=true, kwargs...)
+    selected = filter(_get_filter(; feasible=feasible, kwargs...), vec(rgms))
     return return_idx ? get_bnc_idx.(selected) : selected
 end
 
@@ -449,6 +455,9 @@ function get_bnc_regimes(model::AbstractBnc, rgms::Union{Nothing,AbstractArray}=
     return get_bnc_regimes(rgms; kwargs...)
 end
 
+n_bnc_regimes(model::Bnc; feasible::Union{Bool,Nothing}=true, kwargs...) =
+    length(get_bnc_regimes(model; feasible=feasible, kwargs...))
+
 get_bind_perms(args...; kwargs...) = get_bind_perm.(get_bind_regimes(args...; kwargs...))
 get_bind_indices(args...; kwargs...) = get_bind_idx.(get_bind_regimes(args...; kwargs...))
 get_catalysis_perms(args...; kwargs...) = get_catalysis_perm.(get_catalysis_regimes(args...; kwargs...))
@@ -475,7 +484,7 @@ function get_affine_x2qK(rgm::BindRegime)
     return rgm.M, rgm.M0
 end # Binding is equilibrium
 get_affine_xk2qKk(rgm::BindRegime) = let 
-    n_k = get_catalysis_network(rgm).n_v
+    n_k = get_catalysis_network(rgm).n_k
     M, M0 = get_affine_x2qK(rgm)
     M_xk = blockdiag(M, spdiagm(0 => ones(Int, n_k)))
     M0_xk = vcat(M0, zeros(eltype(rgm.M0), n_k))
@@ -519,7 +528,7 @@ get_affine_qK2x(rgm::BindRegime) = let
 end
 get_affine_qKk2xk(rgm::BindRegime) = let
     H,H0 = get_affine_qK2x(rgm)
-    n_k = get_catalysis_network(rgm).n_v
+    n_k = get_catalysis_network(rgm).n_k
     H_xk = blockdiag(H, spdiagm(0 => ones(Int, n_k)))
     H0_xk = vcat(H0, zeros(eltype(H0), n_k))
     return H_xk, H0_xk
@@ -527,12 +536,12 @@ end
 
 get_affine_qKk2v(rgm::BncRegime) = let
     H,H0 = get_affine_qK2x(get_bind_regime(rgm))
-    n_v = get_catalysis_network(rgm).n_v
-    H_cat = blockdiag(H, spdiagm(0 => ones(Int, n_v)))
-    H0_cat = vcat(H0, zeros(eltype(H0), n_v))
+    n_k = get_catalysis_network(rgm).n_k
+    H_cat = blockdiag(H, spdiagm(0 => ones(Int, n_k)))
+    H0_cat = vcat(H0, zeros(eltype(H0), n_k))
     z, z0 = get_affine_xk2v(get_catalysis_regime(rgm))
-    H_v = H_cat * z
-    H0_v = H_cat * z0 + H0_cat
+    H_v = z * H_cat
+    H0_v = z * H0_cat + z0
     return H_v, H0_v
 end
 
@@ -571,7 +580,7 @@ function get_C_C0_x(rgm::BindRegime; remove_h_redundancy::Bool=false)
     )
 end
 get_C_C0_xk(rgm::BindRegime; remove_h_redundancy::Bool=false) = let
-    n_k = get_catalysis_network(rgm).n_v
+    n_k = get_catalysis_network(rgm).n_k
     C_x, C0_x = get_C_C0_x(rgm)
     C_xk = hcat(C_x, spzeros(eltype(C_x), size(C_x, 1), n_k))
     return _maybe_remove_h_redundancy_pair(
@@ -684,7 +693,7 @@ function get_C_C0_nullity_qK(rgm::BindRegime; remove_h_redundancy::Bool=false)
 end
 get_C_C0_nullity_qKk(rgm::BindRegime; remove_h_redundancy::Bool=false) = let
     C_qK, C0_qK, nullity = get_C_C0_nullity_qK(rgm)
-    n_k = get_catalysis_network(rgm).n_v
+    n_k = get_catalysis_network(rgm).n_k
     C = hcat(C_qK, spzeros(eltype(C_qK), size(C_qK, 1), n_k))
     return _maybe_remove_h_redundancy(
         C,
@@ -737,7 +746,8 @@ end
 # N\log xk + N0 =0  is the same flux balance condition in xk space
 function get_N_N0_xk(rgm::CatalysisRegime)
     get_catalysis_regime(rgm)
-    return hcat(rgm.PΠ, rgm.P), rgm.P0
+    z, z0 = get_affine_xk2v(rgm)
+    return rgm.P * z, rgm.P * z0 + rgm.P0
 end
 
 #  ̃p := -P\logk = PΠ \log x + P0
@@ -749,7 +759,8 @@ end
 #  ̃p := -P\logk
 get_affine_k2k̃(rgm::CatalysisRegime) = let 
     get_catalysis_regime(rgm)
-    return -rgm.P, zeros(eltype(rgm.P0), length(rgm.P0))
+    cn = get_catalysis_network(rgm)
+    return -(rgm.P * cn.F), -(rgm.P * cn.F0)
 end
 
 get_affine_x2Kk̃(rgm::BncRegime) = let 
@@ -780,7 +791,7 @@ end
 
 get_affine_xk2wKk̃k(rgm::BncRegime) = let
     M,M0 = get_affine_x2wKk̃(rgm)
-    n_k = get_catalysis_network(rgm).n_v
+    n_k = get_catalysis_network(rgm).n_k
     M_xk = blockdiag(M, spdiagm(0 => ones(Int, n_k)))
     M0_xk = vcat(M0,zeros(eltype(M0), n_k))
     return M_xk, M0_xk
@@ -789,17 +800,17 @@ end
 get_affine_wKk2wKk̃k(rgm::BncRegime)= let 
     d_w = get_catalysis_network(rgm).d_w
     r = get_binding_network(rgm).r
-    n_v = get_catalysis_network(rgm).n_v
+    n_k = get_catalysis_network(rgm).n_k
     blk1 = spdiagm(0 => ones(Int, d_w))
     blk2 = spdiagm(0 => ones(Int, r))
     z,z0 = get_affine_k2k̃(get_catalysis_regime(rgm))
     blk3 = let
         upper = z
-        lower = spdiagm(0 => ones(Int, n_v))
+        lower = spdiagm(0 => ones(Int, n_k))
         vcat(upper, lower)
     end
     M = blockdiag(blk1, blk2, blk3)
-    M0 = vcat(zeros(eltype(z0), d_w + r), z0, zeros(eltype(z0), n_v))
+    M0 = vcat(zeros(eltype(z0), d_w + r), z0, zeros(eltype(z0), n_k))
     return M, M0
 end
 get_affine_wKk2wKk̃(rgm::BncRegime)= let
@@ -822,9 +833,9 @@ end
 get_affine_wKk̃k2xk(rgm::BncRegime)= let 
     H = rgm.H_inner
     H0 = rgm.H0_inner
-    n_v = get_catalysis_network(rgm).n_v
-    H_full = blockdiag(H, spdiagm(0 => ones(Int, n_v)))
-    H0_full = vcat(H0, zeros(eltype(H0), n_v))
+    n_k = get_catalysis_network(rgm).n_k
+    H_full = blockdiag(H, spdiagm(0 => ones(Int, n_k)))
+    H0_full = vcat(H0, zeros(eltype(H0), n_k))
     return H_full, H0_full
 end
 
@@ -835,11 +846,11 @@ get_affine_wKk2x(rgm::BncRegime) = let
 end
 get_affine_wKk2xk(rgm::BncRegime) = let
     H,H0 = get_affine_wKk2x(rgm)
-    n_k = get_catalysis_network(rgm).n_v
+    n_k = get_catalysis_network(rgm).n_k
     lower = let 
-        left = zeros(eltype(H), size(H,1), size(H,2)-n_v)
-        rignt = spdiagm(0 => ones(Int, n_k))
-        hcat(left, rignt)
+        left = zeros(eltype(H), n_k, size(H,2)-n_k)
+        right = spdiagm(0 => ones(Int, n_k))
+        hcat(left, right)
     end
     H_full = vcat(H, lower)
     H0_full = vcat(H0, zeros(eltype(H0), n_k))
@@ -848,12 +859,12 @@ end
 
 get_affine_wKk2v(rgm::BncRegime) = let
     H,H0 = get_affine_wKk2x(rgm)
-    n_v = get_catalysis_network(rgm).n_v
-    H_cat = blockdiag(H, spdiagm(0 => ones(Int, n_v)))
-    H0_cat = vcat(H0, zeros(eltype(H0), n_v))
+    n_k = get_catalysis_network(rgm).n_k
+    H_cat = blockdiag(H, spdiagm(0 => ones(Int, n_k)))
+    H0_cat = vcat(H0, zeros(eltype(H0), n_k))
     z, z0 = get_affine_xk2v(get_catalysis_regime(rgm))
-    H_v = H_cat * z
-    H0_v = H_cat * z0 + H0_cat
+    H_v = z * H_cat
+    H0_v = z * H0_cat + z0
     return H_v, H0_v
 end
 
@@ -876,7 +887,7 @@ get_C_C0_nullity_wKk(rgm::BncRegime; remove_h_redundancy::Bool=false) =
     _maybe_remove_h_redundancy(
         rgm.C_wKk,
         rgm.C0_wKk,
-        rgm.nlt;
+        rgm.nlt_wKk;
         remove_h_redundancy=remove_h_redundancy,
     )
 

@@ -87,8 +87,13 @@ end
 
 
 get_affine_xk2v(cn::CatalysisData) = let
-    n_v = cn.n_v
-    return hcat(cn.Π, spdiagm(0 => ones(Int, n_v))), zeros(eltype(cn.Π), n_v) 
+    return hcat(cn.Π, cn.F), cn.F0
+end
+
+function _has_nontrivial_k_constraints(cn::CatalysisData; atol::Float64=1e-12)
+    cn.n_k == cn.n_v || return true
+    nnz(cn.F - spdiagm(0 => ones(Rational{Int}, cn.n_v))) == 0 || return true
+    return any(abs.(Float64.(cn.F0)) .> atol)
 end
 
 

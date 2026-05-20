@@ -359,15 +359,18 @@ function _node_subset_by_nullity(
     hide_nullity_ge_2::Bool=false,
     edge_space::Symbol=_first_space(grh, (:qK, :qKk, :xk, :wKk, :v, :x)),
 )
-    hide_nullity_ge_2 || return collect(1:length(grh.neighbors))
     kind = _regime_graph_kind(grh)
+    if kind === :bnc
+        nodes = [i for i in eachindex(grh.bn.BncRegimes) if is_feasible(grh.bn.BncRegimes[i])]
+        hide_nullity_ge_2 || return nodes
+        return [i for i in nodes if _bnc_color_nullity(grh.bn.BncRegimes[i], edge_space) <= 1]
+    end
+    hide_nullity_ge_2 || return collect(1:length(grh.neighbors))
     if kind === :polyhedron
         return collect(1:length(grh.neighbors))
     elseif kind === :binding
         model = get_binding_network(grh)
         return [i for i in 1:length(grh.neighbors) if get_nullity(model, i) <= 1]
-    elseif kind === :bnc
-        return [i for i in eachindex(grh.bn.BncRegimes) if _bnc_color_nullity(grh.bn.BncRegimes[i], edge_space) <= 1]
     else
         return collect(1:length(grh.neighbors))
     end
