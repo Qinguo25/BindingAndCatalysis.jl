@@ -16,7 +16,7 @@
     g = get_neighbor_graph(grh)
 
     @test length(grh.neighbors) == 2
-    @test Graphs.ne(g) == 1
+    @test BindingAndCatalysis.Graphs.ne(g) == 1
     @test size(grh.hp_data[1].hp_to_poly.M, 1) == 2
     @test size(grh.hp_data[1].hp_to_poly.M, 2) == length(grh.hp_data[1].hyperplanes)
 end
