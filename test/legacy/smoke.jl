@@ -29,5 +29,6 @@
     @test get_nullities(model) == get_nullity.(get_regimes(model))
     @test length(get_neighbors(model, 1)) == 2
     @test get_function(get_regime(model, 1))(inner; input_logspace = true, output_logspace = true) isa AbstractVector
-    @test summary_vertex(model, 1) === nothing
+    singular_idx = only(filter(i -> get_nullity(model, i) > 0, get_indices(model)))
+    @test summary_vertex(model, singular_idx) === nothing
 end

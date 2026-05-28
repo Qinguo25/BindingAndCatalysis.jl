@@ -8,6 +8,7 @@
     @test all(isequal.(k_sym(model), cn.k_sym))
 
     find_catalysis_regimes!(model)
+    @test ensure_catalysis_regimes!(model) === nothing
     @test n_regimes(cn) == 1
 
     cat_perm = first(get_catalysis_regimes(model))
@@ -30,7 +31,8 @@
     @test length(dyn_reduced) == cn.r_v + cn.d_w
     @test length(show_condition_xk(cat_rgm)) == size(C_xk_cat, 1)
 
-    match_regimes!(model)
+    @test match_regimes!(model) === nothing
+    @test ensure_bnc_regimes!(model) === nothing
     @test n_bnc_regimes(model) > 0
 
     bind_perm = first(get_perms(model))

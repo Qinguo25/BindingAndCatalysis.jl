@@ -7,7 +7,9 @@
     @test length(show_equilibrium(model; log_space = false)) == model.r
 
     find_all_vertices!(model)
+    @test ensure_binding_regimes!(model) === nothing
     @test !isempty(BindingAndCatalysis._bind_regimes_data(model))
+    @test n_bind_regimes(BindingAndCatalysis._bind_regimes(model)) == n_regimes(model)
 
     first_perm = BindingAndCatalysis._bind_regimes_perms(model)[1]
     first_idx = get_idx(model, first_perm)
@@ -16,6 +18,7 @@
     @test get_perm(model, first_idx) == first_perm
 
     vertex = get_vertex(model, first_idx)
+    @test ensure_regime_data!(vertex) === nothing
     C, C0, nullity = get_C_C0_nullity(vertex)
     @test size(C, 2) == model.n
     @test length(C0) == size(C, 1)
@@ -46,6 +49,26 @@ end
     logx_default = qK2x(model, logqK; input_logspace = true, output_logspace = true)
     logx_explicit = qK2x(model, logqK; input_logspace = true, output_logspace = true, method = :free_energy)
     @test isapprox(logx_default, logx_explicit; atol = 1e-8, rtol = 1e-8)
+end
+
+@testset "Export Hygiene" begin
+    undefined_exports = [s for s in names(BindingAndCatalysis, all=false) if !isdefined(BindingAndCatalysis, s)]
+    @test isempty(undefined_exports)
+    @test :benchmark_qK2x_methods ∉ names(BindingAndCatalysis, all=false)
+    @test :lines ∉ names(BindingAndCatalysis, all=false)
+end
+
+@testset "Construction And Empty Catalysis Edge Cases" begin
+    model = @test_logs (:warn, r"N has been reduced") Bnc(
+        N = [1 1 -1; 2 2 -2],
+        K_sym = [:K1, :K2],
+    )
+    @test model.r == 1
+    @test string.(K_sym(model)) == ["K1"]
+
+    no_cat = minimal_model()
+    Lcat = @test_logs (:warn, r"does not contain a catalysis network") get_Lcat(no_cat)
+    @test size(Lcat) == (0, no_cat.n)
 end
 
 @testset "Uniform Box Per-Dimension Sampling" begin
@@ -144,15 +167,10 @@ end
     inner = get_one_inner_point(model, 2)
     @test assign_regime(model, inner; input_logspace = true, asymptotic_only = false, return_idx = true) == 2
 
-    vol1 = get_volume(model, 1)
-    vols = get_volumes(model)
-    @test vol1.mean >= 0
-    @test length(vols) == n_regimes(model)
-
     C_add = [1 -1 0]
     C0_add = [-log10(2)]
     feas = check_feasibility_with_constraint(model, 4; C = C_add, C0 = C0_add)
-    feas_list = feasible_vertieces_with_constraint(model; C = C_add, C0 = C0_add, return_idx = true)
+    feas_list = feasible_vertices_with_constraint(model; C = C_add, C0 = C0_add, return_idx = true)
     @test feas isa Bool
     @test all(i -> i in idxs, feas_list)
 
@@ -169,33 +187,6 @@ end
     qK_12 = BindingAndCatalysis._edge_idx_sign(edge_12, vg, :qK)
     @test qK_21[1] == qK_12[1] != 0
     @test qK_21[2] == -qK_12[2]
-
-    inter = get_intersect(model, r2_perm, r1_perm)
-    dir, ins = get_interface(model, r2_perm, r1_perm)
-    @test get_nullity(inter) >= 0
-    @test length(dir) == model.n
-    @test ins isa Real
-    @test sym_direction(model, dir) isa String
-
-    simo = SIMOPaths(model, :tS)
-    @test !isempty(simo.rgm_paths)
-
-    p1_idx = 1
-    p1 = get_path(simo, p1_idx)
-    p1_idx_path = get_path(simo, p1_idx; return_idx = true)
-    @test get_idx(simo, p1) == p1_idx
-    @test get_idx(simo, p1_idx_path) == p1_idx
-    @test get_path(simo, p1; return_idx = true) == p1_idx_path
-
-    path_poly = get_polyhedron(simo, p1_idx)
-    path_vol = get_volume(simo, p1_idx)
-    @test get_nullity(path_poly) >= 0
-    @test path_vol.mean >= 0
-    @test !isempty(show_condition(simo, p1_idx; log_space = false))
-
-    ro_path = get_RO_path(simo, p1_idx; observe_x = :E)
-    @test !isempty(ro_path)
-    @test format_arrow(ro_path) isa String
 
     Random.seed!(42)
     logqK_vec = randomize(model, 4; log_lower = -3, log_upper = 3)

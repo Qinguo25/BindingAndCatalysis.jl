@@ -10,7 +10,7 @@ export get_affine_qK2x, get_affine_xk2qKk, get_affine_qKk2xk
 export get_C_C0_x, get_C_x, get_C0_x
 export get_C_C0_nullity_qK, get_C_C0_qK, get_C_qK, get_C0_qK
 export get_C_C0_nullity, get_C_C0, get_C, get_C0
-export check_feasibility_with_constraint, feasible_vertieces_with_constraint
+export check_feasibility_with_constraint, feasible_vertices_with_constraint, feasible_vertieces_with_constraint
 export get_polyhedron, get_volume, get_polyhedra
 export is_neighbor, get_interface, get_change_dir
 export get_function
@@ -684,11 +684,11 @@ function check_feasibility_with_constraint(args...;C::AbstractMatrix{<:Real},C0:
 end
 
 """
-    feasible_vertieces_with_constraint(bnc::Bnc; C, C0, nullity=0, kwargs...) -> Vector
+    feasible_vertices_with_constraint(bnc::Bnc; C, C0, nullity=0, kwargs...) -> Vector
 
-Return vertices feasible under additional constraints.
+Return regimes feasible under additional constraints.
 """
-function feasible_vertieces_with_constraint(Bnc::Bnc; C::AbstractMatrix{<:Real},C0::AbstractVector{<:Real},nullity::Int=0,kwargs...)
+function feasible_vertices_with_constraint(Bnc::Bnc; C::AbstractMatrix{<:Real},C0::AbstractVector{<:Real},nullity::Int=0,kwargs...)
     all_vtx = get_regimes(Bnc;kwargs...)
     feasible_vtx = Vector{eltype(all_vtx)}()
     for perm in all_vtx
@@ -697,6 +697,14 @@ function feasible_vertieces_with_constraint(Bnc::Bnc; C::AbstractMatrix{<:Real},
         end
     end
     return feasible_vtx
+end
+
+function feasible_vertieces_with_constraint(args...; kwargs...)
+    Base.depwarn(
+        "`feasible_vertieces_with_constraint` is deprecated; use `feasible_vertices_with_constraint`.",
+        :feasible_vertieces_with_constraint,
+    )
+    return feasible_vertices_with_constraint(args...; kwargs...)
 end
 
 

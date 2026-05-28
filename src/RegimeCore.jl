@@ -1,49 +1,92 @@
 export n_bind_regimes, n_catalysis_regimes, n_bnc_regimes, get_binding_network, get_catalysis_network, is_feasible
+export ensure_binding_regimes!, ensure_catalysis_regimes!, ensure_bnc_regimes!, ensure_regime_data!
+
+#========================================================================================#
+# Index helpers
+#========================================================================================#
 
 @inline _bnc_linear_index(n_bind::Int, bind_idx::Int, cat_idx::Int) = bind_idx + (cat_idx - 1) * n_bind
 @inline _bnc_cart_index(n_bind::Int, idx::Int) = ((idx - 1) % n_bind + 1, (idx - 1) ÷ n_bind + 1)
 
-# Network fetch
+
+#========================================================================================#
+# Network accessors
+#========================================================================================#
+
 """
     get_binding_network(bnc_or_vertex, args...) -> Bnc
 
 Return the binding network associated with a vertex or the model itself.
 """
 get_binding_network(model::CatalysisData) = model.bn
-get_binding_network(model::Bnc,args...)=model
+get_binding_network(model::Bnc, args...) = model
 
 get_binding_network(rgm::CatalysisRegime) = get_binding_network(rgm.network)
-get_binding_network(rgm::BindRegime,args...)=get_binding_network(rgm.network)
-get_binding_network(rgm::BncRegime,args...)=get_binding_network(rgm.bind_rgm)
+get_binding_network(rgm::BindRegime, args...) = get_binding_network(rgm.network)
+get_binding_network(rgm::BncRegime, args...) = get_binding_network(rgm.bind_rgm)
 
 
-"""    
-get_catalysis_network(model::CatalysisData) -> CatalysisData
+"""
+    get_catalysis_network(model::CatalysisData) -> CatalysisData
 """
 get_catalysis_network(model::CatalysisData) = model
-get_catalysis_network(model::Bnc,args...) = let
+get_catalysis_network(model::Bnc, args...) = let
     if isnothing(model.catalysis)
         error("Model does not contain a catalysis network. Please provide a Bnc model with a catalysis network.")
     end
-   return model.catalysis 
+    return model.catalysis
 end
 
 
 get_catalysis_network(rgm::CatalysisRegime) = get_catalysis_network(rgm.network)
-get_catalysis_network(rgm::BindRegime,args...) = get_catalysis_network(rgm.network)
-get_catalysis_network(rgm::BncRegime,args...) = get_catalysis_network(rgm.catalysis_rgm)
+get_catalysis_network(rgm::BindRegime, args...) = get_catalysis_network(rgm.network)
+get_catalysis_network(rgm::BncRegime, args...) = get_catalysis_network(rgm.catalysis_rgm)
 
 
 
 
 
 
-# Regimes fetch
+#========================================================================================#
+# Regime cache accessors
+#========================================================================================#
+
 @inline is_bind_regimes_built(model::Bnc) = !isnothing(model.BindRegimes)
 @inline is_catalysis_regimes_built(model::CatalysisData) = !isnothing(model.CatalysisRegimes)
 @inline is_bnc_regimes_built(model::Bnc) = !isnothing(model.BncRegimes)
 
-@inline _bind_regimes(model::Bnc) = let 
+"""
+    ensure_binding_regimes!(model) -> nothing
+
+Compute and cache binding regimes for `model` if they are not already built.
+This is the explicit cache-building entry point behind binding regime getters.
+"""
+function ensure_binding_regimes!(model::AbstractBnc)
+    find_all_regimes!(get_binding_network(model))
+    return nothing
+end
+
+"""
+    ensure_catalysis_regimes!(model) -> nothing
+
+Compute and cache catalysis regimes for `model` if they are not already built.
+"""
+function ensure_catalysis_regimes!(model::AbstractBnc)
+    find_catalysis_regimes!(get_catalysis_network(model))
+    return nothing
+end
+
+"""
+    ensure_bnc_regimes!(model) -> nothing
+
+Compute and cache matched binding-catalysis regimes for `model` if needed.
+"""
+function ensure_bnc_regimes!(model::AbstractBnc)
+    match_regimes!(get_binding_network(model))
+    return nothing
+end
+
+@inline _bind_regimes(model::Bnc) = let
     if isnothing(model.BindRegimes)
         error("Model does not contain binding regimes. Please run \"find_all_regimes!($model)\" to compute the binding regimes.")
     end
@@ -67,7 +110,6 @@ end
 @inline _bnc_regimes(args...; kwargs...) = _bnc_regimes(get_binding_network(args...; kwargs...))
 
 
-# Is the following three functions really necessary?
 @inline _bind_regimes_data(args...; kwargs...) = _bind_regimes(args...; kwargs...).vertices_data
 @inline _catalysis_regimes_data(args...; kwargs...) = _catalysis_regimes(args...; kwargs...).vertices_data
 @inline _bnc_regimes_data(args...; kwargs...) = _bnc_regimes(args...; kwargs...)
@@ -77,8 +119,8 @@ n_catalysis_regimes(args...; kwargs...) = length(_catalysis_regimes_data(args...
 n_bnc_regimes(args...; kwargs...) = length(_bnc_regimes_data(args...; kwargs...))
 
 n_regimes(rgms::Regimes) = length(rgms.vertices_data)
-n_bind_regimes(rgms::Regimes) = n_regimes(rgms::Regimes)
-n_catalysis_regimes(rgms::Regimes) = n_regimes(rgms::Regimes)
+n_bind_regimes(rgms::Regimes) = n_regimes(rgms)
+n_catalysis_regimes(rgms::Regimes) = n_regimes(rgms)
 
 n_bnc_regimes(rgms::AbstractArray{<:BncRegime}; feasible::Union{Bool,Nothing}=true, kwargs...) =
     count(rgm -> isnothing(feasible) || is_feasible(rgm) == feasible, vec(rgms))
@@ -100,7 +142,7 @@ n_bnc_regimes(rgms::AbstractArray{<:BncRegime}; feasible::Union{Bool,Nothing}=tr
 # Properties involving inner struct fields
 @inline _bind_regimes_perms(args...; kwargs...) = getfield.(_bind_regimes_data(args...; kwargs...), :perm)
 @inline _catalysis_regimes_perms(args...; kwargs...) = getfield.(_catalysis_regimes_data(args...; kwargs...), :perm)
-@inline _bnc_regimes_perms(args...; kwargs...) = getfield.(_bnc_regimes_data(args...; kwargs...), :perm) #This is needed to be fixed as the current implementation could problematic
+@inline _bnc_regimes_perms(args...; kwargs...) = getfield.(_bnc_regimes_data(args...; kwargs...), :perm)
 
 @inline _bind_regimes_asymptotic_flag(args...; kwargs...) = getfield.(_bind_regimes_data(args...; kwargs...), :is_asymptotic)
 @inline _catalysis_regimes_asymptotic_flag(args...; kwargs...) = getfield.(_catalysis_regimes_data(args...; kwargs...), :is_asymptotic)
@@ -108,37 +150,38 @@ n_bnc_regimes(rgms::AbstractArray{<:BncRegime}; feasible::Union{Bool,Nothing}=tr
 
 
 
-function get_bind_perm_dict(args...;kwargs...)
+function get_bind_perm_dict(args...; kwargs...)
     bn = get_binding_network(args...; kwargs...)
-    find_all_regimes!(bn; kwargs...)
+    ensure_binding_regimes!(bn)
     _bind_regimes_perm_dict(bn)
 end
 get_bind_regimes_dict(args...; kwargs...) = get_bind_perm_dict(args...; kwargs...)
 
-function get_catalysis_perm_dict(args...;kwargs...)
+function get_catalysis_perm_dict(args...; kwargs...)
     cn = get_catalysis_network(args...; kwargs...)
-    find_catalysis_regimes!(cn; kwargs...)
+    ensure_catalysis_regimes!(cn)
     _catalysis_regimes_perm_dict(cn)
 end
 get_catalysis_regimes_dict(args...; kwargs...) = get_catalysis_perm_dict(args...; kwargs...)
 
-function get_bnc_perm_dict(args...;kwargs...)
+function get_bnc_perm_dict(args...; kwargs...)
     bn = get_binding_network(args...; kwargs...)
     cn = get_catalysis_network(args...; kwargs...)
-    find_all_regimes!(bn; kwargs...)
-    find_catalysis_regimes!(cn; kwargs...)
+    ensure_binding_regimes!(bn)
+    ensure_catalysis_regimes!(cn)
     return _bind_regimes_perm_dict(bn), _catalysis_regimes_perm_dict(cn)
 end
 
-
-
+#========================================================================================#
+# Catalysis projection helpers
+#========================================================================================#
 
 function get_Lcat(model)
     bn = get_binding_network(model)
     cn = model.catalysis
     if isnothing(cn)
         @warn "Model does not contain a catalysis network. Returning an empty sparse matrix for Lcat."
-        return spzeros(Int,0, n)
+        return spzeros(Int, 0, bn.n)
     else
         r_v = cn.r_v
         return bn.L[r_v + 1:end, :]
@@ -153,25 +196,17 @@ function Base.getproperty(model::CatalysisData, sym::Symbol)
     return getfield(model, sym)
 end
 function Base.propertynames(model::CatalysisData, private::Bool=false)
-    names = Symbol[fieldnames(typeof(model))...,
+    names = Symbol[
+        fieldnames(typeof(model))...,
         :d_para,
     ]
     return private ? Tuple(unique(names)) : Tuple(sym for sym in unique(names) if !startswith(String(sym), "_"))
 end
+#========================================================================================#
+# Regime object fetchers and data materialization
+#========================================================================================#
 
-
-
-
-
-
-
-
-
-
-#get regimes
-
-## Bind regime
-function get_bind_regime(vtx::BindRegime; inv_info::Bool=true,kwargs...)::BindRegime
+function get_bind_regime(vtx::BindRegime; inv_info::Bool=true, kwargs...)::BindRegime
     _initialize_regime!(vtx)
     if inv_info
         _fill_all_info!(vtx)
@@ -180,16 +215,63 @@ function get_bind_regime(vtx::BindRegime; inv_info::Bool=true,kwargs...)::BindRe
 end
 get_bind_regime(rgm::BncRegime) = rgm.bind_rgm
 
+"""
+    ensure_regime_data!(rgm; affine=true, conditions=true) -> nothing
 
-function get_bind_regime(model::AbstractBnc,idx::Integer; kwargs...)
+Materialize cached data for a regime object. For binding regimes, the basic
+dominance data are always initialized; affine maps and qK conditions are
+materialized when either `affine` or `conditions` is true. Catalysis regimes
+materialize their dominance and flux-balance data. Bnc regimes delegate to the
+parent model-level cache.
+"""
+function ensure_regime_data!(
+    rgm::BindRegime;
+    affine::Bool=true,
+    conditions::Bool=true,
+)
+    _initialize_regime!(rgm)
+    if affine || conditions
+        _fill_all_info!(rgm)
+    end
+    return nothing
+end
+
+function ensure_regime_data!(
+    rgm::CatalysisRegime;
+    affine::Bool=true,
+    conditions::Bool=true,
+)
+    _initialize_regime!(rgm)
+    return nothing
+end
+
+function ensure_regime_data!(
+    rgm::BncRegime;
+    affine::Bool=true,
+    conditions::Bool=true,
+)
+    ensure_bnc_regimes!(get_binding_network(rgm))
+    return nothing
+end
+
+function ensure_regime_data!(
+    rgms::AbstractVector{<:AbstractRegime};
+    kwargs...,
+)
+    foreach(rgm -> ensure_regime_data!(rgm; kwargs...), rgms)
+    return nothing
+end
+
+
+function get_bind_regime(model::AbstractBnc, idx::Integer; kwargs...)
     bn = get_binding_network(model)
-    find_all_regimes!(bn) 
+    ensure_binding_regimes!(bn)
     return get_bind_regime(_bind_regimes_data(bn)[idx]; kwargs...)
 end
 
 function get_bind_regime(model::AbstractBnc, perm::AbstractVector; kwargs...)
     bn = get_binding_network(model)
-    find_all_regimes!(bn) 
+    ensure_binding_regimes!(bn)
     key = eltype(perm) <: Integer ? perm : locate_sym_x.(Ref(bn), perm)
     idx = _bind_regimes_perm_dict(bn)[key]
     return get_bind_regime(_bind_regimes_data(bn)[idx]; kwargs...)
@@ -200,20 +282,19 @@ end
 
 
 
-## Catalysis regime
 function get_catalysis_regime(rgm::CatalysisRegime; kwargs...)::CatalysisRegime
     return _initialize_regime!(rgm)
 end
 get_catalysis_regime(rgm::BncRegime) = rgm.catalysis_rgm
 function get_catalysis_regime(model::AbstractBnc, idx::Integer; kwargs...)
     cn = get_catalysis_network(model)
-    find_catalysis_regimes!(cn) 
+    ensure_catalysis_regimes!(cn)
     return get_catalysis_regime(_catalysis_regimes_data(cn)[idx]; kwargs...)
 end
 function get_catalysis_regime(model::AbstractBnc, perm::AbstractVector{<:Integer}; kwargs...)
     cn = get_catalysis_network(model)
-    find_catalysis_regimes!(cn)
-    key = perm 
+    ensure_catalysis_regimes!(cn)
+    key = perm
     idx = _catalysis_regimes_perm_dict(cn)[key]
     return get_catalysis_regime(_catalysis_regimes_data(cn)[idx]; kwargs...)
 end
@@ -221,49 +302,47 @@ function get_catalysis_regime(model::AbstractBnc, vtx::CatalysisRegime; kwargs..
     return get_catalysis_regime(vtx; kwargs...)
 end
 
-## Bnc regime
 function get_bnc_regime(rgm::BncRegime; kwargs...)::BncRegime
     return rgm
 end
 
 function get_bnc_regime(model::Bnc, bind, cat; check::Bool=false)
-    match_regimes!(model)
+    ensure_bnc_regimes!(model)
     idx = get_bnc_idx(model, bind, cat; check=check)
     rgm = model.BncRegimes[idx]
     return rgm
 end
 function get_bnc_regime(model::Bnc, idx::Integer; kwargs...)
-    match_regimes!(model)
-    return get_bnc_regimes(model)[idx]
+    ensure_bnc_regimes!(model)
+    return model.BncRegimes[idx]
 end
+#========================================================================================#
+# Regime identity helpers: permutations and indices
+#========================================================================================#
 
-
-
-
-# ==============================get perm of a specific regime==========================================================================================#
-get_bind_perm(args...;kwargs...) = get_bind_regime(args...;kwargs...).perm
-get_catalysis_perm(args...;kwargs...) = get_catalysis_regime(args...;kwargs...).perm
-get_bnc_perm(args...;kwargs...) = get_bnc_regime(args...;kwargs...).perm
+get_bind_perm(args...; kwargs...) = get_bind_regime(args...; kwargs...).perm
+get_catalysis_perm(args...; kwargs...) = get_catalysis_regime(args...; kwargs...).perm
+get_bnc_perm(args...; kwargs...) = get_bnc_regime(args...; kwargs...).perm
 get_binding_perm(rgm::BncRegime) = get_bind_perm(get_bind_regime(rgm))
 get_steady_state_perm(args...; kwargs...) = get_fixed_point_perm(args...; kwargs...)
 
 
-## speeding up 
-function get_bind_perm(Bnc::Bnc,perm::AbstractVector;check::Bool=false)
-    key =  eltype(perm) <: Integer ? perm : locate_sym_x.(Ref(Bnc), perm)
+function get_bind_perm(Bnc::Bnc, perm::AbstractVector; check::Bool=false)
+    key = eltype(perm) <: Integer ? perm : locate_sym_x.(Ref(Bnc), perm)
     check && @assert haskey(get_bind_regimes_dict(Bnc), key) "The given perm is not in Bnc"
     return Vector{Int}(perm)
 end
-get_bind_perm(Bnc::Bnc, idx::Integer; kwargs...)=(find_all_regimes!(Bnc); _bind_regimes_data(Bnc)[idx].perm)
+get_bind_perm(Bnc::Bnc, idx::Integer; kwargs...) =
+    (ensure_binding_regimes!(Bnc); _bind_regimes_data(Bnc)[idx].perm)
 
 function get_catalysis_perm(model::CatalysisData, perm::AbstractVector{<:Integer}; check::Bool=false)
     check && @assert haskey(get_catalysis_regimes_dict(model), perm) "The given catalysis perm is not in the model."
     return Vector{Int}(perm)
 end
-get_catalysis_perm(model::CatalysisData, idx::Integer; kwargs...) = (find_catalysis_regimes!(model); _catalysis_regimes_data(model)[idx].perm)
+get_catalysis_perm(model::CatalysisData, idx::Integer; kwargs...) =
+    (ensure_catalysis_regimes!(model); _catalysis_regimes_data(model)[idx].perm)
 
 
-#==============================get index of a specific regime==========================================================================================#
 get_bind_idx(args...; kwargs...) = get_bind_regime(args...; kwargs...).idx
 get_catalysis_idx(args...; kwargs...) = get_catalysis_regime(args...; kwargs...).idx
 get_idx(rgm::BindRegime) = get_bind_idx(rgm)
@@ -287,17 +366,18 @@ Base.:(==)(rgm::CatalysisRegime, perm::AbstractVector{<:Integer}) = get_catalysi
 
 Return the vertex index, optionally validating it.
 """
-function get_bind_idx(Bnc::Bnc, idx::T;check::Bool=false) where T<:Integer
-    check && (find_all_regimes!(Bnc); @assert idx ≥ 1 && idx ≤ n_regimes(Bnc) "The given index is out of range.")
-   return idx
-end
-get_bind_idx(Bnc::Bnc,perm::AbstractVector;kwargs...)=(get_bind_perm_dict(Bnc)[get_perm(Bnc, perm)])
-
-function get_catalysis_idx(model::CatalysisData, idx::T; check::Bool=false) where T<:Integer
-    check &&(find_catalysis_regimes!(model);@assert idx >= 1 && idx <= n_regimes(model) "The given catalysis index is out of range.")
+function get_bind_idx(Bnc::Bnc, idx::T; check::Bool=false) where T<:Integer
+    check && (ensure_binding_regimes!(Bnc); @assert idx ≥ 1 && idx ≤ n_regimes(Bnc) "The given index is out of range.")
     return idx
 end
-get_catalysis_idx(model::CatalysisData, perm::AbstractVector; kwargs...)=(get_catalysis_perm_dict(model)[get_perm(model, perm)])
+get_bind_idx(Bnc::Bnc, perm::AbstractVector; kwargs...) = get_bind_perm_dict(Bnc)[get_perm(Bnc, perm)]
+
+function get_catalysis_idx(model::CatalysisData, idx::T; check::Bool=false) where T<:Integer
+    check && (ensure_catalysis_regimes!(model); @assert idx >= 1 && idx <= n_regimes(model) "The given catalysis index is out of range.")
+    return idx
+end
+get_catalysis_idx(model::CatalysisData, perm::AbstractVector; kwargs...) =
+    get_catalysis_perm_dict(model)[get_perm(model, perm)]
 function get_bnc_idx(model::Bnc, bind, cat; check::Bool=false)
     cat_idx = get_catalysis_idx(model, cat; check=check)
     bind_idx = get_bind_idx(model, bind; check=check)
@@ -310,9 +390,12 @@ get_bnc_idx(rgm::BncRegime) = _bnc_linear_index(
 )
 
 
-# ==============================get nullity of a specific regime============================================================#
+#========================================================================================#
+# Regime predicates
+#========================================================================================#
+
 get_nullity(rgm::BindRegime) = rgm.nullity
-get_nullity(rgm::CatalysisRegime) = get_catalysis_network(rgm).r_v # This function is kind of wierd
+get_nullity(rgm::CatalysisRegime) = get_catalysis_network(rgm).r_v
 get_nullity(rgm::BncRegime) = rgm.nlt
 
 get_bind_nullity(args...; kwargs...) = get_nullity(get_bind_regime(args...; kwargs...))
@@ -335,30 +418,29 @@ is_asymptotic(rgm::BindRegime) = rgm.is_asymptotic
 is_asymptotic(rgm::CatalysisRegime) = rgm.is_asymptotic
 is_asymptotic(rgm::BncRegime) = (is_asymptotic(rgm.bind_rgm), is_asymptotic(rgm.catalysis_rgm))
 
-is_bind_asymptotic(args...;kwargs...) = is_asymptotic(get_bind_regime(args...; kwargs...))
-is_catalysis_asymptotic(args...;kwargs...) = is_asymptotic(get_catalysis_regime(args...; kwargs...))
-is_bnc_asymptotic(args...;kwargs...) = is_asymptotic(get_bnc_regime(args...; kwargs...))
+is_bind_asymptotic(args...; kwargs...) = is_asymptotic(get_bind_regime(args...; kwargs...))
+is_catalysis_asymptotic(args...; kwargs...) = is_asymptotic(get_catalysis_regime(args...; kwargs...))
+is_bnc_asymptotic(args...; kwargs...) = is_asymptotic(get_bnc_regime(args...; kwargs...))
 
-#==================================Check if a key is valid===============================================================#
 """
-Check if given key is valid for regime fetching. 
+Check if given key is valid for regime fetching.
 """
 have_perm(model::Bnc, perm::AbstractVector) = haskey(get_bind_perm_dict(model), get_bind_perm(model, perm))
-have_perm(model::Bnc, idx::Integer) = (find_all_regimes!(model); 1 <= idx <= n_bind_regimes(model))
-have_perm(model::CatalysisData, perm::AbstractVector) = haskey(get_catalysis_perm_dict(model),get_catalysis_perm(model, perm))
-have_perm(model::CatalysisData, idx::Integer) = (find_catalysis_regimes!(model); idx >= 1 && idx <= n_catalysis_regimes(model))
+have_perm(model::Bnc, idx::Integer) = (ensure_binding_regimes!(model); 1 <= idx <= n_bind_regimes(model))
+have_perm(model::CatalysisData, perm::AbstractVector) = haskey(get_catalysis_perm_dict(model), get_catalysis_perm(model, perm))
+have_perm(model::CatalysisData, idx::Integer) = (ensure_catalysis_regimes!(model); idx >= 1 && idx <= n_catalysis_regimes(model))
 
 have_perm(model::AbstractBnc, rgm::BindRegime) = get_binding_network(rgm) === model
 have_perm(model::AbstractBnc, rgm::CatalysisRegime) = get_catalysis_network(rgm) === model
 
-have_perm(model::AbstractBnc, bind, cat) = have_perm(get_binding_network(model), bind) && have_perm(get_catalysis_network(model), cat)
+have_perm(model::AbstractBnc, bind, cat) =
+    have_perm(get_binding_network(model), bind) && have_perm(get_catalysis_network(model), cat)
+#========================================================================================#
+# Regime filtering and collection fetchers
+#========================================================================================#
 
-
-
-
-# ==================================Get regimes with filters==================================#
-
-function _get_filter(; singular::Union{Bool,Nothing}=nothing,
+function _get_filter(;
+    singular::Union{Bool,Nothing}=nothing,
     nullity::Union{Integer, Tuple{<:Integer,<:Integer},Nothing}=nothing,
     max_nullity::Union{Integer,Nothing}=nothing,
     asymptotic::Union{Bool,Nothing}=nothing,
@@ -378,7 +460,12 @@ function _get_filter(; singular::Union{Bool,Nothing}=nothing,
     judge_stable(x) = isnothing(stable) || is_stable(x) == stable
     judge_feasible(x) = isnothing(feasible) || is_feasible(x) == feasible
     add_filter_func = isnothing(add_filter) ? (x -> true) : add_filter
-    return x -> judge_asymptotic(x) && judge_nullity(x) && judge_singular(x) && judge_stable(x) && judge_feasible(x) && add_filter_func(x)
+    return x -> judge_asymptotic(x) &&
+                judge_nullity(x) &&
+                judge_singular(x) &&
+                judge_stable(x) &&
+                judge_feasible(x) &&
+                add_filter_func(x)
 end
 
 
@@ -396,7 +483,7 @@ end
 
 function _get_mask(model::AbstractBnc, rgms::AbstractVector; kwargs...)
     bn = get_binding_network(model)
-    find_all_regimes!(bn)
+    ensure_binding_regimes!(bn)
     bind_rgms = get_bind_regime.(Ref(bn), rgms)
     return _get_mask(bind_rgms; kwargs...)
 end
@@ -426,14 +513,14 @@ Use `get_perms` or `get_indices` for permutation/index lists.
 """
 function get_bind_regimes(Bnc::AbstractBnc, rgms::Union{Nothing,AbstractVector}=nothing; kwargs...)
     bn = get_binding_network(Bnc)
-    find_all_regimes!(bn)
-    rgms = isnothing(rgms) ? _bind_regimes_data(bn) : get_bind_regime.(Ref(bn),rgms)
+    ensure_binding_regimes!(bn)
+    rgms = isnothing(rgms) ? _bind_regimes_data(bn) : get_bind_regime.(Ref(bn), rgms)
     return get_bind_regimes(rgms; kwargs...)
 end
 
 function filter_regimes(model::Bnc, candidates::AbstractVector; return_mask::Bool=false, kwargs...)
     bn = get_binding_network(model)
-    find_all_regimes!(bn)
+    ensure_binding_regimes!(bn)
     idxs = [get_bind_idx(bn, x) for x in candidates]
     rgms = [get_bind_regime(bn, i) for i in idxs]
     mask = _get_mask(rgms; kwargs...)
@@ -443,15 +530,15 @@ end
 
 function get_catalysis_regimes(Bnc::AbstractBnc, rgms::Union{Nothing,AbstractVector}=nothing; kwargs...)
     cn = get_catalysis_network(Bnc)
-    find_catalysis_regimes!(cn)
-    rgms = isnothing(rgms) ? _catalysis_regimes_data(cn) : get_catalysis_regime.(Ref(cn),rgms)
+    ensure_catalysis_regimes!(cn)
+    rgms = isnothing(rgms) ? _catalysis_regimes_data(cn) : get_catalysis_regime.(Ref(cn), rgms)
     return get_catalysis_regimes(rgms; kwargs...)
 end
 
-function get_bnc_regimes(model::AbstractBnc, rgms::Union{Nothing,AbstractArray}=nothing;kwargs...)
+function get_bnc_regimes(model::AbstractBnc, rgms::Union{Nothing,AbstractArray}=nothing; kwargs...)
     bn = get_binding_network(model)
-    match_regimes!(bn)
-    rgms = isnothing(rgms) ? _bnc_regimes_data(bn) : get_bnc_regime.(Ref(model),rgms)
+    ensure_bnc_regimes!(bn)
+    rgms = isnothing(rgms) ? _bnc_regimes_data(bn) : get_bnc_regime.(Ref(model), rgms)
     return get_bnc_regimes(rgms; kwargs...)
 end
 
@@ -468,12 +555,9 @@ get_bind_nullities(args...; kwargs...) = get_bind_nullity.(get_bind_regimes(args
 get_bnc_nullities(args...; kwargs...) = get_bnc_nullity.(get_bnc_regimes(args...; kwargs...))
 get_nullities(args...; kwargs...) = get_bind_nullities(args...; kwargs...)
 
-
-#==============================Get C, C0, nullity under different reparameterization==================================#
-
-#============================== Dominance condition and forward affine, only binding equilibrium===========================#
-
-# log q = P log x + P0
+#========================================================================================#
+# Affine maps and constraints across coordinate systems
+#========================================================================================#
 
 function get_affine_x2q(rgm::BindRegime)
     get_bind_regime(rgm; inv_info=false)
