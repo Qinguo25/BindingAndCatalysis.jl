@@ -520,7 +520,7 @@ function match_regimes!(model::Bnc)
 end
 
 _build_BncRegime(cat_rgms::Regimes, bind_rgms::Regimes) =
-    _build_BncRegime(cat_rgms.vertices_data, bind_rgms.vertices_data)
+    _build_BncRegime(cat_rgms.regimes_data, bind_rgms.regimes_data)
 
 function _build_BncRegime(cat_rgms::AbstractVector{<:CatalysisRegime}, bind_rgms::AbstractVector{<:BindRegime})
     n_cat = length(cat_rgms)

@@ -129,7 +129,7 @@ function _prepare_sampling_config(
         log_upper64 = _dimension_vector(log_upper, n_dim, "log_upper")
         box_width64 = log_upper64 .- log_lower64
         @assert all(>(0.0), box_width64) "each log_upper must be > log_lower"
-        sample_weight = prod(box_width64)
+        sample_weight = 1.0
     else
         error("sampler must be :gaussian or :uniform_box, got $sampler")
     end
@@ -393,7 +393,7 @@ end
     calc_volume(Cs, C0s; kwargs...) -> Vector{Volume}
 
 Monte Carlo 估计：默认使用 N 维高斯抽样 `x ~ 𝒩(μ, σ²I)` 估计各 polyhedron 的概率质量；
-若 `sampler=:uniform_box` 则估计盒上均匀抽样下的体积（概率×盒体积）。
+若 `sampler=:uniform_box` 则估计指定 log box 上均匀抽样的概率质量。
 
 polyhedron 约束：A*x + b >= -tol
 """

@@ -248,7 +248,6 @@ end
 Assign a regime given a point in x space by first mapping to qK.
 """
 function assign_regime_qK(Bnc::Bnc ; x::AbstractVector{<:Real}, input_logspace::Bool=false, kwargs...) 
-    # @show all_vertice_idx
     logqK = x2qK(Bnc,x; input_logspace=input_logspace, output_logspace=true)
     return assign_regime_qK(Bnc, logqK; input_logspace=true, kwargs...)
 end
@@ -355,6 +354,35 @@ function condition_contains(C, C0, nullity::Integer, z::AbstractVector{<:Real}; 
     return true
 end
 
+function solve_logx_checked(
+    model::Bnc,
+    logqK::AbstractVector{<:Real};
+    method::Union{Symbol,Nothing}=nothing,
+    tol::Float64=1e-6,
+)
+    method = _resolve_qK2x_method(model, method)
+    logx = try
+        if method === :free_energy
+            qK2x(
+                model,
+                logqK;
+                input_logspace=true,
+                output_logspace=true,
+                method=method,
+                warn_on_maxiters=false,
+            )
+        else
+            qK2x(model, logqK; input_logspace=true, output_logspace=true, method=method)
+        end
+    catch
+        return nothing
+    end
+
+    method === :regime && return logx
+    maximum(abs.(qK2x_residual(model, logx, logqK; input_logspace=true))) <= tol || return nothing
+    return logx
+end
+
 function assign_bnc_regime_wKk(model::Bnc, logwKk::AbstractVector{<:Real}; tol::Float64=1e-8, max_nullity::Integer=0)
     rgms = get_bnc_regimes(model)
     for (idx, rgm) in pairs(rgms)
@@ -374,10 +402,10 @@ function _assign_regime_qK_fallback(
     warn_on_fallback::Bool=true,
 )
     real_only = asymptotic_only ? true : nothing
-    all_vertice_idx = get_regimes(Bnc, singular=false, asymptotic = real_only, return_idx = true)
+    all_regime_idx = get_regimes(Bnc, singular=false, asymptotic = real_only, return_idx = true)
 
-    record = Vector{Float64}(undef,length(all_vertice_idx))
-    for (i, idx) in enumerate(all_vertice_idx)
+    record = Vector{Float64}(undef,length(all_regime_idx))
+    for (i, idx) in enumerate(all_regime_idx)
         C, C0 = get_C_C0_qK(Bnc, idx)
         min_val = if !asymptotic_only
             minimum(C * logqK .+ C0)
@@ -390,7 +418,7 @@ function _assign_regime_qK_fallback(
             return return_idx ? idx : get_perm(Bnc, idx)
         end
     end
-    warn_on_fallback && @warn("All vertex conditions failed for logqK=$logqK. Returning the best-fit vertex.")
-    idx = all_vertice_idx[findmax(record)[2]]
+    warn_on_fallback && @warn("All regime conditions failed for logqK=$logqK. Returning the best-fit regime.")
+    idx = all_regime_idx[findmax(record)[2]]
     return return_idx ? idx : get_perm(Bnc, idx)
 end

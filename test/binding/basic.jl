@@ -81,7 +81,7 @@ end
 
     @test sampling.log_lower == [-1.0, -2.0]
     @test sampling.box_width == [2.0, 6.0]
-    @test sampling.sample_weight == 12.0
+    @test sampling.sample_weight == 1.0
 
     rng = MersenneTwister(123)
     x = zeros(2)
@@ -97,6 +97,43 @@ end
         log_lower = [-1],
         log_upper = [1, 4],
     )
+
+    C = [
+        1.0 0.0
+        -1.0 0.0
+        0.0 1.0
+        0.0 -1.0
+    ]
+    C0 = [0.0, 1.0, 0.0, 1.0]
+    log_lower = [-2.0, -2.0]
+    log_upper = [2.0, 2.0]
+
+    direct_fraction = calc_volume(
+        C,
+        C0;
+        sampler = :uniform_box,
+        log_lower = log_lower,
+        log_upper = log_upper,
+        batch_size = 20_000,
+        rel_tol = 0.2,
+        abs_tol = 1.0e-3,
+        time_limit = 3.0,
+    )
+    @test isapprox(direct_fraction.mean, 1 / 16; atol = 0.01)
+
+    poly = get_polyhedron(C, C0, 0; canonicalize = false)
+    poly_fraction = calc_volume(
+        poly;
+        asymptotic = false,
+        sampler = :uniform_box,
+        log_lower = log_lower,
+        log_upper = log_upper,
+        batch_size = 20_000,
+        rel_tol = 0.2,
+        abs_tol = 1.0e-3,
+        time_limit = 3.0,
+    )
+    @test isapprox(poly_fraction.mean, 1 / 16; atol = 0.01)
 end
 
 @testset "Minimal Notebook Workflow" begin

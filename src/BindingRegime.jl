@@ -10,7 +10,8 @@ export get_affine_qK2x, get_affine_xk2qKk, get_affine_qKk2xk
 export get_C_C0_x, get_C_x, get_C0_x
 export get_C_C0_nullity_qK, get_C_C0_qK, get_C_qK, get_C0_qK
 export get_C_C0_nullity, get_C_C0, get_C, get_C0
-export check_feasibility_with_constraint, feasible_vertices_with_constraint, feasible_vertieces_with_constraint
+export check_feasibility_with_constraint, feasible_regimes_with_constraint
+export feasible_vertices_with_constraint, feasible_vertieces_with_constraint
 export get_polyhedron, get_volume, get_polyhedra
 export is_neighbor, get_interface, get_change_dir
 export get_function
@@ -21,9 +22,9 @@ export get_function
 #========================================================================================#
 
 """
-    _calc_C_C0_qK_singular(bnc::Bnc, vtx) -> (SparseMatrixCSC, Vector, Int)
+    _calc_C_C0_qK_singular(bnc::Bnc, regime) -> (SparseMatrixCSC, Vector, Int)
 
-Build qK-space constraints `(C_qK, C0_qK,nullity)` for singular vertices via affine mapping.
+Build qK-space constraints `(C_qK, C0_qK, nullity)` for singular regimes via affine mapping.
 """
 
 function _calc_C_C0_qK_singular(Bnc::Bnc, vtx)
@@ -117,9 +118,9 @@ function find_all_regimes!(model::Bnc{T}) where T
     end
 
 
-    n_vertices = length(all_perms)
+    n_regimes = length(all_perms)
     n_asym_rgms = sum(is_asymptotic)
-    @info "Finished, with $(n_vertices) regimes found and $(n_asym_rgms) asymptotic regimes."
+    @info "Finished, with $(n_regimes) regimes found and $(n_asym_rgms) asymptotic regimes."
 
     @info "2.Building x-neighbor regime graph..."
     model.vertices_graph = let
@@ -131,9 +132,9 @@ function find_all_regimes!(model::Bnc{T}) where T
 
     @info "3.Building regime objects..."
     model.BindRegimes = let
-        regimes = _build_bind_regimes(model, all_perms, is_asymptotic, fill(T(-1), n_vertices))
-        vertices_perm_dict = Dict(perm => idx for (idx, perm) in enumerate(all_perms))
-        Regimes(vertices_perm_dict, regimes)
+        regimes = _build_bind_regimes(model, all_perms, is_asymptotic, fill(T(-1), n_regimes))
+        regimes_perm_dict = Dict(perm => idx for (idx, perm) in enumerate(all_perms))
+        Regimes(regimes_perm_dict, regimes)
     end
 
     @info "4.Propagating affine data and deferred nullity labels..."
@@ -147,9 +148,9 @@ function find_all_regimes!(model::Bnc{T}) where T
 end
 
 @inline function _build_bind_regimes(model::Bnc{T}, all_perms, is_asymptotic, nullity) where T
-    n_vertices = length(all_perms)
-    regimes = Vector{BindRegime}(undef, n_vertices)
-    Threads.@threads for i in 1:n_vertices
+    n_regimes = length(all_perms)
+    regimes = Vector{BindRegime}(undef, n_regimes)
+    Threads.@threads for i in 1:n_regimes
         regimes[i] = BindRegime(
             network = model,
             perm = all_perms[i],
@@ -246,12 +247,12 @@ end
 
 
 #---------------------------------------------------------------------------------------------
-#   Functions involving vertices relationships, (neighbors finding and changedir finding)
+#   Functions involving regime relationships, (neighbors finding and changedir finding)
 #---------------------------------------------------------------------------------------------
 """
     get_regimes_neighbor_mat_x(bnc::Bnc) -> SparseMatrixCSC
 
-Return the x-space adjacency matrix of the vertex graph.
+Return the x-space adjacency matrix of the regime graph.
 """
 function get_regimes_neighbor_mat_x(Bnc::Bnc)
     grh = get_regimes_graph!(Bnc;full=false)
@@ -262,7 +263,7 @@ end
 """
     get_regimes_neighbor_mat_qK(bnc::Bnc) -> SparseMatrixCSC
 
-Return the qK-space adjacency matrix of the vertex graph.
+Return the qK-space adjacency matrix of the regime graph.
 """
 function get_regimes_neighbor_mat_qK(Bnc::Bnc)
     grh = get_regimes_graph!(Bnc;full=true)
@@ -277,27 +278,27 @@ get_regimes_neighbor_mat(args...;kwargs...) =  get_regimes_neighbor_mat_qK(args.
 
 
 """
-    get_volumes(bnc::Bnc, vtxs=nothing; recalculate=false, kwargs...) -> Vector{Volume}
+    get_volumes(bnc::Bnc, regimes=nothing; recalculate=false, kwargs...) -> Vector{Volume}
 
-Return volumes for selected vertices, computing missing volumes as needed.
+Return volumes for selected regimes, computing missing volumes as needed.
 """
-function get_volumes(Bnc::Bnc,vtxs::Union{AbstractVector,Nothing}=nothing; 
+function get_volumes(Bnc::Bnc, regimes::Union{AbstractVector,Nothing}=nothing;
     recalculate::Bool=false, 
     rebase_K::Bool = false, 
     rebase_mat:: Union{AbstractMatrix{<:Real},Nothing} = nothing,
     kwargs...)
 
-    all_vtxs = isnothing(vtxs) ? get_regimes(Bnc;return_idx=true) : [get_idx(Bnc, vtx) for vtx in vtxs]
+    all_rgms = isnothing(regimes) ? get_regimes(Bnc; return_idx=true) : [get_idx(Bnc, rgm) for rgm in regimes]
 
-        vtxs_to_calc = 
+        regimes_to_calc =
             if recalculate
-                all_vtxs
+                all_rgms
             else
-                vertices = _bind_regimes_data(Bnc)
-                filter(i -> isnothing(vertices[i].volume), all_vtxs)
+                rgm_data = _bind_regimes_data(Bnc)
+                filter(i -> isnothing(rgm_data[i].volume), all_rgms)
             end
     
-    if !isempty(vtxs_to_calc)
+    if !isempty(regimes_to_calc)
 
         rebase_mat = if  !isnothing(rebase_mat)
                     @assert !rebase_K "Cannot specify both rebase_K and providing rebase_mat"
@@ -314,13 +315,13 @@ function get_volumes(Bnc::Bnc,vtxs::Union{AbstractVector,Nothing}=nothing;
         #    get_regime(Bnc,idx; inv_info=true)
         # end
         
-        rlts = _calc_bind_regime_volumes(Bnc, vtxs_to_calc; rebase_mat=rebase_mat, kwargs...)
-        for (i,idx) in enumerate(vtxs_to_calc)
-            vtx = get_regime(Bnc,idx; inv_info=false)
-            vtx.volume = rlts[i]
+        rlts = _calc_bind_regime_volumes(Bnc, regimes_to_calc; rebase_mat=rebase_mat, kwargs...)
+        for (i, idx) in enumerate(regimes_to_calc)
+            rgm = get_regime(Bnc, idx; inv_info=false)
+            rgm.volume = rlts[i]
         end
     end
-    return [vtx.volume for vtx in _bind_regimes_data(Bnc)[all_vtxs]]
+    return [rgm.volume for rgm in _bind_regimes_data(Bnc)[all_rgms]]
 end
 
 
@@ -329,7 +330,7 @@ end
 """
     get_volume(args...; kwargs...) -> Volume
 
-Return the volume for a single vertex.
+Return the volume for a single regime.
 """
 function get_volume(args...;  kwargs...)
     model = get_binding_network(args...)
@@ -339,13 +340,13 @@ end
 
 
 #--------------------------------------------------------------------------------------------------------------------------------------
-#          relationships between two vertices, based on regime graphs.
+#          relationships between two regimes, based on regime graphs.
 #----------------------------------------------------------------------------------------------------------------------------------------
 
 """
     get_interface_qK(bnc, from, to) -> (SparseVector, Float64)
 
-Return the interface hyperplane between two vertices in qK space.
+Return the interface hyperplane between two regimes in qK space.
 """
 function get_interface_qK(Bnc, from, to)::Tuple{SparseVector{Float64,Int}, Float64}
     grh = get_regimes_graph!(Bnc; full=true)
@@ -354,7 +355,7 @@ function get_interface_qK(Bnc, from, to)::Tuple{SparseVector{Float64,Int}, Float
         @info "No direct regime-graph edge found; falling back to direct interface reconstruction."
         return get_interface_direct(Bnc, from, to)
     elseif !_edge_has_qK_interface(grh, edge)
-        @error("Vertices $get_perm(Bnc, from) and $get_perm(Bnc, to) are neighbors in x space but not in qK space")
+        @error("Regimes $get_perm(Bnc, from) and $get_perm(Bnc, to) are neighbors in x space but not in qK space")
     else
         return _edge_qK_interface(grh, edge)
     end   
@@ -369,7 +370,7 @@ get_interface(args...;kwargs...) = get_interface_qK(args...;kwargs...)
 """
     get_change_dir_qK(args...; kwargs...) -> SparseVector
 
-Return the qK change direction between neighboring vertices.
+Return the qK change direction between neighboring regimes.
 """
 get_change_dir_qK(args...;kwargs...) = get_interface(args...;kwargs...)[1] # relys on the inner behavior of get_interface, 
 """
@@ -380,9 +381,9 @@ Alias for `get_change_dir_qK`.
 get_change_dir(args...;kwargs...) = get_change_dir_qK(args...;kwargs...)
 
 """
-    is_neighbor_qK(bnc, vtx1, vtx2) -> Bool
+    is_neighbor_qK(bnc, regime1, regime2) -> Bool
 
-Return `true` if two vertices are neighbors in qK space.
+Return `true` if two regimes are neighbors in qK space.
 """
 function is_neighbor_qK(Bnc, vtx1, vtx2)::Bool
     try get_interface_qK(Bnc, vtx1, vtx2)
@@ -403,12 +404,12 @@ is_neighbor(args...;kwargs...) = is_neighbor_qK(args...;kwargs...)
 """
     get_interface_x(bnc::Bnc, from, to) -> (SparseVector, Float64)
 
-Return the interface hyperplane between two vertices in x space.
+Return the interface hyperplane between two regimes in x space.
 """
 function get_interface_x(Bnc::Bnc, from, to)
     edge = get_edge(Bnc, from, to)
     if edge === nothing 
-        @error("Vertices $get_perm(Bnc, from) and $get_perm(Bnc, to) are not neighbors in x space.")
+        @error("Regimes $get_perm(Bnc, from) and $get_perm(Bnc, to) are not neighbors in x space.")
     else 
         grh = get_regimes_graph!(Bnc; full=false)
         x_space = _space(grh, :x)
@@ -422,7 +423,7 @@ end
 """
     get_change_dir_x(args...; kwargs...) -> SparseVector
 
-Return the x-space change direction between neighboring vertices.
+Return the x-space change direction between neighboring regimes.
 """
 get_change_dir_x(args...;kwargs...) = get_interface_x(args...;kwargs...)[1]
 
@@ -431,7 +432,7 @@ get_change_dir_x(args...;kwargs...) = get_interface_x(args...;kwargs...)[1]
 """
     get_neighbors(args...; singular=nothing, asymptotic=nothing, return_idx=false) -> Vector
 
-Return neighbors of a vertex filtered by singularity and asymptotic flags.
+Return neighbors of a regime filtered by singularity and asymptotic flags.
 
 # Keyword Arguments
 - `singular`: `true`, `false`, integer threshold, or `nothing`.
@@ -445,11 +446,11 @@ function get_neighbors(args...; return_idx::Bool=false, kwargs...)
 
     idx = keys(grh.edge_pos[rgm_idx]) |> collect
     
-    vertices = _bind_regimes_data(model)
-    rgms = vertices[idx]
+    regime_data = _bind_regimes_data(model)
+    rgms = regime_data[idx]
     idx = get_indices(rgms; kwargs...)
     sort!(idx)
-    return return_idx ? idx : getfield.(vertices[idx], :perm)
+    return return_idx ? idx : getfield.(regime_data[idx], :perm)
 end
 
 
@@ -457,19 +458,26 @@ end
 #Other higher lever functions
 #----------------------------------------------------------------
 """
-    summary_regime(args...) -> nothing
+    summary_regime(args...; compute_volume=false) -> nothing
 
-Print a detailed summary for a single vertex.
+Print a detailed summary for a single regime.
 """
-function summary_regime(args...)
+function summary_regime(args...; compute_volume::Bool=false, volume_kwargs...)
     idx= get_idx(args...)
     perm = get_perm(args...)
     is_real = is_asymptotic(args...)
     nullity = get_nullity(args...)
-    volume = get_volume(args...)
     println("idx=$idx,perm=$perm, asymptotic=$is_real, nullity=$nullity")
-    println("volume=$(volume.mean) +- $(sqrt(volume.var))")
-    println("Dominante Relation")
+    if compute_volume
+        volume = get_volume(args...; volume_kwargs...)
+        println("volume=$(volume.mean) +- $(sqrt(volume.var))")
+    else
+        if !isempty(volume_kwargs)
+            @warn "summary_regime received volume keyword arguments but compute_volume=false; ignoring them."
+        end
+        println("volume=<not computed>; pass compute_volume=true to calculate")
+    end
+    println("Dominant Relation")
     display.(show_dominant_condition(args...;log_space=false))
     println("Expression")
     try
@@ -487,13 +495,13 @@ end
 
 Alias for `summary_regime`.
 """
-summary(Bnc::Bnc, perm)= summary_regime(Bnc, perm)
+summary(Bnc::Bnc, perm; kwargs...)= summary_regime(Bnc, perm; kwargs...)
 """
     summary(vtx::BindRegime) -> nothing
 
 Alias for `summary_regime`.
 """
-summary(vtx::BindRegime)= summary_regime(vtx)
+summary(vtx::BindRegime; kwargs...)= summary_regime(vtx; kwargs...)
 
 @inline function _regime_display_dominant_mode(rgm::BindRegime)
     return "perm=$(get_perm(rgm))"
@@ -576,7 +584,7 @@ end
 """
     get_polyhedron(args...; kwargs...) -> Polyhedron
 
-Convenience wrapper that pulls constraints from a vertex or model.
+Convenience wrapper that pulls constraints from a regime or model.
 """
 get_polyhedron(args...; kwargs...)=get_polyhedron(get_C_C0_nullity_qK(args...)...; kwargs...)
 
@@ -608,7 +616,7 @@ end
 """
     get_intersect(bnc, vtx1, vtx2) -> Polyhedron
 
-Return the intersection polyhedron between two vertices in qK space.
+Return the intersection polyhedron between two regimes in qK space.
 """
 function get_intersect(Bnc,vtx1,vtx2)::Polyhedron
     p1 = get_polyhedron(Bnc, vtx1)
@@ -620,7 +628,7 @@ function get_intersect(Bnc,vtx1,vtx2)::Polyhedron
     detecthlinearity!(p)
     # @show dim1, dim2, dim(p)
     if dim(p)< max(dim1,dim2)-1
-        error("Vertices $(get_perm(Bnc, vtx1)) and $(get_perm(Bnc, vtx2)) do not have dim-1 intersect.")
+        error("Regimes $(get_perm(Bnc, vtx1)) and $(get_perm(Bnc, vtx2)) do not have dim-1 intersect.")
     end
     return p
 end
@@ -665,7 +673,7 @@ end
 """
     get_one_inner_point(args...; kwargs...) -> Vector
 
-Convenience wrapper that builds a polyhedron from a vertex/model.
+Convenience wrapper that builds a polyhedron from a regime/model.
 """
 get_one_inner_point(args...;kwargs...)=get_one_inner_point(get_polyhedron(args...);kwargs...)
 
@@ -673,7 +681,7 @@ get_one_inner_point(args...;kwargs...)=get_one_inner_point(get_polyhedron(args..
 """
     check_feasibility_with_constraint(args...; C, C0, nullity=0) -> Bool
 
-Check whether a vertex/polyhedron remains feasible under extra constraints.
+Check whether a regime/polyhedron remains feasible under extra constraints.
 """
 function check_feasibility_with_constraint(args...;C::AbstractMatrix{<:Real},C0::AbstractVector{<:Real},nullity::Int=0)
     poly_additional = get_polyhedron(C,C0,nullity)
@@ -684,27 +692,35 @@ function check_feasibility_with_constraint(args...;C::AbstractMatrix{<:Real},C0:
 end
 
 """
-    feasible_vertices_with_constraint(bnc::Bnc; C, C0, nullity=0, kwargs...) -> Vector
+    feasible_regimes_with_constraint(bnc::Bnc; C, C0, nullity=0, kwargs...) -> Vector
 
 Return regimes feasible under additional constraints.
 """
-function feasible_vertices_with_constraint(Bnc::Bnc; C::AbstractMatrix{<:Real},C0::AbstractVector{<:Real},nullity::Int=0,kwargs...)
-    all_vtx = get_regimes(Bnc;kwargs...)
-    feasible_vtx = Vector{eltype(all_vtx)}()
-    for perm in all_vtx
+function feasible_regimes_with_constraint(Bnc::Bnc; C::AbstractMatrix{<:Real},C0::AbstractVector{<:Real},nullity::Int=0,kwargs...)
+    all_rgms = get_regimes(Bnc;kwargs...)
+    feasible_rgms = Vector{eltype(all_rgms)}()
+    for perm in all_rgms
         if check_feasibility_with_constraint(Bnc, perm; C=C, C0=C0, nullity=nullity)
-            push!(feasible_vtx, perm)
+            push!(feasible_rgms, perm)
         end
     end
-    return feasible_vtx
+    return feasible_rgms
+end
+
+function feasible_vertices_with_constraint(args...; kwargs...)
+    Base.depwarn(
+        "`feasible_vertices_with_constraint` is deprecated; use `feasible_regimes_with_constraint`.",
+        :feasible_vertices_with_constraint,
+    )
+    return feasible_regimes_with_constraint(args...; kwargs...)
 end
 
 function feasible_vertieces_with_constraint(args...; kwargs...)
     Base.depwarn(
-        "`feasible_vertieces_with_constraint` is deprecated; use `feasible_vertices_with_constraint`.",
+        "`feasible_vertieces_with_constraint` is deprecated; use `feasible_regimes_with_constraint`.",
         :feasible_vertieces_with_constraint,
     )
-    return feasible_vertices_with_constraint(args...; kwargs...)
+    return feasible_regimes_with_constraint(args...; kwargs...)
 end
 
 

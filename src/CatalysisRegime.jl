@@ -16,30 +16,30 @@ function find_catalysis_regimes!(model::CatalysisData)
         return nothing
     end
 
-    @info "---------------------Start finding all vertices--------------------"
-    all_vertices, is_asymptotic = _enumerate_all_regimes(model._S_helper)
+    @info "---------------------Start finding all catalysis regimes--------------------"
+    all_regimes, is_asymptotic = _enumerate_all_regimes(model._S_helper)
 
-    n_vertices = length(all_vertices)
+    n_regimes = length(all_regimes)
     n_asym_rgms = sum(is_asymptotic)
-    @info "Finished, with $(n_vertices) catalysis vertices found and $(n_asym_rgms) asymptotic vertices."
+    @info "Finished, with $(n_regimes) catalysis regimes found and $(n_asym_rgms) asymptotic regimes."
 
     @info "3.Building Regimes..."
     model.CatalysisRegimes = let
-        regimes = _build_catalysis_regimes(model, all_vertices, is_asymptotic)
-        vertices_perm_dict = Dict(perm => idx for (idx, perm) in enumerate(all_vertices))
-        Regimes(vertices_perm_dict, regimes)
+        regimes = _build_catalysis_regimes(model, all_regimes, is_asymptotic)
+        regimes_perm_dict = Dict(perm => idx for (idx, perm) in enumerate(all_regimes))
+        Regimes(regimes_perm_dict, regimes)
     end
     return nothing
 end
 
 
-@inline function _build_catalysis_regimes(model::CatalysisData, all_vertices, is_asymptotic)
-    n_vertices = length(all_vertices)
-    regimes = Vector{CatalysisRegime}(undef, n_vertices)
-    for i in 1:n_vertices
+@inline function _build_catalysis_regimes(model::CatalysisData, all_regimes, is_asymptotic)
+    n_regimes = length(all_regimes)
+    regimes = Vector{CatalysisRegime}(undef, n_regimes)
+    for i in 1:n_regimes
         regimes[i] = CatalysisRegime(
             network = model,
-            perm = all_vertices[i],
+            perm = all_regimes[i],
             idx = i,
             is_asymptotic = is_asymptotic[i],
         )

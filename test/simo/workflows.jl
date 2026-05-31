@@ -46,8 +46,10 @@
         @test length(edge_rows) == length(expr_rows) - 1
 
         if get(ENV, "BNC_TEST_PLOTS", "false") == "true"
+            @eval using Makie
+            @eval using GraphMakie
             fig = SIMO_plot(pths, 1:2; observe_x = [1, 2], npoints = 32, show_regime_colorbar = false)
-            @test fig isa BindingAndCatalysis.Makie.Figure
+            @test fig isa Makie.Figure
         end
     end
 end

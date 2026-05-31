@@ -24,17 +24,12 @@ using Statistics: quantile
 
 import Base: summary, show
 import CDDLib
-import ImageFiltering: imfilter, Kernel
 import JSON3
 import Printf
 import Random
 
-# Plotting dependencies are currently loaded eagerly because plotting recipes and
-# exported Makie types live in the main module.
-using GraphMakie
-using GraphMakie.NetworkLayout
+# Latex rendering is used by symbolic display helpers.
 using Latexify
-using Makie
 
 
 #========================================================================================#
@@ -153,8 +148,22 @@ _include_src("utils", "HyperPlanes.jl")
 #========================================================================================#
 
 struct Regimes{T,R<:AbstractRegime,A<:AbstractArray{R}}
-    vertices_perm_dict::Dict{Vector{T},Int}
-    vertices_data::A
+    regimes_perm_dict::Dict{Vector{T},Int}
+    regimes_data::A
+end
+
+function Base.getproperty(rgms::Regimes, name::Symbol)
+    if name === :vertices_perm_dict
+        return getfield(rgms, :regimes_perm_dict)
+    elseif name === :vertices_data
+        return getfield(rgms, :regimes_data)
+    end
+    return getfield(rgms, name)
+end
+
+function Base.propertynames(::Regimes, private::Bool=false)
+    names = (:regimes_perm_dict, :regimes_data)
+    return private ? (names..., :vertices_perm_dict, :vertices_data) : names
 end
 
 
@@ -172,7 +181,7 @@ const BindConditionBiasVector = Union{Vector{Float64}, Vector{ExactLogExpr}}
 """
     BindRegime
 
-Representation of a regime/vertex in a binding network, including cached
+Representation of a binding regime in a binding network, including cached
 linear maps and polyhedral conditions.
 """
 mutable struct BindRegime{F,T} <: AbstractRegime
@@ -181,8 +190,8 @@ mutable struct BindRegime{F,T} <: AbstractRegime
 
     # --- Initial / Identifying Properties ---
     perm::Vector{T} # The regime vector
-    idx::Int # Index of the vertex in the Bnc.vertices list
-    is_asymptotic::Bool # Whether the vertex is asymptotic or not.
+    idx::Int # Index of the regime in the parent Regimes container
+    is_asymptotic::Bool # Whether the regime is asymptotic or not.
 
     # --- Basic Properties ---
     P::Union{SparseMatrixCSC{Int, Int}, Nothing}
@@ -224,7 +233,7 @@ end
 mutable struct CatalysisRegime{F<:Real} <:AbstractRegime
     network::Union{AbstractBnc,Nothing} # Reference to the parent Bnc model
     perm::Vector{Int} # The regime vector
-    idx::Int # Index of the vertex in the Catalysis.vertices list
+    idx::Int # Index of the regime in the parent Regimes container
     is_asymptotic::Bool # Whether this catalysis regime is asymptotic or not.
 
     #--- Basic Properties ---
@@ -387,7 +396,7 @@ mutable struct CatalysisData <:AbstractBnc
     _S_helper::AbstractHelper
 
     CatalysisRegimes::Union{Regimes,Nothing} # Using Any for placeholder for CatalysisRegimes
-    vertices_graph::Union{Any,Nothing}
+    vertices_graph::Union{Any,Nothing} # legacy field name for the regime graph
 
     function CatalysisData(bn, Γ, Π, k_sym, w_sym=nothing, v_sym=nothing, F=nothing, F0=nothing)
         Γ = sparse(Γ)
@@ -471,8 +480,8 @@ mutable struct Bnc{T} <: AbstractBnc # T is the int type used for regime indices
     BncRegimes::Union{Any, Nothing}
 
     # Graph and affine propagation caches
-    vertices_graph::Union{Any,Nothing} # Using Any for placeholder for RegimeGraph
-    _vertices_Nρ_inv_dict::Union{Any,Nothing}
+    vertices_graph::Union{Any,Nothing} # legacy field name for the regime graph
+    _vertices_Nρ_inv_dict::Union{Any,Nothing} # legacy field name for regime affine caches
     _regimes_affine_ready::Bool
     _regimes_affine_lock::ReentrantLock
     _integration_helper_lock::ReentrantLock
@@ -512,8 +521,8 @@ mutable struct Bnc{T} <: AbstractBnc # T is the int type used for regime indices
             x_sym, q_sym, K_sym, catalysis,
             nothing,                         # BindRegimes
             nothing,                         # BncRegimes
-            nothing,                         # vertices_graph
-            nothing,                         # _vertices_Nρ_inv_dict
+            nothing,                         # vertices_graph, legacy field name
+            nothing,                         # _vertices_Nρ_inv_dict, legacy field name
             false,                           # _regimes_affine_ready
             ReentrantLock(),                 # _regimes_affine_lock
             ReentrantLock(),                 # _integration_helper_lock

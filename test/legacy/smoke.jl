@@ -30,5 +30,7 @@
     @test length(get_neighbors(model, 1)) == 2
     @test get_function(get_regime(model, 1))(inner; input_logspace = true, output_logspace = true) isa AbstractVector
     singular_idx = only(filter(i -> get_nullity(model, i) > 0, get_indices(model)))
+    get_regime(model, singular_idx).volume = nothing
     @test summary_vertex(model, singular_idx) === nothing
+    @test get_regime(model, singular_idx).volume === nothing
 end

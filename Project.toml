@@ -10,7 +10,6 @@ Clarabel = "61c947e1-3e6d-4ee4-985a-eec8c727bd6e"
 DataStructures = "864edb3b-99cc-5e75-8d2d-829cb0a9cfe8"
 DiffEqCallbacks = "459566f4-90b8-5000-8ac3-15dfb0a30def"
 Distributions = "31c24e10-a181-5473-b8eb-7969acd0382f"
-GraphMakie = "1ecd5474-83a3-4783-bb4f-06765db800d2"
 Graphs = "86223c79-3864-5bf0-83f7-82e725a168b6"
 ImageFiltering = "6a3955dd-da59-5b1f-98d4-e7296123deb5"
 JSON3 = "0f8b85d8-7281-11e9-16c2-39a750bddbf1"
@@ -18,7 +17,6 @@ JuMP = "4076af6c-e467-56ae-b986-b466b2749572"
 Latexify = "23fbe1c1-3f47-55db-b15f-69d7ec21a316"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 Logging = "56ddb016-857b-54e1-b83d-db4d58db5568"
-Makie = "ee78f7c6-11fb-53f2-987a-cfe4a2b5a57a"
 MathOptInterface = "b8f27783-ece8-5eb3-8dc8-9495eed66fee"
 NonlinearSolve = "8913a72c-1f9b-4ce2-8d82-65094dcecaec"
 OrdinaryDiffEq = "1dea7af3-3e70-54e6-95c3-0bf5283fa5ed"
@@ -31,6 +29,13 @@ SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
 Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
 StatsBase = "2913bbd2-ae8a-5f71-8c99-4fb6c76f3a91"
 Symbolics = "0c5d862f-8b57-4792-8d23-62f2024744c7"
+
+[weakdeps]
+GraphMakie = "1ecd5474-83a3-4783-bb4f-06765db800d2"
+Makie = "ee78f7c6-11fb-53f2-987a-cfe4a2b5a57a"
+
+[extensions]
+BindingAndCatalysisVisualizationExt = ["GraphMakie", "Makie"]
 
 [compat]
 CDDLib = "0.10.2"

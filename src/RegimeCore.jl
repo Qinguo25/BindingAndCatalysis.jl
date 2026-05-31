@@ -14,9 +14,9 @@ export ensure_binding_regimes!, ensure_catalysis_regimes!, ensure_bnc_regimes!, 
 #========================================================================================#
 
 """
-    get_binding_network(bnc_or_vertex, args...) -> Bnc
+    get_binding_network(bnc_or_regime, args...) -> Bnc
 
-Return the binding network associated with a vertex or the model itself.
+Return the binding network associated with a regime or the model itself.
 """
 get_binding_network(model::CatalysisData) = model.bn
 get_binding_network(model::Bnc, args...) = model
@@ -110,15 +110,15 @@ end
 @inline _bnc_regimes(args...; kwargs...) = _bnc_regimes(get_binding_network(args...; kwargs...))
 
 
-@inline _bind_regimes_data(args...; kwargs...) = _bind_regimes(args...; kwargs...).vertices_data
-@inline _catalysis_regimes_data(args...; kwargs...) = _catalysis_regimes(args...; kwargs...).vertices_data
+@inline _bind_regimes_data(args...; kwargs...) = _bind_regimes(args...; kwargs...).regimes_data
+@inline _catalysis_regimes_data(args...; kwargs...) = _catalysis_regimes(args...; kwargs...).regimes_data
 @inline _bnc_regimes_data(args...; kwargs...) = _bnc_regimes(args...; kwargs...)
 
 n_bind_regimes(args...; kwargs...) = length(_bind_regimes_data(args...; kwargs...))
 n_catalysis_regimes(args...; kwargs...) = length(_catalysis_regimes_data(args...; kwargs...))
 n_bnc_regimes(args...; kwargs...) = length(_bnc_regimes_data(args...; kwargs...))
 
-n_regimes(rgms::Regimes) = length(rgms.vertices_data)
+n_regimes(rgms::Regimes) = length(rgms.regimes_data)
 n_bind_regimes(rgms::Regimes) = n_regimes(rgms)
 n_catalysis_regimes(rgms::Regimes) = n_regimes(rgms)
 
@@ -128,9 +128,9 @@ n_bnc_regimes(rgms::AbstractArray{<:BncRegime}; feasible::Union{Bool,Nothing}=tr
 
 
 
-@inline _bind_regimes_perm_dict(args...; kwargs...) = _bind_regimes(args...; kwargs...).vertices_perm_dict
-@inline _catalysis_regimes_perm_dict(args...; kwargs...) = _catalysis_regimes(args...; kwargs...).vertices_perm_dict
-@inline _bnc_regimes_perm_dict(args...; kwargs...) = _bnc_regimes(args...; kwargs...).vertices_perm_dict
+@inline _bind_regimes_perm_dict(args...; kwargs...) = _bind_regimes(args...; kwargs...).regimes_perm_dict
+@inline _catalysis_regimes_perm_dict(args...; kwargs...) = _catalysis_regimes(args...; kwargs...).regimes_perm_dict
+@inline _bnc_regimes_perm_dict(args...; kwargs...) = _bnc_regimes(args...; kwargs...).regimes_perm_dict
 
 
 
@@ -364,7 +364,7 @@ Base.:(==)(rgm::CatalysisRegime, perm::AbstractVector{<:Integer}) = get_catalysi
 """
     get_idx(bnc::Bnc, idx::Integer; check=false) -> Integer
 
-Return the vertex index, optionally validating it.
+Return the binding regime index, optionally validating it.
 """
 function get_bind_idx(Bnc::Bnc, idx::T; check::Bool=false) where T<:Integer
     check && (ensure_binding_regimes!(Bnc); @assert idx ≥ 1 && idx ≤ n_regimes(Bnc) "The given index is out of range.")
