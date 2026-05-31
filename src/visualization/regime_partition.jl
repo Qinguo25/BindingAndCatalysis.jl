@@ -8,26 +8,6 @@ function _axis_indices(syms, axes)
     return Int[locate_sym(syms, ax) for ax in axes]
 end
 
-function solve_logx_checked(model::Bnc, logqK::AbstractVector{<:Real}; method::Union{Symbol,Nothing}=nothing, tol::Float64=1e-6)
-    method = _resolve_qK2x_method(model, method)
-    logx = try
-        method === :free_energy ?
-            qK2x(model, logqK; input_logspace=true, output_logspace=true, method=method, warn_on_maxiters=false) :
-            qK2x(model, logqK; input_logspace=true, output_logspace=true, method=method)
-    catch
-        return nothing
-    end
-    
-    if method === :regime
-        return logx
-    end
-
-    maximum(abs.(qK2x_residual(model, logx, logqK; input_logspace=true))) <= tol || return nothing
-    return logx
-end
-
-
-
 function _fixed_log_values(syms, fixed; default=0.0, input_logspace::Bool=true, axis_idxs=nothing)
     vals = fill(Float64(default), length(syms))
     if fixed isa AbstractVector

@@ -1,74 +1,77 @@
 # __precompile__(false)
 module BindingAndCatalysis
 
-# using GLMakie
-# using Plots
-using Symbolics
-using Parameters
+#========================================================================================#
+# Dependencies
+#========================================================================================#
+
 using LinearAlgebra
-# using DifferentialEquations
-import OrdinaryDiffEq as ODE
+using Parameters
+using Symbolics
+
 import DiffEqCallbacks as CB
-using StatsBase
-using SparseArrays
-# using IntegerSmithNormalForm # to get the maximum of denum 
-# using JuMP
-# using CUDA # Speedup calculation for distance matrix
-using DataStructures:Queue,enqueue!,dequeue!,isempty
-# using Interpolations
-using NonlinearSolve
-using Statistics:quantile
-using Distributions:Uniform, Normal
+import OrdinaryDiffEq as ODE
 
-# Exact log rational types
-include(joinpath(@__DIR__, "ExactTypes.jl"))
-using .ExactTypes: ExactLogExpr, exact_log10, exact_log10_ratio
-
-using Polyhedra
-import CDDLib
-
+using DataStructures: Queue, enqueue!, dequeue!, isempty
+using Distributions: Uniform, Normal
 using Graphs
+using NonlinearSolve
+using Polyhedra
+using ProgressMeter
+using SparseArrays
+using StatsBase
+using Statistics: quantile
 
-import Printf
+import Base: summary, show
+import CDDLib
 import JSON3
-import ImageFiltering: imfilter, Kernel
-
+import Printf
 import Random
-import Base: summary,show
 
-#---------------------------plot dependency-----------------------------
-using Makie
-using GraphMakie
-using GraphMakie.NetworkLayout
+# Latex rendering is used by symbolic display helpers.
 using Latexify
 
-using ProgressMeter
+
+#========================================================================================#
+# Internal paths and exact numeric types
+#========================================================================================#
+
+const _SRC_DIR = @__DIR__
+const _MATHCORE_DIR = joinpath(_SRC_DIR, "Mathcore")
+
+_include_src(path...) = include(joinpath(_SRC_DIR, path...))
+_include_mathcore(path...) = include(joinpath(_MATHCORE_DIR, path...))
+
+# Exact log rational types
+_include_src("ExactTypes.jl")
+using .ExactTypes: ExactLogExpr, exact_log10, exact_log10_ratio
 
 
-
-
+#========================================================================================#
+# Public API exports
+#========================================================================================#
 
 export Bnc, update_catalysis!
 export ExactLogExpr, exact_log10, exact_log10_ratio
 
-#Polyhedra export
+# Polyhedra backend exports
 export Polyhedron, HRep, MixedMatHRep, hrep, polyhedron
-export VRep, vrep, points, rays, lines
+export VRep, vrep, points, rays
 export HalfSpace, HyperPlane, intersect, eliminate, detecthlinearity!, removehredundancy!
 export dim, fulldim, hashyperplanes, hyperplanes, allhalfspaces, issubset
 export get_Lcat
 
 
+#========================================================================================#
+# Core shared types
+#========================================================================================#
+
+_include_src("volume_calc.jl")
 
 
-# ---------------------Define the struct of binding and catalysis networks----------------------------------
-
-include(joinpath(@__DIR__,"volume_calc.jl"))
-
-
-#===============================================================================================#
-# Integration Helper struct
-#===============================================================================================#
+#========================================================================================#
+# Numerical integration cache
+#========================================================================================#
 
 """
     IntegrationHelper
@@ -94,19 +97,19 @@ mutable struct IntegrationHelper
 end
 
 
-@inline function calc_integration_helper(L,N)
-    n = size(L,2)
-    d = size(L,1)
-    r = size(N,1)
+@inline function calc_integration_helper(L, N)
+    n = size(L, 2)
+    d = size(L, 1)
+    r = size(N, 1)
     _anchor_log_x = zeros(n)
     _anchor_log_qK = vcat(vec(log10.(sum(L; dims=2))), zeros(r))
-    
+
     _LN_sparse = Float64.(sparse([L; N]))
-    (_LN_top_rows, _LN_top_cols, _LN_top_idx) = rowmask_indices(_LN_sparse, 1,d) # record the position of non-zero elements in L within _LN_sparse
-    (_LN_bottom_rows, _LN_bottom_cols, _LN_bottom_idx) = rowmask_indices(_LN_sparse, d+1,n) # record the position of non-zero elements in N within _LN_sparse
+    (_LN_top_rows, _LN_top_cols, _LN_top_idx) = rowmask_indices(_LN_sparse, 1, d)
+    (_LN_bottom_rows, _LN_bottom_cols, _LN_bottom_idx) = rowmask_indices(_LN_sparse, d + 1, n)
     _LN_top_diag_idx = diag_indices(_LN_sparse, d)
-    
-    _LN_lu = rank(_LN_sparse)== n ? lu(_LN_sparse) : nothing # LU decomposition of _LNt_sparse, used for fast calculation
+
+    _LN_lu = rank(_LN_sparse) == n ? lu(_LN_sparse) : nothing
 
     IntegrationHelper(
         _anchor_log_x,
@@ -124,29 +127,43 @@ end
 end
 
 
-
+#========================================================================================#
+# Abstract interfaces
+#========================================================================================#
 
 abstract type AbstractBnc end
 abstract type AbstractRegime end
 abstract type AbstractHyperPlane end
 abstract type AbstractHelper end
 
-#=================================================================================#
-# f(L) -> {P,P0,C,C0} associated structs and helpers
-#=================================================================================#
+#========================================================================================#
+# f(L) -> {P, P0, C, C0} helpers
+#========================================================================================#
 
-include(joinpath(@__DIR__, "utils/HyperPlanes.jl"))
+_include_src("utils", "HyperPlanes.jl")
 
 
-
-#=================================================================================#
-# Regimes associated structs, including regimes for binding, catalysis and the combined Bnc regimes, 
-#=================================================================================#
-
+#========================================================================================#
+# Regime containers
+#========================================================================================#
 
 struct Regimes{T,R<:AbstractRegime,A<:AbstractArray{R}}
-    vertices_perm_dict::Dict{Vector{T},Int}
-    vertices_data::A
+    regimes_perm_dict::Dict{Vector{T},Int}
+    regimes_data::A
+end
+
+function Base.getproperty(rgms::Regimes, name::Symbol)
+    if name === :vertices_perm_dict
+        return getfield(rgms, :regimes_perm_dict)
+    elseif name === :vertices_data
+        return getfield(rgms, :regimes_data)
+    end
+    return getfield(rgms, name)
+end
+
+function Base.propertynames(::Regimes, private::Bool=false)
+    names = (:regimes_perm_dict, :regimes_data)
+    return private ? (names..., :vertices_perm_dict, :vertices_data) : names
 end
 
 
@@ -157,10 +174,14 @@ const BindAffineMatrix = Union{
 const BindConditionBiasVector = Union{Vector{Float64}, Vector{ExactLogExpr}}
 
 
+#========================================================================================#
+# Binding regimes
+#========================================================================================#
+
 """
     BindRegime
 
-Representation of a regime/vertex in a binding network, including cached
+Representation of a binding regime in a binding network, including cached
 linear maps and polyhedral conditions.
 """
 mutable struct BindRegime{F,T} <: AbstractRegime
@@ -169,8 +190,8 @@ mutable struct BindRegime{F,T} <: AbstractRegime
 
     # --- Initial / Identifying Properties ---
     perm::Vector{T} # The regime vector
-    idx::Int # Index of the vertex in the Bnc.vertices list
-    is_asymptotic::Bool # Whether the vertex is asymptotic or not.
+    idx::Int # Index of the regime in the parent Regimes container
+    is_asymptotic::Bool # Whether the regime is asymptotic or not.
 
     # --- Basic Properties ---
     P::Union{SparseMatrixCSC{Int, Int}, Nothing}
@@ -190,23 +211,29 @@ mutable struct BindRegime{F,T} <: AbstractRegime
     volume::Union{Volume, Nothing}
 
     function BindRegime(; network=nothing, perm, idx, is_asymptotic, nullity::T) where {T<:Integer}
-        return new{ExactLogExpr,T}(network, perm, idx, is_asymptotic,
-            nothing,nothing, nothing, nothing, nothing, nothing, # P, P0, M, M0, C_x, C0_x
+        return new{ExactLogExpr,T}(
+            network,
+            perm,
+            idx,
+            is_asymptotic,
+            nothing, nothing, nothing, nothing, nothing, nothing, # P, P0, M, M0, C_x, C0_x
             nullity,
             nothing, nothing, # H, H0
             nothing, nothing, # C_qK,C0_qK
-            nothing
+            nothing,
         )
     end
 end
 
 
-
+#========================================================================================#
+# Catalysis regimes
+#========================================================================================#
 
 mutable struct CatalysisRegime{F<:Real} <:AbstractRegime
     network::Union{AbstractBnc,Nothing} # Reference to the parent Bnc model
     perm::Vector{Int} # The regime vector
-    idx::Int # Index of the vertex in the Catalysis.vertices list
+    idx::Int # Index of the regime in the parent Regimes container
     is_asymptotic::Bool # Whether this catalysis regime is asymptotic or not.
 
     #--- Basic Properties ---
@@ -239,11 +266,13 @@ mutable struct CatalysisRegime{F<:Real} <:AbstractRegime
     end
 end
 
-# for BncRegime, the x /xk conditions are already within bind_rgm or catalysis_rgm, 
-# H_w, H0_w, C_wKk, C0_wKk
-# C_qKk_cat, C_0qKk_cat, 
-# C_xk_ss
 
+#========================================================================================#
+# Matched binding-catalysis regimes
+#========================================================================================#
+#
+# x/xk conditions live on the binding and catalysis regime objects. BncRegime
+# caches only the reduced steady-state maps and conditions in qKk/wKk bases.
 
 mutable struct BncRegime <:AbstractRegime
     bind_rgm::BindRegime
@@ -298,30 +327,33 @@ mutable struct BncRegime <:AbstractRegime
         H_bd = sparse(Float64.(PΠ * H_bind[:, 1:r_v]))
 
         return new(
-            bind_rgm, 
-            catalysis_rgm, 
-            H_bd, 
+            bind_rgm,
+            catalysis_rgm,
+            H_bd,
             Int8(0), #is_stable
             true, # is_feasible
             nothing, # H_inner
             nothing, # H0_inner
 
             -1, # nlt
-            
-            nothing, 
+
             nothing,
             nothing,
-            nothing, 
-            -1,  
-            
-            nothing, 
+            nothing,
             nothing,
             -1,
-            nothing)
+            nothing,
+            nothing,
+            -1,
+            nothing,
+        )
     end
 end
 
 
+#========================================================================================#
+# Catalysis network data
+#========================================================================================#
 
 """
     CatalysisData
@@ -364,13 +396,13 @@ mutable struct CatalysisData <:AbstractBnc
     _S_helper::AbstractHelper
 
     CatalysisRegimes::Union{Regimes,Nothing} # Using Any for placeholder for CatalysisRegimes
-    vertices_graph::Union{Any,Nothing}
+    vertices_graph::Union{Any,Nothing} # legacy field name for the regime graph
 
-    function CatalysisData(bn,Γ, Π, k_sym, w_sym=nothing, v_sym=nothing, F=nothing, F0=nothing)
+    function CatalysisData(bn, Γ, Π, k_sym, w_sym=nothing, v_sym=nothing, F=nothing, F0=nothing)
         Γ = sparse(Γ)
         Π = sparse(Π)
         d_wv, nv = size(Γ)
-        n = size(Π,2)
+        n = size(Π, 2)
         F = isnothing(F) ? Matrix{Rational{Int}}(I, nv, nv) : rationalize.(Int, Float64.(F); tol=1e-10)
         size(F, 1) == nv || throw(ArgumentError("F must have one row per catalysis flux/rate constant: expected $nv, got $(size(F, 1))."))
         nk = size(F, 2)
@@ -380,20 +412,20 @@ mutable struct CatalysisData <:AbstractBnc
         F = sparse(F)
         v_sym = isnothing(v_sym) ? Symbolics.variables(:v, 1:nv) : name_converter(v_sym)
         # Validation
-        @assert size(Π,1) == nv "Γ's column number must match Π's row number."
+        @assert size(Π, 1) == nv "Γ's column number must match Π's row number."
         @assert length(k_sym) == nk "k_sym length must match the number of independent rate constants (size(F, 2))."
         @assert length(v_sym) == nv "v_sym length must match the number of fluxes"
         @assert n == bn.n "Π's column number have to meet with the number of species n in the binding network"
         L_Γ, pivits = left_nullspace_integer(Γ)
 
         r_v = length(pivits) # Maximum of non-redundant flux, also the number of independent catalysis reactions.
-        a_w = size(L_Γ,2)
+        a_w = size(L_Γ, 2)
         d_w = bn.d - r_v
 
         # reorder and fix the binding network
         no_pivits = setdiff(1:d_wv, pivits)
         S = Γ[pivits, :]
-        new_ord = vcat(pivits,no_pivits)
+        new_ord = vcat(pivits, no_pivits)
         Γ = Γ[new_ord, :]
         L_Γ = L_Γ[new_ord, :]
         fix_bn_catalysis!(bn, new_ord, L_Γ, w_sym)
@@ -405,17 +437,19 @@ mutable struct CatalysisData <:AbstractBnc
         S_pos_neg = S_to_S_pos_neg(S)
         _S_helper = _build_matrix_helper(S_pos_neg)
 
-        new(bn, Γ, Π, F, F0, S, L_Γ,
+        new(
+            bn, Γ, Π, F, F0, S, L_Γ,
             r_v, nv, nk, d_w, a_w,
             k_sym, v_sym, _S_sparse, _Π_sparse,
-            S_pos_neg, _S_helper, nothing,nothing)
+            S_pos_neg, _S_helper, nothing, nothing,
+        )
     end
 end
 
 
-
-
-
+#========================================================================================#
+# Binding network model
+#========================================================================================#
 
 """
     Bnc
@@ -423,8 +457,8 @@ end
 Binding network model with stoichiometry, conservation laws, and derived
 structures for regime analysis.
 """
-mutable struct Bnc{T} <: AbstractBnc # T is the int type to save all the indices
-    # ----Parameters of the binding networks------
+mutable struct Bnc{T} <: AbstractBnc # T is the int type used for regime indices.
+    # Binding network matrices
     N::SparseMatrixCSC{Int,Int} # binding reaction matrix
     L::SparseMatrixCSC{Int,Int} # conservation law matrix
 
@@ -433,35 +467,32 @@ mutable struct Bnc{T} <: AbstractBnc # T is the int type to save all the indices
     d::Int # number of conserved quantities
     # lcm::Int # least common multiple of [L;N]^{-1}
 
-    #-------symbols of species -----------
+    # Symbol metadata
     x_sym::Vector{Num} # species symbols, each column is a species
     q_sym::Vector{Num}
     K_sym::Vector{Num}
 
-    #-------Parameters of the catalysis networks------
+    # Catalysis network data
     catalysis::Union{Any,Nothing} # Using Any for placeholder for CatalysisData
 
-    #--------Binding regimes data--------
+    # Cached regime data
     BindRegimes::Union{Regimes, Nothing}
-
-    #-------Mixed regimes data--------
     BncRegimes::Union{Any, Nothing}
 
-    #The following are computed when building graphs.
-    vertices_graph::Union{Any,Nothing} # Using Any for placeholder for RegimeGraph
-    # _vertices_Nρ_inv_dict::Dict{Vector{T}, Tuple{SparseMatrixCSC{Float64, Int},T}} # cache the N_inv for each vertex permutation
-    _vertices_Nρ_inv_dict :: Union{Any,Nothing}
+    # Graph and affine propagation caches
+    vertices_graph::Union{Any,Nothing} # legacy field name for the regime graph
+    _vertices_Nρ_inv_dict::Union{Any,Nothing} # legacy field name for regime affine caches
     _regimes_affine_ready::Bool
     _regimes_affine_lock::ReentrantLock
     _integration_helper_lock::ReentrantLock
 
-    #------other helper parameters------
+    # Numeric helpers
     direction::Int8 # direction of the binding reactions, determine the ray direction for invertible regime, calculated by sign of det[L;N]
     IntegrationHelper::Union{IntegrationHelper,Nothing}
     _L_helper::AbstractHelper # MatrixHelper
 
 
-    # Inner constructor 
+    # Inner constructor
     function Bnc{T}(N, L, x_sym, q_sym, K_sym, catalysis) where {T<:Integer}
         N_sparse = sparse(N)
         L_sparse = sparse(L)
@@ -480,71 +511,63 @@ mutable struct Bnc{T} <: AbstractBnc # T is the int type to save all the indices
             @assert length(K_sym) == r "K_sym length must equal number of reactions (r)"
         end
 
-        #The direction and lcm
+        # Direction of the binding reactions.
         M = vcat(L_dense, N_dense)
-        direction = sign(det(M)) # Ensure matrix is Float64 for det
-        # lcm = get_max_denom(M)
-        #-------helper parameters-------------
-        # paramters for default homotopcontinuous starting point.
+        direction = sign(det(M))
+
         _L_helper = _build_matrix_helper(L)
         new(
-            # Fields 1-5
-            N_sparse, L_sparse, r, n, d,# lcm,
-            # Fields 6-9
+            N_sparse, L_sparse, r, n, d,
             x_sym, q_sym, K_sym, catalysis,
-            # Fields 10-12 (Initialized empty)
             nothing,                         # BindRegimes
             nothing,                         # BncRegimes
-            nothing,                         # vertices_graph
-            nothing,                         # _vertices_perm_Ninv_dict
+            nothing,                         # vertices_graph, legacy field name
+            nothing,                         # _vertices_Nρ_inv_dict, legacy field name
             false,                           # _regimes_affine_ready
             ReentrantLock(),                 # _regimes_affine_lock
             ReentrantLock(),                 # _integration_helper_lock
-            # Fields 13-28 (Calculated values)
             direction,
             nothing,
             _L_helper,
         )
     end
 end
+#========================================================================================#
+# Source loading
+#========================================================================================#
 
-    
-
-
-pth1 = joinpath(@__DIR__,"Mathcore/")
-
-include(joinpath(@__DIR__, "initialize.jl"))
-include(joinpath(pth1,"find_matrix_vertex.jl")) # before regimes.jl
-include(joinpath(pth1,"d_stable.jl"))
+_include_src("initialize.jl")
+_include_mathcore("find_matrix_vertex.jl") # before regime files
+_include_mathcore("d_stable.jl")
 using .DStable: judge_dstable
 export judge_dstable
-include(joinpath(pth1,"perm_graph_core.jl"))
-include(joinpath(pth1,"SparseSparse_modified.jl"))
 
-include(joinpath(@__DIR__,"helperfunctions.jl"))
-include(joinpath(pth1,"matrix_inverse.jl"))
-include(joinpath(pth1,"graph_propagate.jl"))
-include(joinpath(@__DIR__,"qK_x_mapping.jl"))
-include(joinpath(@__DIR__,"regime_assign.jl"))
-include(joinpath(@__DIR__,"volume_calc_impl.jl"))
-include(joinpath(@__DIR__,"numeric.jl"))
+_include_mathcore("perm_graph_core.jl")
+_include_mathcore("SparseSparse_modified.jl")
+_include_mathcore("matrix_inverse.jl")
+_include_mathcore("graph_propagate.jl")
 
-# three different level of regime
-include(joinpath(@__DIR__,"RegimeCore.jl"))
-include(joinpath(@__DIR__,"BindingRegime.jl"))
-include(joinpath(@__DIR__,"CatalysisRegime.jl"))
-include(joinpath(@__DIR__,"BncRegime.jl"))
+_include_src("helperfunctions.jl")
+_include_src("qK_x_mapping.jl")
+_include_src("regime_assign.jl")
+_include_src("volume_calc_impl.jl")
+_include_src("numeric.jl")
 
-# three different level of regime graph
-include(joinpath(@__DIR__,"BindingRegimeGraph.jl"))
-include(joinpath(@__DIR__,"CatalysisRegimeGraph.jl"))
-include(joinpath(@__DIR__,"BncRegimeGraph.jl"))
+# Regime models and APIs
+_include_src("RegimeCore.jl")
+_include_src("BindingRegime.jl")
+_include_src("CatalysisRegime.jl")
+_include_src("BncRegime.jl")
 
+# Regime graph APIs
+_include_src("BindingRegimeGraph.jl")
+_include_src("CatalysisRegimeGraph.jl")
+_include_src("BncRegimeGraph.jl")
 
-include(joinpath(@__DIR__,"SIMO.jl"))
-include(joinpath(@__DIR__,"symbolics.jl"))
-# include(joinpath(@__DIR__,"additional_constrain.jl"))
-include(joinpath(@__DIR__,"visualize.jl"))
-include(joinpath(@__DIR__,"old_api.jl"))
+# Higher-level workflows, rendering, and compatibility
+_include_src("SIMO.jl")
+_include_src("symbolics.jl")
+_include_src("visualize.jl")
+_include_src("old_api.jl")
 
 end # module

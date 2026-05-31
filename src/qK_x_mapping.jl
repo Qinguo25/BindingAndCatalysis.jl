@@ -1,8 +1,10 @@
-export x2qK, qK2x, qK2x_residual, benchmark_qK2x_methods
+export x2qK, qK2x, qK2x_residual
 export x_traj_with_qK_change, x_traj_with_q_change, x_traj_cat, qK_traj_cat, q_traj_cat, catalysis_logx
 export qcat_traj_cat, simulate_adaptation
 
-# ----------------Functions for mapping between qK space and x space----------------------------------
+#========================================================================================#
+# Public qK/x mappings
+#========================================================================================#
 
 """
     x2qK(bnc::Bnc, x; input_logspace=false, output_logspace=false, only_q=false)
@@ -21,52 +23,32 @@ Map concentrations `x` to totals/binding constants `qK`.
 # Returns
 - Vector or array containing `q` (and `K` if `only_q=false`).
 """
-function x2qK(Bnc::Bnc, x::AbstractArray{<:Real};
+function x2qK(
+    Bnc::Bnc,
+    x::AbstractArray{<:Real};
     input_logspace::Bool=false,
     output_logspace::Bool=false,
     only_q::Bool=false,
 )::AbstractArray{<:Real}
-    if !only_q
-        if input_logspace
-            if output_logspace
-                K = Bnc.N * x
-                q = log10.(Bnc.L * exp10.(x))
-            else
-                K = exp10.(Bnc.N * x)
-                q = Bnc.L * exp10.(x)
-            end
-        else
-            if output_logspace
-                K = Bnc.N * log10.(x)
-                q = log10.(Bnc.L * x)
-            else
-                K = exp10.(Bnc.N * log10.(x))
-                q = Bnc.L * x
-            end
-        end
-        return vcat(q, K)
-    else
-        if input_logspace
-            if output_logspace
-                q = log10.(Bnc.L * exp10.(x))
-            else
-                q = Bnc.L * exp10.(x)
-            end
-        else
-            if output_logspace
-                q = log10.(Bnc.L * x)
-            else
-                q = Bnc.L * x
-            end
-        end
-        return q
-    end
+    logx = input_logspace ? x : log10.(x)
+    x_linear = input_logspace ? exp10.(x) : x
+
+    q = Bnc.L * x_linear
+    q_out = output_logspace ? log10.(q) : q
+    only_q && return q_out
+
+    logK = Bnc.N * logx
+    K_out = output_logspace ? logK : exp10.(logK)
+    return vcat(q_out, K_out)
 end
 
 
+#========================================================================================#
+# qK2x solver dispatch
+#========================================================================================#
 
 """
-    qK2x(bnc::Bnc, qK; K=nothing, logK=nothing, input_logspace=false, output_logspace=false,
+    qK2x(bnc::Bnc, qK; input_logspace=false, output_logspace=false,
         startlogx=nothing, startlogqK=nothing, use_vtx=false, method=nothing,
         reltol=1e-8, abstol=1e-10, kwargs...) -> Vector
 
@@ -77,8 +59,6 @@ Map from totals/binding constants (`qK`) to species concentrations `x`.
 - `qK`: Vector of totals (and optionally binding constants).
 
 # Keyword Arguments
-- `K`: Binding constants in linear space.
-- `logK`: Binding constants in log10 space.
 - `input_logspace`: Treat inputs as log10 values when `true`.
 - `output_logspace`: Return log10 values when `true`.
 - `startlogx`: Initial guess for log10(x).
@@ -94,74 +74,76 @@ Map from totals/binding constants (`qK`) to species concentrations `x`.
 # Returns
 - Vector of `x` values in log10 or linear space.
 """
-function qK2x(Bnc::Bnc, qK::AbstractVector{<:Real};
+function qK2x(
+    Bnc::Bnc,
+    qK::AbstractVector{<:Real};
     input_logspace::Bool=false,
     output_logspace::Bool=false,
     startlogx::Union{Vector{<:Real},Nothing}=nothing,
     startlogqK::Union{Vector{<:Real},Nothing}=nothing,
     use_vtx::Bool=false,
     method::Union{Symbol,Nothing}=nothing,
-    reltol = 1e-8,
-    abstol = 1e-10,
+    reltol=1e-8,
+    abstol=1e-10,
     kwargs...
 )::Vector{Float64}
     method = _resolve_qK2x_method(Bnc, method)
     endlogqK = input_logspace ? qK : log10.(qK)
 
     logx = if use_vtx || method === :regime
-            _logqK2logx_regime(Bnc, endlogqK)
-        elseif method === :homotopy
-            helper = _integration_helper!(Bnc)
-            
-            if isnothing(startlogqK) || isnothing(startlogx)
-                # If no starting point is provided, use the default
-                # Make deep copies to avoid shared state in threaded environment
-                startlogx = copy(helper._anchor_log_x)
-                startlogqK = copy(helper._anchor_log_qK)
-            end
+        _logqK2logx_regime(Bnc, endlogqK)
+    elseif method === :homotopy
+        helper = _integration_helper!(Bnc)
 
-            sol = _logx_traj_with_logqK_change(Bnc,
-                startlogqK,
-                endlogqK;
-                startlogx=startlogx,
-                alg=ODE.Tsit5(),
-                save_everystep=false,
-                save_start=false,
-                reltol = reltol,
-                abstol = abstol,
-                kwargs...
-            )
-            sol.u[end]
-        elseif method === :free_energy
-            _logqK2logx_free_energy(
-                Bnc,
-                endlogqK;
-                startlogx=startlogx,
-                reltol=reltol,
-                abstol=abstol,
-                kwargs...,
-            )
-        elseif method === :newton_nullspace || method === :nullspace
-            _logqK2logx_nullspace_newton(
-                Bnc,
-                endlogqK;
-                startlogx=startlogx,
-                reltol=reltol,
-                abstol=abstol,
-                kwargs...,
-            )
-        elseif method === :nlsolve
-            helper = _integration_helper!(Bnc)
-            _logqK2logx_nlsolve(Bnc,
-                endlogqK;
-                startlogx = isnothing(startlogx) ? copy(helper._anchor_log_x) : Float64.(startlogx),
-                reltol=reltol,
-                abstol=abstol,
-                kwargs...
-            )
-        else
-            throw(ArgumentError("unsupported qK2x method: $method"))
+        if isnothing(startlogqK) || isnothing(startlogx)
+            startlogx = copy(helper._anchor_log_x)
+            startlogqK = copy(helper._anchor_log_qK)
         end
+
+        sol = _logx_traj_with_logqK_change(
+            Bnc,
+            startlogqK,
+            endlogqK;
+            startlogx=startlogx,
+            alg=ODE.Tsit5(),
+            save_everystep=false,
+            save_start=false,
+            reltol=reltol,
+            abstol=abstol,
+            kwargs...
+        )
+        sol.u[end]
+    elseif method === :free_energy
+        _logqK2logx_free_energy(
+            Bnc,
+            endlogqK;
+            startlogx=startlogx,
+            reltol=reltol,
+            abstol=abstol,
+            kwargs...,
+        )
+    elseif method === :newton_nullspace || method === :nullspace
+        _logqK2logx_nullspace_newton(
+            Bnc,
+            endlogqK;
+            startlogx=startlogx,
+            reltol=reltol,
+            abstol=abstol,
+            kwargs...,
+        )
+    elseif method === :nlsolve
+        helper = _integration_helper!(Bnc)
+        _logqK2logx_nlsolve(
+            Bnc,
+            endlogqK;
+            startlogx=isnothing(startlogx) ? copy(helper._anchor_log_x) : Float64.(startlogx),
+            reltol=reltol,
+            abstol=abstol,
+            kwargs...
+        )
+    else
+        throw(ArgumentError("unsupported qK2x method: $method"))
+    end
 
     logx = output_logspace ? logx : exp10.(logx)
     return logx

@@ -503,7 +503,7 @@ end
 
 function match_regimes!(model::Bnc)
     if is_bnc_regimes_built(model)
-        return model.BncRegimes
+        return nothing
     end
 
     find_all_regimes!(model)
@@ -516,11 +516,11 @@ function match_regimes!(model::Bnc)
 
     _initialize_regime!(model.BncRegimes) # The real calculation
 
-    return model.BncRegimes
+    return nothing
 end
 
 _build_BncRegime(cat_rgms::Regimes, bind_rgms::Regimes) =
-    _build_BncRegime(cat_rgms.vertices_data, bind_rgms.vertices_data)
+    _build_BncRegime(cat_rgms.regimes_data, bind_rgms.regimes_data)
 
 function _build_BncRegime(cat_rgms::AbstractVector{<:CatalysisRegime}, bind_rgms::AbstractVector{<:BindRegime})
     n_cat = length(cat_rgms)
