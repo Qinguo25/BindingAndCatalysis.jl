@@ -47,17 +47,17 @@ end
 
     bind = get_regime(model, 1)
     cat = get_catalysis_regime(model, 1; check = true)
-    mixed = first(filter(r -> r.nlt == 0 && !is_singular(get_binding_regime(r)), get_bnc_regimes(model)))
+    bnc_rgm = first(filter(r -> r.nlt == 0 && !is_singular(get_binding_regime(r)), get_bnc_regimes(model)))
 
     bind_dyn = string.(show_catalysis_dynamics(bind))
     cat_dyn = string.(show_catalysis_dynamics(cat))
-    mixed_dyn = string.(show_catalysis_dynamics(mixed))
+    bnc_dyn = string.(show_catalysis_dynamics(bnc_rgm))
 
     @test any(occursin.(r"k2\*tS|tS\*k2", bind_dyn))
     @test any(occursin.("C*k3", cat_dyn))
     @test !any(occursin.(r"k2\*tS|tS\*k2", cat_dyn))
-    @test any(occursin.(r"k1\*tE|tE\*k1|k2\*tS|tS\*k2", mixed_dyn))
-    @test !any(occursin.("C*k3", mixed_dyn))
+    @test any(occursin.(r"k1\*tE|tE\*k1|k2\*tS|tS\*k2", bnc_dyn))
+    @test !any(occursin.("C*k3", bnc_dyn))
 end
 
 @testset "SIMO Path Symbolics Smoke" begin

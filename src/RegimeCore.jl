@@ -104,7 +104,7 @@ end
 end
 @inline _bnc_regimes(model::Bnc) = let
     if isnothing(model.BncRegimes)
-        error("Model does not contain mixed regimes. Please run \"match_regimes!($model)\" to compute the mixed regimes.")
+        error("Model does not contain Bnc regimes. Please run \"match_regimes!($model)\" to compute the Bnc regimes.")
     end
     return model.BncRegimes
 end

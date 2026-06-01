@@ -1,4 +1,4 @@
-@testset "Catalysis And Mixed Regimes" begin
+@testset "Catalysis And Binding-Catalysis Regimes" begin
     model = minimal_catalysis_model()
     cn = get_catalysis_network(model)
 
@@ -38,33 +38,33 @@
     bind_perm = first(get_perms(model))
     @test have_perm(model, bind_perm, cat_perm)
 
-    mixed = get_bnc_regime(model, bind_perm, cat_perm)
-    @test mixed !== nothing
-    @test get_bnc_regime(model, bind_perm, cat_perm) === mixed
-    @test get_binding_perm(mixed) == bind_perm
-    @test get_catalysis_perm(mixed) == cat_perm
-    @test get_idx(mixed) == get_idx(model, bind_perm, cat_perm)
-    @test occursin("dominant mode", sprint(show, MIME"text/plain"(), mixed))
-    @test occursin("nullity", sprint(show, MIME"text/plain"(), mixed))
-    @test occursin("asymptotic", sprint(show, MIME"text/plain"(), mixed))
+    bnc_rgm = get_bnc_regime(model, bind_perm, cat_perm)
+    @test bnc_rgm !== nothing
+    @test get_bnc_regime(model, bind_perm, cat_perm) === bnc_rgm
+    @test get_binding_perm(bnc_rgm) == bind_perm
+    @test get_catalysis_perm(bnc_rgm) == cat_perm
+    @test get_idx(bnc_rgm) == get_idx(model, bind_perm, cat_perm)
+    @test occursin("dominant mode", sprint(show, MIME"text/plain"(), bnc_rgm))
+    @test occursin("nullity", sprint(show, MIME"text/plain"(), bnc_rgm))
+    @test occursin("asymptotic", sprint(show, MIME"text/plain"(), bnc_rgm))
 
-    C_qKk, C0_qKk, nlt_qKk = get_C_C0_nullity_qKk(mixed)
+    C_qKk, C0_qKk, nlt_qKk = get_C_C0_nullity_qKk(bnc_rgm)
     @test size(C_qKk, 2) == model.d + model.r + cn.n_v
     @test length(C0_qKk) == size(C_qKk, 1)
     @test nlt_qKk >= 0
 
-    C_wKk, C0_wKk, nlt_wKk = get_C_C0_nullity_wKk(mixed)
+    C_wKk, C0_wKk, nlt_wKk = get_C_C0_nullity_wKk(bnc_rgm)
     @test size(C_wKk, 2) == cn.d_w + model.r + cn.n_v
     @test length(C0_wKk) == size(C_wKk, 1)
     @test nlt_wKk >= 0
 
-    @test !isempty(show_condition_xk(mixed; kind = :binding))
-    @test !isempty(show_condition_xk(mixed; kind = :catalysis))
-    @test !isempty(show_condition_qKk(mixed; kind = :binding))
-    @test show_condition_qKk(mixed; kind = :catalysis) isa AbstractVector
-    @test !isempty(show_condition_qKk(mixed))
-    @test !isempty(show_condition_wKk(mixed))
-    @test !isempty(show_consistency_condition(mixed))
+    @test !isempty(show_condition_xk(bnc_rgm; kind = :binding))
+    @test !isempty(show_condition_xk(bnc_rgm; kind = :catalysis))
+    @test !isempty(show_condition_qKk(bnc_rgm; kind = :binding))
+    @test show_condition_qKk(bnc_rgm; kind = :catalysis) isa AbstractVector
+    @test !isempty(show_condition_qKk(bnc_rgm))
+    @test !isempty(show_condition_wKk(bnc_rgm))
+    @test !isempty(show_consistency_condition(bnc_rgm))
 
     regular = first(filter(r -> r.nlt == 0, get_bnc_regimes(model)))
     F_qcat, F0_qcat = get_qcat_F_F0(regular)
@@ -78,9 +78,9 @@
     @test stable_flag === true || stable_flag === false || ismissing(stable_flag)
     @test stable_code in (-1, 0, 1)
 
-    singular_mixed = filter(r -> r.nlt == 1, get_bnc_regimes(model))
-    if !isempty(singular_mixed)
-        Hs, H0s = get_H_H0(first(singular_mixed))
+    singular_bnc_rgms = filter(r -> r.nlt == 1, get_bnc_regimes(model))
+    if !isempty(singular_bnc_rgms)
+        Hs, H0s = get_H_H0(first(singular_bnc_rgms))
         @test size(Hs, 1) == model.n
         @test length(H0s) == model.n
     end
@@ -138,13 +138,13 @@ end
     @test n_regimes(model) == 4
     @test n_regimes(get_catalysis_network(model)) == 1
 
-    mixed = get_bnc_regime(model, 1, 1; check = true)
-    @test get_binding_perm(mixed) == [2, 1]
-    @test get_catalysis_perm(mixed) == [1, 2]
-    @test string.(BindingAndCatalysis.wKk_sym(mixed)) == ["tE", "K", "β", "γ"]
-    @test string.(show_condition_wKk(mixed; log_space = false)) == ["K*γ ~ tE*β", "K > tE"]
+    bnc_rgm = get_bnc_regime(model, 1, 1; check = true)
+    @test get_binding_perm(bnc_rgm) == [2, 1]
+    @test get_catalysis_perm(bnc_rgm) == [1, 2]
+    @test string.(BindingAndCatalysis.wKk_sym(bnc_rgm)) == ["tE", "K", "β", "γ"]
+    @test string.(show_condition_wKk(bnc_rgm; log_space = false)) == ["K*γ ~ tE*β", "K > tE"]
 
-    C_wKk, C0_wKk, nlt_wKk = get_C_C0_nullity_wKk(mixed)
+    C_wKk, C0_wKk, nlt_wKk = get_C_C0_nullity_wKk(bnc_rgm)
     @test Matrix(C_wKk) == Rational{Int}[-1 1 -1 1; -1 1 0 0]
     @test C0_wKk == ExactLogExpr[0, 0]
     @test nlt_wKk == 1
@@ -169,10 +169,10 @@ end
     @test length(wKk_sym(model)) == cn.d_w + model.r + cn.n_k
 
     match_regimes!(model)
-    mixed = first(get_bnc_regimes(model))
+    bnc_rgm = first(get_bnc_regimes(model))
     @test all(is_feasible, get_bnc_regimes(model))
-    @test size(get_C_C0_nullity_xk(mixed)[1], 2) == model.n + cn.n_k
-    @test size(get_C_C0_nullity_wKk(mixed)[1], 2) == cn.d_w + model.r + cn.n_k
+    @test size(get_C_C0_nullity_xk(bnc_rgm)[1], 2) == model.n + cn.n_k
+    @test size(get_C_C0_nullity_wKk(bnc_rgm)[1], 2) == cn.d_w + model.r + cn.n_k
 end
 
 @testset "Affine K Constraint Bnc Graph Uses Reduced xk Facets" begin
@@ -227,24 +227,24 @@ end
     @test simultaneous == 16
 end
 
-@testset "Catalysis Exact Mixed Mode" begin
+@testset "Catalysis Exact Binding-Catalysis Mode" begin
     model = minimal_catalysis_model()
     find_all_regimes!(model)
     find_catalysis_regimes!(model)
     match_regimes!(model)
 
-    mixed = first(get_bnc_regimes(model))
+    bnc_rgm = first(get_bnc_regimes(model))
     regular = first(filter(r -> r.nlt == 0, get_bnc_regimes(model)))
 
-    @test eltype(get_H0(mixed)) == ExactLogExpr
-    @test eltype(get_C0_qKk(mixed)) == ExactLogExpr
-    @test eltype(get_C0_wKk(mixed)) == ExactLogExpr
-    @test !isempty(show_condition_qKk(mixed))
-    @test !isempty(show_condition_wKk(mixed))
+    @test eltype(get_H0(bnc_rgm)) == ExactLogExpr
+    @test eltype(get_C0_qKk(bnc_rgm)) == ExactLogExpr
+    @test eltype(get_C0_wKk(bnc_rgm)) == ExactLogExpr
+    @test !isempty(show_condition_qKk(bnc_rgm))
+    @test !isempty(show_condition_wKk(bnc_rgm))
     @test !isempty(show_expression_qcat(regular))
 end
 
-@testset "High-Nullity Mixed Regimes Keep Consistency" begin
+@testset "High-Nullity Binding-Catalysis Regimes Keep Consistency" begin
     model = sparse_singular_model()
     update_catalysis!(
         model;
@@ -257,14 +257,14 @@ end
     bind_high = filter(r -> get_binding_regime(r).nullity > 1 && r.nlt <= 1, get_bnc_regimes(model))
     @test !isempty(bind_high)
 
-    low_mixed = first(bind_high)
-    @test get_H_bd(low_mixed) isa AbstractMatrix
-    @test is_stable(low_mixed) === true || is_stable(low_mixed) === false
-    @test stability_code(low_mixed) in (-1, 1)
-    @test !isempty(show_condition_qKk(low_mixed))
-    @test !isempty(show_condition_wKk(low_mixed))
+    low_bnc_rgm = first(bind_high)
+    @test get_H_bd(low_bnc_rgm) isa AbstractMatrix
+    @test is_stable(low_bnc_rgm) === true || is_stable(low_bnc_rgm) === false
+    @test stability_code(low_bnc_rgm) in (-1, 1)
+    @test !isempty(show_condition_qKk(low_bnc_rgm))
+    @test !isempty(show_condition_wKk(low_bnc_rgm))
 
-    H_low, H0_low = get_H_H0(low_mixed)
+    H_low, H0_low = get_H_H0(low_bnc_rgm)
     @test size(H_low, 1) == model.n
     @test length(H0_low) == model.n
 
@@ -280,18 +280,18 @@ end
     consistency_only = filter(r -> r.nlt > 1, get_bnc_regimes(high_model))
     @test !isempty(consistency_only)
 
-    high_mixed = first(consistency_only)
-    @test get_H_bd(high_mixed) isa AbstractMatrix
-    @test is_stable(high_mixed) === true || is_stable(high_mixed) === false
-    @test stability_code(high_mixed) in (-1, 1)
-    @test isnothing(high_mixed.H)
-    @test isnothing(high_mixed.H0)
-    @test !isempty(show_condition_qKk(high_mixed))
-    @test !isempty(show_condition_wKk(high_mixed))
-    @test_throws Exception get_H_H0(high_mixed)
+    high_bnc_rgm = first(consistency_only)
+    @test get_H_bd(high_bnc_rgm) isa AbstractMatrix
+    @test is_stable(high_bnc_rgm) === true || is_stable(high_bnc_rgm) === false
+    @test stability_code(high_bnc_rgm) in (-1, 1)
+    @test isnothing(high_bnc_rgm.H)
+    @test isnothing(high_bnc_rgm.H0)
+    @test !isempty(show_condition_qKk(high_bnc_rgm))
+    @test !isempty(show_condition_wKk(high_bnc_rgm))
+    @test_throws Exception get_H_H0(high_bnc_rgm)
 end
 
-@testset "Catalysis Offsets And Mixed Consistency" begin
+@testset "Catalysis Offsets And Binding-Catalysis Consistency" begin
     model = offset_catalysis_model()
     cn = get_catalysis_network(model)
     find_catalysis_regimes!(model)
@@ -313,9 +313,9 @@ end
     end
 
     match_regimes!(model)
-    mixed_regular = first(filter(r -> r.nlt == 0 && !is_singular(get_binding_regime(r)), get_bnc_regimes(model)))
-    bind_rgm = get_binding_regime(mixed_regular)
-    cat_rgm = get_catalysis_regime(mixed_regular)
+    regular_bnc_rgm = first(filter(r -> r.nlt == 0 && !is_singular(get_binding_regime(r)), get_bnc_regimes(model)))
+    bind_rgm = get_binding_regime(regular_bnc_rgm)
+    cat_rgm = get_catalysis_regime(regular_bnc_rgm)
     r_v = size(get_P(cat_rgm), 1)
 
     P_ss = Matrix{Float64}(bind_rgm.P[r_v+1:end, :])
@@ -334,10 +334,10 @@ end
     H_expected = hcat(H_ss[:, 1:split], -(H_right * Pθ))
     H0_expected = vec(H0_ss - H_right * P0θ)
 
-    @test Matrix(get_H(mixed_regular)) ≈ H_expected
-    @test get_H0(mixed_regular) ≈ H0_expected
+    @test Matrix(get_H(regular_bnc_rgm)) ≈ H_expected
+    @test get_H0(regular_bnc_rgm) ≈ H0_expected
 
-    C_cat_qKk, C0_cat_qKk, nlt_cat_qKk = get_C_C0_nullity_qKk(mixed_regular, :catalysis)
+    C_cat_qKk, C0_cat_qKk, nlt_cat_qKk = get_C_C0_nullity_qKk(regular_bnc_rgm, :catalysis)
     H_bind, H0_bind = get_H_H0(bind_rgm)
     C_expected = hcat(Matrix{Float64}(get_CΠ(cat_rgm) * H_bind), Matrix{Float64}(get_C_k(cat_rgm)))
     C0_expected = vec(get_CΠ(cat_rgm) * H0_bind + get_C0(cat_rgm))
@@ -345,6 +345,6 @@ end
     @test nlt_cat_qKk == 0
     @test Matrix(C_cat_qKk) ≈ C_expected
     @test C0_cat_qKk ≈ C0_expected
-    @test !isempty(show_condition_qKk(mixed_regular; kind = :catalysis))
-    @test !isempty(show_condition_wKk(mixed_regular))
+    @test !isempty(show_condition_qKk(regular_bnc_rgm; kind = :catalysis))
+    @test !isempty(show_condition_wKk(regular_bnc_rgm))
 end

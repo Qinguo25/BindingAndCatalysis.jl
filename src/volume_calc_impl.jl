@@ -815,7 +815,7 @@ calc_volume(poly::Polyhedron;kwargs...) = calc_volume([poly]; kwargs...)[1]
 """
     get_volumes(rgms::AbstractVector{<:BncRegime}; recompute=false, kwargs...) -> Vector{Volume}
 
-Return cached wKk-space volumes for mixed regimes, computing missing entries
+Return cached wKk-space volumes for Bnc regimes, computing missing entries
 from each regime's `get_C_C0_nullity_wKk` polyhedron.
 """
 function get_volumes(rgms::AbstractVector{<:BncRegime};

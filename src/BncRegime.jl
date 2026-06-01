@@ -48,7 +48,7 @@ end
 
 
 
-# Determine the stability of a mixed regime
+# Determine the stability of a Binding-Catalysis regime.
 function judge_stability!(rgm::BncRegime; kwargs...)
     isnothing(rgm.H_bd) && (rgm.H_bd = get_H_bd_numerically(rgm))
     H_bd = rgm.H_bd
@@ -146,7 +146,7 @@ function _steady_state_affine(bind_rgm::BindRegime, perm, N_ss, N0_ss, r_v::Int,
     else
         _build_singular_H_from_perm_exact(perm, N_ss, direction)[1]
     end
-    isnothing(H_ss) && error("Failed to build steady-state affine map for a mixed regime with nullity $nlt.")
+    isnothing(H_ss) && error("Failed to build steady-state affine map for a Bnc regime with nullity $nlt.")
 
     return sparse(H_ss), vec(-(H_ss * M0_ss))
 end
