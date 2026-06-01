@@ -62,3 +62,13 @@ This note records maintainability observations found while reorganizing source l
 - Formatter 已引入但未做全仓库重排。
   - 已添加 `.JuliaFormatter.toml` 和 `scripts/format` 独立 formatter 环境。
   - 由于当前任务包含功能性改动，暂未运行全仓库格式化，避免把语义 diff 和纯格式 diff 混在一起。
+
+- Julia keyword 兼容层不能完全靠同名 wrapper 隔离。
+  - Julia 的 keyword 不参与方法分派；`qK2x(...; input_logspace=true)` 和 `qK2x(...; input=:log)` 不能用两个同 positional signature 的方法分别放在 `old_api.jl` 和新 API 文件中。
+  - 当前做法是在核心函数入口接受旧 keyword 并立即翻译成 `input` / `output`，内部调用全部使用新 Symbol 模式。
+  - 后续如果要更严格隔离旧 API，需要引入不同函数名或 breaking release 删除旧 keyword。
+
+- 测试耗时主要来自 regime construction / graph propagation，而不是 volume sampling。
+  - 本轮已把 volume Monte Carlo 测试从 `20_000` / `4_000` batch 降到 `5_000` / `1_500`。
+  - 完整测试仍有若干 10s+ testset，主要是重复构造相同小模型并运行 `find_all_regimes!` / `match_regimes!`。
+  - 后续可以把 shared fixture 缓存到 test helper，或把少量重型 integration smoke test 放到环境变量控制的 extended suite。

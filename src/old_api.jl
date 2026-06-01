@@ -67,16 +67,16 @@ SISO_plot(args...; kwargs...) = (_legacy_api_depwarn(:SISO_plot, :SIMO_plot); SI
 
 # Default binding-network convenience API. These are still maintained because
 # many user workflows use `get_regime(model, idx)` for binding regimes.
-get_binding_regime(args...;kwargs...) = get_bind_regime(args...;kwargs...)
 get_perm(args...;kwargs...) = get_bind_perm(args...;kwargs...)
 get_regime(args...; kwargs...) = get_bind_regime(args...; kwargs...)
 get_idx(args...; kwargs...) = get_bind_idx(args...; kwargs...)
 get_nullity(args...; kwargs...) = get_bind_nullity(args...; kwargs...)
 is_singular(args...; kwargs...) = is_bind_singular(args...; kwargs...)
 is_asymptotic(args...; kwargs...) = is_bind_asymptotic(args...; kwargs...)
-get_regimes(args...; kwargs...) = get_bind_regimes(args...; kwargs...)
-get_perms(args...; kwargs...) = get_bind_perms(args...; kwargs...)
-get_indices(args...; kwargs...) = get_bind_indices(args...; kwargs...)
+get_regimes(args...; return_idx::Bool=false, kwargs...) =
+    return_idx ? get_binding_indices(args...; kwargs...) : get_binding_regimes(args...; kwargs...)
+get_perms(args...; kwargs...) = get_binding_perms(args...; kwargs...)
+get_indices(args...; kwargs...) = get_binding_indices(args...; kwargs...)
 n_binding_regimes(rgms::Regimes) = n_bind_regimes(rgms)
 n_regimes(model::Bnc) = n_bind_regimes(model)
 n_regimes(model::CatalysisData) = n_catalysis_regimes(model)

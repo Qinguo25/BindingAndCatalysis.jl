@@ -34,8 +34,8 @@
 
     Random.seed!(42)
     logqK = randomize(model, 1; log_lower = -2, log_upper = 2)[1]
-    logx = qK2x(model, logqK; input_logspace = true, output_logspace = true)
-    logqK_back = x2qK(model, logx; input_logspace = true, output_logspace = true)
+    logx = qK2x(model, logqK; input = :log, output = :log)
+    logqK_back = x2qK(model, logx; input = :log, output = :log)
     @test isapprox(logqK_back, logqK; atol = 1e-6, rtol = 1e-6)
 end
 
@@ -46,8 +46,8 @@ end
     @test BindingAndCatalysis._resolve_qK2x_method(model, :free_energy) === :homotopy
 
     logqK = [0.0, 0.0]
-    logx_default = qK2x(model, logqK; input_logspace = true, output_logspace = true)
-    logx_explicit = qK2x(model, logqK; input_logspace = true, output_logspace = true, method = :free_energy)
+    logx_default = qK2x(model, logqK; input = :log, output = :log)
+    logx_explicit = qK2x(model, logqK; input = :log, output = :log, method = :free_energy)
     @test isapprox(logx_default, logx_explicit; atol = 1e-8, rtol = 1e-8)
 end
 
@@ -114,9 +114,9 @@ end
         sampler = :uniform_box,
         log_lower = log_lower,
         log_upper = log_upper,
-        batch_size = 20_000,
-        rel_tol = 0.2,
-        abs_tol = 1.0e-3,
+        batch_size = 5_000,
+        reltol = 0.2,
+        abstol = 1.0e-3,
         time_limit = 3.0,
     )
     @test isapprox(direct_fraction.mean, 1 / 16; atol = 0.01)
@@ -128,9 +128,9 @@ end
         sampler = :uniform_box,
         log_lower = log_lower,
         log_upper = log_upper,
-        batch_size = 20_000,
-        rel_tol = 0.2,
-        abs_tol = 1.0e-3,
+        batch_size = 5_000,
+        reltol = 0.2,
+        abstol = 1.0e-3,
         time_limit = 3.0,
     )
     @test isapprox(poly_fraction.mean, 1 / 16; atol = 0.01)
@@ -143,7 +143,7 @@ end
     rgms = get_regimes(model)
     perms = get_perms(model)
     idxs = get_indices(model)
-    perm_dict = get_bind_regimes_dict(model)
+    perm_dict = get_binding_regimes_dict(model)
 
     @test length(rgms) == length(perms) == n_regimes(model) == length(idxs) == length(perm_dict)
     @test idxs == collect(1:n_regimes(model))
@@ -202,7 +202,7 @@ end
     @test nltpoly == nltqK
 
     inner = get_one_inner_point(model, 2)
-    @test assign_regime(model, inner; input_logspace = true, asymptotic_only = false, return_idx = true) == 2
+    @test assign_regime_index(model, inner; input = :log, asymptotic_only = false) == 2
 
     C_add = [1 -1 0]
     C0_add = [-log10(2)]
@@ -227,28 +227,27 @@ end
 
     Random.seed!(42)
     logqK_vec = randomize(model, 4; log_lower = -3, log_upper = 3)
-    logx_vec = logqK_vec .|> qK -> qK2x(model, qK; input_logspace = true, output_logspace = true)
-    logqK_vec_back = logx_vec .|> x -> x2qK(model, x; input_logspace = true, output_logspace = true)
+    logx_vec = logqK_vec .|> qK -> qK2x(model, qK; input = :log, output = :log)
+    logqK_vec_back = logx_vec .|> x -> x2qK(model, x; input = :log, output = :log)
     @test all(isapprox.(logqK_vec_back, logqK_vec; atol = 1e-6, rtol = 1e-6))
 
-    assigned_qK = logqK_vec .|> qK -> assign_regime(model, qK; input_logspace = true, asymptotic_only = false, return_idx = true)
-    assigned_from_x_qK = logx_vec .|> x -> assign_regime_qK(model; x = x, input_logspace = true, asymptotic_only = false, return_idx = true)
-    assigned_from_x_x = logx_vec .|> x -> assign_regime_x(model, x; input_logspace = true, asymptotic_only = true, return_idx = true)
+    assigned_qK = logqK_vec .|> qK -> assign_regime_index(model, qK; input = :log, asymptotic_only = false)
+    assigned_from_x_qK = logx_vec .|> x -> assign_regime_qK_index(model; x = x, input = :log, asymptotic_only = false)
+    assigned_from_x_x = logx_vec .|> x -> assign_regime_x_index(model, x; input = :log, asymptotic_only = true)
     @test assigned_qK == assigned_from_x_qK
     @test assigned_from_x_qK == assigned_from_x_x
 
-    singular_bind_idx = only(filter(i -> get_nullity(model, i) == 1, get_regimes(model; return_idx = true)))
+    singular_bind_idx = only(filter(i -> get_nullity(model, i) == 1, get_binding_indices(model)))
     Hs, H0s = get_H_H0(model, singular_bind_idx)
     @test size(Hs, 1) == model.n
     @test length(H0s) == model.n
-    @test get_volume(model, singular_bind_idx; recalculate = true) == zero(BindingAndCatalysis.Volume)
+    @test get_volume(model, singular_bind_idx; recompute = true) == zero(BindingAndCatalysis.Volume)
 
     subset = [1, singular_bind_idx, 2]
-    filtered_subset, subset_mask = BindingAndCatalysis.filter_regimes(
+    filtered_subset, subset_mask = BindingAndCatalysis.filter_regimes_with_mask(
         model,
         subset;
         singular = false,
-        return_mask = true,
     )
     @test filtered_subset == [1, 2]
     @test subset_mask == BitVector([true, false, true])
@@ -257,7 +256,7 @@ end
 @testset "Small CDN3 Polyhedra And Volume Route" begin
     model = cdn3_small_model()
     find_all_regimes!(model)
-    idxs = get_regimes(model; return_idx = true)
+    idxs = get_binding_indices(model)
 
     polys_default = get_polyhedra(model)
     polys_unc = get_polyhedra(model; canonicalize = false)
@@ -277,19 +276,19 @@ end
     classifier_vol = get_volume(
         model,
         regular_idx;
-        recalculate = true,
-        batch_size = 4_000,
-        rel_tol = 0.2,
-        abs_tol = 1e-3,
+        recompute = true,
+        batch_size = 1_500,
+        reltol = 0.2,
+        abstol = 1e-3,
         time_limit = 1.0,
     )
     rgm = get_regime(model, regular_idx; inv_info = true)
     poly_vol = calc_volume(
         [rgm];
         contain_overlap = true,
-        batch_size = 4_000,
-        rel_tol = 0.2,
-        abs_tol = 1e-3,
+        batch_size = 1_500,
+        reltol = 0.2,
+        abstol = 1e-3,
         time_limit = 1.0,
     )[1]
 
@@ -304,18 +303,18 @@ end
     classifier_rebased_vol = calc_volume(
         [rgm];
         rebase_mat = rebase_mat,
-        batch_size = 4_000,
-        rel_tol = 0.2,
-        abs_tol = 1e-3,
+        batch_size = 1_500,
+        reltol = 0.2,
+        abstol = 1e-3,
         time_limit = 1.0,
     )[1]
     poly_rebased_vol = calc_volume(
         [rgm];
         contain_overlap = true,
         rebase_mat = rebase_mat,
-        batch_size = 4_000,
-        rel_tol = 0.2,
-        abs_tol = 1e-3,
+        batch_size = 1_500,
+        reltol = 0.2,
+        abstol = 1e-3,
         time_limit = 1.0,
     )[1]
 

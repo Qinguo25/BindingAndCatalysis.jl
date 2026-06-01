@@ -40,7 +40,7 @@
 
     mixed = get_bnc_regime(model, bind_perm, cat_perm)
     @test mixed !== nothing
-    @test get_regime(model, bind_perm, cat_perm) === mixed
+    @test get_bnc_regime(model, bind_perm, cat_perm) === mixed
     @test get_binding_perm(mixed) == bind_perm
     @test get_catalysis_perm(mixed) == cat_perm
     @test get_idx(mixed) == get_idx(model, bind_perm, cat_perm)
@@ -74,7 +74,7 @@
     @test length(show_expression_x(regular)) == model.n
 
     stable_flag = is_stable(regular)
-    stable_code = is_stable(regular; return_code = true)
+    stable_code = stability_code(regular)
     @test stable_flag === true || stable_flag === false || ismissing(stable_flag)
     @test stable_code in (-1, 0, 1)
 
@@ -260,7 +260,7 @@ end
     low_mixed = first(bind_high)
     @test get_H_bd(low_mixed) isa AbstractMatrix
     @test is_stable(low_mixed) === true || is_stable(low_mixed) === false
-    @test is_stable(low_mixed; return_code = true) in (-1, 1)
+    @test stability_code(low_mixed) in (-1, 1)
     @test !isempty(show_condition_qKk(low_mixed))
     @test !isempty(show_condition_wKk(low_mixed))
 
@@ -283,7 +283,7 @@ end
     high_mixed = first(consistency_only)
     @test get_H_bd(high_mixed) isa AbstractMatrix
     @test is_stable(high_mixed) === true || is_stable(high_mixed) === false
-    @test is_stable(high_mixed; return_code = true) in (-1, 1)
+    @test stability_code(high_mixed) in (-1, 1)
     @test isnothing(high_mixed.H)
     @test isnothing(high_mixed.H0)
     @test !isempty(show_condition_qKk(high_mixed))

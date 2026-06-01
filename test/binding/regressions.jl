@@ -49,9 +49,9 @@ end
     model = notebook_model2()
     find_all_regimes!(model)
 
-    regular_ids = get_regimes(model; singular = false, return_idx = true)
+    regular_ids = get_binding_indices(model; singular = false)
     assigned = [
-        assign_regime(model, get_one_inner_point(model, idx); input_logspace = true, asymptotic_only = false, return_idx = true)
+        assign_regime_index(model, get_one_inner_point(model, idx); input = :log, asymptotic_only = false)
         for idx in regular_ids
     ]
     @test assigned == regular_ids

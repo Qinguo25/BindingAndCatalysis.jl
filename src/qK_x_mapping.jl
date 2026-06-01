@@ -6,8 +6,27 @@ export qcat_traj_cat, simulate_adaptation
 # Public qK/x mappings
 #========================================================================================#
 
+const _SPACE_MODES = (:linear, :log)
+
+@inline function _resolve_space_mode(
+    mode::Symbol,
+    legacy_logspace::Union{Bool,Nothing},
+    legacy_name::Symbol,
+)
+    if !isnothing(legacy_logspace)
+        legacy_mode = legacy_logspace ? :log : :linear
+        if mode !== :linear && mode !== legacy_mode
+            throw(ArgumentError("conflicting `$legacy_name` and new coordinate-space mode"))
+        end
+        return legacy_mode
+    end
+
+    mode in _SPACE_MODES || throw(ArgumentError("coordinate-space mode must be `:linear` or `:log`, got `$mode`"))
+    return mode
+end
+
 """
-    x2qK(bnc::Bnc, x; input_logspace=false, output_logspace=false, only_q=false)
+    x2qK(bnc::Bnc, x; input=:linear, output=:linear, only_q=false)
 
 Map concentrations `x` to totals/binding constants `qK`.
 
@@ -16,8 +35,8 @@ Map concentrations `x` to totals/binding constants `qK`.
 - `x`: Species concentrations (vector or matrix).
 
 # Keyword Arguments
-- `input_logspace`: Treat `x` as log10 values when `true`.
-- `output_logspace`: Return log10 values when `true`.
+- `input`: Coordinate space of `x`; supported values are `:linear` and `:log`.
+- `output`: Coordinate space of returned values; supported values are `:linear` and `:log`.
 - `only_q`: Return only `q` (conservation totals) when `true`.
 
 # Returns
@@ -26,19 +45,24 @@ Map concentrations `x` to totals/binding constants `qK`.
 function x2qK(
     Bnc::Bnc,
     x::AbstractArray{<:Real};
-    input_logspace::Bool=false,
-    output_logspace::Bool=false,
+    input::Symbol=:linear,
+    output::Symbol=:linear,
+    input_logspace::Union{Bool,Nothing}=nothing,
+    output_logspace::Union{Bool,Nothing}=nothing,
     only_q::Bool=false,
 )::AbstractArray{<:Real}
-    logx = input_logspace ? x : log10.(x)
-    x_linear = input_logspace ? exp10.(x) : x
+    input = _resolve_space_mode(input, input_logspace, :input_logspace)
+    output = _resolve_space_mode(output, output_logspace, :output_logspace)
+
+    logx = input === :log ? x : log10.(x)
+    x_linear = input === :log ? exp10.(x) : x
 
     q = Bnc.L * x_linear
-    q_out = output_logspace ? log10.(q) : q
+    q_out = output === :log ? log10.(q) : q
     only_q && return q_out
 
     logK = Bnc.N * logx
-    K_out = output_logspace ? logK : exp10.(logK)
+    K_out = output === :log ? logK : exp10.(logK)
     return vcat(q_out, K_out)
 end
 
@@ -48,7 +72,7 @@ end
 #========================================================================================#
 
 """
-    qK2x(bnc::Bnc, qK; input_logspace=false, output_logspace=false,
+    qK2x(bnc::Bnc, qK; input=:linear, output=:linear,
         startlogx=nothing, startlogqK=nothing, use_vtx=false, method=nothing,
         reltol=1e-8, abstol=1e-10, kwargs...) -> Vector
 
@@ -59,8 +83,8 @@ Map from totals/binding constants (`qK`) to species concentrations `x`.
 - `qK`: Vector of totals (and optionally binding constants).
 
 # Keyword Arguments
-- `input_logspace`: Treat inputs as log10 values when `true`.
-- `output_logspace`: Return log10 values when `true`.
+- `input`: Coordinate space of `qK`; supported values are `:linear` and `:log`.
+- `output`: Coordinate space of returned `x`; supported values are `:linear` and `:log`.
 - `startlogx`: Initial guess for log10(x).
 - `startlogqK`: Initial log10(qK) for homotopy.
 - `use_vtx`: Use regime-based closed form when `true`.
@@ -77,8 +101,10 @@ Map from totals/binding constants (`qK`) to species concentrations `x`.
 function qK2x(
     Bnc::Bnc,
     qK::AbstractVector{<:Real};
-    input_logspace::Bool=false,
-    output_logspace::Bool=false,
+    input::Symbol=:linear,
+    output::Symbol=:linear,
+    input_logspace::Union{Bool,Nothing}=nothing,
+    output_logspace::Union{Bool,Nothing}=nothing,
     startlogx::Union{Vector{<:Real},Nothing}=nothing,
     startlogqK::Union{Vector{<:Real},Nothing}=nothing,
     use_vtx::Bool=false,
@@ -87,8 +113,10 @@ function qK2x(
     abstol=1e-10,
     kwargs...
 )::Vector{Float64}
+    input = _resolve_space_mode(input, input_logspace, :input_logspace)
+    output = _resolve_space_mode(output, output_logspace, :output_logspace)
     method = _resolve_qK2x_method(Bnc, method)
-    endlogqK = input_logspace ? qK : log10.(qK)
+    endlogqK = input === :log ? qK : log10.(qK)
 
     logx = if use_vtx || method === :regime
         _logqK2logx_regime(Bnc, endlogqK)
@@ -145,7 +173,7 @@ function qK2x(
         throw(ArgumentError("unsupported qK2x method: $method"))
     end
 
-    logx = output_logspace ? logx : exp10.(logx)
+    logx = output === :log ? logx : exp10.(logx)
     return logx
 end
 
@@ -224,7 +252,7 @@ function _logqK2logx_nlsolve(Bnc::Bnc, logqK::AbstractArray{<:Real,1};
             accepted = false
             while step >= 2.0^-40
                 u_try = u .- step .* Δ
-                trial_resid = qK2x_residual(Bnc, u_try, logqK; input_logspace=true)
+                trial_resid = qK2x_residual(Bnc, u_try, logqK; input=:log)
                 trial_norm = norm(trial_resid, Inf)
                 if isfinite(trial_norm) && trial_norm < min(prev_norm, res_norm)
                     u .= u_try
@@ -248,7 +276,7 @@ end
 
 
 function _logqK2logx_regime(Bnc::Bnc, logqK::AbstractArray{<:Real,1})::Vector{Float64}
-    perm = assign_regime_qK(Bnc, logqK; input_logspace=true, asymptotic_only=false)
+    perm = assign_regime_qK(Bnc, logqK; input=:log, asymptotic_only=false)
     H, H0 = get_H_H0(Bnc, perm)
     return Vector{Float64}(H * logqK .+ H0)
 end
@@ -265,12 +293,19 @@ end
 
 
 
-function qK2x_residual(Bnc::Bnc, logx::AbstractVector{<:Real}, qK::AbstractVector{<:Real}; input_logspace::Bool=false)
-    logqK = input_logspace ? Float64.(qK) : log10.(Float64.(qK))
+function qK2x_residual(
+    Bnc::Bnc,
+    logx::AbstractVector{<:Real},
+    qK::AbstractVector{<:Real};
+    input::Symbol=:linear,
+    input_logspace::Union{Bool,Nothing}=nothing,
+)
+    input = _resolve_space_mode(input, input_logspace, :input_logspace)
+    logqK = input === :log ? Float64.(qK) : log10.(Float64.(qK))
     d = Bnc.d
     r = Bnc.r
     resid = Vector{Float64}(undef, d + r)
-    resid .= x2qK(Bnc, logx; input_logspace=true, output_logspace=true) .- logqK
+    resid .= x2qK(Bnc, logx; input=:log, output=:log) .- logqK
     return resid
 end
 
@@ -451,14 +486,14 @@ end
 #     Bnc::Bnc,
 #     qKs;
 #     methods=(:free_energy, :homotopy, :newton_nullspace, :nlsolve, :regime),
-#     input_logspace::Bool=true,
+#     input::Symbol=:log,
 #     reference_method::Symbol=:free_energy,
 #     kwargs...,
 # )
 #     cols = qKs isa AbstractMatrix ? [qKs[:, i] for i in axes(qKs, 2)] : collect(qKs)
 #     refs = Dict{Int,Vector{Float64}}()
 #     for (i, qK) in pairs(cols)
-#         refs[i] = qK2x(Bnc, qK; input_logspace=input_logspace, output_logspace=true, method=reference_method, kwargs...)
+#         refs[i] = qK2x(Bnc, qK; input=input, output=:log, method=reference_method, kwargs...)
 #     end
 
 #     results = NamedTuple[]
@@ -469,8 +504,8 @@ end
 #         elapsed = @elapsed begin
 #             for (i, qK) in pairs(cols)
 #                 try
-#                     logx = qK2x(Bnc, qK; input_logspace=input_logspace, output_logspace=true, method=method, kwargs...)
-#                     resid = qK2x_residual(Bnc, logx, qK; input_logspace=input_logspace)
+#                     logx = qK2x(Bnc, qK; input=input, output=:log, method=method, kwargs...)
+#                     resid = qK2x_residual(Bnc, logx, qK; input=input)
 #                     max_resid = max(max_resid, norm(resid, Inf))
 #                     max_ref_err = max(max_ref_err, norm(logx .- refs[i], Inf))
 #                 catch err
@@ -493,7 +528,7 @@ end
 #----------------Functions using homotopyContinuous to moving across x space along with qK change----------------------
 
 """
-    x_traj_with_qK_change(bnc::Bnc, start_point, end_point; input_logspace=false, output_logspace=false, kwargs...)
+    x_traj_with_qK_change(bnc::Bnc, start_point, end_point; input=:linear, output=:linear, kwargs...)
 
 Compute a trajectory in `x` space while `qK` changes linearly in log10 space.
 
@@ -503,8 +538,8 @@ Compute a trajectory in `x` space while `qK` changes linearly in log10 space.
 - `end_point`: Ending `qK` values.
 
 # Keyword Arguments
-- `input_logspace`: Treat inputs as log10 values when `true`.
-- `output_logspace`: Return `x` in log10 space when `true`.
+- `input`: Coordinate space of inputs; supported values are `:linear` and `:log`.
+- `output`: Coordinate space of returned `x`; supported values are `:linear` and `:log`.
 - `kwargs...`: Passed to the ODE solver.
 
 # Returns
@@ -514,18 +549,21 @@ function x_traj_with_qK_change(
     Bnc::Bnc,
     start_point::Vector{<:Real},
     end_point::Vector{<:Real};
-    input_logspace::Bool=false,
-    output_logspace::Bool=false,
+    input::Symbol=:linear,
+    output::Symbol=:linear,
+    input_logspace::Union{Bool,Nothing}=nothing,
+    output_logspace::Union{Bool,Nothing}=nothing,
     kwargs...
 )
-    # println("x_traj_with_qK_change get kwargs: ", kwargs)
+    input = _resolve_space_mode(input, input_logspace, :input_logspace)
+    output = _resolve_space_mode(output, output_logspace, :output_logspace)
 
-    startlogqK = input_logspace ? start_point : log10.(start_point)
-    endlogqK = input_logspace ? end_point : log10.(end_point)
+    startlogqK = input === :log ? start_point : log10.(start_point)
+    endlogqK = input === :log ? end_point : log10.(end_point)
 
     solution = _logx_traj_with_logqK_change(Bnc, startlogqK, endlogqK; dense=false, kwargs...)
 
-    if !output_logspace
+    if output === :linear
         foreach(u -> u .= exp10.(u), solution.u)
     end
 
@@ -534,7 +572,7 @@ end
 
 
 """
-    x_traj_with_q_change(bnc::Bnc, start_q, end_q; K=nothing, logK=nothing, input_logspace=false, kwargs...)
+    x_traj_with_q_change(bnc::Bnc, start_q, end_q; K=nothing, logK=nothing, input=:linear, kwargs...)
 
 Compute an `x` trajectory for a change in `q` while holding `K` fixed.
 """
@@ -544,11 +582,13 @@ function x_traj_with_q_change(
     end_q::Vector{<:Real};
     K::Union{Vector{<:Real},Nothing}=nothing,
     logK::Union{Vector{<:Real},Nothing}=nothing,
-    input_logspace::Bool=false,
+    input::Symbol=:linear,
+    input_logspace::Union{Bool,Nothing}=nothing,
     kwargs...
 )
-    K_prepared = input_logspace ? (isnothing(logK) ? log10.(K) : logK) : (isnothing(K) ? K : exp10.(K))
-    x_traj_with_qK_change(Bnc, [start_q;K_prepared], [end_q;K_prepared]; input_logspace=input_logspace,kwargs...)
+    input = _resolve_space_mode(input, input_logspace, :input_logspace)
+    K_prepared = input === :log ? (isnothing(logK) ? log10.(K) : logK) : (isnothing(K) ? K : exp10.(K))
+    x_traj_with_qK_change(Bnc, [start_q;K_prepared], [end_q;K_prepared]; input=input, kwargs...)
 end
 
 
@@ -674,7 +714,7 @@ function _logx_traj_with_logqK_change(Bnc::Bnc,
 
     
     # Prepare starting x if not given
-    u0 = isnothing(startlogx) ? qK2x(Bnc, startlogqK; input_logspace=true, output_logspace=true) : startlogx
+    u0 = isnothing(startlogx) ? qK2x(Bnc, startlogqK; input=:log, output=:log) : startlogx
     p = get_homotopy_param(Bnc, startlogqK, endlogqK)
     f! = get_homotopy_ode(Bnc,p)
 
@@ -724,24 +764,26 @@ end
 
 
 """
-    x_traj_cat(bnc::Bnc, qK0_or_q0, tspan; K=nothing, logK=nothing,
-        input_logspace=false, output_logspace=false, kwargs...) -> (Vector, Vector)
+    x_traj_cat(bnc::Bnc, x0, tspan; input=:linear, output=:linear, kwargs...) -> (Vector, Vector)
 
 Simulate species trajectories under catalysis dynamics.
 """
 function x_traj_cat(Bnc::Bnc, x0::Vector{<:Real}, tspan::Tuple{Real,Real};
-    input_logspace::Bool=false,
-    output_logspace::Bool=false,
+    input::Symbol=:linear,
+    output::Symbol=:linear,
+    input_logspace::Union{Bool,Nothing}=nothing,
+    output_logspace::Union{Bool,Nothing}=nothing,
     kwargs...
     )
-    x0 = input_logspace ? x0 : log10.(x0)
-    # startlogx = qK2x(Bnc, qK0; input_logspace=input_logspace, output_logspace=true)
+    input = _resolve_space_mode(input, input_logspace, :input_logspace)
+    output = _resolve_space_mode(output, output_logspace, :output_logspace)
+    x0 = input === :log ? x0 : log10.(x0)
     #---Solve the ODE to find the time curve of log(x) as catalysis happens
     sol = catalysis_logx(Bnc, x0, tspan;
         dense = false, #manually handle later
         kwargs...
     )
-    if !output_logspace
+    if output === :linear
         foreach(u -> u .= exp10.(u), sol.u)
     end
     
@@ -749,20 +791,24 @@ function x_traj_cat(Bnc::Bnc, x0::Vector{<:Real}, tspan::Tuple{Real,Real};
 end
 
 """
-    qK_traj_cat(bnc::Bnc, args...; only_q=false, output_logspace=false, kwargs...) -> (Vector{Float64}, Matrix{Float64})
+    qK_traj_cat(bnc::Bnc, args...; only_q=false, input=:linear, output=:linear, kwargs...) -> (Vector{Float64}, Matrix{Float64})
 
 Simulate catalysis dynamics and return trajectories in q/K space.
 """
 function qK_traj_cat(Bnc::Bnc, qK0::Vector{<:Real}, args...;
     only_q::Bool=false,
-    input_logspace::Bool=false,
-    output_logspace::Bool=false,
+    input::Symbol=:linear,
+    output::Symbol=:linear,
+    input_logspace::Union{Bool,Nothing}=nothing,
+    output_logspace::Union{Bool,Nothing}=nothing,
     kwargs...
     )
 
-    logx0 = qK2x(Bnc, qK0; input_logspace=input_logspace, output_logspace=true)
-    t,u = x_traj_cat(Bnc, logx0, args...; input_logspace=true,output_logspace=true, kwargs...)
-    u = x2qK.(Ref(Bnc), u;input_logspace=true,output_logspace=output_logspace, only_q=only_q)
+    input = _resolve_space_mode(input, input_logspace, :input_logspace)
+    output = _resolve_space_mode(output, output_logspace, :output_logspace)
+    logx0 = qK2x(Bnc, qK0; input=input, output=:log)
+    t,u = x_traj_cat(Bnc, logx0, args...; input=:log, output=:log, kwargs...)
+    u = x2qK.(Ref(Bnc), u; input=:log, output=output, only_q=only_q)
     return (t,u)
 end
 
@@ -796,8 +842,8 @@ function _direct_logx_checked(
         qK2x(
             model,
             logqK;
-            input_logspace=true,
-            output_logspace=true,
+            input=:log,
+            output=:log,
             method=method,
             startlogx=startlogx,
             maxiters=qK2x_maxiters,
@@ -807,7 +853,7 @@ function _direct_logx_checked(
     catch
         return nothing
     end
-    maximum(abs.(qK2x_residual(model, logx, logqK; input_logspace=true))) <= tol || return nothing
+    maximum(abs.(qK2x_residual(model, logx, logqK; input=:log))) <= tol || return nothing
     return logx
 end
 
@@ -826,8 +872,8 @@ function _homotopy_logx_checked(
             model,
             Vector{Float64}(from_logqK),
             Vector{Float64}(to_logqK);
-            input_logspace=true,
-            output_logspace=true,
+            input=:log,
+            output=:log,
             startlogx=Vector{Float64}(from_logx),
             reltol=reltol,
             abstol=abstol,
@@ -838,7 +884,7 @@ function _homotopy_logx_checked(
     catch
         return nothing
     end
-    maximum(abs.(qK2x_residual(model, logx, to_logqK; input_logspace=true))) <= tol || return nothing
+    maximum(abs.(qK2x_residual(model, logx, to_logqK; input=:log))) <= tol || return nothing
     return logx
 end
 
@@ -875,8 +921,10 @@ function qcat_traj_cat(
     logqcat0::AbstractVector{<:Real},
     logwKk,
     tspan::Tuple{<:Real,<:Real};
-    input_logspace::Bool=true,
-    output_logspace::Bool=true,
+    input::Symbol=:log,
+    output::Symbol=:log,
+    input_logspace::Union{Bool,Nothing}=nothing,
+    output_logspace::Union{Bool,Nothing}=nothing,
     method::Union{Symbol,Nothing}=nothing,
     tol::Float64=1e-6,
     qK2x_maxiters::Integer=80,
@@ -894,12 +942,14 @@ function qcat_traj_cat(
 )
     have_catalysis(model) || throw(ArgumentError("model has no catalysis data."))
     cn = model.catalysis
+    input = _resolve_space_mode(input, input_logspace, :input_logspace)
+    output = _resolve_space_mode(output, output_logspace, :output_logspace)
     inner_method = _resolve_qK2x_method(model, method)
-    first_logwKk = _logwKk_at(logwKk, Float64(tspan[1]); input_logspace=input_logspace)
+    first_logwKk = _logwKk_at(logwKk, Float64(tspan[1]); input_logspace=(input === :log))
     expected_wKk_len = cn.d_w + model.r + cn.n_k
     length(first_logwKk) == expected_wKk_len || throw(ArgumentError("logwKk length must be $expected_wKk_len, got $(length(first_logwKk)). Available wKk symbols: $(wKk_symbol(model))."))
 
-    u0 = input_logspace ? Vector{Float64}(logqcat0) : log10.(Float64.(logqcat0))
+    u0 = input === :log ? Vector{Float64}(logqcat0) : log10.(Float64.(logqcat0))
     length(u0) == cn.r_v || throw(ArgumentError("logqcat0 length must be $(cn.r_v)."))
 
     logv = Vector{Float64}(undef, cn.n_v)
@@ -909,7 +959,7 @@ function qcat_traj_cat(
     last_logx = Ref{Union{Nothing,Vector{Float64}}}(nothing)
 
     function rhs!(du, u, _, t)
-        current_logwKk = _logwKk_at(logwKk, t; input_logspace=input_logspace)
+        current_logwKk = _logwKk_at(logwKk, t; input_logspace=(input === :log))
         logqK = _logqK_from_logqcat_logwKk(model, u, current_logwKk)
         logx = _direct_logx_checked(
             model,
@@ -978,7 +1028,7 @@ function qcat_traj_cat(
         isoutofdomain=(u, _, _) -> any(!isfinite, u),
         kwargs...,
     )
-    us = output_logspace ? sol.u : [exp10.(u) for u in sol.u]
+    us = output === :log ? sol.u : [exp10.(u) for u in sol.u]
     return collect(sol.t), us
 end
 
@@ -1043,8 +1093,8 @@ function simulate_adaptation(
         q0,
         logwKk_fun,
         tspan;
-        input_logspace=true,
-        output_logspace=true,
+        input=:log,
+        output=:log,
         method=method,
         tol=tol,
         qK2x_maxiters=qK2x_maxiters,
@@ -1068,8 +1118,8 @@ function simulate_adaptation(
                 qK2x(
                     model,
                     logqK;
-                    input_logspace=true,
-                    output_logspace=true,
+                    input=:log,
+                    output=:log,
                     method=inner_method,
                     startlogx=last_logx,
                     maxiters=qK2x_maxiters,
@@ -1079,7 +1129,7 @@ function simulate_adaptation(
             catch
                 nothing
             end
-            if isnothing(logx) || maximum(abs.(qK2x_residual(model, logx, logqK; input_logspace=true))) > tol
+            if isnothing(logx) || maximum(abs.(qK2x_residual(model, logx, logqK; input=:log))) > tol
                 obs[j] = NaN
             else
                 last_logx = logx

@@ -180,10 +180,10 @@ end
 @inline function _path_indices_to_calculate(
     is_calc::BitVector,
     pth_idx::AbstractVector{<:Integer};
-    recalculate::Bool=false,
+    recompute::Bool=false,
 )
     idxs = Int.(pth_idx)
-    return recalculate ? idxs : filter(i -> !is_calc[i], idxs)
+    return recompute ? idxs : filter(i -> !is_calc[i], idxs)
 end
 
 get_neighbor_graph_qK(grh::SIMOPaths; kwargs...) = grh.qK_grh

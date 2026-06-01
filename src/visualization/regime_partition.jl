@@ -104,13 +104,13 @@ function _binding_partition_value(
     tol::Float64,
 )
     if isnothing(value_func) && chart === :qK
-        return assign_regime_qK(model, logqK; input_logspace=true, asymptotic_only=asymptotic_only, return_idx=true)
+        return assign_regime_qK_index(model, logqK; input=:log, asymptotic_only=asymptotic_only)
     end
     logx = solve_logx_checked(model, logqK; method=method, tol=tol)
     isnothing(logx) && return nothing
     if isnothing(value_func)
         chart === :x || throw(ArgumentError("chart must be :qK or :x."))
-        return assign_regime_x(model, logx; input_logspace=true, asymptotic_only=asymptotic_only, return_idx=true)
+        return assign_regime_x_index(model, logx; input=:log, asymptotic_only=asymptotic_only)
     end
     return Float64(value_func(logx, logqK))
 end
@@ -201,13 +201,13 @@ function _fill_binding_partition_homotopy!(
                     categorical ? 0 : NaN
                 else
                     logx = logxs[i]
-                    resid_ok = maximum(abs.(qK2x_residual(model, logx, logqK; input_logspace=true))) <= tol
+                    resid_ok = maximum(abs.(qK2x_residual(model, logx, logqK; input=:log))) <= tol
                     if !resid_ok
                         categorical ? 0 : NaN
                     elseif isnothing(value_func)
                         chart === :qK ?
-                            assign_regime_qK(model, logqK; input_logspace=true, asymptotic_only=asymptotic_only, return_idx=true) :
-                            assign_regime_x(model, logx; input_logspace=true, asymptotic_only=asymptotic_only, return_idx=true)
+                            assign_regime_qK_index(model, logqK; input=:log, asymptotic_only=asymptotic_only) :
+                            assign_regime_x_index(model, logx; input=:log, asymptotic_only=asymptotic_only)
                     else
                         Float64(value_func(logx, logqK))
                     end
@@ -649,8 +649,8 @@ function plot_qcat_slice_with_flux(
             logx = solve_logx_checked(model, logqK; method=method, tol=tol)
             isnothing(logx) && error("No feasible qK point.")
             vals[I] = chart === :x ?
-                assign_regime_x(model, logx; input_logspace=true, asymptotic_only=false, return_idx=true) :
-                assign_regime_qK(model, logqK; input_logspace=true, asymptotic_only=false, return_idx=true)
+                assign_regime_x_index(model, logx; input=:log, asymptotic_only=false) :
+                assign_regime_qK_index(model, logqK; input=:log, asymptotic_only=false)
             logv = cn.Π * logx .+ logk_old
             vshift = maximum(logv)
             vscaled = exp10.(logv .- vshift)

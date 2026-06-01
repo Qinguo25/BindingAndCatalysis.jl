@@ -1,5 +1,9 @@
 export n_bind_regimes, n_catalysis_regimes, n_bnc_regimes, get_binding_network, get_catalysis_network, is_feasible
 export ensure_binding_regimes!, ensure_catalysis_regimes!, ensure_bnc_regimes!, ensure_regime_data!
+export get_binding_regime, get_binding_regimes, get_binding_perms, get_binding_indices
+export get_binding_perm_dict, get_binding_regimes_dict
+export get_binding_index, get_catalysis_index, get_bnc_index
+export filter_regimes, filter_regimes_mask, filter_regimes_with_mask
 
 #========================================================================================#
 # Index helpers
@@ -156,6 +160,8 @@ function get_bind_perm_dict(args...; kwargs...)
     _bind_regimes_perm_dict(bn)
 end
 get_bind_regimes_dict(args...; kwargs...) = get_bind_perm_dict(args...; kwargs...)
+get_binding_perm_dict(args...; kwargs...) = get_bind_perm_dict(args...; kwargs...)
+get_binding_regimes_dict(args...; kwargs...) = get_binding_perm_dict(args...; kwargs...)
 
 function get_catalysis_perm_dict(args...; kwargs...)
     cn = get_catalysis_network(args...; kwargs...)
@@ -280,6 +286,13 @@ function get_bind_regime(model::AbstractBnc, vtx::BindRegime; kwargs...)
     return get_bind_regime(vtx; kwargs...)
 end
 
+"""
+    get_binding_regime(args...; kwargs...) -> BindRegime
+
+Return a binding regime. This is the maintained full-name API; `get_bind_regime`
+is kept as a compatibility alias.
+"""
+get_binding_regime(args...; kwargs...) = get_bind_regime(args...; kwargs...)
 
 
 function get_catalysis_regime(rgm::CatalysisRegime; kwargs...)::CatalysisRegime
@@ -323,7 +336,7 @@ end
 get_bind_perm(args...; kwargs...) = get_bind_regime(args...; kwargs...).perm
 get_catalysis_perm(args...; kwargs...) = get_catalysis_regime(args...; kwargs...).perm
 get_bnc_perm(args...; kwargs...) = get_bnc_regime(args...; kwargs...).perm
-get_binding_perm(rgm::BncRegime) = get_bind_perm(get_bind_regime(rgm))
+get_binding_perm(args...; kwargs...) = get_bind_perm(args...; kwargs...)
 get_steady_state_perm(args...; kwargs...) = get_fixed_point_perm(args...; kwargs...)
 
 
@@ -345,6 +358,9 @@ get_catalysis_perm(model::CatalysisData, idx::Integer; kwargs...) =
 
 get_bind_idx(args...; kwargs...) = get_bind_regime(args...; kwargs...).idx
 get_catalysis_idx(args...; kwargs...) = get_catalysis_regime(args...; kwargs...).idx
+get_binding_index(args...; kwargs...) = get_bind_idx(args...; kwargs...)
+get_catalysis_index(args...; kwargs...) = get_catalysis_idx(args...; kwargs...)
+get_bnc_index(args...; kwargs...) = get_bnc_idx(args...; kwargs...)
 get_idx(rgm::BindRegime) = get_bind_idx(rgm)
 get_idx(rgm::CatalysisRegime) = get_catalysis_idx(rgm)
 get_idx(rgm::BncRegime) = get_bnc_idx(rgm)
@@ -356,8 +372,6 @@ get_perm(rgm::CatalysisRegime) = get_catalysis_perm(rgm)
 get_perm(rgm::BncRegime) = get_bnc_perm(rgm)
 get_perm(model::Bnc, arg; kwargs...) = get_bind_perm(model, arg; kwargs...)
 get_perm(model::CatalysisData, arg; kwargs...) = get_catalysis_perm(model, arg; kwargs...)
-get_regime(model::Bnc, bind, cat; kwargs...) = get_bnc_regime(model, bind, cat; kwargs...)
-get_regime(model::CatalysisData, arg; kwargs...) = get_catalysis_regime(model, arg; kwargs...)
 Base.:(==)(perm::AbstractVector{<:Integer}, rgm::CatalysisRegime) = perm == get_catalysis_perm(rgm)
 Base.:(==)(rgm::CatalysisRegime, perm::AbstractVector{<:Integer}) = get_catalysis_perm(rgm) == perm
 
@@ -490,42 +504,59 @@ end
 
 
 
+function get_binding_regimes(rgms::AbstractVector{<:BindRegime}; kwargs...)
+    filter_func = _get_filter(; kwargs...)
+    return filter(filter_func, rgms)
+end
+
 function get_bind_regimes(rgms::AbstractVector{<:BindRegime}; return_idx::Bool=false, kwargs...)
-    filter_func = _get_filter(; kwargs...)
-    selected = filter(filter_func, rgms)
-    return return_idx ? get_bind_idx.(selected) : selected
+    selected = get_binding_regimes(rgms; kwargs...)
+    return return_idx ? get_binding_index.(selected) : selected
 end
-function get_catalysis_regimes(rgms::AbstractVector{<:CatalysisRegime}; return_idx::Bool=false, kwargs...)
+
+function get_catalysis_regimes(rgms::AbstractVector{<:CatalysisRegime}; kwargs...)
     filter_func = _get_filter(; kwargs...)
-    selected = filter(filter_func, rgms)
-    return return_idx ? get_catalysis_idx.(selected) : selected
+    return filter(filter_func, rgms)
 end
-function get_bnc_regimes(rgms::AbstractArray{<:BncRegime}; return_idx::Bool=false, feasible::Union{Bool,Nothing}=true, kwargs...)
-    selected = filter(_get_filter(; feasible=feasible, kwargs...), vec(rgms))
-    return return_idx ? get_bnc_idx.(selected) : selected
+
+function get_bnc_regimes(rgms::AbstractArray{<:BncRegime}; feasible::Union{Bool,Nothing}=true, kwargs...)
+    return filter(_get_filter(; feasible=feasible, kwargs...), vec(rgms))
 end
 
 """
-    get_regimes(bnc::Bnc; singular=nothing, asymptotic=nothing, return_idx=false) -> Vector
+    get_binding_regimes(bnc::Bnc; singular=nothing, asymptotic=nothing) -> Vector
 
 Return cached `BindRegime`s that satisfy singularity/asymptotic filters.
-Use `get_perms` or `get_indices` for permutation/index lists.
+Use `get_binding_perms` or `get_binding_indices` for permutation/index lists.
 """
-function get_bind_regimes(Bnc::AbstractBnc, rgms::Union{Nothing,AbstractVector}=nothing; kwargs...)
+function get_binding_regimes(Bnc::AbstractBnc, rgms::Union{Nothing,AbstractVector}=nothing; kwargs...)
     bn = get_binding_network(Bnc)
     ensure_binding_regimes!(bn)
     rgms = isnothing(rgms) ? _bind_regimes_data(bn) : get_bind_regime.(Ref(bn), rgms)
-    return get_bind_regimes(rgms; kwargs...)
+    return get_binding_regimes(rgms; kwargs...)
 end
 
-function filter_regimes(model::Bnc, candidates::AbstractVector; return_mask::Bool=false, kwargs...)
+function get_bind_regimes(Bnc::AbstractBnc, rgms::Union{Nothing,AbstractVector}=nothing; return_idx::Bool=false, kwargs...)
+    return return_idx ? get_binding_indices(Bnc, rgms; kwargs...) : get_binding_regimes(Bnc, rgms; kwargs...)
+end
+
+function filter_regimes_mask(model::Bnc, candidates::AbstractVector; kwargs...)
     bn = get_binding_network(model)
     ensure_binding_regimes!(bn)
     idxs = [get_bind_idx(bn, x) for x in candidates]
     rgms = [get_bind_regime(bn, i) for i in idxs]
-    mask = _get_mask(rgms; kwargs...)
-    selected = idxs[mask]
-    return return_mask ? (selected, mask) : selected
+    return _get_mask(rgms; kwargs...)
+end
+
+function filter_regimes(model::Bnc, candidates::AbstractVector; kwargs...)
+    mask = filter_regimes_mask(model, candidates; kwargs...)
+    return [get_bind_idx(get_binding_network(model), x) for x in candidates][mask]
+end
+
+function filter_regimes_with_mask(model::Bnc, candidates::AbstractVector; kwargs...)
+    mask = filter_regimes_mask(model, candidates; kwargs...)
+    selected = [get_bind_idx(get_binding_network(model), x) for x in candidates][mask]
+    return selected, mask
 end
 
 function get_catalysis_regimes(Bnc::AbstractBnc, rgms::Union{Nothing,AbstractVector}=nothing; kwargs...)
@@ -545,8 +576,10 @@ end
 n_bnc_regimes(model::Bnc; feasible::Union{Bool,Nothing}=true, kwargs...) =
     length(get_bnc_regimes(model; feasible=feasible, kwargs...))
 
-get_bind_perms(args...; kwargs...) = get_bind_perm.(get_bind_regimes(args...; kwargs...))
-get_bind_indices(args...; kwargs...) = get_bind_idx.(get_bind_regimes(args...; kwargs...))
+get_binding_perms(args...; kwargs...) = get_binding_perm.(get_binding_regimes(args...; kwargs...))
+get_binding_indices(args...; kwargs...) = get_binding_index.(get_binding_regimes(args...; kwargs...))
+get_bind_perms(args...; kwargs...) = get_binding_perms(args...; kwargs...)
+get_bind_indices(args...; kwargs...) = get_binding_indices(args...; kwargs...)
 get_catalysis_perms(args...; kwargs...) = get_catalysis_perm.(get_catalysis_regimes(args...; kwargs...))
 get_catalysis_indices(args...; kwargs...) = get_catalysis_idx.(get_catalysis_regimes(args...; kwargs...))
 get_bnc_perms(args...; kwargs...) = get_bnc_perm.(get_bnc_regimes(args...; kwargs...))

@@ -278,20 +278,20 @@ get_regimes_neighbor_mat(args...;kwargs...) =  get_regimes_neighbor_mat_qK(args.
 
 
 """
-    get_volumes(bnc::Bnc, regimes=nothing; recalculate=false, kwargs...) -> Vector{Volume}
+    get_volumes(bnc::Bnc, regimes=nothing; recompute=false, kwargs...) -> Vector{Volume}
 
 Return volumes for selected regimes, computing missing volumes as needed.
 """
 function get_volumes(Bnc::Bnc, regimes::Union{AbstractVector,Nothing}=nothing;
-    recalculate::Bool=false, 
+    recompute::Bool=false,
     rebase_K::Bool = false, 
     rebase_mat:: Union{AbstractMatrix{<:Real},Nothing} = nothing,
     kwargs...)
 
-    all_rgms = isnothing(regimes) ? get_regimes(Bnc; return_idx=true) : [get_idx(Bnc, rgm) for rgm in regimes]
+    all_rgms = isnothing(regimes) ? get_binding_indices(Bnc) : [get_idx(Bnc, rgm) for rgm in regimes]
 
         regimes_to_calc =
-            if recalculate
+            if recompute
                 all_rgms
             else
                 rgm_data = _bind_regimes_data(Bnc)
@@ -531,10 +531,18 @@ end
 
 function get_function(vtx::BindRegime)
     H,H0 = get_H_H0(vtx)
-    f = function(qK::AbstractArray{<:Real}; input_logspace::Bool=false, output_logspace::Bool=false)
-            lgqK = input_logspace ? qK : log10.(qK)
-            lgx = H * lgqK .+ H0
-        return output_logspace ? lgx : exp10.(lgx)
+    f = function(
+        qK::AbstractArray{<:Real};
+        input::Symbol=:linear,
+        output::Symbol=:linear,
+        input_logspace::Union{Bool,Nothing}=nothing,
+        output_logspace::Union{Bool,Nothing}=nothing,
+    )
+        input = _resolve_space_mode(input, input_logspace, :input_logspace)
+        output = _resolve_space_mode(output, output_logspace, :output_logspace)
+        lgqK = input === :log ? qK : log10.(qK)
+        lgx = H * lgqK .+ H0
+        return output === :log ? lgx : exp10.(lgx)
     end
     return f
 end
@@ -542,6 +550,7 @@ end
 
 
 is_stable(rgm::BindRegime)=true
+stability_code(rgm::BindRegime)=1
 get_affine_x2K(model::Bnc) = (model.N, zeros(eltype(model.N), model.r)) # will the intersection fine ?
 
 

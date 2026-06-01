@@ -200,8 +200,8 @@ function _update_volume_stats!(
     active_ids::AbstractVector{<:Integer},
     total_N::Int,
     z::Float64,
-    rel_tol::Float64,
-    abs_tol::Float64,
+    reltol::Float64,
+    abstol::Float64,
     sample_weight::Float64,
 )
     new_active = Int[]
@@ -214,7 +214,7 @@ function _update_volume_stats!(
         stats[idx] = Volume(scaled_center, scaled_margin^2)
 
         rel_error = scaled_center == 0.0 ? Inf : (scaled_margin / scaled_center)
-        if rel_error > rel_tol && scaled_margin > abs_tol
+        if rel_error > reltol && scaled_margin > abstol
             push!(new_active, idx)
         end
     end
@@ -233,8 +233,8 @@ function _estimate_volumes(
     log_upper::Union{Real,AbstractVector{<:Real}} = 6.0,
     confidence_level::Float64 = 0.95,
     batch_size::Int = 100_000,
-    abs_tol::Float64 = 1.0e-8,
-    rel_tol::Float64 = 0.005,
+    abstol::Float64 = 1.0e-8,
+    reltol::Float64 = 0.005,
     time_limit::Float64 = 120.0,
     show_progress::Bool = false,
     rng_seed::Integer = 0x12345678,
@@ -287,8 +287,8 @@ function _estimate_volumes(
             active_ids,
             total_N,
             z,
-            rel_tol,
-            abs_tol,
+            reltol,
+            abstol,
             sampling.sample_weight,
         )
 
@@ -412,8 +412,8 @@ function calc_volume(
     contain_overlap::Bool = false,
     regime_judge_tol::Float64 = 0.0,
     batch_size::Int = 100_000,
-    abs_tol::Float64 = 1.0e-8,
-    rel_tol::Float64 = 0.005,
+    abstol::Float64 = 1.0e-8,
+    reltol::Float64 = 0.005,
     time_limit::Float64 = 120.0,
 
     # --- perf/UX ---
@@ -445,8 +445,8 @@ function calc_volume(
         log_upper=log_upper,
         confidence_level=confidence_level,
         batch_size=batch_size,
-        abs_tol=abs_tol,
-        rel_tol=rel_tol,
+        abstol=abstol,
+        reltol=reltol,
         time_limit=time_limit,
         show_progress=show_progress,
         rng_seed=0x12345678,
@@ -501,12 +501,11 @@ function _calc_bind_regime_volumes(
 )
     vals = zeros(Volume, length(regime_ids))
 
-    rgm_ids, rgm_mask = filter_regimes(
+    rgm_ids, rgm_mask = filter_regimes_with_mask(
         Bnc,
         regime_ids;
         singular=false,
         asymptotic=asymptotic,
-        return_mask=true,
     )
 
     positions = findall(rgm_mask)
@@ -584,8 +583,8 @@ function _calc_volume_via_classifier(
     confidence_level::Float64 = 0.95,
     regime_judge_tol::Float64 = 0.0,
     batch_size::Int = 100_000,
-    abs_tol::Float64 = 1.0e-8,
-    rel_tol::Float64 = 0.005,
+    abstol::Float64 = 1.0e-8,
+    reltol::Float64 = 0.005,
     time_limit::Float64 = 120.0,
     show_progress::Bool = true,
     asymptotic::Bool = false,
@@ -625,8 +624,8 @@ function _calc_volume_via_classifier(
         log_upper=log_upper,
         confidence_level=confidence_level,
         batch_size=batch_size,
-        abs_tol=abs_tol,
-        rel_tol=rel_tol,
+        abstol=abstol,
+        reltol=reltol,
         time_limit=time_limit,
         show_progress=show_progress,
         rng_seed=0x5eed1234,
@@ -697,14 +696,16 @@ function _get_mask(polys::AbstractVector{<:Polyhedron};
 end
 
 """
-    filter_polys(polys; return_idx=false, kwargs...) -> Vector
+    filter_polys(polys; kwargs...) -> Vector
 
 Filter polyhedra by singularity/asymptotic criteria.
 """
-function filter_polys(polys; return_idx::Bool=false, kwargs...)
+function filter_polys(polys; kwargs...)
     mask = _get_mask(polys; kwargs...)
-    return return_idx ? findall(mask) : polys[mask]
+    return polys[mask]
 end
+
+filter_polys_indices(polys; kwargs...) = findall(_get_mask(polys; kwargs...))
 
 #------------------------------------------------------------------------------------------------
 # calculate volume for Bnc regimes,
@@ -789,9 +790,8 @@ function calc_volume(rgms::AbstractVector{<:Polyhedron};
     vals = zeros(Volume, n_all)
     n_all == 0 && return vals
 
-    idxs = filter_polys(
+    idxs = filter_polys_indices(
         rgms;
-        return_idx=true,
         singular=false,
         asymptotic=asymptotic ? true : nothing,
     )
@@ -813,16 +813,16 @@ Compute the volume for a single polyhedron.
 calc_volume(poly::Polyhedron;kwargs...) = calc_volume([poly]; kwargs...)[1]
 
 """
-    get_volumes(rgms::AbstractVector{<:BncRegime}; recalculate=false, kwargs...) -> Vector{Volume}
+    get_volumes(rgms::AbstractVector{<:BncRegime}; recompute=false, kwargs...) -> Vector{Volume}
 
 Return cached wKk-space volumes for mixed regimes, computing missing entries
 from each regime's `get_C_C0_nullity_wKk` polyhedron.
 """
 function get_volumes(rgms::AbstractVector{<:BncRegime};
-    recalculate::Bool=false,
+    recompute::Bool=false,
     kwargs...
 )
-    idxs = recalculate ? collect(eachindex(rgms)) : findall(rgm -> isnothing(rgm.volume), rgms)
+    idxs = recompute ? collect(eachindex(rgms)) : findall(rgm -> isnothing(rgm.volume), rgms)
     if !isempty(idxs)
         vals = calc_volume(rgms[idxs]; kwargs...)
         for (i, idx) in enumerate(idxs)
@@ -832,5 +832,5 @@ function get_volumes(rgms::AbstractVector{<:BncRegime};
     return [rgm.volume for rgm in rgms]
 end
 
-get_volume(rgm::BncRegime; recalculate::Bool=false, kwargs...) =
-    get_volumes(BncRegime[rgm]; recalculate=recalculate, kwargs...)[1]
+get_volume(rgm::BncRegime; recompute::Bool=false, kwargs...) =
+    get_volumes(BncRegime[rgm]; recompute=recompute, kwargs...)[1]

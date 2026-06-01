@@ -162,7 +162,7 @@ function set_node_positions(p, new_pos)
 end
 
 function get_node_colors(model, regimes=nothing; singular_color="#CCCCFF", asymptotic_color="#FFCCCC", regular_color="#CCFFCC")::Vector{String}
-    all_regimes = isnothing(regimes) ? get_regimes(model; return_idx=true) : regimes
+    all_regimes = isnothing(regimes) ? get_binding_indices(model) : regimes
     node_colors = Vector{String}(undef, length(all_regimes))
     for (i, j) in enumerate(all_regimes)
         if is_singular(model, j)
@@ -183,11 +183,11 @@ end
 function get_node_size(model::Bnc; default_node_size=50, asymptotic=true, kwargs...)
     vals = get_volumes(model; asymptotic=asymptotic, kwargs...) .|> x -> x.mean
     zero_volume_idx = if asymptotic
-        non_asym_idx = get_regimes(model, singular=nothing, asymptotic=false, return_idx=true)
-        singular_asym_idx = get_regimes(model, singular=true, asymptotic=true, return_idx=true)
+        non_asym_idx = get_binding_indices(model, singular=nothing, asymptotic=false)
+        singular_asym_idx = get_binding_indices(model, singular=true, asymptotic=true)
         vcat(non_asym_idx, singular_asym_idx)
     else
-        get_regimes(model, singular=true, asymptotic=nothing, return_idx=true)
+        get_binding_indices(model, singular=true, asymptotic=nothing)
     end
 
     n_data = length(vals) - length(zero_volume_idx)

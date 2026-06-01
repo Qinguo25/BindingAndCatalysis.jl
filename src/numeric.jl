@@ -3,7 +3,7 @@ export logder_x_qK, logder_qK_x, ∂logx_∂logqK, ∂logqK_∂logx, get_H_numer
 #----------------Functions for calculates the derivative of log(x) with respect to log(qK) and vice versa----------------------
 
 """
-    ∂logqK_∂logx(bnc::Bnc; x=nothing, qK=nothing, q=nothing) -> Matrix
+    ∂logqK_∂logx(bnc::Bnc; x=nothing, qK=nothing, input=:linear) -> Matrix
 
 Compute the Jacobian of `log(q,K)` with respect to `log(x)` at a given point.
 
@@ -17,15 +17,18 @@ Compute the Jacobian of `log(q,K)` with respect to `log(x)` at a given point.
 function ∂logqK_∂logx(Bnc::Bnc;
     x::Union{AbstractVector{<:Real},Nothing}=nothing,
     qK::Union{AbstractVector{<:Real},Nothing}=nothing,
-    input_logspace::Bool=false)::Matrix{Float64}
+    input::Symbol=:linear,
+    input_logspace::Union{Bool,Nothing}=nothing,
+)::Matrix{Float64}
+    input = _resolve_space_mode(input, input_logspace, :input_logspace)
 
     x = if isnothing(x)
             if isnothing(qK)
                 error("Either x or qK must be provided")
             else
-                qK2x(Bnc, qK; input_logspace=input_logspace, output_logspace=false) # Derive x from qK
+                qK2x(Bnc, qK; input=input, output=:linear)
             end
-        elseif input_logspace
+        elseif input === :log
             exp10.(x) # Convert from log space to linear space
         else
             x
@@ -33,7 +36,7 @@ function ∂logqK_∂logx(Bnc::Bnc;
 
     q = if isnothing(qK)
             Bnc.L * x
-        elseif input_logspace
+        elseif input === :log
             exp10.(qK[1:Bnc.d])
         else
             qK[1:Bnc.d]
@@ -94,7 +97,7 @@ function get_reaction_order(Bnc::Bnc, x_mat::Matrix{<:Real}, q_mat::Union{Matrix
     # q_mat: Matrix of qK values, each row is a different time point
     # x_idx: Indices of x to be calculated, default is all indices
     # qK_idx: Indices of qK to be calculated, default is all indices
-    q_mat = isnothing(q_mat) ? x2qK(Bnc, x_mat'; input_logspace=false, output_logspace=false, only_q=true)' : q_mat
+    q_mat = isnothing(q_mat) ? x2qK(Bnc, x_mat'; input=:linear, output=:linear, only_q=true)' : q_mat
     x_idx = isnothing(x_idx) ? (1:Bnc.n) : x_idx
     qK_idx = isnothing(qK_idx) ? (1:Bnc.n) : qK_idx
     if only_q
@@ -146,10 +149,9 @@ function get_H_numerically(rgm::BindRegime)
     C, C0 = get_C_C0_x(rgm)
     poly = get_polyhedron(C, C0, 0; canonicalize=true)
     logx = get_one_inner_point(poly, rand_line=false, rand_ray=false, extend=4)
-    H = logder_x_qK(bn; x=logx, input_logspace=true)
+    H = logder_x_qK(bn; x=logx, input=:log)
     return H
 end
-
 
 
 

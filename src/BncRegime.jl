@@ -7,7 +7,7 @@ export get_H_bd, get_H_bd_numerically, get_qcat_F_F0
 export get_affine_qKk2v, get_affine_x2Kk̃, get_affine_x2wKk̃, get_affine_xk2wKk̃k
 export get_affine_wKk2wKk̃k, get_affine_wKk2wKk̃, get_affine_wKk̃2x, get_affine_wKk̃k2xk
 export get_affine_wKk2x, get_affine_wKk2xk, get_affine_wKk2v, get_affine_wKk2qcat
-export judge_stability!, is_stable
+export judge_stability!, is_stable, stability_code
 export get_volume, get_volumes
 
 
@@ -70,15 +70,24 @@ end
 
 
 
-function is_stable(rgm::BncRegime; recalculate::Bool=false, return_code::Bool=false, kwargs...)
-    
-    flag = if (recalculate || rgm.is_stable == 0) 
-                judge_stability!(rgm; kwargs...)
-           else 
-            rgm.is_stable
-           end
+function _stability_flag(rgm::BncRegime; recompute::Bool=false, kwargs...)
+    return if recompute || rgm.is_stable == 0
+        judge_stability!(rgm; kwargs...)
+    else
+        rgm.is_stable
+    end
+end
 
-    return_code && return flag == 1 ? 1 : flag == -1 ? -1 : 0
+function stability_code(rgm::BncRegime; recompute::Bool=false, kwargs...)
+    flag = _stability_flag(rgm; recompute=recompute, kwargs...)
+    return flag == 1 ? 1 : flag == -1 ? -1 : 0
+end
+
+stability_code(model::Bnc, bind, cat; kwargs...) =
+    stability_code(get_bnc_regime(model, bind, cat; check=true); kwargs...)
+
+function is_stable(rgm::BncRegime; recompute::Bool=false, kwargs...)
+    flag = _stability_flag(rgm; recompute=recompute, kwargs...)
     return flag == 1 ? true : flag == -1 ? false : missing
 end
 

@@ -238,11 +238,11 @@ function get_volumes(
     pth_idx::Union{AbstractVector,Nothing}=nothing;
     rebase_K=false,
     rebase_mat=nothing,
-    recalculate=false,
+    recompute=false,
     kwargs...,
 )
     path_idxs = get_indices(grh, pth_idx)
-    path_idxs_to_calculate = _path_indices_to_calculate(grh.path_volume_is_calc, path_idxs; recalculate=recalculate)
+    path_idxs_to_calculate = _path_indices_to_calculate(grh.path_volume_is_calc, path_idxs; recompute=recompute)
 
     if !isempty(path_idxs_to_calculate)
         resolved_rebase_mat = _resolve_simo_rebase_mat(grh; rebase_K=rebase_K, rebase_mat=rebase_mat)

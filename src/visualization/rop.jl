@@ -26,7 +26,7 @@ function draw_ROP(
     regular_color="#CCFFCC",
     emphasize_color="#FF0000",
 )
-    V = get_regimes(model, singular=1, return_idx=true)
+    V = get_binding_indices(model, singular=1)
     V_non_singular = filter(v -> !is_singular(model, v), V)
     V_singular = filter(v -> is_singular(model, v), V)
 
@@ -117,7 +117,7 @@ function draw_ROP(
 
     inner_pnts = if add_inner_points
         x_smp = randomize(model, npoints)
-        pnts = x_smp .|> x -> ∂logx_∂logqK(model; x=x, input_logspace=true) |> get_val
+        pnts = x_smp .|> x -> ∂logx_∂logqK(model; x=x, input=:log) |> get_val
         Ptype.(pnts)
     else
         nothing

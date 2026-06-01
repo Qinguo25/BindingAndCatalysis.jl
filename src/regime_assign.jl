@@ -1,4 +1,5 @@
 export assign_regime, assign_regime_qK, assign_regime_x
+export assign_regime_index, assign_regime_qK_index, assign_regime_x_index
 export condition_contains, solve_logx_checked, assign_bnc_regime_wKk
 
 #-----------------------------------------------------------------
@@ -243,28 +244,48 @@ end
 
 
 """
-    assign_regime_qK(bnc::Bnc; x, input_logspace=false, kwargs...) -> Vector
+    assign_regime_qK(bnc::Bnc; x, input=:linear, kwargs...) -> Vector
 
 Assign a regime given a point in x space by first mapping to qK.
 """
-function assign_regime_qK(Bnc::Bnc ; x::AbstractVector{<:Real}, input_logspace::Bool=false, kwargs...) 
-    logqK = x2qK(Bnc,x; input_logspace=input_logspace, output_logspace=true)
-    return assign_regime_qK(Bnc, logqK; input_logspace=true, kwargs...)
+function assign_regime_qK(
+    Bnc::Bnc;
+    x::AbstractVector{<:Real},
+    input::Symbol=:linear,
+    input_logspace::Union{Bool,Nothing}=nothing,
+    kwargs...,
+)
+    input = _resolve_space_mode(input, input_logspace, :input_logspace)
+    logqK = x2qK(Bnc, x; input=input, output=:log)
+    return assign_regime_qK(Bnc, logqK; input=:log, kwargs...)
 end
 """
-    assign_regime_qK(bnc::Bnc, qK; input_logspace=false, asymptotic_only=false, eps=0, return_idx=false)
+    assign_regime_qK_index(bnc::Bnc, qK; input=:linear, asymptotic_only=false, eps=0) -> Int
 
-Assign a regime given qK coordinates.
+Assign a regime given qK coordinates and return its binding-regime index.
 """
-function assign_regime_qK(
+function assign_regime_qK_index(
+    Bnc::Bnc;
+    x::AbstractVector{<:Real},
+    input::Symbol=:linear,
+    input_logspace::Union{Bool,Nothing}=nothing,
+    kwargs...,
+)
+    input = _resolve_space_mode(input, input_logspace, :input_logspace)
+    logqK = x2qK(Bnc, x; input=input, output=:log)
+    return assign_regime_qK_index(Bnc, logqK; input=:log, kwargs...)
+end
+
+function assign_regime_qK_index(
     Bnc::Bnc,
     qK::AbstractVector{<:Real};
-    input_logspace::Bool=false,
+    input::Symbol=:linear,
+    input_logspace::Union{Bool,Nothing}=nothing,
     asymptotic_only::Bool=false,
     eps=0,
-    return_idx::Bool=false,
 )
-    logqK = input_logspace ? qK : log10.(qK)
+    input = _resolve_space_mode(input, input_logspace, :input_logspace)
+    logqK = input === :log ? qK : log10.(qK)
     classifier = _get_qK_hyperplane_classifier(Bnc)
 
     candidate_ids, sig = _classifier_candidates(
@@ -275,38 +296,61 @@ function assign_regime_qK(
     )
 
     if length(candidate_ids) == 1
-        idx = Int(candidate_ids[1])
-        return return_idx ? idx : get_perm(Bnc, idx)
-    elseif isempty(candidate_ids) 
-        msg = "qK hyperplane classifier found no candidate regime"
-        # @error(msg * ": logqK=$(repr(collect(logqK))), signature=$(repr(collect(sig)))")
-        return _assign_regime_qK_fallback(
+        return Int(candidate_ids[1])
+    elseif isempty(candidate_ids)
+        return _assign_regime_qK_fallback_index(
             Bnc,
             logqK;
             asymptotic_only=asymptotic_only,
             eps=eps,
-            return_idx=return_idx,
             warn_on_fallback=false,
         )
     else
         msg = "qK hyperplane classifier is not unique"
         error(msg * ": logqK=$(repr(collect(logqK))), signature=$(repr(collect(sig))), candidate_ids=$(repr(Int.(candidate_ids)))")
-        return nothing
     end
+end
+
+"""
+    assign_regime_qK(bnc::Bnc, qK; input=:linear, asymptotic_only=false, eps=0)
+
+Assign a regime given qK coordinates.
+"""
+function assign_regime_qK(
+    Bnc::Bnc,
+    qK::AbstractVector{<:Real};
+    input::Symbol=:linear,
+    input_logspace::Union{Bool,Nothing}=nothing,
+    asymptotic_only::Bool=false,
+    eps=0,
+    return_idx::Union{Bool,Nothing}=nothing,
+)
+    idx = assign_regime_qK_index(
+        Bnc,
+        qK;
+        input=input,
+        input_logspace=input_logspace,
+        asymptotic_only=asymptotic_only,
+        eps=eps,
+    )
+    return return_idx === true ? idx : get_perm(Bnc, idx)
 end
 
 #-------------------------------------------------------------------------------------------------------------------------------------------------------
 
 """
-    assign_regime_x(bnc::Bnc, x; input_logspace=false, asymptotic_only=true, return_idx=false)
+    assign_regime_x_index(bnc::Bnc, x; input=:linear, asymptotic_only=true) -> Int
 
-Assign a regime given a point in x space.
+Assign a regime given a point in x space and return its binding-regime index.
 """
-function assign_regime_x(Bnc::Bnc{T}, x::AbstractVector{<:Real};
-    input_logspace::Bool=false,
+function assign_regime_x_index(
+    Bnc::Bnc{T},
+    x::AbstractVector{<:Real};
+    input::Symbol=:linear,
+    input_logspace::Union{Bool,Nothing}=nothing,
     asymptotic_only::Bool=true,
-    return_idx::Bool=false) where T
-    # x = input_logspace ? exp10.(x) : x
+) where T
+    input = _resolve_space_mode(input, input_logspace, :input_logspace)
     helper = _integration_helper!(Bnc)
     L = Bnc.L
     d = Bnc.d
@@ -319,7 +363,7 @@ function assign_regime_x(Bnc::Bnc{T}, x::AbstractVector{<:Real};
     if asymptotic_only
         nzval = @view(x[helper._LN_top_cols])
     else
-        x = input_logspace ? exp10.(x) : x # linear or log space only matters when not asymptotic
+        x = input === :log ? exp10.(x) : x # linear or log space only matters when not asymptotic
         nzval = @view(x[helper._LN_top_cols]) .* L.nzval
     end
 
@@ -337,7 +381,30 @@ function assign_regime_x(Bnc::Bnc{T}, x::AbstractVector{<:Real};
             end
         end
     end
-    return return_idx ? get_idx(Bnc,max_indices) : max_indices
+    return get_idx(Bnc, max_indices)
+end
+
+"""
+    assign_regime_x(bnc::Bnc, x; input=:linear, asymptotic_only=true) -> Vector
+
+Assign a regime given a point in x space.
+"""
+function assign_regime_x(
+    Bnc::Bnc,
+    x::AbstractVector{<:Real};
+    input::Symbol=:linear,
+    input_logspace::Union{Bool,Nothing}=nothing,
+    asymptotic_only::Bool=true,
+    return_idx::Union{Bool,Nothing}=nothing,
+)
+    idx = assign_regime_x_index(
+        Bnc,
+        x;
+        input=input,
+        input_logspace=input_logspace,
+        asymptotic_only=asymptotic_only,
+    )
+    return return_idx === true ? idx : get_perm(Bnc, idx)
 end
 
 """
@@ -345,7 +412,8 @@ end
 
 Alias for `assign_regime_qK`.
 """
-assign_regime(args...;kwargs...)=assign_regime_qK(args...;kwargs...)
+assign_regime(args...; kwargs...) = assign_regime_qK(args...; kwargs...)
+assign_regime_index(args...; kwargs...) = assign_regime_qK_index(args...; kwargs...)
 
 function condition_contains(C, C0, nullity::Integer, z::AbstractVector{<:Real}; tol::Float64=1e-8)
     vals = Vector{Float64}(C * z .+ C0)
@@ -366,20 +434,20 @@ function solve_logx_checked(
             qK2x(
                 model,
                 logqK;
-                input_logspace=true,
-                output_logspace=true,
+                input=:log,
+                output=:log,
                 method=method,
                 warn_on_maxiters=false,
             )
         else
-            qK2x(model, logqK; input_logspace=true, output_logspace=true, method=method)
+            qK2x(model, logqK; input=:log, output=:log, method=method)
         end
     catch
         return nothing
     end
 
     method === :regime && return logx
-    maximum(abs.(qK2x_residual(model, logx, logqK; input_logspace=true))) <= tol || return nothing
+    maximum(abs.(qK2x_residual(model, logx, logqK; input=:log))) <= tol || return nothing
     return logx
 end
 
@@ -393,16 +461,15 @@ function assign_bnc_regime_wKk(model::Bnc, logwKk::AbstractVector{<:Real}; tol::
     return 0
 end
 
-function _assign_regime_qK_fallback(
+function _assign_regime_qK_fallback_index(
     Bnc::Bnc,
     logqK::AbstractVector{<:Real};
     asymptotic_only::Bool=false,
     eps=0,
-    return_idx::Bool=false,
     warn_on_fallback::Bool=true,
 )
     real_only = asymptotic_only ? true : nothing
-    all_regime_idx = get_regimes(Bnc, singular=false, asymptotic = real_only, return_idx = true)
+    all_regime_idx = get_binding_indices(Bnc; singular=false, asymptotic=real_only)
 
     record = Vector{Float64}(undef,length(all_regime_idx))
     for (i, idx) in enumerate(all_regime_idx)
@@ -415,10 +482,10 @@ function _assign_regime_qK_fallback(
         record[i] = min_val
 
         if record[i] >= -eps
-            return return_idx ? idx : get_perm(Bnc, idx)
+            return idx
         end
     end
     warn_on_fallback && @warn("All regime conditions failed for logqK=$logqK. Returning the best-fit regime.")
     idx = all_regime_idx[findmax(record)[2]]
-    return return_idx ? idx : get_perm(Bnc, idx)
+    return idx
 end

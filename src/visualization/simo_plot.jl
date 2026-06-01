@@ -29,8 +29,8 @@ function _simo_logx_grid(model::Bnc, params, change_idx, qvals; method::Union{Sy
             model,
             start_qK,
             end_qK;
-            input_logspace=true,
-            output_logspace=true,
+            input=:log,
+            output=:log,
             npoints=length(qvals),
         )
         return reduce(hcat, xs)
@@ -41,8 +41,8 @@ function _simo_logx_grid(model::Bnc, params, change_idx, qvals; method::Union{Sy
         out[:, i] = qK2x(
             model,
             _full_qK(params, change_idx, qvals[i]);
-            input_logspace=true,
-            output_logspace=true,
+            input=:log,
+            output=:log,
             method= method,
         )
     end
@@ -52,12 +52,11 @@ end
 function _simo_assign_rgms(model::Bnc, logx)
     out = Vector{Int}(undef, size(logx, 2))
     Threads.@threads for i in axes(logx, 2)
-        out[i] = assign_regime_x(
+        out[i] = assign_regime_x_index(
             model,
             collect(@view logx[:, i]);
-            input_logspace=true,
+            input=:log,
             asymptotic_only=false,
-            return_idx=true,
         )
     end
     return out
