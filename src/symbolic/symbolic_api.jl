@@ -24,7 +24,7 @@ function show_condition_path(grh::SIMOPaths, pth_idx; kwargs...)
 end
 
 show_expression_x(args...; kwargs...) = begin
-    rgm = get_bind_regime(args...;kwargs...)
+    rgm = get_binding_regime(args...;kwargs...)
     bn = get_binding_network(rgm)
     if is_singular(rgm)
         @error "The regime is singular. The expression is not valid."

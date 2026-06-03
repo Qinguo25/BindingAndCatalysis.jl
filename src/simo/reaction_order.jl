@@ -120,7 +120,7 @@ function _ensure_ro_regimes_materialized!(
     end
 
     for idx in ordered_idxs
-        get_regime(model, idx; inv_info=true)
+        get_binding_regime(model, idx; inv_info=true)
     end
 
     return nothing

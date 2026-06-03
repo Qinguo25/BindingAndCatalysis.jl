@@ -154,14 +154,14 @@ n_bnc_regimes(rgms::AbstractArray{<:BncRegime}; feasible::Union{Bool,Nothing}=tr
 
 
 
-function get_bind_perm_dict(args...; kwargs...)
+function get_binding_perm_dict(args...; kwargs...)
     bn = get_binding_network(args...; kwargs...)
     ensure_binding_regimes!(bn)
     _bind_regimes_perm_dict(bn)
 end
-get_bind_regimes_dict(args...; kwargs...) = get_bind_perm_dict(args...; kwargs...)
-get_binding_perm_dict(args...; kwargs...) = get_bind_perm_dict(args...; kwargs...)
 get_binding_regimes_dict(args...; kwargs...) = get_binding_perm_dict(args...; kwargs...)
+get_bind_perm_dict(args...; kwargs...) = get_binding_perm_dict(args...; kwargs...)
+get_bind_regimes_dict(args...; kwargs...) = get_binding_regimes_dict(args...; kwargs...)
 
 function get_catalysis_perm_dict(args...; kwargs...)
     cn = get_catalysis_network(args...; kwargs...)
@@ -212,14 +212,14 @@ end
 # Regime object fetchers and data materialization
 #========================================================================================#
 
-function get_bind_regime(vtx::BindRegime; inv_info::Bool=true, kwargs...)::BindRegime
+function get_binding_regime(vtx::BindRegime; inv_info::Bool=true, kwargs...)::BindRegime
     _initialize_regime!(vtx)
     if inv_info
         _fill_all_info!(vtx)
     end
     return vtx
 end
-get_bind_regime(rgm::BncRegime) = rgm.bind_rgm
+get_binding_regime(rgm::BncRegime) = rgm.bind_rgm
 
 """
     ensure_regime_data!(rgm; affine=true, conditions=true) -> nothing
@@ -269,21 +269,21 @@ function ensure_regime_data!(
 end
 
 
-function get_bind_regime(model::AbstractBnc, idx::Integer; kwargs...)
+function get_binding_regime(model::AbstractBnc, idx::Integer; kwargs...)
     bn = get_binding_network(model)
     ensure_binding_regimes!(bn)
-    return get_bind_regime(_bind_regimes_data(bn)[idx]; kwargs...)
+    return get_binding_regime(_bind_regimes_data(bn)[idx]; kwargs...)
 end
 
-function get_bind_regime(model::AbstractBnc, perm::AbstractVector; kwargs...)
+function get_binding_regime(model::AbstractBnc, perm::AbstractVector; kwargs...)
     bn = get_binding_network(model)
     ensure_binding_regimes!(bn)
     key = eltype(perm) <: Integer ? perm : locate_sym_x.(Ref(bn), perm)
     idx = _bind_regimes_perm_dict(bn)[key]
-    return get_bind_regime(_bind_regimes_data(bn)[idx]; kwargs...)
+    return get_binding_regime(_bind_regimes_data(bn)[idx]; kwargs...)
 end
-function get_bind_regime(model::AbstractBnc, vtx::BindRegime; kwargs...)
-    return get_bind_regime(vtx; kwargs...)
+function get_binding_regime(model::AbstractBnc, vtx::BindRegime; kwargs...)
+    return get_binding_regime(vtx; kwargs...)
 end
 
 """
@@ -292,7 +292,7 @@ end
 Return a binding regime. This is the maintained full-name API; `get_bind_regime`
 is kept as a compatibility alias.
 """
-get_binding_regime(args...; kwargs...) = get_bind_regime(args...; kwargs...)
+get_bind_regime(args...; kwargs...) = get_binding_regime(args...; kwargs...)
 
 
 function get_catalysis_regime(rgm::CatalysisRegime; kwargs...)::CatalysisRegime
@@ -333,20 +333,20 @@ end
 # Regime identity helpers: permutations and indices
 #========================================================================================#
 
-get_bind_perm(args...; kwargs...) = get_bind_regime(args...; kwargs...).perm
+get_binding_perm(args...; kwargs...) = get_binding_regime(args...; kwargs...).perm
 get_catalysis_perm(args...; kwargs...) = get_catalysis_regime(args...; kwargs...).perm
 get_bnc_perm(args...; kwargs...) = get_bnc_regime(args...; kwargs...).perm
-get_binding_perm(args...; kwargs...) = get_bind_perm(args...; kwargs...)
 get_steady_state_perm(args...; kwargs...) = get_fixed_point_perm(args...; kwargs...)
 
 
-function get_bind_perm(Bnc::Bnc, perm::AbstractVector; check::Bool=false)
+function get_binding_perm(Bnc::Bnc, perm::AbstractVector; check::Bool=false)
     key = eltype(perm) <: Integer ? perm : locate_sym_x.(Ref(Bnc), perm)
-    check && @assert haskey(get_bind_regimes_dict(Bnc), key) "The given perm is not in Bnc"
+    check && @assert haskey(get_binding_regimes_dict(Bnc), key) "The given perm is not in Bnc"
     return Vector{Int}(perm)
 end
-get_bind_perm(Bnc::Bnc, idx::Integer; kwargs...) =
+get_binding_perm(Bnc::Bnc, idx::Integer; kwargs...) =
     (ensure_binding_regimes!(Bnc); _bind_regimes_data(Bnc)[idx].perm)
+get_bind_perm(args...; kwargs...) = get_binding_perm(args...; kwargs...)
 
 function get_catalysis_perm(model::CatalysisData, perm::AbstractVector{<:Integer}; check::Bool=false)
     check && @assert haskey(get_catalysis_regimes_dict(model), perm) "The given catalysis perm is not in the model."
@@ -356,21 +356,20 @@ get_catalysis_perm(model::CatalysisData, idx::Integer; kwargs...) =
     (ensure_catalysis_regimes!(model); _catalysis_regimes_data(model)[idx].perm)
 
 
-get_bind_idx(args...; kwargs...) = get_bind_regime(args...; kwargs...).idx
+get_binding_index(args...; kwargs...) = get_binding_regime(args...; kwargs...).idx
 get_catalysis_idx(args...; kwargs...) = get_catalysis_regime(args...; kwargs...).idx
-get_binding_index(args...; kwargs...) = get_bind_idx(args...; kwargs...)
 get_catalysis_index(args...; kwargs...) = get_catalysis_idx(args...; kwargs...)
 get_bnc_index(args...; kwargs...) = get_bnc_idx(args...; kwargs...)
-get_idx(rgm::BindRegime) = get_bind_idx(rgm)
+get_idx(rgm::BindRegime) = get_binding_index(rgm)
 get_idx(rgm::CatalysisRegime) = get_catalysis_idx(rgm)
 get_idx(rgm::BncRegime) = get_bnc_idx(rgm)
-get_idx(model::Bnc, arg; kwargs...) = get_bind_idx(model, arg; kwargs...)
+get_idx(model::Bnc, arg; kwargs...) = get_binding_index(model, arg; kwargs...)
 get_idx(model::CatalysisData, arg; kwargs...) = get_catalysis_idx(model, arg; kwargs...)
 get_idx(model::Bnc, bind, cat; kwargs...) = get_bnc_idx(model, bind, cat; kwargs...)
-get_perm(rgm::BindRegime) = get_bind_perm(rgm)
+get_perm(rgm::BindRegime) = get_binding_perm(rgm)
 get_perm(rgm::CatalysisRegime) = get_catalysis_perm(rgm)
 get_perm(rgm::BncRegime) = get_bnc_perm(rgm)
-get_perm(model::Bnc, arg; kwargs...) = get_bind_perm(model, arg; kwargs...)
+get_perm(model::Bnc, arg; kwargs...) = get_binding_perm(model, arg; kwargs...)
 get_perm(model::CatalysisData, arg; kwargs...) = get_catalysis_perm(model, arg; kwargs...)
 Base.:(==)(perm::AbstractVector{<:Integer}, rgm::CatalysisRegime) = perm == get_catalysis_perm(rgm)
 Base.:(==)(rgm::CatalysisRegime, perm::AbstractVector{<:Integer}) = get_catalysis_perm(rgm) == perm
@@ -380,11 +379,12 @@ Base.:(==)(rgm::CatalysisRegime, perm::AbstractVector{<:Integer}) = get_catalysi
 
 Return the binding regime index, optionally validating it.
 """
-function get_bind_idx(Bnc::Bnc, idx::T; check::Bool=false) where T<:Integer
+function get_binding_index(Bnc::Bnc, idx::T; check::Bool=false) where T<:Integer
     check && (ensure_binding_regimes!(Bnc); @assert idx ≥ 1 && idx ≤ n_regimes(Bnc) "The given index is out of range.")
     return idx
 end
-get_bind_idx(Bnc::Bnc, perm::AbstractVector; kwargs...) = get_bind_perm_dict(Bnc)[get_perm(Bnc, perm)]
+get_binding_index(Bnc::Bnc, perm::AbstractVector; kwargs...) = get_binding_perm_dict(Bnc)[get_perm(Bnc, perm)]
+get_bind_idx(args...; kwargs...) = get_binding_index(args...; kwargs...)
 
 function get_catalysis_idx(model::CatalysisData, idx::T; check::Bool=false) where T<:Integer
     check && (ensure_catalysis_regimes!(model); @assert idx >= 1 && idx <= n_regimes(model) "The given catalysis index is out of range.")
@@ -394,12 +394,12 @@ get_catalysis_idx(model::CatalysisData, perm::AbstractVector; kwargs...) =
     get_catalysis_perm_dict(model)[get_perm(model, perm)]
 function get_bnc_idx(model::Bnc, bind, cat; check::Bool=false)
     cat_idx = get_catalysis_idx(model, cat; check=check)
-    bind_idx = get_bind_idx(model, bind; check=check)
+    bind_idx = get_binding_index(model, bind; check=check)
     return _bnc_linear_index(n_bind_regimes(model), bind_idx, cat_idx)
 end
 get_bnc_idx(rgm::BncRegime) = _bnc_linear_index(
     n_bind_regimes(get_binding_network(rgm)),
-    get_bind_idx(rgm.bind_rgm),
+    get_binding_index(rgm.bind_rgm),
     get_catalysis_idx(rgm.catalysis_rgm),
 )
 
@@ -412,7 +412,8 @@ get_nullity(rgm::BindRegime) = rgm.nullity
 get_nullity(rgm::CatalysisRegime) = get_catalysis_network(rgm).r_v
 get_nullity(rgm::BncRegime) = rgm.nlt
 
-get_bind_nullity(args...; kwargs...) = get_nullity(get_bind_regime(args...; kwargs...))
+get_binding_nullity(args...; kwargs...) = get_nullity(get_binding_regime(args...; kwargs...))
+get_bind_nullity(args...; kwargs...) = get_binding_nullity(args...; kwargs...)
 get_bnc_nullity(args...; kwargs...) = get_nullity(get_bnc_regime(args...; kwargs...))
 
 is_singular(rgm::BindRegime) = get_nullity(rgm) > 0
@@ -423,7 +424,8 @@ is_feasible(::BindRegime) = true
 is_feasible(::CatalysisRegime) = true
 is_feasible(rgm::BncRegime) = rgm.is_feasible
 
-is_bind_singular(args...; kwargs...) = is_singular(get_bind_regime(args...; kwargs...))
+is_binding_singular(args...; kwargs...) = is_singular(get_binding_regime(args...; kwargs...))
+is_bind_singular(args...; kwargs...) = is_binding_singular(args...; kwargs...)
 is_bnc_singular(args...; kwargs...) = is_singular(get_bnc_regime(args...; kwargs...))
 
 #===================================Check if a regime is asymptotic==========================================================================================#
@@ -432,14 +434,15 @@ is_asymptotic(rgm::BindRegime) = rgm.is_asymptotic
 is_asymptotic(rgm::CatalysisRegime) = rgm.is_asymptotic
 is_asymptotic(rgm::BncRegime) = (is_asymptotic(rgm.bind_rgm), is_asymptotic(rgm.catalysis_rgm))
 
-is_bind_asymptotic(args...; kwargs...) = is_asymptotic(get_bind_regime(args...; kwargs...))
+is_binding_asymptotic(args...; kwargs...) = is_asymptotic(get_binding_regime(args...; kwargs...))
+is_bind_asymptotic(args...; kwargs...) = is_binding_asymptotic(args...; kwargs...)
 is_catalysis_asymptotic(args...; kwargs...) = is_asymptotic(get_catalysis_regime(args...; kwargs...))
 is_bnc_asymptotic(args...; kwargs...) = is_asymptotic(get_bnc_regime(args...; kwargs...))
 
 """
 Check if given key is valid for regime fetching.
 """
-have_perm(model::Bnc, perm::AbstractVector) = haskey(get_bind_perm_dict(model), get_bind_perm(model, perm))
+have_perm(model::Bnc, perm::AbstractVector) = haskey(get_binding_perm_dict(model), get_binding_perm(model, perm))
 have_perm(model::Bnc, idx::Integer) = (ensure_binding_regimes!(model); 1 <= idx <= n_bind_regimes(model))
 have_perm(model::CatalysisData, perm::AbstractVector) = haskey(get_catalysis_perm_dict(model), get_catalysis_perm(model, perm))
 have_perm(model::CatalysisData, idx::Integer) = (ensure_catalysis_regimes!(model); idx >= 1 && idx <= n_catalysis_regimes(model))
@@ -498,7 +501,7 @@ end
 function _get_mask(model::AbstractBnc, rgms::AbstractVector; kwargs...)
     bn = get_binding_network(model)
     ensure_binding_regimes!(bn)
-    bind_rgms = get_bind_regime.(Ref(bn), rgms)
+    bind_rgms = get_binding_regime.(Ref(bn), rgms)
     return _get_mask(bind_rgms; kwargs...)
 end
 
@@ -532,7 +535,7 @@ Use `get_binding_perms` or `get_binding_indices` for permutation/index lists.
 function get_binding_regimes(Bnc::AbstractBnc, rgms::Union{Nothing,AbstractVector}=nothing; kwargs...)
     bn = get_binding_network(Bnc)
     ensure_binding_regimes!(bn)
-    rgms = isnothing(rgms) ? _bind_regimes_data(bn) : get_bind_regime.(Ref(bn), rgms)
+    rgms = isnothing(rgms) ? _bind_regimes_data(bn) : get_binding_regime.(Ref(bn), rgms)
     return get_binding_regimes(rgms; kwargs...)
 end
 
@@ -543,19 +546,19 @@ end
 function filter_regimes_mask(model::Bnc, candidates::AbstractVector; kwargs...)
     bn = get_binding_network(model)
     ensure_binding_regimes!(bn)
-    idxs = [get_bind_idx(bn, x) for x in candidates]
-    rgms = [get_bind_regime(bn, i) for i in idxs]
+    idxs = [get_binding_index(bn, x) for x in candidates]
+    rgms = [get_binding_regime(bn, i) for i in idxs]
     return _get_mask(rgms; kwargs...)
 end
 
 function filter_regimes(model::Bnc, candidates::AbstractVector; kwargs...)
     mask = filter_regimes_mask(model, candidates; kwargs...)
-    return [get_bind_idx(get_binding_network(model), x) for x in candidates][mask]
+    return [get_binding_index(get_binding_network(model), x) for x in candidates][mask]
 end
 
 function filter_regimes_with_mask(model::Bnc, candidates::AbstractVector; kwargs...)
     mask = filter_regimes_mask(model, candidates; kwargs...)
-    selected = [get_bind_idx(get_binding_network(model), x) for x in candidates][mask]
+    selected = [get_binding_index(get_binding_network(model), x) for x in candidates][mask]
     return selected, mask
 end
 
@@ -584,20 +587,21 @@ get_catalysis_perms(args...; kwargs...) = get_catalysis_perm.(get_catalysis_regi
 get_catalysis_indices(args...; kwargs...) = get_catalysis_idx.(get_catalysis_regimes(args...; kwargs...))
 get_bnc_perms(args...; kwargs...) = get_bnc_perm.(get_bnc_regimes(args...; kwargs...))
 get_bnc_indices(args...; kwargs...) = get_bnc_idx.(get_bnc_regimes(args...; kwargs...))
-get_bind_nullities(args...; kwargs...) = get_bind_nullity.(get_bind_regimes(args...; kwargs...))
+get_binding_nullities(args...; kwargs...) = get_binding_nullity.(get_binding_regimes(args...; kwargs...))
+get_bind_nullities(args...; kwargs...) = get_binding_nullities(args...; kwargs...)
 get_bnc_nullities(args...; kwargs...) = get_bnc_nullity.(get_bnc_regimes(args...; kwargs...))
-get_nullities(args...; kwargs...) = get_bind_nullities(args...; kwargs...)
+get_nullities(args...; kwargs...) = get_binding_nullities(args...; kwargs...)
 
 #========================================================================================#
 # Affine maps and constraints across coordinate systems
 #========================================================================================#
 
 function get_affine_x2q(rgm::BindRegime)
-    get_bind_regime(rgm; inv_info=false)
+    get_binding_regime(rgm; inv_info=false)
     return rgm.P, rgm.P0
 end
 function get_affine_x2qK(rgm::BindRegime)
-    get_bind_regime(rgm; inv_info=false)
+    get_binding_regime(rgm; inv_info=false)
     return rgm.M, rgm.M0
 end # Binding is equilibrium
 get_affine_xk2qKk(rgm::BindRegime) = let 
@@ -639,7 +643,7 @@ get_affine_xk2f(rgm::CatalysisRegime) = let
 end
 
 get_affine_qK2x(rgm::BindRegime) = let
-    get_bind_regime(rgm; inv_info=true);
+    get_binding_regime(rgm; inv_info=true);
     rgm.nullity > 1 && @error("BindRegime's nullity is bigger than 1, cannot get H0")
     rgm.H, rgm.H0
 end
@@ -652,7 +656,7 @@ get_affine_qKk2xk(rgm::BindRegime) = let
 end
 
 get_affine_qKk2v(rgm::BncRegime) = let
-    H,H0 = get_affine_qK2x(get_bind_regime(rgm))
+    H,H0 = get_affine_qK2x(get_binding_regime(rgm))
     n_k = get_catalysis_network(rgm).n_k
     H_cat = blockdiag(H, spdiagm(0 => ones(Int, n_k)))
     H0_cat = vcat(H0, zeros(eltype(H0), n_k))
@@ -689,7 +693,7 @@ end
 end
 
 function get_C_C0_x(rgm::BindRegime; remove_h_redundancy::Bool=false)
-    get_bind_regime(rgm; inv_info=false)
+    get_binding_regime(rgm; inv_info=false)
     return _maybe_remove_h_redundancy_pair(
         rgm.C_x,
         rgm.C0_x;
@@ -753,7 +757,7 @@ get_C_C0_nullity_xk(rgm::CatalysisRegime; remove_h_redundancy::Bool=false) = let
 end
 
 get_C_C0_xk(rgm::BncRegime; remove_h_redundancy::Bool=false) = let
-    bind_rgm = get_bind_regime(rgm.bind_rgm; inv_info=false)
+    bind_rgm = get_binding_regime(rgm.bind_rgm; inv_info=false)
     catalysis_rgm = get_catalysis_regime(rgm.catalysis_rgm)
 
     C_bind, C0_bind = get_C_C0_xk(bind_rgm)
@@ -773,7 +777,7 @@ function get_C_C0_nullity_xk(
     remove_h_redundancy::Bool=false,
 )
     if kind === :binding
-        C, C0 = get_C_C0_xk(get_bind_regime(rgm))
+        C, C0 = get_C_C0_xk(get_binding_regime(rgm))
         return _maybe_remove_h_redundancy(
             C,
             C0,
@@ -786,7 +790,7 @@ function get_C_C0_nullity_xk(
             remove_h_redundancy=remove_h_redundancy,
         )
     elseif kind === :combined || kind === :all
-        C_bind, C0_bind = get_C_C0_xk(get_bind_regime(rgm))
+        C_bind, C0_bind = get_C_C0_xk(get_binding_regime(rgm))
         C_cat, C0_cat, nlt_cat = get_C_C0_nullity_xk(get_catalysis_regime(rgm))
         return _maybe_remove_h_redundancy(
             vcat(C_bind, C_cat),
@@ -800,7 +804,7 @@ function get_C_C0_nullity_xk(
 end
 
 function get_C_C0_nullity_qK(rgm::BindRegime; remove_h_redundancy::Bool=false)
-    get_bind_regime(rgm; inv_info=true)
+    get_binding_regime(rgm; inv_info=true)
     return _maybe_remove_h_redundancy(
         rgm.C_qK,
         rgm.C0_qK,
@@ -826,7 +830,7 @@ function get_C_C0_nullity_qKk(
 )
     if kind === :binding
         return get_C_C0_nullity_qKk(
-            get_bind_regime(rgm);
+            get_binding_regime(rgm);
             remove_h_redundancy=remove_h_redundancy,
         )
     elseif kind === :catalysis
@@ -837,7 +841,7 @@ function get_C_C0_nullity_qKk(
             remove_h_redundancy=remove_h_redundancy,
         )
     elseif kind === :combined || kind === :all
-        C_bind, C0_bind, nlt_bind = get_C_C0_nullity_qKk(get_bind_regime(rgm))
+        C_bind, C0_bind, nlt_bind = get_C_C0_nullity_qKk(get_binding_regime(rgm))
         C_cat, C0_cat, nlt_cat = rgm.C_qKk_cat, rgm.C0_qKk_cat, rgm.nlt_qKk_cat
         return _maybe_remove_h_redundancy(
             vcat(C_bind, C_cat),
@@ -881,7 +885,7 @@ get_affine_k2k̃(rgm::CatalysisRegime) = let
 end
 
 get_affine_x2Kk̃(rgm::BncRegime) = let 
-    bind_rgm = get_bind_regime(rgm.bind_rgm; inv_info=false)
+    bind_rgm = get_binding_regime(rgm.bind_rgm; inv_info=false)
     cat_rgm = get_catalysis_regime(rgm.catalysis_rgm)
 
     N_bind,N0_bind = get_affine_x2K(bind_rgm)
@@ -894,7 +898,7 @@ end
 
 
 get_affine_x2wKk̃(rgm::BncRegime) = let
-    bind_rgm = get_bind_regime(rgm.bind_rgm; inv_info=false)
+    bind_rgm = get_binding_regime(rgm.bind_rgm; inv_info=false)
     cat_rgm = get_catalysis_regime(rgm.catalysis_rgm)
 
     P_w, P0_w = get_affine_x2w(bind_rgm)
@@ -989,7 +993,7 @@ get_affine_wKk2qcat(rgm::BncRegime) = let
     rgm.nlt == 0 || error("The reduced steady-state system is singular, so q_cat has no affine expression in (w, K, k).")
     H,H0 = get_affine_wKk2x(rgm)
     r_v = get_catalysis_network(rgm).r_v
-    P,P0 = get_affine_x2q(get_bind_regime(rgm.bind_rgm; inv_info=false))
+    P,P0 = get_affine_x2q(get_binding_regime(rgm.bind_rgm; inv_info=false))
     P_cat = P[1:r_v, :]
     P0_cat = P0[1:r_v]
     F = P_cat * H
@@ -1033,7 +1037,7 @@ get_C0_wKk(rgm; kwargs...) = get_C_C0_nullity_wKk(rgm; kwargs...)[2]
 
 
 
-get_P_P0_x(args...; kwargs...) = get_P_P0_x(get_bind_regime(args...; inv_info=false,kwargs...)) 
+get_P_P0_x(args...; kwargs...) = get_P_P0_x(get_binding_regime(args...; inv_info=false,kwargs...))
 get_P_P0(args...; kwargs...) = get_P_P0_x(args...; kwargs...)
 get_P(args...; kwargs...) = get_P_P0_x(args...; kwargs...)[1]
 get_P0(args...; kwargs...) = get_P_P0_x(args...; kwargs...)[2]
@@ -1051,7 +1055,7 @@ get_PΠ(args...; kwargs...) = get_PΠ(get_catalysis_regime(args...; kwargs...))
 
 # dominance matrix with N
 
-get_M_M0(args...; kwargs...) = get_M_M0(get_bind_regime(args...; inv_info=false, kwargs...))
+get_M_M0(args...; kwargs...) = get_M_M0(get_binding_regime(args...; inv_info=false, kwargs...))
 get_M(args...) = get_M_M0(args...)[1]
 get_M0(args...) = get_M_M0(args...)[2]
 
@@ -1061,7 +1065,7 @@ get_M0(args...) = get_M_M0(args...)[2]
 
 get_C_C0_x(args...; remove_h_redundancy::Bool=false, kwargs...) =
     get_C_C0_x(
-        get_bind_regime(args...; inv_info=false, kwargs...);
+        get_binding_regime(args...; inv_info=false, kwargs...);
         remove_h_redundancy=remove_h_redundancy,
     )
 get_C_x(args...; kwargs...) = get_C_C0_x(args...; kwargs...)[1]
@@ -1069,13 +1073,13 @@ get_C0_x(args...; kwargs...) = get_C_C0_x(args...; kwargs...)[2]
 
 get_C_C0_xk(args...; remove_h_redundancy::Bool=false, kwargs...) =
     get_C_C0_xk(
-        get_bind_regime(args...; inv_info=false, kwargs...);
+        get_binding_regime(args...; inv_info=false, kwargs...);
         remove_h_redundancy=remove_h_redundancy,
     )
 
 get_C_C0_nullity_qK(args...; remove_h_redundancy::Bool=false, kwargs...) =
     get_C_C0_nullity_qK(
-        get_bind_regime(args...; inv_info=true, kwargs...);
+        get_binding_regime(args...; inv_info=true, kwargs...);
         remove_h_redundancy=remove_h_redundancy,
     )
 get_C_C0_qK(args...; kwargs...) = get_C_C0_nullity_qK(args...; kwargs...)[1:2]
@@ -1088,6 +1092,6 @@ get_C(args...;kwargs...) = get_C_C0_nullity(args...;kwargs...)[1]
 get_C0(args...;kwargs...) = get_C_C0_nullity(args...;kwargs...)[2]
 
 
-get_H_H0(args...; kwargs...) = get_H_H0(get_bind_regime(args...; kwargs...))
+get_H_H0(args...; kwargs...) = get_H_H0(get_binding_regime(args...; kwargs...))
 get_H(args...) = get_H_H0(args...)[1]
 get_H0(args...) = get_H_H0(args...)[2]

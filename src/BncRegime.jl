@@ -13,7 +13,7 @@ export get_volume, get_volumes
 
 function Base.getproperty(model::BncRegime, sym::Symbol)
     if sym === :perm
-        return get_bind_perm(model), get_catalysis_perm(model)
+        return get_binding_perm(model), get_catalysis_perm(model)
     end
     return getfield(model, sym)
 end
@@ -266,7 +266,7 @@ function _calc_C_C0_qKk(bind_rgm::BindRegime, cat_rgm::CatalysisRegime)
 end
 
 function _calc_C_C0_wKk(rgm::BncRegime)
-    bind_rgm = get_bind_regime(rgm)
+    bind_rgm = get_binding_regime(rgm)
     cat_rgm = get_catalysis_regime(rgm)
 
     C_xk_bind, C0_xk_bind = get_C_C0_xk(bind_rgm)
@@ -464,7 +464,7 @@ end
 #========================================================================================#
 
 function summary_regime(rgm::BncRegime)
-    rgm = get_regime(rgm)
+    rgm = get_bnc_regime(rgm)
     println("bind_idx=$(get_idx(rgm.bind_rgm)), cat_idx=$(get_idx(rgm.catalysis_rgm)), nlt=$(rgm.nlt), stable=$(is_stable(rgm))")
     println("Binding / catalysis conditions in (x, k):")
     display.(show_condition_xk(rgm; kind=:binding, log_space=false))

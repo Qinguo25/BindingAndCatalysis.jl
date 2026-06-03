@@ -522,7 +522,7 @@ function _calc_bind_regime_volumes(
             kwargs...,
         )
     elseif route === :polyhedra
-        rgms = [get_regime(Bnc, idx; inv_info=true) for idx in rgm_ids]
+        rgms = [get_binding_regime(Bnc, idx; inv_info=true) for idx in rgm_ids]
         _calc_selected_constraint_volumes(
             rgms;
             asymptotic=asymptotic,

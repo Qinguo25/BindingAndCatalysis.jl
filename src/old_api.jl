@@ -14,7 +14,7 @@ end
 find_all_vertices(args...; kwargs...) = (_legacy_api_depwarn(:find_all_vertices, :find_all_regimes); find_all_regimes(args...; kwargs...))
 find_all_vertices!(args...; kwargs...) = (_legacy_api_depwarn(:find_all_vertices!, :find_all_regimes!); find_all_regimes!(args...; kwargs...))
 
-get_vertices_perm_dict(args...; kwargs...) = (_legacy_api_depwarn(:get_vertices_perm_dict, :get_bind_regimes_dict); get_bind_regimes_dict(args...; kwargs...))
+get_vertices_perm_dict(args...; kwargs...) = (_legacy_api_depwarn(:get_vertices_perm_dict, :get_binding_regimes_dict); get_binding_regimes_dict(args...; kwargs...))
 
 assign_vertex_x(args...; kwargs...) = (_legacy_api_depwarn(:assign_vertex_x, :assign_regime_x); assign_regime_x(args...; kwargs...))
 assign_vertex_qK(args...; kwargs...) = (_legacy_api_depwarn(:assign_vertex_qK, :assign_regime_qK); assign_regime_qK(args...; kwargs...))
@@ -38,7 +38,7 @@ get_vertices(args...; kwargs...) = (_legacy_api_depwarn(:get_vertices, :get_regi
 
 n_vertices(args...; kwargs...) = (_legacy_api_depwarn(:n_vertices, :n_regimes); n_regimes(args...; kwargs...))
 summary_vertex(args...; kwargs...) = (_legacy_api_depwarn(:summary_vertex, :summary_regime); summary_regime(args...; kwargs...))
-get_regimes_perm_dict(args...; kwargs...) = (_legacy_api_depwarn(:get_regimes_perm_dict, :get_bind_regimes_dict); get_bind_regimes_dict(args...; kwargs...))
+get_regimes_perm_dict(args...; kwargs...) = (_legacy_api_depwarn(:get_regimes_perm_dict, :get_binding_regimes_dict); get_binding_regimes_dict(args...; kwargs...))
 
 get_mixed_regime(args...; kwargs...) = (_legacy_api_depwarn(:get_mixed_regime, :get_bnc_regime); get_bnc_regime(args...; kwargs...))
 get_mixed_regimes(args...; kwargs...) = (_legacy_api_depwarn(:get_mixed_regimes, :get_bnc_regimes); get_bnc_regimes(args...; kwargs...))
@@ -67,12 +67,12 @@ SISO_plot(args...; kwargs...) = (_legacy_api_depwarn(:SISO_plot, :SIMO_plot); SI
 
 # Default binding-network convenience API. These are still maintained because
 # many user workflows use `get_regime(model, idx)` for binding regimes.
-get_perm(args...;kwargs...) = get_bind_perm(args...;kwargs...)
-get_regime(args...; kwargs...) = get_bind_regime(args...; kwargs...)
-get_idx(args...; kwargs...) = get_bind_idx(args...; kwargs...)
-get_nullity(args...; kwargs...) = get_bind_nullity(args...; kwargs...)
-is_singular(args...; kwargs...) = is_bind_singular(args...; kwargs...)
-is_asymptotic(args...; kwargs...) = is_bind_asymptotic(args...; kwargs...)
+get_perm(args...;kwargs...) = get_binding_perm(args...;kwargs...)
+get_regime(args...; kwargs...) = get_binding_regime(args...; kwargs...)
+get_idx(args...; kwargs...) = get_binding_index(args...; kwargs...)
+get_nullity(args...; kwargs...) = get_binding_nullity(args...; kwargs...)
+is_singular(args...; kwargs...) = is_binding_singular(args...; kwargs...)
+is_asymptotic(args...; kwargs...) = is_binding_asymptotic(args...; kwargs...)
 get_regimes(args...; return_idx::Bool=false, kwargs...) =
     return_idx ? get_binding_indices(args...; kwargs...) : get_binding_regimes(args...; kwargs...)
 get_perms(args...; kwargs...) = get_binding_perms(args...; kwargs...)

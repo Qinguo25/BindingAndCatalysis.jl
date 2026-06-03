@@ -1,4 +1,4 @@
-export find_all_regimes!, get_bind_regimes_dict, get_nullities, get_volumes, have_perm
+export find_all_regimes!, get_binding_regimes_dict, get_bind_regimes_dict, get_nullities, get_volumes, have_perm
 export get_regimes, get_perms, get_indices, get_regimes_neighbor_mat
 export is_singular, is_asymptotic, n_regimes
 export get_idx, get_perm, get_regime, get_neighbors, get_nullity
@@ -312,12 +312,12 @@ function get_volumes(Bnc::Bnc, regimes::Union{AbstractVector,Nothing}=nothing;
         
         # #ensure conditions for volume calculation are calced, may further replaced by other functions
         # Threads.@threads for idx in vtxs_to_calc
-        #    get_regime(Bnc,idx; inv_info=true)
+        #    get_binding_regime(Bnc,idx; inv_info=true)
         # end
         
         rlts = _calc_bind_regime_volumes(Bnc, regimes_to_calc; rebase_mat=rebase_mat, kwargs...)
         for (i, idx) in enumerate(regimes_to_calc)
-            rgm = get_regime(Bnc, idx; inv_info=false)
+            rgm = get_binding_regime(Bnc, idx; inv_info=false)
             rgm.volume = rlts[i]
         end
     end
