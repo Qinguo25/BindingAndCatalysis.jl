@@ -373,6 +373,85 @@ This implementation follows that boundary. It makes the older report-style
 R-index reproducible in the intended biological reduced chart without storing a
 constraint family inside `Bnc` or mutating regime caches.
 
+## Test Results After Second Implementation Pass, 2026-06-08
+
+I retested after the package added `ParameterChart`, identified-parameter
+`map`/`groups`, `mode=:asymptotic_R`, and the report-oriented
+`multistability_R_index` wrapper.
+
+First, the focused package test passed:
+
+```text
+BNC Analysis Constraints                  37 passed
+Binding Analysis Constraints Default to qK 4 passed
+```
+
+Second, I reran the toggle-switch reproduction against the old reference CSV
+using the new public API.  The reproduction used the old case-study parameter
+identifications as `map=Dict(old_symbol => reduced_symbol, ...)`, original-symbol
+inequalities such as `(:K1, :<, :Kp1)`, and `multistability_R_index`, which
+defaults to `mode=:asymptotic_R`.
+
+The main R-index issue is fixed.  The new R-index values reproduce the old
+reference table within 50,000-sample Monte Carlo error.
+
+Representative retest output:
+
+| scenario | old R | new R, 50k samples | status |
+| --- | ---: | ---: | --- |
+| monomer unconstrained | 0.02762 | 0.02714 ± 0.00073 | OK |
+| monomer shared loss/beta | 0.06188 | 0.06122 ± 0.00107 | OK |
+| monomer fully symmetric | 0.37451 | 0.37540 ± 0.00217 | OK |
+| dimer unconstrained | 0.01929 | 0.01904 ± 0.00061 | OK |
+| dimer unconstrained + `K_i<Kp_i` | 0.02784 | 0.02728 ± 0.00073 | OK |
+| dimer paired all loss + `K_i<Kp_i` | 0.06143 | 0.06182 ± 0.00108 | OK |
+| dimer shared loss/beta/K + `K_i<Kp_i` | 0.11228 | 0.11238 ± 0.00141 | OK |
+| dimer fully symmetric + `K_i<Kp_i` | 0.38737 | 0.38830 ± 0.00218 | OK |
+
+The bistability-relevant deterministic counts also reproduce: reduced dimension,
+stable full-dimensional regime count, and stable pair-intersection count match
+the old CSV for all scenarios tested.
+
+Two small wrapper semantics issues were found after the second pass.
+
+First, the old CSV's `full_dim_regimes` column counted all full-dimensional
+restricted BNC regimes, including singular regimes.  The second-pass
+`multistability_R_index` default applied `singular=false` to the
+`full_dim_restricted` count, so `full_dim_regimes` was lower in cases where some
+full-dimensional regimes were singular.  Examples from the retest:
+
+| scenario | old `full_dim_regimes` | current `full_dim_regimes` | stable count | pair count |
+| --- | ---: | ---: | ---: | ---: |
+| monomer fully symmetric | 14 | 11 | matches | matches |
+| dimer fully symmetric | 38 | 35 | matches | matches |
+| dimer fully symmetric + `K_i<Kp_i` | 35 | 32 | matches | matches |
+
+This does not affect `R_multistability`, because the stable nonsingular regimes
+and pair intersections still match.  But for a report-oriented wrapper intended
+to reproduce the earlier table, the filters used for summary columns should be
+separated:
+
+```julia
+full_dim_regimes = count all feasible full-dimensional restricted regimes
+stable_full_dim_regimes = count stable, nonsingular, full-dimensional regimes
+pair_intersections = stable nonsingular full-dimensional pair intersections
+```
+
+This has been patched: `full_dim_regimes` now counts all feasible
+full-dimensional restricted BNC regimes, while `stable_full_dim_regimes`,
+`pair_intersections`, and `R_multistability` continue to use the candidate
+filter controlled by `singular=false` by default.
+
+Second, passing `map=Dict{Symbol,Symbol}()` marked the chart as
+`basis_kind=:identified_parameters`, even though the map was empty and the chart
+was effectively identity.  This was harmless numerically, but misleading in
+report output.  Empty `map`/`groups` are now normalized to the identity chart.
+
+This second issue was triggered by my reproduction script, where I passed an
+empty map just to keep all scenarios on one code path.  A user can avoid it by
+omitting `map` for unconstrained cases, but the package now handles empty maps
+cleanly for report output.
+
 ## Context needed to read this file alone
 
 This feedback comes from an actual downstream case study, not from a general API

@@ -904,6 +904,15 @@ summary = multistability_R_index(
 `full_dim_regimes`, `stable_full_dim_regimes`, `pair_intersections`,
 `R_multistability`, `stderr`, `basis_kind`, and `denominator`.
 
+`full_dim_regimes` is a broad diagnostic count of all feasible full-dimensional
+restricted BNC regimes. The stable candidate counts, pair intersections, and
+`R_multistability` use the candidate filter controlled by `singular`, which
+defaults to nonsingular regimes.
+
+Empty `map` or `groups` inputs are normalized to the identity chart. This is
+useful when a script shares one code path across unconstrained and grouped
+parameter families.
+
 Useful fields:
 
 ```julia

@@ -338,7 +338,10 @@ R-index denominator explicit: `denominator=:constraint_region`.
 recession-cone membership, returning `denominator=:constraint_cone`.
 `multistability_R_index` is the report-oriented wrapper that defaults to
 `mode=:asymptotic_R` and returns deterministic regime counts together with the
-conditional `R_multistability`.
+conditional `R_multistability`. Its `full_dim_regimes` field is a broad
+diagnostic count of all feasible full-dimensional restricted BNC regimes;
+candidate counts, pair intersections, and `R_multistability` use the stable and
+singular filters.
 
 ## Public API Conventions
 

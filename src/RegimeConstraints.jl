@@ -276,6 +276,11 @@ function _unique_mapped_symbols(symbols::AbstractVector{Symbol}, mapping)
     return reduced
 end
 
+function _has_parameter_identification(map, groups)
+    return !isempty(_constraint_map_pairs(map)) ||
+           !isempty(_constraint_groups_pairs(groups))
+end
+
 function _parameter_chart_from_map(
     model::Bnc, chart::Symbol, symbols::AbstractVector{Symbol}, map, groups, reduced_symbols
 )
@@ -390,7 +395,7 @@ function parameter_chart(
         )
     end
 
-    if isnothing(map) && isnothing(groups)
+    if !_has_parameter_identification(map, groups)
         eye = Matrix{Float64}(I, length(symbols), length(symbols))
         return ParameterChart(
             model,
@@ -1160,6 +1165,11 @@ end
 Report-oriented constrained multistability summary. This wraps
 `multistability_profile` and returns deterministic regime counts together with
 the conditional `R_multistability = R_atleast_2`.
+
+`full_dim_regimes` counts all feasible full-dimensional restricted BNC regimes.
+`stable_full_dim_regimes`, `pair_intersections`, and `R_multistability` use the
+candidate filter controlled by `singular`, which defaults to nonsingular
+regimes.
 """
 function multistability_R_index(
     model::Bnc;
@@ -1182,13 +1192,10 @@ function multistability_R_index(
         regimes,
         constraints;
         stable=nothing,
-        singular=singular,
+        singular=nothing,
         feasible=feasible,
         full_dim=full_dim,
     )
-    stable_full_dim_restricted = [
-        rr for rr in full_dim_restricted if is_stable(rr.regime) === true
-    ]
     profile = multistability_profile(
         model;
         constraints=constraints,
@@ -1208,6 +1215,7 @@ function multistability_R_index(
         pair_intersections=true,
         mode=mode,
     )
+    stable_full_dim_restricted = profile.restricted_regimes
 
     p = profile.R_atleast_2
     stderr =

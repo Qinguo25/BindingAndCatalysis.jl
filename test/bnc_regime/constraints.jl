@@ -53,6 +53,11 @@
     @test mapped_chart.basis == mapped_chart.F
     @test mapped_chart.offset == mapped_chart.F0
 
+    empty_map_chart = parameter_chart(model; map=Dict{Symbol, Symbol}())
+    @test empty_map_chart.basis_kind == :identity
+    @test empty_map_chart.reduced_symbols == syms
+    @test empty_map_chart.F ≈ Matrix{Float64}(I, length(syms), length(syms))
+
     original_constraints = parameter_constraints(
         model;
         map=Dict(syms[1] => :shared_parameter, syms[2] => :shared_parameter),
@@ -106,6 +111,8 @@
     @test summary.R_multistability == summary.profile.R_atleast_2
     @test hasproperty(summary, :full_dim_regimes)
     @test hasproperty(summary, :stable_full_dim_regimes)
+    @test summary.full_dim_regimes >= summary.stable_full_dim_regimes
+    @test summary.stable_full_dim_regimes == length(summary.profile.restricted_regimes)
 end
 
 @testset "Binding Analysis Constraints Default to qK" begin
