@@ -131,6 +131,41 @@
         @test W ≈ transpose(W)
     end
 
+    invariance = steady_state_invariance(ctrl)
+    @test hasproperty(invariance, :invariant)
+    @test hasproperty(invariance, :residual)
+    @test is_steady_state_invariant(ctrl) == invariance.invariant
+
+    direct_response = input_responsiveness(ctrl; standard=:direct_flux, threshold=0.0)
+    @test direct_response.standard == :direct_flux
+    @test hasproperty(direct_response, :responsive)
+    @test input_responsive(ctrl; standard=:direct_flux, threshold=0.0) ==
+        direct_response.responsive
+
+    output_response = input_responsiveness(
+        regular;
+        input=first(wKk_symbol(model)),
+        output=first(x_symbol(model)),
+        standard=:output_controllability,
+        threshold=0.0,
+        order=0,
+    )
+    @test output_response.standard == :output_controllability
+    @test output_response.output == [first(x_symbol(model))]
+
+    response_rows = compare_input_responsiveness(
+        [regular];
+        input=first(wKk_symbol(model)),
+        outputs=(first(x_symbol(model)), first(q_cat_symbol(model))),
+        standards=(:direct_flux, :output_controllability),
+        threshold=0.0,
+        order=0,
+    )
+    @test length(response_rows) == 4
+    @test all(hasproperty(row, :output) for row in response_rows)
+    @test all(hasproperty(row, :standard) for row in response_rows)
+    @test all(hasproperty(row, :responsive) for row in response_rows)
+
     singular_bnc_rgms = filter(r -> r.nlt == 1, get_bnc_regimes(model))
     if !isempty(singular_bnc_rgms)
         Hs, H0s = get_H_H0(first(singular_bnc_rgms))

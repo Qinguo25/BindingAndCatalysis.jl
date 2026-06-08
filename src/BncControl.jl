@@ -3,6 +3,8 @@ export hbd_source, get_H_bd_info
 export linear_control_model, control_metrics
 export controllability_matrix, output_controllability_matrix, output_controllability_row
 export markov_coefficients, controllability_gramian, steady_state_gain
+export steady_state_invariance, is_steady_state_invariant
+export input_responsiveness, input_responsive, compare_input_responsiveness
 
 """
     BncLinearControlModel
@@ -420,4 +422,215 @@ end
 
 function steady_state_gain(rgm::BncRegime; kwargs...)
     return steady_state_gain(linear_control_model(rgm; kwargs...))
+end
+
+function _maxabs(A)
+    isempty(A) && return 0.0
+    return Float64(maximum(abs, A))
+end
+
+"""
+    steady_state_invariance(ctrl; atol=1e-8)
+    steady_state_invariance(rgm::BncRegime; atol=1e-8, kwargs...)
+
+Return a diagnostic named tuple for the steady-state input-output gain.
+
+The output is steady-state invariant when `maximum(abs, steady_state_gain(ctrl)) <= atol`.
+If the gain cannot be computed, `invariant=false` and `error` records the reason.
+"""
+function steady_state_invariance(ctrl::BncLinearControlModel; atol::Real=1e-8)
+    try
+        gain = steady_state_gain(ctrl)
+        residual = _maxabs(gain)
+        return (;
+            invariant=residual <= atol,
+            residual=residual,
+            atol=Float64(atol),
+            gain=gain,
+            input=ctrl.input,
+            output=ctrl.output,
+            output_space=ctrl.output_space,
+            stable=ctrl.stable,
+            error=nothing,
+        )
+    catch err
+        return (;
+            invariant=false,
+            residual=Inf,
+            atol=Float64(atol),
+            gain=nothing,
+            input=ctrl.input,
+            output=ctrl.output,
+            output_space=ctrl.output_space,
+            stable=ctrl.stable,
+            error=sprint(showerror, err),
+        )
+    end
+end
+
+function steady_state_invariance(rgm::BncRegime; atol::Real=1e-8, kwargs...)
+    return steady_state_invariance(linear_control_model(rgm; kwargs...); atol=atol)
+end
+
+"""
+    is_steady_state_invariant(args...; kwargs...) -> Bool
+
+Boolean convenience wrapper around `steady_state_invariance`.
+"""
+function is_steady_state_invariant(args...; kwargs...)
+    return steady_state_invariance(args...; kwargs...).invariant
+end
+
+function _responsiveness_score(
+    ctrl::BncLinearControlModel, standard::Symbol; order::Integer, horizon::Symbol
+)
+    if standard === :direct_flux
+        return _maxabs(ctrl.D)
+    elseif standard === :output_controllability
+        return _maxabs(output_controllability_matrix(ctrl; order=order))
+    elseif standard === :output_reachability
+        return Float64(norm(output_controllability_matrix(ctrl; order=order)))
+    elseif standard === :gramian
+        W = controllability_gramian(ctrl; horizon=horizon)
+        return Float64(norm(ctrl.C * W * transpose(ctrl.C)))
+    elseif standard === :steady_state_gain
+        return _maxabs(steady_state_gain(ctrl))
+    end
+
+    throw(
+        ArgumentError(
+            "Unknown responsiveness standard $(repr(standard)). Supported standards are `:direct_flux`, `:output_controllability`, `:output_reachability`, `:gramian`, and `:steady_state_gain`.",
+        ),
+    )
+end
+
+"""
+    input_responsiveness(ctrl; standard=:output_reachability, threshold=1e-8)
+    input_responsiveness(rgm::BncRegime; input=:all, output=:x, standard=:output_reachability, threshold=1e-8)
+
+Return a diagnostic named tuple for a selected input-output responsiveness
+standard.
+
+Supported standards are:
+
+  - `:direct_flux`: direct `D` term magnitude.
+  - `:output_controllability`: max absolute entry of `[D C*B C*A*B ...]`.
+  - `:output_reachability`: norm of `[D C*B C*A*B ...]`.
+  - `:gramian`: norm of `C*W*C'` for the infinite-horizon controllability Gramian.
+  - `:steady_state_gain`: max absolute DC gain.
+"""
+function input_responsiveness(
+    ctrl::BncLinearControlModel;
+    standard::Symbol=:output_reachability,
+    threshold::Real=1e-8,
+    order::Integer=size(ctrl.A, 1) - 1,
+    horizon::Symbol=:infinite,
+)
+    score = _responsiveness_score(ctrl, standard; order=order, horizon=horizon)
+    return (;
+        standard=standard,
+        responsive=score > threshold,
+        score=score,
+        threshold=Float64(threshold),
+        order=Int(order),
+        input=ctrl.input,
+        output=ctrl.output,
+        output_space=ctrl.output_space,
+        stable=ctrl.stable,
+        hbd_source=ctrl.hbd_source,
+        error=nothing,
+    )
+end
+
+function input_responsiveness(
+    rgm::BncRegime;
+    standard::Symbol=:output_reachability,
+    threshold::Real=1e-8,
+    order=nothing,
+    horizon::Symbol=:infinite,
+    kwargs...,
+)
+    ctrl = linear_control_model(rgm; kwargs...)
+    resolved_order = isnothing(order) ? size(ctrl.A, 1) - 1 : order
+    return input_responsiveness(
+        ctrl; standard=standard, threshold=threshold, order=resolved_order, horizon=horizon
+    )
+end
+
+"""
+    input_responsive(args...; kwargs...) -> Bool
+
+Boolean convenience wrapper around `input_responsiveness`.
+"""
+function input_responsive(args...; kwargs...)
+    return input_responsiveness(args...; kwargs...).responsive
+end
+
+function _comparison_regime_id(rgm::BncRegime)
+    return get_idx(rgm)
+end
+
+"""
+    compare_input_responsiveness(rgms; input=:all, outputs=:x, standards=(...), threshold=1e-8)
+
+Return a vector of named tuples comparing responsiveness standards across BNC
+regimes and outputs.
+"""
+function compare_input_responsiveness(
+    rgms::AbstractVector{<:BncRegime};
+    input=:all,
+    outputs=:x,
+    standards=(:direct_flux, :output_controllability, :output_reachability),
+    threshold::Real=1e-8,
+    order=nothing,
+    kwargs...,
+)
+    rows = NamedTuple[]
+    for rgm in rgms
+        for output in _selector_items(outputs)
+            for standard in _selector_items(standards)
+                try
+                    result = input_responsiveness(
+                        rgm;
+                        input=input,
+                        output=output,
+                        standard=Symbol(standard),
+                        threshold=threshold,
+                        order=order,
+                        kwargs...,
+                    )
+                    push!(
+                        rows,
+                        (;
+                            regime=_comparison_regime_id(rgm),
+                            binding_regime=get_idx(get_binding_regime(rgm)),
+                            catalysis_regime=get_idx(get_catalysis_regime(rgm)),
+                            result...,
+                        ),
+                    )
+                catch err
+                    push!(
+                        rows,
+                        (;
+                            regime=_comparison_regime_id(rgm),
+                            binding_regime=get_idx(get_binding_regime(rgm)),
+                            catalysis_regime=get_idx(get_catalysis_regime(rgm)),
+                            standard=Symbol(standard),
+                            responsive=missing,
+                            score=NaN,
+                            threshold=Float64(threshold),
+                            order=isnothing(order) ? missing : order,
+                            input=_selector_items(input),
+                            output=_selector_items(output),
+                            output_space=missing,
+                            stable=missing,
+                            hbd_source=hbd_source(rgm),
+                            error=sprint(showerror, err),
+                        ),
+                    )
+                end
+            end
+        end
+    end
+    return rows
 end
