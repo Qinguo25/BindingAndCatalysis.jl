@@ -88,6 +88,49 @@
     @test stable_flag === true || stable_flag === false || ismissing(stable_flag)
     @test stable_code in (-1, 0, 1)
 
+    @test isdefined(Main, :linear_control_model)
+    @test isdefined(Main, :control_metrics)
+    @test isdefined(Main, :controllability_matrix)
+    @test isdefined(Main, :output_controllability_matrix)
+
+    ctrl = linear_control_model(
+        regular; input=first(wKk_symbol(model)), output=first(x_symbol(model))
+    )
+    @test size(ctrl.A) == (cn.r_v, cn.r_v)
+    @test size(ctrl.B) == (cn.r_v, 1)
+    @test size(ctrl.C) == (1, cn.r_v)
+    @test size(ctrl.D) == (1, 1)
+    @test ctrl.input == [first(wKk_symbol(model))]
+    @test ctrl.output == [first(x_symbol(model))]
+    @test ctrl.output_space == :x
+    @test ctrl.hbd_source == hbd_source(regular)
+    @test get_H_bd_info(regular).source == hbd_source(regular)
+
+    metrics = control_metrics(ctrl)
+    @test metrics.A == ctrl.A
+    @test metrics.B == ctrl.B
+    @test metrics.C == ctrl.C
+    @test metrics.D == ctrl.D
+    @test metrics.hbd_source == ctrl.hbd_source
+
+    qcat_ctrl = linear_control_model(regular; input=:all, output=:qcat)
+    @test qcat_ctrl.output_space == :qcat
+    @test qcat_ctrl.output == q_cat_symbol(model)
+    @test size(qcat_ctrl.D) == (cn.r_v, length(wKk_symbol(model)))
+
+    state_ctl = controllability_matrix(ctrl)
+    output_ctl = output_controllability_matrix(ctrl)
+    marks = markov_coefficients(ctrl)
+    @test size(state_ctl, 1) == cn.r_v
+    @test size(output_ctl, 1) == 1
+    @test length(marks) == cn.r_v + 1
+    @test marks[1] == ctrl.D
+    if ctrl.stable
+        W = controllability_gramian(ctrl)
+        @test size(W) == (cn.r_v, cn.r_v)
+        @test W ≈ transpose(W)
+    end
+
     singular_bnc_rgms = filter(r -> r.nlt == 1, get_bnc_regimes(model))
     if !isempty(singular_bnc_rgms)
         Hs, H0s = get_H_H0(first(singular_bnc_rgms))
