@@ -40,6 +40,72 @@
     @test profile.R_atleast_1 >= profile.R_atleast_2 >= profile.R_atleast_3
     @test hasproperty(profile, :combination_counts)
     @test hasproperty(profile, :pair_table)
+
+    syms = wKk_symbol(model)
+    mapped_chart = parameter_chart(
+        model; map=Dict(syms[1] => :shared_parameter, syms[2] => :shared_parameter)
+    )
+    @test mapped_chart.chart == :wKk
+    @test mapped_chart.basis_kind == :identified_parameters
+    @test :shared_parameter in mapped_chart.reduced_symbols
+    @test size(mapped_chart.F, 1) == length(syms)
+    @test size(mapped_chart.F, 2) == length(syms) - 1
+    @test mapped_chart.basis == mapped_chart.F
+    @test mapped_chart.offset == mapped_chart.F0
+
+    original_constraints = parameter_constraints(
+        model;
+        map=Dict(syms[1] => :shared_parameter, syms[2] => :shared_parameter),
+        inequalities=[(syms[1], :<, syms[end])],
+    )
+    reduced_constraints = parameter_constraints(
+        mapped_chart; inequalities=[(:shared_parameter, :<, syms[end])]
+    )
+    @test original_constraints.basis_kind == :identified_parameters
+    @test reduced_constraints.basis_kind == :identified_parameters
+    @test original_constraints.reduced_symbols == reduced_constraints.reduced_symbols
+    @test original_constraints.reduced_inequality_C ≈
+        reduced_constraints.reduced_inequality_C
+
+    identity_chart = parameter_chart(
+        model;
+        F=Matrix{Float64}(I, length(syms), length(syms)),
+        F0=zeros(length(syms)),
+        reduced_symbols=syms,
+    )
+    @test identity_chart.basis_kind == :provided
+    @test identity_chart.original_symbols == syms
+
+    asymptotic_profile = multistability_profile(
+        model;
+        constraints=original_constraints,
+        samples=20,
+        max_draws=1_000,
+        sampler=:uniform_box,
+        log_lower=-2.0,
+        log_upper=2.0,
+        rng_seed=2,
+        mode=:asymptotic_R,
+    )
+    @test asymptotic_profile.mode == :asymptotic_R
+    @test asymptotic_profile.denominator == :constraint_cone
+    @test asymptotic_profile.basis_kind == :identified_parameters
+
+    summary = multistability_R_index(
+        model;
+        constraints=original_constraints,
+        samples=20,
+        max_draws=1_000,
+        sampler=:uniform_box,
+        log_lower=-2.0,
+        log_upper=2.0,
+        rng_seed=3,
+    )
+    @test summary.mode == :asymptotic_R
+    @test summary.denominator == :constraint_cone
+    @test summary.R_multistability == summary.profile.R_atleast_2
+    @test hasproperty(summary, :full_dim_regimes)
+    @test hasproperty(summary, :stable_full_dim_regimes)
 end
 
 @testset "Binding Analysis Constraints Default to qK" begin

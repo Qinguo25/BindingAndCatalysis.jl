@@ -703,6 +703,64 @@ The default chart is context dependent:
 - binding-only models use `chart=:qK`;
 - BNC/catalysis models use `chart=:wKk`.
 
+For constrained R-index work, it is useful to separate two concepts:
+
+1. a parameter chart, which says how the original coordinates are represented
+   by new reduced coordinates;
+2. constraints inside that reduced chart.
+
+For example, several original parameters can be identified with one biological
+parameter:
+
+```julia
+chart = parameter_chart(
+    model;
+    chart = :wKk,
+    map = Dict(
+        :γ1 => :loss,
+        :γ2 => :loss,
+        :δ1 => :loss,
+        :δ2 => :loss,
+        :β1 => :beta,
+        :β2 => :beta,
+    ),
+)
+```
+
+This means:
+
+```text
+old_wKk = chart.F * new_wKk + chart.F0
+```
+
+The same identification can be written by groups:
+
+```julia
+chart = parameter_chart(
+    model;
+    chart = :wKk,
+    groups = Dict(
+        :loss => [:γ1, :γ2, :δ1, :δ2],
+        :beta => [:β1, :β2],
+    ),
+)
+```
+
+Advanced users can pass the affine map directly:
+
+```julia
+chart = parameter_chart(
+    model;
+    chart = :wKk,
+    F = F,
+    F0 = F0,
+    reduced_symbols = [:loss, :beta, :K],
+)
+```
+
+The fields `chart.basis` and `chart.offset` are aliases for `chart.F` and
+`chart.F0`, matching the lower-level restriction internals.
+
 Matrix constraints use the package condition convention:
 
 ```julia
@@ -728,6 +786,40 @@ Convenience symbolic constraints are also supported:
 constraints = parameter_constraints(
     model;
     equalities = [:k1 => :k2],
+    inequalities = [(:K1, :<, :Kp1), (:K2, :<, :Kp2)],
+)
+```
+
+When using a `ParameterChart`, constraints are written in the reduced symbols by
+default:
+
+```julia
+constraints = parameter_constraints(
+    chart;
+    inequalities = [(:K, :<, :Kp)],
+)
+```
+
+If you prefer to write inequalities in the original symbols and pull them back
+through the chart, use `symbols=:original`:
+
+```julia
+constraints = parameter_constraints(
+    chart;
+    inequalities = [(:K1, :<, :Kp1), (:K2, :<, :Kp2)],
+    symbols = :original,
+)
+```
+
+The one-step form is also supported. In that form, symbolic constraints are
+interpreted in the original chart unless `constraint_symbols=:reduced` is
+provided:
+
+```julia
+constraints = parameter_constraints(
+    model;
+    chart = :wKk,
+    map = Dict(:K1 => :K, :K2 => :K),
     inequalities = [(:K1, :<, :Kp1), (:K2, :<, :Kp2)],
 )
 ```
@@ -778,6 +870,7 @@ profile = multistability_profile(
     model;
     constraints,
     samples = 500_000,
+    mode = :finite_region,
 )
 ```
 
@@ -785,9 +878,38 @@ The denominator is the constraint region: sampling first accepts points that
 satisfy `constraints`, then counts how many stable restricted BNC regimes contain
 each accepted point.
 
+Use `mode=:asymptotic_R` for the asymptotic solid-angle R-index convention. This
+strips offsets and samples recession-cone membership:
+
+```julia
+profile = multistability_profile(
+    model;
+    constraints,
+    samples = 500_000,
+    mode = :asymptotic_R,
+)
+```
+
+For report-style summaries, use:
+
+```julia
+summary = multistability_R_index(
+    model;
+    constraints,
+    samples = 500_000,
+)
+```
+
+`multistability_R_index` defaults to `mode=:asymptotic_R` and returns
+`full_dim_regimes`, `stable_full_dim_regimes`, `pair_intersections`,
+`R_multistability`, `stderr`, `basis_kind`, and `denominator`.
+
 Useful fields:
 
 ```julia
+profile.mode
+profile.denominator
+profile.basis_kind
 profile.R_atleast_1    # any stable regime
 profile.R_atleast_2    # bistability R-index
 profile.R_atleast_3    # multistability hint

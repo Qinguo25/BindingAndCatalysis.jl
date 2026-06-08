@@ -1,6 +1,44 @@
-export ParameterConstraints, RestrictedRegime
+export ParameterChart, ParameterConstraints, RestrictedRegime
+export parameter_chart
 export parameter_constraints, restrict_polyhedron, restrict_regime, restrict_regimes
 export is_full_dimensional, stable_regime_intersections, multistability_profile
+export multistability_R_index
+
+"""
+    ParameterChart
+
+Affine reparameterization for an analysis chart.
+
+The original chart variable `z` is represented by reduced coordinates `y` as
+
+```text
+z = F * y + F0
+```
+
+Use `chart.basis` and `chart.offset` as aliases for `F` and `F0` when working
+with existing constraint internals.
+"""
+struct ParameterChart
+    model::Bnc
+    chart::Symbol
+    original_symbols::Vector{Symbol}
+    reduced_symbols::Vector{Symbol}
+    F::Matrix{Float64}
+    F0::Vector{Float64}
+    basis_kind::Symbol
+    notes::Vector{String}
+end
+
+function Base.getproperty(chart::ParameterChart, sym::Symbol)
+    if sym === :basis
+        return getfield(chart, :F)
+    elseif sym === :offset
+        return getfield(chart, :F0)
+    elseif sym === :symbols
+        return getfield(chart, :original_symbols)
+    end
+    return getfield(chart, sym)
+end
 
 """
     ParameterConstraints
@@ -30,6 +68,8 @@ struct ParameterConstraints
     compatible::Bool
     residual::Float64
     notes::Vector{String}
+    parameter_chart::ParameterChart
+    basis_kind::Symbol
 end
 
 """
@@ -174,6 +214,201 @@ function _constraint_inequalities(symbols::AbstractVector{Symbol}, inequalities)
     return reduce(vcat, transpose.(rows)), biases, notes
 end
 
+function _constraint_map_pairs(map)
+    isnothing(map) && return Pair[]
+    if map isa AbstractDict
+        return collect(pairs(map))
+    elseif map isa AbstractVector || map isa Tuple
+        return collect(map)
+    end
+    return [map]
+end
+
+function _constraint_groups_pairs(groups)
+    isnothing(groups) && return Pair[]
+    groups isa AbstractDict && return collect(pairs(groups))
+    groups isa AbstractVector && return collect(groups)
+    groups isa Tuple && return collect(groups)
+    return [groups]
+end
+
+function _identified_parameter_map(symbols::AbstractVector{Symbol}, map, groups)
+    mapping = Dict(sym => sym for sym in symbols)
+
+    for item in _constraint_groups_pairs(groups)
+        item isa Pair || throw(
+            ArgumentError("Constraint groups must be `new_symbol => old_symbols` pairs."),
+        )
+        reduced = _constraint_symbol(item.first)
+        for old in _constraint_items(item.second)
+            old_symbol = _constraint_symbol(old)
+            old_symbol in symbols || throw(
+                ArgumentError(
+                    "Unknown grouped constraint symbol $(repr(old_symbol)). Available symbols are $(repr(symbols)).",
+                ),
+            )
+            mapping[old_symbol] = reduced
+        end
+    end
+
+    for item in _constraint_map_pairs(map)
+        item isa Pair || throw(
+            ArgumentError("Constraint map must use `old_symbol => new_symbol` pairs.")
+        )
+        old_symbol = _constraint_symbol(item.first)
+        old_symbol in symbols || throw(
+            ArgumentError(
+                "Unknown mapped constraint symbol $(repr(old_symbol)). Available symbols are $(repr(symbols)).",
+            ),
+        )
+        mapping[old_symbol] = _constraint_symbol(item.second)
+    end
+
+    return mapping
+end
+
+function _unique_mapped_symbols(symbols::AbstractVector{Symbol}, mapping)
+    reduced = Symbol[]
+    for sym in symbols
+        target = mapping[sym]
+        target in reduced || push!(reduced, target)
+    end
+    return reduced
+end
+
+function _parameter_chart_from_map(
+    model::Bnc, chart::Symbol, symbols::AbstractVector{Symbol}, map, groups, reduced_symbols
+)
+    mapping = _identified_parameter_map(symbols, map, groups)
+    resolved_reduced_symbols = if isnothing(reduced_symbols)
+        _unique_mapped_symbols(symbols, mapping)
+    else
+        _constraint_symbol.(collect(reduced_symbols))
+    end
+
+    F = zeros(Float64, length(symbols), length(resolved_reduced_symbols))
+    for (i, sym) in pairs(symbols)
+        target = mapping[sym]
+        j = findfirst(==(target), resolved_reduced_symbols)
+        isnothing(j) && throw(
+            ArgumentError(
+                "Mapped symbol $(repr(target)) is not present in reduced_symbols $(repr(resolved_reduced_symbols)).",
+            ),
+        )
+        F[i, j] = 1.0
+    end
+
+    return ParameterChart(
+        model,
+        chart,
+        collect(symbols),
+        resolved_reduced_symbols,
+        F,
+        zeros(Float64, length(symbols)),
+        :identified_parameters,
+        String[],
+    )
+end
+
+function _parameter_chart_from_matrix(
+    model::Bnc,
+    chart::Symbol,
+    symbols::AbstractVector{Symbol};
+    F,
+    F0=nothing,
+    reduced_symbols=nothing,
+    basis::Symbol=:provided,
+)
+    F_mat = Matrix{Float64}(F)
+    size(F_mat, 1) == length(symbols) || throw(
+        ArgumentError(
+            "F must have $(length(symbols)) rows for chart $(repr(chart)), got $(size(F_mat, 1)).",
+        ),
+    )
+
+    F0_vec = if isnothing(F0)
+        zeros(Float64, length(symbols))
+    else
+        Float64.(vec(F0))
+    end
+    length(F0_vec) == length(symbols) ||
+        throw(ArgumentError("F0 length must match the number of original chart symbols."))
+
+    resolved_reduced_symbols = if isnothing(reduced_symbols)
+        [Symbol(:theta_, i) for i in 1:size(F_mat, 2)]
+    else
+        _constraint_symbol.(collect(reduced_symbols))
+    end
+    length(resolved_reduced_symbols) == size(F_mat, 2) ||
+        throw(ArgumentError("reduced_symbols length must match the number of F columns."))
+
+    return ParameterChart(
+        model,
+        chart,
+        collect(symbols),
+        resolved_reduced_symbols,
+        F_mat,
+        F0_vec,
+        basis,
+        String[],
+    )
+end
+
+"""
+    parameter_chart(model; chart=:auto, map=nothing, groups=nothing)
+    parameter_chart(model; chart=:auto, F, F0=zeros(...), reduced_symbols)
+
+Build an affine parameter chart `old = F * new + F0`.
+
+`map` uses `old_symbol => new_symbol` pairs. `groups` uses
+`new_symbol => old_symbols` pairs. Unmapped original symbols are kept as
+independent reduced symbols.
+"""
+function parameter_chart(
+    obj;
+    chart::Symbol=:auto,
+    map=nothing,
+    groups=nothing,
+    F=nothing,
+    F0=nothing,
+    reduced_symbols=nothing,
+    basis::Symbol=:identified_parameters,
+)
+    model = get_binding_network(obj)
+    resolved_chart = _resolve_constraint_chart(obj, chart)
+    symbols = _chart_symbols(obj, resolved_chart)
+
+    if !isnothing(F)
+        return _parameter_chart_from_matrix(
+            model,
+            resolved_chart,
+            symbols;
+            F=F,
+            F0=F0,
+            reduced_symbols=reduced_symbols,
+            basis=basis === :identified_parameters ? :provided : basis,
+        )
+    end
+
+    if isnothing(map) && isnothing(groups)
+        eye = Matrix{Float64}(I, length(symbols), length(symbols))
+        return ParameterChart(
+            model,
+            resolved_chart,
+            collect(symbols),
+            collect(symbols),
+            eye,
+            zeros(Float64, length(symbols)),
+            :identity,
+            String[],
+        )
+    end
+
+    return _parameter_chart_from_map(
+        model, resolved_chart, symbols, map, groups, reduced_symbols
+    )
+end
+
 function _matrix_constraints(C, C0, nullity::Integer, n::Int)
     if isnothing(C)
         isnothing(C0) || throw(ArgumentError("C0 was provided without C."))
@@ -221,15 +456,150 @@ function _affine_subspace(
     return offset, basis, compatible, residual
 end
 
+function _reduce_constraint_rows(C, C0, chart::ParameterChart, symbols::Symbol)
+    if symbols === :reduced
+        return C, C0
+    elseif symbols === :original
+        return C * chart.F, C * chart.F0 + C0
+    end
+    throw(ArgumentError("Constraint symbols must be `:reduced` or `:original`."))
+end
+
+function _composed_basis_kind(parent::Symbol, equality_rows::Int, basis::Symbol)
+    equality_rows == 0 && return parent
+    parent === :identity && return basis
+    return :composed
+end
+
+function _parameter_constraints_from_chart(
+    chart_obj::ParameterChart;
+    C=nothing,
+    C0=nothing,
+    nullity::Integer=0,
+    equalities=nothing,
+    inequalities=nothing,
+    symbols::Symbol=:reduced,
+    basis::Symbol=:orthonormal,
+    atol::Real=1e-10,
+)
+    source_symbols = if symbols === :reduced
+        chart_obj.reduced_symbols
+    elseif symbols === :original
+        chart_obj.original_symbols
+    else
+        throw(ArgumentError("Constraint symbols must be `:reduced` or `:original`."))
+    end
+
+    eq_C, eq_C0 = _constraint_equalities(source_symbols, equalities)
+    ineq_C, ineq_C0, notes = _constraint_inequalities(source_symbols, inequalities)
+    mat_C, mat_C0, mat_nullity = _matrix_constraints(C, C0, nullity, length(source_symbols))
+
+    mat_eq_C = mat_C[1:mat_nullity, :]
+    mat_eq_C0 = mat_C0[1:mat_nullity]
+    mat_ineq_C = mat_C[(mat_nullity + 1):end, :]
+    mat_ineq_C0 = mat_C0[(mat_nullity + 1):end]
+
+    equality_C_source = vcat(eq_C, mat_eq_C)
+    equality_C0_source = vcat(eq_C0, mat_eq_C0)
+    inequality_C_source = vcat(ineq_C, mat_ineq_C)
+    inequality_C0_source = vcat(ineq_C0, mat_ineq_C0)
+
+    equality_C_y, equality_C0_y = _reduce_constraint_rows(
+        equality_C_source, equality_C0_source, chart_obj, symbols
+    )
+    inequality_C_y, inequality_C0_y = _reduce_constraint_rows(
+        inequality_C_source, inequality_C0_source, chart_obj, symbols
+    )
+
+    y_offset, y_basis, compatible, residual = _affine_subspace(
+        equality_C_y, equality_C0_y; atol=atol
+    )
+
+    final_basis = chart_obj.F * y_basis
+    final_offset = chart_obj.F * y_offset + chart_obj.F0
+    reduced_inequality_C = inequality_C_y * y_basis
+    reduced_inequality_C0 = inequality_C_y * y_offset + inequality_C0_y
+    final_reduced_symbols = if size(equality_C_y, 1) == 0
+        chart_obj.reduced_symbols
+    else
+        [Symbol(:theta_, i) for i in 1:size(final_basis, 2)]
+    end
+    basis_kind = _composed_basis_kind(chart_obj.basis_kind, size(equality_C_y, 1), basis)
+    final_chart = ParameterChart(
+        chart_obj.model,
+        chart_obj.chart,
+        chart_obj.original_symbols,
+        final_reduced_symbols,
+        final_basis,
+        final_offset,
+        basis_kind,
+        vcat(chart_obj.notes, notes),
+    )
+
+    C_full = vcat(equality_C_source, inequality_C_source)
+    C0_full = vcat(equality_C0_source, inequality_C0_source)
+
+    return ParameterConstraints(
+        chart_obj.model,
+        chart_obj.chart,
+        chart_obj.original_symbols,
+        C_full,
+        C0_full,
+        size(equality_C_y, 1),
+        equality_C_source,
+        equality_C0_source,
+        inequality_C_source,
+        inequality_C0_source,
+        final_basis,
+        final_offset,
+        final_reduced_symbols,
+        reduced_inequality_C,
+        reduced_inequality_C0,
+        compatible,
+        residual,
+        vcat(chart_obj.notes, notes),
+        final_chart,
+        basis_kind,
+    )
+end
+
 """
+    parameter_constraints(chart::ParameterChart; inequalities=nothing, symbols=:reduced)
     parameter_constraints(model; chart=:auto, C=nothing, C0=nothing, nullity=0,
                           equalities=nothing, inequalities=nothing)
 
 Build an analysis-time constraint object. Matrix constraints use the package
 condition convention: the first `nullity` rows are equalities and later rows are
-inequalities. Symbolic equalities and inequalities are optional convenience
-syntax and are compiled to the same representation.
+inequalities.
+
+When the first argument is a `ParameterChart`, constraints are interpreted in
+the reduced chart by default. Use `symbols=:original` to write them in the
+original chart and pull them back through the affine map.
 """
+function parameter_constraints(
+    chart_obj::ParameterChart;
+    C=nothing,
+    C0=nothing,
+    nullity::Integer=0,
+    equalities=nothing,
+    inequalities=nothing,
+    symbols::Symbol=:reduced,
+    basis::Symbol=:orthonormal,
+    atol::Real=1e-10,
+)
+    return _parameter_constraints_from_chart(
+        chart_obj;
+        C=C,
+        C0=C0,
+        nullity=nullity,
+        equalities=equalities,
+        inequalities=inequalities,
+        symbols=symbols,
+        basis=basis,
+        atol=atol,
+    )
+end
+
 function parameter_constraints(
     obj;
     chart::Symbol=:auto,
@@ -238,8 +608,39 @@ function parameter_constraints(
     nullity::Integer=0,
     equalities=nothing,
     inequalities=nothing,
+    map=nothing,
+    groups=nothing,
+    F=nothing,
+    F0=nothing,
+    reduced_symbols=nothing,
+    constraint_symbols::Symbol=:original,
+    basis::Symbol=:orthonormal,
     atol::Real=1e-10,
 )
+    if !isnothing(map) || !isnothing(groups) || !isnothing(F)
+        chart_obj = parameter_chart(
+            obj;
+            chart=chart,
+            map=map,
+            groups=groups,
+            F=F,
+            F0=F0,
+            reduced_symbols=reduced_symbols,
+            basis=isnothing(F) ? :identified_parameters : :provided,
+        )
+        return parameter_constraints(
+            chart_obj;
+            C=C,
+            C0=C0,
+            nullity=nullity,
+            equalities=equalities,
+            inequalities=inequalities,
+            symbols=constraint_symbols,
+            basis=basis,
+            atol=atol,
+        )
+    end
+
     model = get_binding_network(obj)
     resolved_chart = _resolve_constraint_chart(obj, chart)
     symbols = _chart_symbols(obj, resolved_chart)
@@ -259,13 +660,24 @@ function parameter_constraints(
     inequality_C = vcat(ineq_C, mat_ineq_C)
     inequality_C0 = vcat(ineq_C0, mat_ineq_C0)
 
-    offset, basis, compatible, residual = _affine_subspace(
+    offset, basis_matrix, compatible, residual = _affine_subspace(
         equality_C, equality_C0; atol=atol
     )
 
-    reduced_inequality_C = inequality_C * basis
+    reduced_inequality_C = inequality_C * basis_matrix
     reduced_inequality_C0 = inequality_C * offset + inequality_C0
-    reduced_symbols = [Symbol(:theta_, i) for i in 1:size(basis, 2)]
+    reduced_symbols = [Symbol(:theta_, i) for i in 1:size(basis_matrix, 2)]
+    basis_kind = size(equality_C, 1) == 0 ? :identity : basis
+    chart_obj = ParameterChart(
+        model,
+        resolved_chart,
+        collect(symbols),
+        reduced_symbols,
+        basis_matrix,
+        offset,
+        basis_kind,
+        notes,
+    )
 
     C_full = vcat(equality_C, inequality_C)
     C0_full = vcat(equality_C0, inequality_C0)
@@ -281,7 +693,7 @@ function parameter_constraints(
         equality_C0,
         inequality_C,
         inequality_C0,
-        basis,
+        basis_matrix,
         offset,
         reduced_symbols,
         reduced_inequality_C,
@@ -289,6 +701,8 @@ function parameter_constraints(
         compatible,
         residual,
         notes,
+        chart_obj,
+        basis_kind,
     )
 end
 
@@ -562,22 +976,32 @@ function stable_regime_intersections(
     return rows
 end
 
-function _constraints_satisfied(y, C, C0; tol::Real=0.0)
+function _constraints_satisfied(y, C, C0; tol::Real=0.0, asymptotic::Bool=false)
     isempty(C0) && return true
-    vals = C * y + C0
+    vals = if asymptotic
+        C * y
+    else
+        C * y + C0
+    end
     return all(vals .>= -abs(Float64(tol)))
 end
 
-function _restricted_hit(y, restricted::RestrictedRegime; tol::Real=0.0)
+function _restricted_hit(
+    y, restricted::RestrictedRegime; tol::Real=0.0, asymptotic::Bool=false
+)
     restricted.feasible || return false
     nlt = restricted.nullity
     if nlt > 0
-        eq_vals = restricted.C[1:nlt, :] * y + restricted.C0[1:nlt]
+        eq_vals = if asymptotic
+            restricted.C[1:nlt, :] * y
+        else
+            restricted.C[1:nlt, :] * y + restricted.C0[1:nlt]
+        end
         all(abs.(eq_vals) .<= abs(Float64(tol))) || return false
     end
     C_ineq = restricted.C[(nlt + 1):end, :]
     C0_ineq = restricted.C0[(nlt + 1):end]
-    return _constraints_satisfied(y, C_ineq, C0_ineq; tol=tol)
+    return _constraints_satisfied(y, C_ineq, C0_ineq; tol=tol, asymptotic=asymptotic)
 end
 
 function _draw_reduced_sample!(y, rng, sampler::Symbol, log_lower, log_upper)
@@ -615,12 +1039,22 @@ function _combination_table(counts::Dict{Tuple, Int}, total::Int)
     return rows
 end
 
+function _multistability_mode(mode::Symbol)
+    mode in (:finite_region, :asymptotic_R) ||
+        throw(ArgumentError("mode must be one of `:finite_region` or `:asymptotic_R`."))
+    return mode
+end
+
 """
-    multistability_profile(model; constraints=parameter_constraints(model), samples=100_000)
+    multistability_profile(model; constraints=parameter_constraints(model), samples=100_000, mode=:finite_region)
 
 Estimate constrained R-index summaries by sampling points that satisfy the
 analysis constraints and counting how many stable restricted BNC regimes contain
 each sampled point.
+
+`mode=:finite_region` uses the full restricted inequalities, including offsets.
+`mode=:asymptotic_R` strips offsets and samples the recession-cone membership
+used by asymptotic solid-angle R-index calculations.
 """
 function multistability_profile(
     model::Bnc;
@@ -639,7 +1073,10 @@ function multistability_profile(
     hit_tol::Real=0.0,
     constraint_tol::Real=0.0,
     pair_intersections::Bool=true,
+    mode::Symbol=:finite_region,
 )
+    resolved_mode = _multistability_mode(mode)
+    asymptotic = resolved_mode === :asymptotic_R
     restricted = restrict_regimes(
         regimes,
         constraints;
@@ -666,12 +1103,14 @@ function multistability_profile(
             constraints.reduced_inequality_C,
             constraints.reduced_inequality_C0;
             tol=constraint_tol,
+            asymptotic=asymptotic,
         ) || continue
 
         accepted += 1
         hits = Int[]
         for rr in restricted
-            _restricted_hit(y, rr; tol=hit_tol) && push!(hits, get_idx(rr.regime))
+            _restricted_hit(y, rr; tol=hit_tol, asymptotic=asymptotic) &&
+                push!(hits, get_idx(rr.regime))
         end
         nhit = length(hits)
         max_hit_count = max(max_hit_count, nhit)
@@ -695,7 +1134,10 @@ function multistability_profile(
 
     return (;
         constraints=constraints,
-        denominator=:constraint_region,
+        mode=resolved_mode,
+        denominator=asymptotic ? :constraint_cone : :constraint_region,
+        basis_kind=constraints.basis_kind,
+        reduced_symbols=constraints.reduced_symbols,
         requested_samples=Int(samples),
         accepted_samples=accepted,
         draws=draws,
@@ -709,5 +1151,86 @@ function multistability_profile(
         R_atleast_1=get(R_atleast, 1, 0.0),
         R_atleast_2=get(R_atleast, 2, 0.0),
         R_atleast_3=get(R_atleast, 3, 0.0),
+    )
+end
+
+"""
+    multistability_R_index(model; constraints=parameter_constraints(model), mode=:asymptotic_R, samples=100_000)
+
+Report-oriented constrained multistability summary. This wraps
+`multistability_profile` and returns deterministic regime counts together with
+the conditional `R_multistability = R_atleast_2`.
+"""
+function multistability_R_index(
+    model::Bnc;
+    constraints::ParameterConstraints=parameter_constraints(model; chart=:auto),
+    regimes=get_bnc_regimes(model; feasible=true),
+    samples::Integer=100_000,
+    max_draws::Integer=max(10 * samples, samples + 1),
+    sampler::Symbol=:gaussian,
+    log_lower=-6.0,
+    log_upper=6.0,
+    rng_seed::Integer=0x12345678,
+    singular::Bool=false,
+    feasible::Bool=true,
+    full_dim::Bool=true,
+    hit_tol::Real=0.0,
+    constraint_tol::Real=0.0,
+    mode::Symbol=:asymptotic_R,
+)
+    full_dim_restricted = restrict_regimes(
+        regimes,
+        constraints;
+        stable=nothing,
+        singular=singular,
+        feasible=feasible,
+        full_dim=full_dim,
+    )
+    stable_full_dim_restricted = [
+        rr for rr in full_dim_restricted if is_stable(rr.regime) === true
+    ]
+    profile = multistability_profile(
+        model;
+        constraints=constraints,
+        regimes=regimes,
+        samples=samples,
+        max_draws=max_draws,
+        sampler=sampler,
+        log_lower=log_lower,
+        log_upper=log_upper,
+        rng_seed=rng_seed,
+        stable=true,
+        singular=singular,
+        feasible=feasible,
+        full_dim=full_dim,
+        hit_tol=hit_tol,
+        constraint_tol=constraint_tol,
+        pair_intersections=true,
+        mode=mode,
+    )
+
+    p = profile.R_atleast_2
+    stderr =
+        profile.accepted_samples == 0 ? NaN : sqrt(p * (1 - p) / profile.accepted_samples)
+
+    return (;
+        constraints=constraints,
+        profile=profile,
+        mode=profile.mode,
+        denominator=profile.denominator,
+        basis_kind=constraints.basis_kind,
+        reduced_symbols=constraints.reduced_symbols,
+        total_bnc_regimes=length(regimes),
+        full_dim_regimes=length(full_dim_restricted),
+        stable_full_dim_regimes=length(stable_full_dim_restricted),
+        pair_intersections=length(profile.pair_table),
+        R_multistability=profile.R_atleast_2,
+        stderr=stderr,
+        samples=profile.accepted_samples,
+        requested_samples=profile.requested_samples,
+        draws=profile.draws,
+        pair_table=profile.pair_table,
+        combination_counts=profile.combination_counts,
+        notes=constraints.notes,
     )
 end

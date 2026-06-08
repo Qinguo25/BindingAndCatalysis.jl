@@ -79,12 +79,14 @@ families cheap and explicit.
 Implemented APIs:
 
 ```julia
+parameter_chart
 parameter_constraints
 restrict_polyhedron
 restrict_regime
 restrict_regimes
 stable_regime_intersections
 multistability_profile
+multistability_R_index
 is_full_dimensional
 ```
 
@@ -93,6 +95,9 @@ Design choices:
 - Matrix constraints are the core API, matching the package condition
   convention: first `nullity` rows are equalities and later rows are
   inequalities.
+- Parameter charts now explicitly encode `old = F*new + F0`.
+- Biological parameter identification can be expressed with `map` or `groups`,
+  while advanced users can pass `F,F0` directly.
 - Symbolic equalities and inequalities are convenience syntax compiled into the
   same matrix representation.
 - Equality constraints are handled by affine reduction:
@@ -108,9 +113,14 @@ z = offset + basis * y
 - Strict inequalities such as `K1 < Kp1` are represented as closed halfspaces.
   This is appropriate for full-dimensional volume estimates because the
   boundary has zero measure.
-- `multistability_profile` samples the constraint region first, then counts how
-  many stable restricted BNC regimes contain each accepted sample. Therefore the
-  denominator is explicitly `:constraint_region`.
+- `multistability_profile(...; mode=:finite_region)` samples the constraint
+  region first, then counts how many stable restricted BNC regimes contain each
+  accepted sample. Therefore the denominator is explicitly
+  `:constraint_region`.
+- `multistability_profile(...; mode=:asymptotic_R)` strips offsets and samples
+  recession-cone membership, with `denominator=:constraint_cone`.
+- `multistability_R_index` is the report-oriented wrapper for conditional
+  asymptotic multistability R-index summaries.
 - Pairwise stable-regime intersections are retained as strict metadata.
   Higher-order multistability is currently exposed through sample hit
   combinations rather than exhaustive triple/k-tuple intersection enumeration.
@@ -277,6 +287,91 @@ Highest-priority follow-up: add an explicit constrained asymptotic
 multistability estimator that reuses `stable_regime_intersections` but preserves
 the user's chosen reduced-parameter basis and strips offsets when
 `asymptotic=true`.
+
+## Maintainer Response and Second Implementation Pass, 2026-06-08
+
+The feedback clarified that constrained R-index analysis needs two explicit
+layers:
+
+1. a parameter chart that defines how the original chart variables are expressed
+   by reduced biological parameters;
+2. constraints applied inside that chosen reduced chart.
+
+The second implementation pass added this split.
+
+### Implemented
+
+- Added `ParameterChart` and `parameter_chart`.
+- `ParameterChart` stores:
+  - `original_symbols`,
+  - `reduced_symbols`,
+  - `F`,
+  - `F0`,
+  - `basis_kind`.
+- `chart.basis` and `chart.offset` are aliases for `chart.F` and `chart.F0`,
+  so the new API remains compatible with the existing restriction internals.
+- `parameter_chart(...; map=...)` supports `old_symbol => new_symbol`
+  parameter identification.
+- `parameter_chart(...; groups=...)` supports
+  `new_symbol => old_symbols` biological grouping.
+- `parameter_chart(...; F, F0, reduced_symbols)` supports advanced affine
+  reparameterizations directly.
+- `parameter_constraints(chart; ...)` now applies constraints in reduced
+  symbols by default.
+- `parameter_constraints(chart; symbols=:original, ...)` applies constraints in
+  original symbols and pulls them back through `old = F*new + F0`.
+- The one-step convenience form is supported:
+
+```julia
+constraints = parameter_constraints(
+    model;
+    chart=:wKk,
+    map=Dict(:K1 => :K, :K2 => :K),
+    inequalities=[(:K1, :<, :Kp1), (:K2, :<, :Kp2)],
+)
+```
+
+  In this one-step form constraints default to original symbols, preserving the
+  old calling style.
+- `multistability_profile` now accepts:
+
+```julia
+mode=:finite_region
+mode=:asymptotic_R
+```
+
+- `mode=:finite_region` keeps offsets and returns
+  `denominator=:constraint_region`.
+- `mode=:asymptotic_R` strips offsets and returns
+  `denominator=:constraint_cone`.
+- Added `multistability_R_index`, a report-oriented wrapper that defaults to
+  `mode=:asymptotic_R` and returns:
+  - `full_dim_regimes`,
+  - `stable_full_dim_regimes`,
+  - `pair_intersections`,
+  - `R_multistability`,
+  - `stderr`,
+  - `samples`,
+  - `basis_kind`,
+  - `denominator`,
+  - `pair_table`.
+
+### Developer Position
+
+The package should not decide which biological parameters should be grouped or
+how a toggle-switch result should be interpreted. That remains project-level
+analysis.
+
+The package should be responsible for the reusable bookkeeping:
+
+- preserving the chosen affine measure convention;
+- pulling original-symbol constraints back into reduced coordinates;
+- distinguishing finite-region sampling from asymptotic cone R-index;
+- reporting the denominator and basis convention in every R-index summary.
+
+This implementation follows that boundary. It makes the older report-style
+R-index reproducible in the intended biological reduced chart without storing a
+constraint family inside `Bnc` or mutating regime caches.
 
 ## Context needed to read this file alone
 

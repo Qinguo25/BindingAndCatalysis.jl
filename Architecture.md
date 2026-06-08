@@ -283,22 +283,33 @@ constrained multistability summaries. This layer does not mutate `Bnc` or
 replace the model's regime caches. A constraint family is passed explicitly to
 restriction, overlap, and sampling functions.
 
-The central constraint object is:
+The constrained analysis layer has two central objects:
 
 ```julia
+ParameterChart
 ParameterConstraints
 ```
 
-It stores the original chart variables `z`, an affine reduced chart
+`ParameterChart` stores the affine relation from reduced analysis coordinates
+to original chart coordinates:
 
 ```math
-z = z_0 + B y,
+z = F y + F_0.
 ```
 
-and inequality rows in the reduced coordinate `y`. Equality constraints are
-absorbed into the affine parameterization. Matrix constraints use the package
-condition convention: the first `nullity` rows are equalities and later rows are
-inequalities.
+This is the package-level representation of biological parameter
+identification such as "these degradation rates are the same reduced
+parameter." It preserves the measure convention used by constrained R-index
+calculations. `map`/`groups` are user-facing constructors; direct `F,F0` input is
+available for advanced affine charts.
+
+`ParameterConstraints` stores additional equality/inequality rows after the
+chart has been chosen. By default, constraints attached to a `ParameterChart`
+are interpreted in the reduced coordinates. Use `symbols=:original` to write
+constraints in the original chart and pull them back through `F,F0`.
+
+The older matrix constraint convention remains supported: the first `nullity`
+rows are equalities and later rows are inequalities.
 
 Default chart selection:
 
@@ -308,18 +319,26 @@ Default chart selection:
 The public functions are:
 
 ```julia
+parameter_chart
 parameter_constraints
 restrict_polyhedron
 restrict_regime
 restrict_regimes
 stable_regime_intersections
 multistability_profile
+multistability_R_index
 is_full_dimensional
 ```
 
 `multistability_profile` samples the constraint region first, then counts how
 many stable restricted BNC regimes contain each accepted sample. This makes the
 R-index denominator explicit: `denominator=:constraint_region`.
+
+`multistability_profile(...; mode=:asymptotic_R)` strips offsets and samples
+recession-cone membership, returning `denominator=:constraint_cone`.
+`multistability_R_index` is the report-oriented wrapper that defaults to
+`mode=:asymptotic_R` and returns deterministic regime counts together with the
+conditional `R_multistability`.
 
 ## Public API Conventions
 
