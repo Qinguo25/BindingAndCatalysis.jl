@@ -5,6 +5,73 @@ toggle-switch multistability R-index analysis under several parameter
 constraints.  It complements `docs/developer_feedback.md`, which focused more on
 adaptation and local BNC control workflows.
 
+## Implementation Response, 2026-06-08
+
+The first implementation pass keeps these constraints purely analytical. It does
+not store a constraint family inside `Bnc` and does not mutate the binding/BNC
+regime caches. This keeps comparisons across multiple biological parameter
+families cheap and explicit.
+
+Implemented APIs:
+
+```julia
+parameter_constraints
+restrict_polyhedron
+restrict_regime
+restrict_regimes
+stable_regime_intersections
+multistability_profile
+is_full_dimensional
+```
+
+Design choices:
+
+- Matrix constraints are the core API, matching the package condition
+  convention: first `nullity` rows are equalities and later rows are
+  inequalities.
+- Symbolic equalities and inequalities are convenience syntax compiled into the
+  same matrix representation.
+- Equality constraints are handled by affine reduction:
+
+```text
+z = offset + basis * y
+```
+
+  so sampling happens in the reduced constraint chart rather than by rejection
+  against measure-zero equality rows.
+- `chart=:auto` resolves to `:qK` for binding-only analysis and `:wKk` for BNC
+  analysis.
+- Strict inequalities such as `K1 < Kp1` are represented as closed halfspaces.
+  This is appropriate for full-dimensional volume estimates because the
+  boundary has zero measure.
+- `multistability_profile` samples the constraint region first, then counts how
+  many stable restricted BNC regimes contain each accepted sample. Therefore the
+  denominator is explicitly `:constraint_region`.
+- Pairwise stable-regime intersections are retained as strict metadata.
+  Higher-order multistability is currently exposed through sample hit
+  combinations rather than exhaustive triple/k-tuple intersection enumeration.
+
+Implemented return shape for constrained multistability:
+
+```julia
+profile = multistability_profile(model; constraints, samples=...)
+
+profile.R_atleast_1
+profile.R_atleast_2
+profile.R_atleast_3
+profile.max_hit_count
+profile.combination_counts
+profile.pair_table
+profile.denominator
+```
+
+Deferred:
+
+- exact or analytic union-volume computation for stable pair intersections;
+- exhaustive triple/k-tuple intersection enumeration;
+- persistent named constraint sets stored on `Bnc`;
+- a table writer / Tables.jl-compatible wrapper around the profile object.
+
 ## Context needed to read this file alone
 
 This feedback comes from an actual downstream case study, not from a general API

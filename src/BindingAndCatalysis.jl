@@ -417,12 +417,12 @@ mutable struct CatalysisData <: AbstractBnc
             fill(zero(ExactLogExpr), nv)
         else
             [
-            if x isa ExactLogExpr
-                x
-            else
-                ExactLogExpr(rationalize(Int, Float64(x); tol=1e-10))
-            end for x in vec(F0)
-        ]
+                if x isa ExactLogExpr
+                    x
+                else
+                    ExactLogExpr(rationalize(Int, Float64(x); tol=1e-10))
+                end for x in vec(F0)
+            ]
         end
         length(F0) == nv || throw(
             ArgumentError(
@@ -609,6 +609,7 @@ _include_src("BncRegimeGraph.jl")
 # Higher-level workflows, rendering, and compatibility
 _include_src("SIMO.jl")
 _include_src("symbolics.jl")
+_include_src("RegimeConstraints.jl")
 _include_src("visualize.jl")
 _include_src("old_api.jl")
 

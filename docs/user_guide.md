@@ -107,6 +107,13 @@ wKk_sym(model)
 itI = locate_sym_wKk(model, :tI)
 ```
 
+There are two symbol-helper styles:
+
+- `_sym` helpers, such as `x_sym` and `wKk_sym`, return Symbolics `Num`
+  objects for display and symbolic expressions.
+- `_symbol` helpers, such as `x_symbol` and `wKk_symbol`, return plain
+  `Symbol`s for programmatic selectors and table outputs.
+
 Common model fields:
 
 ```julia
@@ -451,9 +458,13 @@ Filter BNC regimes:
 ```julia
 feasible = get_bnc_regimes(model; feasible=true)
 all_bnc = get_bnc_regimes(model; feasible=nothing)
-regular = get_bnc_regimes(model; nullity=0)
+regular = get_bnc_regimes(model; singular=false)
 stable = get_bnc_regimes(model; stable=true)
 ```
+
+For BNC regimes, `singular=false` refers to the BNC regime nullity `rgm.nlt`.
+It does not guarantee that the underlying binding regime has an exact binding
+derivative.  Use `hbd_source(bnc_rgm)` when derivative provenance matters.
 
 Check stability:
 
@@ -604,7 +615,115 @@ rows = compare_input_responsiveness(
 )
 ```
 
-## 12. Catalysis and Adaptation Simulations
+## 12. Constrained Multistability and R-Index
+
+Analysis-time parameter constraints let you study regime feasibility, stable
+overlap, and R-index inside a constrained parameter family without modifying the
+model's regime cache.
+
+The default chart is context dependent:
+
+- binding-only models use `chart=:qK`;
+- BNC/catalysis models use `chart=:wKk`.
+
+Matrix constraints use the package condition convention:
+
+```julia
+C * z + C0 == 0   # first nullity rows
+C * z + C0 >= 0   # remaining rows
+```
+
+For a BNC model:
+
+```julia
+constraints = parameter_constraints(
+    model;
+    chart = :auto,
+    C = C,
+    C0 = C0,
+    nullity = nlt,
+)
+```
+
+Convenience symbolic constraints are also supported:
+
+```julia
+constraints = parameter_constraints(
+    model;
+    equalities = [:k1 => :k2],
+    inequalities = [(:K1, :<, :Kp1), (:K2, :<, :Kp2)],
+)
+```
+
+Strict inequalities are represented as closed halfspaces for volume/R-index
+calculations.  This does not affect full-dimensional asymptotic volume because
+the boundary has zero measure.
+
+Restrict regimes under the constraints:
+
+```julia
+restricted = restrict_regimes(
+    get_bnc_regimes(model),
+    constraints;
+    stable = true,
+    singular = false,
+    feasible = true,
+    full_dim = true,
+)
+```
+
+Each entry records feasibility and dimension diagnostics:
+
+```julia
+rr = first(restricted)
+rr.poly
+rr.feasible
+rr.dim
+rr.ambient_dim
+rr.full_dim
+rr.reason
+```
+
+Find full-dimensional stable pair intersections:
+
+```julia
+pairs = stable_regime_intersections(
+    get_bnc_regimes(model);
+    constraints,
+    full_dim = true,
+)
+```
+
+For a constrained sampling estimate of multistability:
+
+```julia
+profile = multistability_profile(
+    model;
+    constraints,
+    samples = 500_000,
+)
+```
+
+The denominator is the constraint region: sampling first accepts points that
+satisfy `constraints`, then counts how many stable restricted BNC regimes contain
+each accepted point.
+
+Useful fields:
+
+```julia
+profile.R_atleast_1    # any stable regime
+profile.R_atleast_2    # bistability R-index
+profile.R_atleast_3    # multistability hint
+profile.max_hit_count
+profile.combination_counts
+profile.pair_table
+```
+
+`combination_counts` is useful for multistability exploration.  If many sampled
+points hit the same triple of stable regimes, that combination is a good
+candidate for a later explicit intersection check.
+
+## 13. Catalysis and Adaptation Simulations
 
 For full catalysis dynamics from an initial `x`:
 
@@ -661,7 +780,7 @@ solves the binding problem along the trajectory.  Always inspect `NaN` values
 in `result.logobserve`; they indicate that the binding solve failed at that
 time point.
 
-## 13. Symbolic Output
+## 14. Symbolic Output
 
 The symbolic display helpers return equations or inequalities that are useful
 for notebooks and reports:
@@ -680,7 +799,7 @@ show_catalysis_dynamics(bnc_rgm)
 Use `log_space=false` when you want expressions in ordinary symbolic variables
 rather than log variables.
 
-## 14. SIMO Workflows
+## 15. SIMO Workflows
 
 For one-input sweeps and path summaries:
 
@@ -700,7 +819,7 @@ SIMO_plot(
 The SIMO tools are useful when one coordinate changes and the other coordinates
 are fixed.
 
-## 15. Recommended Names and Legacy API
+## 16. Recommended Names and Legacy API
 
 Use explicit names in new code:
 
@@ -733,7 +852,7 @@ Recommended rules:
 - Use `get_catalysis_regime` / `get_catalysis_regimes` for catalysis regimes.
 - Prefer explicit `binding`, `catalysis`, and `bnc` names in user-facing code.
 
-## 16. Common Issues
+## 17. Common Issues
 
 ### `qK2x` warns that `L * N' is nonzero`
 
@@ -797,7 +916,7 @@ everything:
 get_bnc_regimes(model; feasible=nothing)
 ```
 
-## 17. Complete Small Example
+## 18. Complete Small Example
 
 ```julia
 using CairoMakie, GraphMakie

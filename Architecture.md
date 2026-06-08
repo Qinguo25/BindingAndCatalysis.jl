@@ -36,6 +36,10 @@ Bnc model
   │   ├─ BncLinearControlModel
   │   ├─ A/B/C/D regime linearization
   │   └─ invariance / responsiveness metrics
+  ├─ Constrained regime analysis layer
+  │   ├─ ParameterConstraints
+  │   ├─ restricted regime diagnostics
+  │   └─ constrained multistability/R-index sampling
   └─ Higher-level tools
       ├─ volume estimation
       ├─ symbolic rendering
@@ -244,6 +248,51 @@ compare_input_responsiveness
 `hbd_source(rgm)` and `get_H_bd_info(rgm)` expose whether the BNC dynamic
 derivative came from exact regime derivatives or numerical binding derivatives.
 This provenance is important for singular binding regimes.
+
+### Constrained Regime Analysis Layer
+
+`src/RegimeConstraints.jl` provides analysis-time parameter constraints and
+constrained multistability summaries. This layer does not mutate `Bnc` or
+replace the model's regime caches. A constraint family is passed explicitly to
+restriction, overlap, and sampling functions.
+
+The central constraint object is:
+
+```julia
+ParameterConstraints
+```
+
+It stores the original chart variables `z`, an affine reduced chart
+
+```math
+z = z_0 + B y,
+```
+
+and inequality rows in the reduced coordinate `y`. Equality constraints are
+absorbed into the affine parameterization. Matrix constraints use the package
+condition convention: the first `nullity` rows are equalities and later rows are
+inequalities.
+
+Default chart selection:
+
+- binding-only analysis uses `:qK`;
+- BNC/catalysis analysis uses `:wKk`.
+
+The public functions are:
+
+```julia
+parameter_constraints
+restrict_polyhedron
+restrict_regime
+restrict_regimes
+stable_regime_intersections
+multistability_profile
+is_full_dimensional
+```
+
+`multistability_profile` samples the constraint region first, then counts how
+many stable restricted BNC regimes contain each accepted sample. This makes the
+R-index denominator explicit: `denominator=:constraint_region`.
 
 ## Public API Conventions
 
@@ -592,6 +641,7 @@ Maintenance notes:
 10. High-level APIs:
    - `SIMO.jl`
    - `symbolics.jl`
+   - `RegimeConstraints.jl`
    - `visualize.jl`
    - `old_api.jl`
 
@@ -629,6 +679,9 @@ files that depend on methods loaded later.
 - `src/numeric.jl`: Jacobian and reaction-order numerical helpers.
 - `src/volume_calc.jl`: `Volume` type.
 - `src/volume_calc_impl.jl`: Monte Carlo volume estimation and volume routing.
+- `src/RegimeConstraints.jl`: analysis-time parameter constraints, restricted
+  regime diagnostics, stable regime intersections, and constrained
+  multistability/R-index sampling.
 
 ### Graphs, Symbolics, and Workflows
 
