@@ -41,7 +41,9 @@ Each priority was committed separately.
    - Public API now includes `linear_control_model`, `control_metrics`,
      `controllability_matrix`, `output_controllability_matrix`,
      `output_controllability_row`, `markov_coefficients`,
-     `controllability_gramian`, and `steady_state_gain`.
+     `controllability_gramian`, `output_energy`,
+     `dynamic_steady_state_gain`, `affine_steady_state_gain`, and
+     `steady_state_gain`.
    - Added `hbd_source` and `get_H_bd_info` so downstream analysis can inspect
      whether `H_bd` came from exact regime derivatives or numerical binding
      derivatives.
@@ -54,9 +56,12 @@ Each priority was committed separately.
    - Added `steady_state_invariance` and `is_steady_state_invariant`.
    - Added `input_responsiveness` and `input_responsive`.
    - Added `compare_input_responsiveness` for table-shaped regime comparisons.
+   - Added `input_drive` for explicit signed positive/negative input-drive
+     terms.
+   - Supported invariance standards: `:affine` and `:dynamic_dc_gain`.
    - Supported responsiveness standards:
-     `:direct_flux`, `:output_controllability`, `:output_reachability`,
-     `:gramian`, and `:steady_state_gain`.
+     `:direct_feedthrough`, `:direct_flux`, `:output_controllability`,
+     `:output_reachability`, `:gramian`, and `:steady_state_gain`.
 
 ### Verification
 
@@ -228,7 +233,7 @@ The user guide should explicitly distinguish these two meanings of
 "steady-state invariance"; otherwise users will assume the current function
 checks the Xiao condition.
 
-### Issue 2: `:direct_flux` Is Implemented as Direct Feedthrough, Not the Report's Direct-Flux Rule
+### Issue 2: `:direct_flux` Is Implemented as Direct Feedthrough `D`, While the Report Needs the Input Drive into the Dynamics
 
 The package currently scores `standard=:direct_flux` as:
 
@@ -252,9 +257,23 @@ s_feedthrough = ||D||_∞
 responsive iff s_feedthrough > threshold.
 ```
 
-This is a direct feedthrough test.  In the competitive adaptation report,
-`direct_flux` means a flux-dominance drive into the tAstar catalytic state,
-not the observation direct term `D`.
+This is a direct feedthrough test for the output equation.  It asks whether the
+input appears immediately in
+
+```text
+y = C z + D u.
+```
+
+The report's `direct_flux` standard instead needs the input drive into the
+dynamic equation, i.e. the `B`-side effect in
+
+```text
+dz/dt = A z + B u.
+```
+
+So the user's interpretation is essentially correct: the report needs a
+`B`-like flux-drive quantity, while the package's current `:direct_flux`
+returns a `D`-like direct-feedthrough score.
 
 For this circuit the report's direct-flux drive was:
 
@@ -288,7 +307,7 @@ e_Astar' H_bind e_tAstar > θ.
 
 Thus the package's current `:direct_flux` formula tests `D`, while the report's
 formula tests a signed flux-drive difference in the binding/catalysis
-structure.
+structure that corresponds to an input drive into the catalytic state equation.
 
 On the exact steady-state-invariant subset of the competitive adaptation
 example, this gives:
@@ -322,13 +341,18 @@ Suggested fix:
 
 - Rename the current `:direct_flux` standard to `:direct_feedthrough` if it is
   meant to represent `D`.
-- Implement the report's direct-flux rule as `:direct_flux`, at least for the
-  competitive adaptation output convention where the relevant catalytic
-  complexes are `:C1` and `:C2`.
-- If the package wants a generic version, the API needs to accept the positive
-  and negative flux species/symbols instead of inferring them silently.
+- Implement a separate B/input-drive based standard for the report's
+  `direct_flux` meaning.  For a generic package API this likely needs explicit
+  positive and negative flux terms, for example `positive_flux=:C1` and
+  `negative_flux=:C2`, instead of inferring them silently.
+- Document the distinction:
 
-### Issue 3: `:output_reachability` Currently Duplicates Output-Controllability Semantics
+```text
+direct_feedthrough: output-equation score based on D
+direct_flux:        dynamics/input-drive score based on B or flux-drive terms
+```
+
+### Issue 3: `:output_reachability` Needs an Explicit Direction Option
 
 The package currently defines `:output_reachability` as the norm of the
 output-controllability matrix:
@@ -352,9 +376,13 @@ s_norm = ||R_y||
 responsive iff s_norm > θ.
 ```
 
-This is sign-agnostic: a large negative first response and a large positive
-first response both pass.  The report's thresholded output-reachability
-criterion was signed and ordered.  Define the Markov/output coefficients:
+This sign-agnostic default is a reasonable package-level interpretation of
+"reachable": a large negative response and a large positive response are both
+evidence that the input can move the output.  The mismatch is that the report
+had an additional direction requirement.  That direction requirement should be
+an explicit option, not silently assumed by the generic default.
+
+For the directional report standard, define the Markov/output coefficients:
 
 ```text
 m_0 = D,
@@ -400,8 +428,9 @@ the report standard was:
 responsive iff (m_first > θ) or (E_y > θ^2).
 ```
 
-The package's current norm test collapses sign and coefficient order, so it
-does not implement the same reachability notion.
+The package's current norm test implements direction-free reachability.  The
+report used positive-direction reachability.  These are both reasonable
+standards, but they should have different names or an explicit keyword.
 
 For a single input and single output, this is sign-agnostic and gives the same
 responsive regimes as `:output_controllability` in the competitive adaptation
@@ -440,14 +469,27 @@ D^2 + C * W * C'
 
 Suggested fix:
 
-- Rename the current `:output_reachability` to `:output_controllability_norm`
-  or document that it is sign-agnostic and not the report standard.
-- Add the report standard under a less ambiguous name, for example
-  `:thresholded_output_reachability`.
-- The signed-first-coefficient part must preserve sign; using a norm loses the
-  distinction between positive response and negative response.
+- Keep direction-free reachability as a valid default, but document it as such.
+- Add an explicit direction parameter, for example:
 
-### Issue 4: `:gramian` Threshold Semantics Do Not Match the Report
+```julia
+input_responsiveness(
+    rgm;
+    standard=:output_reachability,
+    direction=:any,       # current norm / sign-agnostic behavior
+)
+
+input_responsiveness(
+    rgm;
+    standard=:output_reachability,
+    direction=:positive,  # report behavior: first signed coefficient > θ
+)
+```
+
+- If `direction=:positive`, the signed-first-coefficient part must preserve
+  sign; using a norm is not enough.
+
+### Issue 4: `:gramian` Threshold Semantics Need to State Whether the Threshold Is Energy-Like or Amplitude-Like
 
 The package currently scores `:gramian` as:
 
@@ -478,8 +520,13 @@ s_pkg = ||C W C'||
 responsive iff s_pkg > θ.
 ```
 
-The report used an output energy and compared it to `θ^2`.  For a qcat output,
-where `D = 0`,
+The report used an output energy and compared it to `θ^2`.  This does not mean
+the package formula is mathematically invalid; it means the threshold has a
+different unit/meaning.  If `θ` is intended as an energy threshold, comparing
+`C W C'` to `θ` is coherent.  If `θ` is intended as an output-amplitude
+threshold, then the corresponding energy cutoff is `θ^2`.
+
+For a qcat output, where `D = 0`,
 
 ```text
 E_y = C W C'.
@@ -503,11 +550,12 @@ The report's energy criterion was:
 responsive iff E_y > θ^2.
 ```
 
-The mismatch is therefore twofold:
+The semantic mismatch is therefore:
 
-1. the package compares an energy-like quantity to `θ`, while the report
-   compares energy to `θ^2`;
-2. for `x` outputs, the package omits the direct output/input energy term
+1. the package appears to treat `threshold` as an energy threshold;
+2. the report treated `threshold` as an amplitude threshold and therefore used
+   `threshold^2` for energy;
+3. for `x` outputs, the report included the direct output/input energy term
    `D D'`.
 
 On the exact steady-state-invariant subset with `threshold=0.1`, it gives:
@@ -528,8 +576,22 @@ tAstar: 20 regimes
 
 Suggested fix:
 
-- Decide whether `:gramian` should return an energy or an amplitude-like score.
-- If it returns energy, compare against `threshold^2`, not `threshold`.
+- Decide and document whether `threshold` for `:gramian` is an energy threshold
+  or an amplitude threshold.
+- If the package keeps the current behavior, document it as
+  `energy_threshold=threshold`.
+- If users pass the same `threshold` used for output amplitudes, provide an
+  option such as:
+
+```julia
+input_responsiveness(
+    rgm;
+    standard=:gramian,
+    threshold=0.1,
+    threshold_scale=:amplitude,  # compare energy to threshold^2
+)
+```
+
 - For `output_space=:x`, include the direct term when reporting output energy:
 
 ```julia
@@ -560,6 +622,248 @@ This is not necessarily a bug: `singular=false` filters BNC regime nullity, not
 whether the underlying binding regime is singular.  However, the user guide
 should state this explicitly.  Otherwise users may assume `singular=false`
 implies exact binding derivatives.
+
+## Maintainer Response to Adaptation-Control Feedback, 2026-06-08
+
+The feedback identifies real API ambiguity. The package should provide the
+general state-space and regime-affine primitives, while downstream adaptation
+projects should define biological labels, flux signs, and compound decision
+rules.
+
+### Implemented in the Generic Package Layer
+
+- `linear_control_model` continues to return `A`, `B`, `C`, and `D`, with
+  symbol-order metadata. These are the standard state-space matrices:
+  state/system matrix, input/control matrix, output/observation matrix, and
+  direct-feedthrough matrix.
+- Added explicit steady-state gain names:
+  `dynamic_steady_state_gain` for `D - C*(A \ B)` and
+  `affine_steady_state_gain` for the exact affine regime map.
+- Changed `steady_state_invariance` to accept `standard=:affine` and
+  `standard=:dynamic_dc_gain`; the affine standard is the Xiao-style
+  steady-state invariant condition.
+- Added `output_energy(ctrl; include_direct=...)` and made
+  `standard=:gramian` distinguish `threshold_scale=:energy` from
+  `threshold_scale=:amplitude`.
+- Renamed the `D`-based responsiveness meaning to
+  `standard=:direct_feedthrough`.
+- Kept `standard=:direct_flux`, but made it require explicit
+  `positive_flux` and optional `negative_flux` selectors. This prevents the
+  package from silently treating a direct-feedthrough matrix as a biological
+  flux-drive criterion.
+- Added signed reachability through
+  `standard=:output_reachability, direction=:any/:positive/:negative`.
+- Updated the user guide and architecture document to explain BNC regularity
+  versus binding-derivative provenance.
+
+### Left to User Projects
+
+- Choosing that `C1` is the positive flux term and `C2` is the negative flux
+  term.
+- Deciding that an `Astar` direct-flux response requires both a positive
+  `C1-C2` drive and a positive `Astar` sensitivity to `tAstar`.
+- Choosing thresholds and deciding whether they are amplitude-like or
+  energy-like.
+- Choosing the analysis subset, such as stable regimes, exact affine-invariant
+  regimes, or regimes with exact binding derivatives only.
+
+This keeps the package general: it exposes the reusable mathematical
+quantities, but it does not hard-code the biological interpretation of one
+adaptation circuit.
+
+## Retest After Maintainer Response, 2026-06-08
+
+I retested the implemented API on the competitive adaptation example:
+
+```text
+/home/joker/Realizibility_index/NFBLB_saver/code/common.jl
+```
+
+using the same report subset:
+
+```julia
+model = build_competitive_adaptation_model()
+stable = filter(is_stable, get_bnc_regimes(model; singular=false))
+```
+
+This gives 116 stable regular BNC regimes.
+
+### Retest Result
+
+The new API resolves the previous formula-level mismatches.  The package now
+provides the mathematical primitives needed to reproduce the report standards,
+while leaving circuit-specific biological composition rules in the downstream
+project.
+
+### Steady-State Invariance
+
+Package call:
+
+```julia
+is_steady_state_invariant(
+    rgm;
+    input=:tI,
+    output=output,
+    standard=:affine,
+    atol=1e-6,
+)
+```
+
+matches the report's exact affine/Xiao steady-state invariant standard:
+
+```text
+output   package affine standard   report/local exact affine standard
+Astar    68                        68
+tAstar   74                        74
+```
+
+The previous dynamic DC-gain behavior is still available explicitly:
+
+```julia
+standard=:dynamic_dc_gain
+```
+
+For regime 10, the new distinction is clear:
+
+```text
+regime 10, Astar:
+  affine residual     = 0.0
+  affine invariant    = true
+  dynamic DC residual = 9.983224234578937e-5
+  dynamic invariant   = false
+
+regime 10, tAstar:
+  affine residual     = 0.0
+  affine invariant    = true
+  dynamic DC residual = 9.985548675947353e-5
+  dynamic invariant   = false
+```
+
+This is the intended separation between exact affine steady-state invariance
+and dynamic local DC gain.
+
+### Direct Flux
+
+Package call:
+
+```julia
+input_responsive(
+    rgm;
+    input=:tI,
+    output=tA_ACTIVE,
+    standard=:direct_flux,
+    positive_flux=:C1,
+    negative_flux=:C2,
+    direction=:positive,
+    threshold=0.1,
+)
+```
+
+now represents the signed input-drive quantity
+
+```text
+Δ_f = ∂log(C1)/∂log(tI) - ∂log(C2)/∂log(tI)
+```
+
+instead of the output direct-feedthrough matrix `D`.
+
+Using this package primitive plus the report's project-level Astar gate,
+
+```text
+∂log(Astar)/∂log(tAstar) > 0.1,
+```
+
+reproduces the report direct-flux counts:
+
+```text
+Astar:  14
+tAstar: 20
+```
+
+This is acceptable: the package supplies the reusable signed input-drive
+primitive, and the downstream project composes the Astar-specific gate.
+
+### Output Reachability and Gramian Energy
+
+Package calls:
+
+```julia
+input_responsive(
+    rgm;
+    input=:tI,
+    output=output,
+    standard=:output_reachability,
+    direction=:positive,
+    threshold=0.1,
+)
+```
+
+and
+
+```julia
+input_responsive(
+    rgm;
+    input=:tI,
+    output=output,
+    standard=:gramian,
+    threshold=0.1,
+    threshold_scale=:amplitude,
+)
+```
+
+now expose the two pieces needed for the report's thresholded reachability
+standard:
+
+```text
+responsive iff (first signed Markov coefficient > 0.1)
+              or (output energy > 0.1^2).
+```
+
+The recomposed report criterion matches the previous report counts:
+
+```text
+output   output_controllability   positive reachability   gramian amplitude   reachability OR gramian
+Astar    46                       20                      15                  20
+tAstar   45                       20                      10                  20
+```
+
+Note: the old report column named "gramian" actually used the compound
+thresholded-reachability rule, i.e. signed first coefficient OR energy.  The
+package's `standard=:gramian` is now correctly just the energy piece.
+
+### Batch API
+
+The batch helper also runs with the new explicit keywords:
+
+```julia
+rows = compare_input_responsiveness(
+    stable;
+    input=:tI,
+    outputs=(A_ACTIVE, tA_ACTIVE),
+    standards=(
+        :direct_feedthrough,
+        :direct_flux,
+        :output_controllability,
+        :output_reachability,
+        :gramian,
+    ),
+    threshold=0.1,
+    positive_flux=:C1,
+    negative_flux=:C2,
+    direction=:positive,
+    threshold_scale=:amplitude,
+)
+```
+
+Result:
+
+```text
+rows = 1160
+errors = 0
+missing responsiveness entries = 0
+```
+
+No further package-level API issue is identified from this retest.
 
 ## 1. Export Symmetric Regime Index and Permutation Helpers
 

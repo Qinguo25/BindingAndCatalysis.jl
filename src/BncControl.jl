@@ -2,9 +2,10 @@ export BncLinearControlModel
 export hbd_source, get_H_bd_info
 export linear_control_model, control_metrics
 export controllability_matrix, output_controllability_matrix, output_controllability_row
-export markov_coefficients, controllability_gramian, steady_state_gain
+export markov_coefficients, controllability_gramian, output_energy
+export dynamic_steady_state_gain, affine_steady_state_gain, steady_state_gain
 export steady_state_invariance, is_steady_state_invariant
-export input_responsiveness, input_responsive, compare_input_responsiveness
+export input_drive, input_responsiveness, input_responsive, compare_input_responsiveness
 
 """
     BncLinearControlModel
@@ -13,6 +14,9 @@ Linearized Binding-Catalysis control data for a `BncRegime`.
 
 The state is `log(q_cat)`. Inputs are selected from `wKk_symbol(rgm)`,
 and outputs are selected from either `x_symbol(rgm)` or `q_cat_symbol(rgm)`.
+The matrices follow the standard state-space convention: `A` is the state or
+system matrix, `B` is the input matrix, `C` is the output matrix, and `D` is
+the direct-feedthrough matrix.
 """
 struct BncLinearControlModel
     rgm::BncRegime
@@ -412,16 +416,71 @@ function controllability_gramian(rgm::BncRegime; horizon::Symbol=:infinite, kwar
 end
 
 """
+    dynamic_steady_state_gain(ctrl)
     steady_state_gain(ctrl)
 
-Return the DC gain `D - C * inv(A) * B`.
+Return the dynamic DC gain `D - C * inv(A) * B`. `steady_state_gain` is kept as
+the short alias for this dynamic state-space quantity.
 """
-function steady_state_gain(ctrl::BncLinearControlModel)
+function dynamic_steady_state_gain(ctrl::BncLinearControlModel)
     return ctrl.D - ctrl.C * (ctrl.A \ ctrl.B)
 end
 
+steady_state_gain(ctrl::BncLinearControlModel) = dynamic_steady_state_gain(ctrl)
+
+function dynamic_steady_state_gain(rgm::BncRegime; kwargs...)
+    return dynamic_steady_state_gain(linear_control_model(rgm; kwargs...))
+end
+
 function steady_state_gain(rgm::BncRegime; kwargs...)
-    return steady_state_gain(linear_control_model(rgm; kwargs...))
+    return dynamic_steady_state_gain(rgm; kwargs...)
+end
+
+"""
+    affine_steady_state_gain(ctrl)
+    affine_steady_state_gain(rgm::BncRegime; kwargs...)
+
+Return the exact affine steady-state coefficient from the regime map.
+
+For `output_space=:x`, this uses `get_affine_wKk2x(rgm)`. For
+`output_space=:qcat`, this uses `get_qcat_F_F0(rgm)`.
+"""
+function affine_steady_state_gain(ctrl::BncLinearControlModel)
+    H = if ctrl.output_space === :x
+        get_affine_wKk2x(ctrl.rgm)[1]
+    elseif ctrl.output_space === :qcat
+        get_qcat_F_F0(ctrl.rgm)[1]
+    else
+        throw(ArgumentError("Unsupported output_space $(repr(ctrl.output_space))."))
+    end
+    return _dense_float_matrix(H)[ctrl.output_indices, ctrl.input_indices]
+end
+
+function affine_steady_state_gain(rgm::BncRegime; kwargs...)
+    return affine_steady_state_gain(linear_control_model(rgm; kwargs...))
+end
+
+"""
+    output_energy(ctrl; horizon=:infinite, include_direct=false)
+
+Return the output energy matrix `C*W*C'`, where `W` is the controllability
+Gramian. If `include_direct=true`, add the direct term `D*D'`.
+"""
+function output_energy(
+    ctrl::BncLinearControlModel; horizon::Symbol=:infinite, include_direct::Bool=false
+)
+    W = controllability_gramian(ctrl; horizon=horizon)
+    energy = ctrl.C * W * transpose(ctrl.C)
+    include_direct && (energy += ctrl.D * transpose(ctrl.D))
+    return Matrix{Float64}((energy + transpose(energy)) ./ 2)
+end
+
+function output_energy(
+    rgm::BncRegime; horizon::Symbol=:infinite, include_direct::Bool=false, kwargs...
+)
+    return output_energy(
+        linear_control_model(rgm; kwargs...); horizon=horizon, include_direct=include_direct
+    )
 end
 
 function _maxabs(A)
@@ -429,24 +488,106 @@ function _maxabs(A)
     return Float64(maximum(abs, A))
 end
 
+function _directional_score(A, direction::Symbol)
+    if direction === :any
+        return _maxabs(A)
+    elseif direction === :positive
+        isempty(A) && return 0.0
+        return Float64(maximum(A))
+    elseif direction === :negative
+        isempty(A) && return 0.0
+        return Float64(maximum(-A))
+    end
+
+    throw(ArgumentError("direction must be one of `:any`, `:positive`, or `:negative`."))
+end
+
+function _first_signed_markov_coefficients(
+    ctrl::BncLinearControlModel; order::Integer, coefficient_atol::Real
+)
+    coeffs = markov_coefficients(ctrl; order=order)
+    first_coeffs = fill(NaN, size(ctrl.D))
+    found = falses(size(ctrl.D))
+
+    for coeff in coeffs
+        for idx in CartesianIndices(coeff)
+            if !found[idx] && abs(coeff[idx]) > coefficient_atol
+                first_coeffs[idx] = coeff[idx]
+                found[idx] = true
+            end
+        end
+    end
+
+    return first_coeffs, found
+end
+
+function _output_reachability_score(
+    ctrl::BncLinearControlModel; order::Integer, direction::Symbol, coefficient_atol::Real
+)
+    if direction === :any
+        return Float64(norm(output_controllability_matrix(ctrl; order=order)))
+    end
+
+    first_coeffs, found = _first_signed_markov_coefficients(
+        ctrl; order=order, coefficient_atol=coefficient_atol
+    )
+    any(found) || return 0.0
+    return _directional_score(first_coeffs[found], direction)
+end
+
+function _effective_threshold(standard::Symbol, threshold::Real, threshold_scale::Symbol)
+    if standard !== :gramian
+        return Float64(threshold)
+    elseif threshold_scale === :energy
+        return Float64(threshold)
+    elseif threshold_scale === :amplitude
+        return Float64(threshold)^2
+    end
+
+    throw(ArgumentError("threshold_scale must be one of `:energy` or `:amplitude`."))
+end
+
+function _resolve_include_direct(ctrl::BncLinearControlModel, include_direct)
+    isnothing(include_direct) && return ctrl.output_space === :x
+    include_direct isa Bool ||
+        throw(ArgumentError("include_direct must be `true`, `false`, or `nothing`."))
+    return include_direct
+end
+
 """
-    steady_state_invariance(ctrl; atol=1e-8)
-    steady_state_invariance(rgm::BncRegime; atol=1e-8, kwargs...)
+    steady_state_invariance(ctrl; standard=:affine, atol=1e-8)
+    steady_state_invariance(rgm::BncRegime; standard=:affine, atol=1e-8, kwargs...)
 
 Return a diagnostic named tuple for the steady-state input-output gain.
 
-The output is steady-state invariant when `maximum(abs, steady_state_gain(ctrl)) <= atol`.
-If the gain cannot be computed, `invariant=false` and `error` records the reason.
+`standard=:affine` checks the exact affine steady-state map of the BNC regime.
+`standard=:dynamic_dc_gain` checks the local dynamic DC gain
+`D - C * (A \\ B)`. If the gain cannot be computed, `invariant=false` and
+`error` records the reason.
 """
-function steady_state_invariance(ctrl::BncLinearControlModel; atol::Real=1e-8)
+function steady_state_invariance(
+    ctrl::BncLinearControlModel; standard::Symbol=:affine, atol::Real=1e-8
+)
     try
-        gain = steady_state_gain(ctrl)
+        gain, source = if standard === :affine
+            affine_steady_state_gain(ctrl), :affine_steady_state_map
+        elseif standard === :dynamic_dc_gain || standard === :dc_gain
+            dynamic_steady_state_gain(ctrl), :dynamic_dc_gain
+        else
+            throw(
+                ArgumentError(
+                    "Unknown invariance standard $(repr(standard)). Supported standards are `:affine` and `:dynamic_dc_gain`.",
+                ),
+            )
+        end
         residual = _maxabs(gain)
         return (;
+            standard=standard,
             invariant=residual <= atol,
             residual=residual,
             atol=Float64(atol),
             gain=gain,
+            source=source,
             input=ctrl.input,
             output=ctrl.output,
             output_space=ctrl.output_space,
@@ -455,10 +596,12 @@ function steady_state_invariance(ctrl::BncLinearControlModel; atol::Real=1e-8)
         )
     catch err
         return (;
+            standard=standard,
             invariant=false,
             residual=Inf,
             atol=Float64(atol),
             gain=nothing,
+            source=missing,
             input=ctrl.input,
             output=ctrl.output,
             output_space=ctrl.output_space,
@@ -468,8 +611,12 @@ function steady_state_invariance(ctrl::BncLinearControlModel; atol::Real=1e-8)
     end
 end
 
-function steady_state_invariance(rgm::BncRegime; atol::Real=1e-8, kwargs...)
-    return steady_state_invariance(linear_control_model(rgm; kwargs...); atol=atol)
+function steady_state_invariance(
+    rgm::BncRegime; standard::Symbol=:affine, atol::Real=1e-8, kwargs...
+)
+    return steady_state_invariance(
+        linear_control_model(rgm; kwargs...); standard=standard, atol=atol
+    )
 end
 
 """
@@ -481,25 +628,120 @@ function is_steady_state_invariant(args...; kwargs...)
     return steady_state_invariance(args...; kwargs...).invariant
 end
 
-function _responsiveness_score(
-    ctrl::BncLinearControlModel, standard::Symbol; order::Integer, horizon::Symbol
+"""
+    input_drive(rgm::BncRegime; input=:all, positive, negative=nothing, target_space=:x, direction=:positive)
+
+Return a signed direct input-drive diagnostic. `positive` and `negative` select
+rows in `target_space`; the reported drive is `sum(positive rows) - sum(negative rows)`.
+
+Use `target_space=:x` for binding-species drive terms and `target_space=:qcat`
+for direct drive into catalytic state variables.
+"""
+function input_drive(
+    rgm::BncRegime;
+    input=:all,
+    positive,
+    negative=nothing,
+    target_space::Symbol=:x,
+    direction::Symbol=:positive,
+    timescale=:identity,
 )
-    if standard === :direct_flux
+    wKk_symbols = wKk_symbol(rgm)
+    input_indices = _selector_indices(input, wKk_symbols; what="input")
+
+    target_symbols, drive_matrix, source = if target_space === :x
+        _, _, D_x_full, _ = _binding_control_blocks(rgm)
+        x_symbol(rgm), D_x_full[:, input_indices], :binding_direct_input_drive
+    elseif target_space === :qcat
+        ctrl = linear_control_model(
+            rgm; input=input, output=:qcat, output_space=:qcat, timescale=timescale
+        )
+        ctrl.qcat_symbols, ctrl.B, :qcat_input_drive
+    else
+        throw(ArgumentError("target_space must be one of `:x` or `:qcat`."))
+    end
+
+    positive_indices = _selector_indices(positive, target_symbols; what="positive")
+    negative_indices = if isnothing(negative)
+        Int[]
+    else
+        _selector_indices(negative, target_symbols; what="negative")
+    end
+
+    positive_drive = sum(drive_matrix[positive_indices, :]; dims=1)
+    negative_drive = if isempty(negative_indices)
+        zeros(Float64, 1, length(input_indices))
+    else
+        sum(drive_matrix[negative_indices, :]; dims=1)
+    end
+    drive = Matrix{Float64}(positive_drive - negative_drive)
+    score = _directional_score(drive, direction)
+
+    return (;
+        score=score,
+        drive=drive,
+        direction=direction,
+        input=wKk_symbols[input_indices],
+        positive=target_symbols[positive_indices],
+        negative=target_symbols[negative_indices],
+        target_space=target_space,
+        source=source,
+    )
+end
+
+function input_drive(ctrl::BncLinearControlModel; input=nothing, kwargs...)
+    selected_input = isnothing(input) ? ctrl.input : input
+    return input_drive(ctrl.rgm; input=selected_input, kwargs...)
+end
+
+function _responsiveness_score(
+    ctrl::BncLinearControlModel,
+    standard::Symbol;
+    order::Integer,
+    horizon::Symbol,
+    direction::Symbol,
+    coefficient_atol::Real,
+    threshold_scale::Symbol,
+    include_direct,
+    positive_flux,
+    negative_flux,
+    flux_space::Symbol,
+)
+    if standard === :direct_feedthrough
         return _maxabs(ctrl.D)
+    elseif standard === :direct_flux
+        isnothing(positive_flux) && throw(
+            ArgumentError(
+                "`standard=:direct_flux` requires `positive_flux`; pass `negative_flux` when the drive is a signed difference. Use `standard=:direct_feedthrough` for the output-equation `D` term.",
+            ),
+        )
+        return input_drive(
+            ctrl;
+            positive=positive_flux,
+            negative=negative_flux,
+            target_space=flux_space,
+            direction=direction,
+        ).score
     elseif standard === :output_controllability
         return _maxabs(output_controllability_matrix(ctrl; order=order))
     elseif standard === :output_reachability
-        return Float64(norm(output_controllability_matrix(ctrl; order=order)))
+        return _output_reachability_score(
+            ctrl; order=order, direction=direction, coefficient_atol=coefficient_atol
+        )
     elseif standard === :gramian
-        W = controllability_gramian(ctrl; horizon=horizon)
-        return Float64(norm(ctrl.C * W * transpose(ctrl.C)))
+        resolved_include_direct = _resolve_include_direct(ctrl, include_direct)
+        return Float64(
+            norm(
+                output_energy(ctrl; horizon=horizon, include_direct=resolved_include_direct)
+            ),
+        )
     elseif standard === :steady_state_gain
-        return _maxabs(steady_state_gain(ctrl))
+        return _maxabs(dynamic_steady_state_gain(ctrl))
     end
 
     throw(
         ArgumentError(
-            "Unknown responsiveness standard $(repr(standard)). Supported standards are `:direct_flux`, `:output_controllability`, `:output_reachability`, `:gramian`, and `:steady_state_gain`.",
+            "Unknown responsiveness standard $(repr(standard)). Supported standards are `:direct_feedthrough`, `:direct_flux`, `:output_controllability`, `:output_reachability`, `:gramian`, and `:steady_state_gain`.",
         ),
     )
 end
@@ -513,10 +755,13 @@ standard.
 
 Supported standards are:
 
-  - `:direct_flux`: direct `D` term magnitude.
+  - `:direct_feedthrough`: direct `D` term magnitude.
+  - `:direct_flux`: signed input drive from explicit `positive_flux` and optional `negative_flux` terms.
   - `:output_controllability`: max absolute entry of `[D C*B C*A*B ...]`.
-  - `:output_reachability`: norm of `[D C*B C*A*B ...]`.
-  - `:gramian`: norm of `C*W*C'` for the infinite-horizon controllability Gramian.
+  - `:output_reachability`: norm of `[D C*B C*A*B ...]` for `direction=:any`,
+    or the first signed Markov coefficient for `direction=:positive`/`:negative`.
+  - `:gramian`: norm of output energy. `threshold_scale=:amplitude` compares
+    energy against `threshold^2`; `threshold_scale=:energy` compares directly.
   - `:steady_state_gain`: max absolute DC gain.
 """
 function input_responsiveness(
@@ -525,14 +770,48 @@ function input_responsiveness(
     threshold::Real=1e-8,
     order::Integer=size(ctrl.A, 1) - 1,
     horizon::Symbol=:infinite,
+    direction::Symbol=:any,
+    coefficient_atol::Real=1e-12,
+    threshold_scale::Symbol=:energy,
+    include_direct=nothing,
+    positive_flux=nothing,
+    negative_flux=nothing,
+    flux_space::Symbol=:x,
 )
-    score = _responsiveness_score(ctrl, standard; order=order, horizon=horizon)
+    score = _responsiveness_score(
+        ctrl,
+        standard;
+        order=order,
+        horizon=horizon,
+        direction=direction,
+        coefficient_atol=coefficient_atol,
+        threshold_scale=threshold_scale,
+        include_direct=include_direct,
+        positive_flux=positive_flux,
+        negative_flux=negative_flux,
+        flux_space=flux_space,
+    )
+    effective_threshold = _effective_threshold(standard, threshold, threshold_scale)
+    resolved_include_direct =
+        standard === :gramian ? _resolve_include_direct(ctrl, include_direct) : false
     return (;
         standard=standard,
-        responsive=score > threshold,
+        responsive=score > effective_threshold,
         score=score,
         threshold=Float64(threshold),
+        effective_threshold=effective_threshold,
+        threshold_scale=standard === :gramian ? threshold_scale : missing,
         order=Int(order),
+        direction=if standard === :output_reachability || standard === :direct_flux
+            direction
+        else
+            missing
+        end,
+        coefficient_atol=Float64(coefficient_atol),
+        include_direct=standard === :gramian ? resolved_include_direct : missing,
+        positive_flux=standard === :direct_flux ? positive_flux : missing,
+        negative_flux=standard === :direct_flux ? negative_flux : missing,
+        flux_space=standard === :direct_flux ? flux_space : missing,
         input=ctrl.input,
         output=ctrl.output,
         output_space=ctrl.output_space,
@@ -548,12 +827,30 @@ function input_responsiveness(
     threshold::Real=1e-8,
     order=nothing,
     horizon::Symbol=:infinite,
+    direction::Symbol=:any,
+    coefficient_atol::Real=1e-12,
+    threshold_scale::Symbol=:energy,
+    include_direct=nothing,
+    positive_flux=nothing,
+    negative_flux=nothing,
+    flux_space::Symbol=:x,
     kwargs...,
 )
     ctrl = linear_control_model(rgm; kwargs...)
     resolved_order = isnothing(order) ? size(ctrl.A, 1) - 1 : order
     return input_responsiveness(
-        ctrl; standard=standard, threshold=threshold, order=resolved_order, horizon=horizon
+        ctrl;
+        standard=standard,
+        threshold=threshold,
+        order=resolved_order,
+        horizon=horizon,
+        direction=direction,
+        coefficient_atol=coefficient_atol,
+        threshold_scale=threshold_scale,
+        include_direct=include_direct,
+        positive_flux=positive_flux,
+        negative_flux=negative_flux,
+        flux_space=flux_space,
     )
 end
 
@@ -580,7 +877,7 @@ function compare_input_responsiveness(
     rgms::AbstractVector{<:BncRegime};
     input=:all,
     outputs=:x,
-    standards=(:direct_flux, :output_controllability, :output_reachability),
+    standards=(:direct_feedthrough, :output_controllability, :output_reachability),
     threshold::Real=1e-8,
     order=nothing,
     kwargs...,
@@ -619,7 +916,15 @@ function compare_input_responsiveness(
                             responsive=missing,
                             score=NaN,
                             threshold=Float64(threshold),
+                            effective_threshold=NaN,
+                            threshold_scale=missing,
                             order=isnothing(order) ? missing : order,
+                            direction=missing,
+                            coefficient_atol=missing,
+                            include_direct=missing,
+                            positive_flux=missing,
+                            negative_flux=missing,
+                            flux_space=missing,
                             input=_selector_items(input),
                             output=_selector_items(output),
                             output_space=missing,

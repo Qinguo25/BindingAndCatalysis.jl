@@ -5,6 +5,70 @@ toggle-switch multistability R-index analysis under several parameter
 constraints.  It complements `docs/developer_feedback.md`, which focused more on
 adaptation and local BNC control workflows.
 
+## Read this first
+
+This file is intended to be self-contained.  The concrete analysis behind the
+feedback was a toggle-switch multistability R-index study originally implemented
+outside this repository at:
+
+```text
+~/Realizibility_index/CASE_STUDY/Toggle_switch_constraints/
+```
+
+The old reference table is:
+
+```text
+~/Realizibility_index/CASE_STUDY/Toggle_switch_constraints/results/summary.csv
+```
+
+The case study compared monomer-repressor and dimer-repressor toggle switches.
+The monomer topology has `P1 + D2 <-> C1` and `P2 + D1 <-> C2`.  The dimer
+topology adds TF self-dimerization first: `2P1 <-> Cp1`, `2P2 <-> Cp2`, then
+`Cp1 + D2 <-> C1` and `Cp2 + D1 <-> C2`.  In the dimer model, `Kp1,Kp2` are
+self-dimerization dissociation constants and `K1,K2` are dimer-DNA dissociation
+constants, so stronger dimer-DNA binding is `K1<Kp1` and `K2<Kp2`.
+
+For each constrained parameter family, the old analysis did this:
+
+1. enumerate BNC regimes;
+2. keep feasible, stable, nonsingular, full-dimensional BNC regimes in `wKk`
+   space after constraints;
+3. intersect every pair of stable regimes;
+4. count a pair as bistable if the pair intersection is full-dimensional;
+5. estimate the asymptotic solid-angle volume of the union of those pair
+   intersections.  This was reported as the multistability R-index.
+
+After the new constraint APIs were added, I reran this workflow using
+`parameter_constraints`, `restrict_regimes`, `stable_regime_intersections`, and
+`multistability_profile`.  The new APIs reproduce the deterministic polyhedral
+counts exactly: reduced dimension, number of full-dimensional regimes, number of
+stable full-dimensional regimes, and number of stable pair intersections all
+match the old CSV.
+
+The remaining issue is R-index semantics.  The current `multistability_profile`
+does not always reproduce the old asymptotic R-index, especially after equality
+constraints.  There are two concrete reasons:
+
+- equality constraints currently use an SVD orthonormal nullspace basis, while
+  the old analysis used named biological identified-parameter coordinates, for
+  example one shared degradation coordinate copied into several original rate
+  positions;
+- `multistability_profile.R_atleast_2` samples membership in the full restricted
+  inequalities, including offsets `C0`, while the old R-index stripped offsets
+  and measured the recession cone.
+
+The main development request is therefore not more regime enumeration.  That
+part works.  The remaining request is an explicit constrained asymptotic
+multistability estimator that:
+
+- lets users choose the equality-measure convention, e.g. `basis=:orthonormal`
+  versus `basis=:identified_parameters`;
+- preserves biological reduced-coordinate labels when parameters are grouped;
+- exposes `mode=:asymptotic_R` separately from finite-region sampling;
+- returns the old report-style summary fields: `full_dim_regimes`,
+  `stable_full_dim_regimes`, `pair_intersections`, and conditional asymptotic
+  `R_multistability`.
+
 ## Implementation Response, 2026-06-08
 
 The first implementation pass keeps these constraints purely analytical. It does
@@ -71,6 +135,148 @@ Deferred:
 - exhaustive triple/k-tuple intersection enumeration;
 - persistent named constraint sets stored on `Bnc`;
 - a table writer / Tables.jl-compatible wrapper around the profile object.
+
+## Reproduction check after the implementation pass, 2026-06-08
+
+I reran the toggle-switch case study using the new public APIs listed above,
+rather than the original hand-written affine-reduction and polyhedron-intersection
+code.  The test script rebuilt the monomer and dimer toggle models, expressed the
+same parameter families with `parameter_constraints`, used `restrict_regimes` to
+filter full-dimensional stable BNC regimes, used `stable_regime_intersections` to
+find bistable stable-regime overlaps, and used `multistability_profile` for the
+sampling estimate.
+
+The deterministic parts reproduced correctly.  For every monomer and dimer
+scenario checked, the reduced dimension, number of full-dimensional regimes,
+number of stable full-dimensional regimes, and number of full-dimensional stable
+pair intersections matched the earlier case-study CSV exactly.  This is a strong
+sign that the new constraint/restriction/intersection APIs capture the core
+polyhedral workflow.
+
+The R-index values did not always reproduce the earlier case-study values,
+especially for equality-heavy constrained families.  The table below used 50,000
+samples per scenario, so small differences are Monte Carlo noise; large
+differences are semantic.
+
+| scenario | previous R-index | current `R_atleast_2` | comment |
+| --- | ---: | ---: | --- |
+| monomer unconstrained | 0.02762 | 0.02714 | matches within sampling error |
+| monomer paired loss | 0.03886 | 0.03818 | close |
+| monomer shared loss/beta | 0.06188 | 0.04828 | not reproduced |
+| monomer shared loss/beta/K | 0.06270 | 0.04836 | not reproduced |
+| monomer fully symmetric | 0.37451 | 0.25036 | not reproduced |
+| dimer unconstrained | 0.01929 | 0.01904 | matches within sampling error |
+| dimer unconstrained + `K_i<Kp_i` | 0.02784 | 0.02728 | close |
+| dimer paired bound loss | 0.02350 | 0.02686 | not reproduced |
+| dimer paired bound loss + `K_i<Kp_i` | 0.03496 | 0.03750 | not reproduced |
+| dimer paired all loss | 0.03859 | 0.03536 | not reproduced |
+| dimer paired all loss + `K_i<Kp_i` | 0.06143 | 0.05798 | not reproduced |
+| dimer shared loss/beta/K | 0.07015 | 0.04862 | not reproduced |
+| dimer shared loss/beta/K + `K_i<Kp_i` | 0.11228 | 0.07480 | not reproduced |
+| dimer fully symmetric | 0.35180 | 0.26932 | not reproduced |
+| dimer fully symmetric + `K_i<Kp_i` | 0.38737 | 0.37336 | close but still lower |
+
+Two issues explain the mismatch.
+
+### Equality constraints need an explicit measure convention
+
+The original case-study script imposed equalities by building a biological
+reduced coordinate chart directly.  For example, if several degradation rates
+were constrained to share one value, the old script sampled one shared
+degradation coordinate and copied it into all corresponding original positions.
+In matrix form this was a non-orthonormal map `z = A*y`, where repeated columns
+encode parameter identification.
+
+The new `parameter_constraints` implementation absorbs equalities using an SVD
+nullspace basis.  This produces an orthonormal coordinate system for the affine
+subspace.  That is mathematically clean, but it changes the solid-angle measure
+relative to the older biological-parameter chart.  For equality-heavy scenarios,
+the R-index can change substantially even though the feasible regimes and pair
+intersections are identical.
+
+This means the API needs to make the measure convention explicit.  I would
+suggest adding one of the following:
+
+```julia
+parameter_constraints(model; equalities, basis=:orthonormal)      # current behavior
+parameter_constraints(model; groups, basis=:identified_parameters)
+parameter_constraints(model; basis=A, offset=A0, reduced_symbols=...)
+```
+
+The `groups` form could express the older workflow directly, for example:
+
+```julia
+constraints = parameter_constraints(
+    model;
+    chart=:wKk,
+    groups = Dict(
+        :loss => [:γ1, :γ2, :η1, :η2, :δ1, :δ2],
+        :beta => [:β1, :β2],
+        :Kp => [:Kp1, :Kp2],
+        :K => [:K1, :K2],
+    ),
+    inequalities = [(:K1, :<, :Kp1), (:K2, :<, :Kp2)],
+)
+```
+
+The important point is that a user should be able to choose whether R-index is
+measured in an orthonormal subspace chart or in named biological parameter
+coordinates after parameter identification.  The guide should document the
+default, because both conventions are defensible but they answer different
+questions.
+
+### `multistability_profile` should separate finite-region sampling from asymptotic R-index
+
+The earlier report used asymptotic solid-angle R-index: after finding the
+stable-pair intersection polyhedra, it used only the recession-cone halfspace
+directions and ignored constant offsets.  The current `multistability_profile`
+checks membership using the full restricted regime inequalities, including
+`C0`.  In many scenarios these agree, but not always.  For example, in the
+50,000-sample reproduction test, monomer fully symmetric gave about `0.36376`
+when I sampled the stable-pair recession cones but only `0.25036` from
+`multistability_profile.R_atleast_2`.
+
+This should be made explicit in the API.  Possible fixes:
+
+```julia
+multistability_profile(model; constraints, asymptotic=true)
+multistability_profile(model; constraints, sampler=:gaussian_cone)
+multistability_profile(model; constraints, mode=:finite_region)
+multistability_profile(model; constraints, mode=:asymptotic_R)
+```
+
+At minimum, the user guide should state that the current `R_atleast_2` is not
+necessarily the same as the asymptotic R-index used by `calc_volume(...;
+asymptotic=true)` or by the earlier toggle-switch report.
+
+### Usability feedback from the reproduction
+
+The new APIs are a major improvement over the old script.  The most comfortable
+parts were:
+
+- `parameter_constraints` avoids manual `C*A` and `C0 + C*A0` bookkeeping;
+- `restrict_regimes` directly returns useful feasibility/dimension diagnostics;
+- `stable_regime_intersections` replaces most hand-written pair-loop code;
+- strict inequality notes are helpful and correctly remind users that strict
+  constraints become closed halfspaces for volume calculations.
+
+The remaining uncomfortable parts are:
+
+- reduced coordinates are named `theta_i`, so report tables lose biological
+  labels unless the user separately tracks the equality groups;
+- the default equality basis silently changes the measure compared with the
+  intuitive "merge these parameters into one biological parameter" workflow;
+- `multistability_profile.R_atleast_2` sounds like the requested R-index, but it
+  may be a finite-offset sampling probability instead of the asymptotic cone
+  volume;
+- there is still no direct one-call replacement for the earlier report's exact
+  summary table: `full_dim_regimes`, `stable_full_dim_regimes`,
+  `pair_intersections`, and asymptotic conditional R-index.
+
+Highest-priority follow-up: add an explicit constrained asymptotic
+multistability estimator that reuses `stable_regime_intersections` but preserves
+the user's chosen reduced-parameter basis and strips offsets when
+`asymptotic=true`.
 
 ## Context needed to read this file alone
 
@@ -198,7 +404,12 @@ write custom code for:
 These are not project-specific operations.  They are natural package-level
 operations for any R-index or multistability case study.
 
-## Suggested package additions
+## Original suggested package additions, partly implemented
+
+This section is retained as historical context for why the new constraint APIs
+were added.  Some items below are already implemented in the first pass listed
+at the top of this file.  The newer reproduction check above is the better guide
+to the remaining gaps.
 
 ### 1. Affine constraint and inequality API for regime polyhedra
 
@@ -375,7 +586,7 @@ like `"γ1" => "γδ"`.  This is fragile around Unicode, subscripts, and plain
 ASCII fallbacks.  A package-level constraint API should accept both `Symbol` and
 `Num` labels and normalize them using the same machinery as `locate_sym_*`.
 
-## Suggested priority
+## Original suggested priority, superseded by the reproduction check above
 
 Highest priority for future case studies:
 

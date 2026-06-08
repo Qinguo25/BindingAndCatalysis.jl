@@ -538,7 +538,17 @@ ctrl = linear_control_model(
 )
 ```
 
-The model stores:
+This is the standard state-space form:
+
+```text
+d state / dt = A * state + B * input
+output       = C * state + D * input
+```
+
+In control terminology, `A` is the state/system matrix, `B` is the input/control
+matrix, `C` is the output/observation matrix, and `D` is the direct-feedthrough
+matrix. The model also stores symbol order metadata so the rows and columns can
+be interpreted safely:
 
 ```julia
 ctrl.A
@@ -570,19 +580,30 @@ markov_coefficients(ctrl)
 steady_state_gain(ctrl)
 ```
 
+`steady_state_gain(ctrl)` is the dynamic DC gain `D - C * (A \ B)`. If you need
+the exact affine steady-state coefficient from the regime map, use:
+
+```julia
+affine_steady_state_gain(ctrl)
+dynamic_steady_state_gain(ctrl)
+```
+
 For stable `A`, compute the infinite-horizon controllability Gramian:
 
 ```julia
 W = controllability_gramian(ctrl)
+E = output_energy(ctrl; include_direct=true)
 ```
 
 Steady-state invariance and responsiveness helpers return diagnostic named
 tuples:
 
 ```julia
-inv = steady_state_invariance(ctrl; atol=1e-8)
+inv = steady_state_invariance(ctrl; standard=:affine, atol=1e-8)
 inv.invariant
 inv.residual
+
+dc_inv = steady_state_invariance(ctrl; standard=:dynamic_dc_gain, atol=1e-8)
 
 resp = input_responsiveness(
     bnc_rgm;
@@ -597,11 +618,67 @@ resp.score
 
 Supported responsiveness standards are:
 
-- `:direct_flux`,
+- `:direct_feedthrough`, the direct `D` matrix term;
+- `:direct_flux`, a signed input-drive score that requires explicit
+  `positive_flux` and optional `negative_flux` terms;
 - `:output_controllability`,
-- `:output_reachability`,
-- `:gramian`,
-- `:steady_state_gain`.
+- `:output_reachability`, with `direction=:any`, `:positive`, or `:negative`;
+- `:gramian`, with `threshold_scale=:energy` or `:amplitude`;
+- `:steady_state_gain`, the dynamic DC-gain magnitude.
+
+For a report-specific flux-drive standard, pass the positive and negative terms
+explicitly. The package does not infer circuit-specific biology from names such
+as `C1` and `C2`:
+
+```julia
+drive = input_drive(
+    bnc_rgm;
+    input = :tI,
+    positive = :C1,
+    negative = :C2,
+    target_space = :x,
+    direction = :positive,
+)
+
+flux_resp = input_responsiveness(
+    bnc_rgm;
+    input = :tI,
+    output = :tAstar,
+    standard = :direct_flux,
+    positive_flux = :C1,
+    negative_flux = :C2,
+    direction = :positive,
+    threshold = 0.1,
+)
+```
+
+For signed reachability, use:
+
+```julia
+input_responsiveness(
+    bnc_rgm;
+    input = :tI,
+    output = :Astar,
+    standard = :output_reachability,
+    direction = :positive,
+    threshold = 0.1,
+)
+```
+
+For Gramian-based output energy, `threshold_scale=:amplitude` compares output
+energy against `threshold^2`, while `threshold_scale=:energy` compares directly:
+
+```julia
+input_responsiveness(
+    bnc_rgm;
+    input = :tI,
+    output = :Astar,
+    standard = :gramian,
+    threshold = 0.1,
+    threshold_scale = :amplitude,
+    include_direct = true,
+)
+```
 
 For batch comparisons across regimes and outputs:
 
@@ -610,7 +687,7 @@ rows = compare_input_responsiveness(
     get_bnc_regimes(model; stable=true);
     input = first(wKk_symbol(model)),
     outputs = (first(x_symbol(model)), first(q_cat_symbol(model))),
-    standards = (:direct_flux, :output_controllability),
+    standards = (:direct_feedthrough, :output_controllability),
     threshold = 1e-8,
 )
 ```

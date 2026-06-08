@@ -92,6 +92,10 @@
     @test isdefined(Main, :control_metrics)
     @test isdefined(Main, :controllability_matrix)
     @test isdefined(Main, :output_controllability_matrix)
+    @test isdefined(Main, :dynamic_steady_state_gain)
+    @test isdefined(Main, :affine_steady_state_gain)
+    @test isdefined(Main, :output_energy)
+    @test isdefined(Main, :input_drive)
 
     ctrl = linear_control_model(
         regular; input=first(wKk_symbol(model)), output=first(x_symbol(model))
@@ -125,22 +129,58 @@
     @test size(output_ctl, 1) == 1
     @test length(marks) == cn.r_v + 1
     @test marks[1] == ctrl.D
+    @test steady_state_gain(ctrl) == dynamic_steady_state_gain(ctrl)
+    @test affine_steady_state_gain(ctrl) ==
+        Matrix{Float64}(get_H(regular))[ctrl.output_indices, ctrl.input_indices]
     if ctrl.stable
         W = controllability_gramian(ctrl)
         @test size(W) == (cn.r_v, cn.r_v)
         @test W ≈ transpose(W)
+        energy = output_energy(ctrl; include_direct=true)
+        @test size(energy) == (1, 1)
+        gramian_response = input_responsiveness(
+            ctrl;
+            standard=:gramian,
+            threshold=0.1,
+            threshold_scale=:amplitude,
+            include_direct=true,
+        )
+        @test gramian_response.effective_threshold ≈ 0.01
+        @test gramian_response.include_direct === true
     end
 
     invariance = steady_state_invariance(ctrl)
     @test hasproperty(invariance, :invariant)
     @test hasproperty(invariance, :residual)
+    @test invariance.standard == :affine
+    @test invariance.gain == affine_steady_state_gain(ctrl)
+    dynamic_invariance = steady_state_invariance(ctrl; standard=:dynamic_dc_gain)
+    @test dynamic_invariance.source == :dynamic_dc_gain
     @test is_steady_state_invariant(ctrl) == invariance.invariant
 
-    direct_response = input_responsiveness(ctrl; standard=:direct_flux, threshold=0.0)
-    @test direct_response.standard == :direct_flux
+    direct_response = input_responsiveness(
+        ctrl; standard=:direct_feedthrough, threshold=0.0
+    )
+    @test direct_response.standard == :direct_feedthrough
     @test hasproperty(direct_response, :responsive)
-    @test input_responsive(ctrl; standard=:direct_flux, threshold=0.0) ==
+    @test input_responsive(ctrl; standard=:direct_feedthrough, threshold=0.0) ==
         direct_response.responsive
+    @test_throws ArgumentError input_responsiveness(ctrl; standard=:direct_flux)
+
+    drive = input_drive(
+        regular; input=first(wKk_symbol(model)), positive=first(x_symbol(model))
+    )
+    @test size(drive.drive) == (1, 1)
+    flux_response = input_responsiveness(
+        regular;
+        input=first(wKk_symbol(model)),
+        output=first(x_symbol(model)),
+        standard=:direct_flux,
+        threshold=0.0,
+        positive_flux=first(x_symbol(model)),
+    )
+    @test flux_response.standard == :direct_flux
+    @test flux_response.positive_flux == first(x_symbol(model))
 
     output_response = input_responsiveness(
         regular;
@@ -152,12 +192,20 @@
     )
     @test output_response.standard == :output_controllability
     @test output_response.output == [first(x_symbol(model))]
+    positive_reachability = input_responsiveness(
+        ctrl;
+        standard=:output_reachability,
+        threshold=0.0,
+        direction=:positive,
+        coefficient_atol=0.0,
+    )
+    @test positive_reachability.direction == :positive
 
     response_rows = compare_input_responsiveness(
         [regular];
         input=first(wKk_symbol(model)),
         outputs=(first(x_symbol(model)), first(q_cat_symbol(model))),
-        standards=(:direct_flux, :output_controllability),
+        standards=(:direct_feedthrough, :output_controllability),
         threshold=0.0,
         order=0,
     )

@@ -218,6 +218,13 @@ The local model is:
 \delta y=C\delta q_{cat}+D\delta u.
 ```
 
+The matrix names follow standard state-space control terminology:
+
+- `A`: state/system/dynamics matrix,
+- `B`: input/control matrix,
+- `C`: output/observation matrix,
+- `D`: direct-feedthrough/direct-transmission matrix.
+
 The public constructor is:
 
 ```julia
@@ -237,17 +244,37 @@ output_controllability_matrix
 output_controllability_row
 markov_coefficients
 controllability_gramian
+output_energy
+dynamic_steady_state_gain
+affine_steady_state_gain
 steady_state_gain
 steady_state_invariance
 is_steady_state_invariant
+input_drive
 input_responsiveness
 input_responsive
 compare_input_responsiveness
 ```
 
+`steady_state_invariance` has two explicit standards. `standard=:affine`
+checks the exact affine steady-state map of the regime and is the appropriate
+standard for Xiao-style steady-state invariance. `standard=:dynamic_dc_gain`
+checks the state-space DC gain `D - C*(A \ B)`.
+
+Input responsiveness separates generic control quantities from
+project-specific biological criteria. `standard=:direct_feedthrough` uses the
+`D` matrix. `standard=:direct_flux` requires explicit `positive_flux` and
+optional `negative_flux` selectors and is implemented through `input_drive`;
+the package does not infer circuit-specific flux signs from species names.
+`standard=:output_reachability` supports `direction=:any`, `:positive`, and
+`:negative`. `standard=:gramian` supports energy-like and amplitude-like
+threshold semantics through `threshold_scale`.
+
 `hbd_source(rgm)` and `get_H_bd_info(rgm)` expose whether the BNC dynamic
 derivative came from exact regime derivatives or numerical binding derivatives.
-This provenance is important for singular binding regimes.
+This provenance is important for singular binding regimes. Note that
+`get_bnc_regimes(...; singular=false)` filters BNC nullity; it does not imply
+that the underlying binding derivative was exact.
 
 ### Constrained Regime Analysis Layer
 
