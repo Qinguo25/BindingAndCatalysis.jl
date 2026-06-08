@@ -1,8 +1,7 @@
 # BindingAndCatalysis.jl Architecture
 
 This document describes the current architecture of `BindingAndCatalysis.jl`.
-It is intended as a maintainer-facing replacement for the older
-`Archetecture.md`.
+It is the canonical maintainer-facing architecture reference for the package.
 
 ## Overview
 
@@ -33,6 +32,10 @@ Bnc model
   │   ├─ BncRegime = BindRegime × CatalysisRegime
   │   ├─ Bnc RegimeGraph
   │   └─ stability / fixed-point conditions
+  ├─ Linear BNC control layer
+  │   ├─ BncLinearControlModel
+  │   ├─ A/B/C/D regime linearization
+  │   └─ invariance / responsiveness metrics
   └─ Higher-level tools
       ├─ volume estimation
       ├─ symbolic rendering
@@ -196,6 +199,51 @@ H^{bd}=P\Pi H_{q_{cat}}.
 `is_stable(rgm)` returns `true`, `false`, or `missing`. `missing` means the
 algorithm could not determine stability. Use `stability_code(rgm)` to retrieve
 the underlying integer code.
+
+### Linear BNC Control Layer
+
+`src/BncControl.jl` provides public control-oriented summaries built on top of a
+`BncRegime`. The state is `log(q_cat)`, inputs are selected from
+`wKk_symbol(rgm)`, and outputs are selected from either `x_symbol(rgm)` or
+`q_cat_symbol(rgm)`.
+
+The local model is:
+
+```math
+\delta\dot q_{cat}=A\delta q_{cat}+B\delta u,\qquad
+\delta y=C\delta q_{cat}+D\delta u.
+```
+
+The public constructor is:
+
+```julia
+linear_control_model(rgm; input=:all, output=:x, timescale=:identity)
+```
+
+`timescale=:identity` uses the regime derivative directly. A positive vector can
+be supplied to row-scale `A` and `B`; physical timescales are not inferred from a
+regime object alone.
+
+The layer also exposes:
+
+```julia
+control_metrics
+controllability_matrix
+output_controllability_matrix
+output_controllability_row
+markov_coefficients
+controllability_gramian
+steady_state_gain
+steady_state_invariance
+is_steady_state_invariant
+input_responsiveness
+input_responsive
+compare_input_responsiveness
+```
+
+`hbd_source(rgm)` and `get_H_bd_info(rgm)` expose whether the BNC dynamic
+derivative came from exact regime derivatives or numerical binding derivatives.
+This provenance is important for singular binding regimes.
 
 ## Public API Conventions
 
@@ -535,11 +583,13 @@ Maintenance notes:
    - `BindingRegime.jl`
    - `CatalysisRegime.jl`
    - `BncRegime.jl`
-8. Graph APIs:
+8. Linear BNC control API:
+   - `BncControl.jl`
+9. Graph APIs:
    - `BindingRegimeGraph.jl`
    - `CatalysisRegimeGraph.jl`
    - `BncRegimeGraph.jl`
-9. High-level APIs:
+10. High-level APIs:
    - `SIMO.jl`
    - `symbolics.jl`
    - `visualize.jl`
@@ -561,6 +611,8 @@ files that depend on methods loaded later.
   volume access.
 - `src/CatalysisRegime.jl`: catalysis regime construction and conditions.
 - `src/BncRegime.jl`: Bnc regime matching, fixed-point conditions, stability.
+- `src/BncControl.jl`: BNC linear control models, control metrics,
+  steady-state invariance, input responsiveness, and H_bd provenance helpers.
 
 ### Mathcore
 

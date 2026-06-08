@@ -420,14 +420,16 @@ Enumerate catalysis regimes:
 
 ```julia
 cat_rgms = get_catalysis_regimes(model)
-cat_ids = get_idx.(cat_rgms)
+cat_ids = get_catalysis_indices(model)
+cat_perms = get_catalysis_perms(model)
 ```
 
 Build Binding-and-Catalysis regimes:
 
 ```julia
 bnc_rgms = get_bnc_regimes(model)
-bnc_ids = get_idx.(bnc_rgms)
+bnc_ids = get_bnc_indices(model)
+bnc_perms = get_bnc_perms(model)
 ```
 
 Fetch one BNC regime:
@@ -483,10 +485,14 @@ The local binding derivative used in BNC dynamics is:
 get_H_bd(bnc_rgm)
 ```
 
-For singular binding regimes, numerical fallback is available:
+To inspect whether this derivative came from an exact regime derivative or a
+numerical binding derivative:
 
 ```julia
-get_H_bd_numerically(bnc_rgm)
+info = get_H_bd_info(bnc_rgm)
+info.H
+info.source
+hbd_source(bnc_rgm)
 ```
 
 Assign a `wKk` point to a BNC regime:
@@ -508,7 +514,97 @@ plot_bnc_regime_partition(
 )
 ```
 
-## 11. Catalysis and Adaptation Simulations
+## 11. Linear BNC Control and Responsiveness
+
+For a BNC regime, build the local linearized control model in `log(q_cat)`
+coordinates:
+
+```julia
+ctrl = linear_control_model(
+    bnc_rgm;
+    input = :all,      # symbols from wKk_symbol(model), or one symbol
+    output = :x,       # :x, :qcat, or one output symbol
+)
+```
+
+The model stores:
+
+```julia
+ctrl.A
+ctrl.B
+ctrl.C
+ctrl.D
+ctrl.eigvals
+ctrl.stable
+ctrl.input
+ctrl.output
+ctrl.hbd_source
+```
+
+Use `control_metrics` when you want a named tuple:
+
+```julia
+metrics = control_metrics(bnc_rgm; input=:all, output=:qcat)
+metrics.A
+metrics.eigvals
+```
+
+Common regime-level control summaries:
+
+```julia
+controllability_matrix(ctrl)
+output_controllability_matrix(ctrl)
+output_controllability_row(ctrl)
+markov_coefficients(ctrl)
+steady_state_gain(ctrl)
+```
+
+For stable `A`, compute the infinite-horizon controllability Gramian:
+
+```julia
+W = controllability_gramian(ctrl)
+```
+
+Steady-state invariance and responsiveness helpers return diagnostic named
+tuples:
+
+```julia
+inv = steady_state_invariance(ctrl; atol=1e-8)
+inv.invariant
+inv.residual
+
+resp = input_responsiveness(
+    bnc_rgm;
+    input = first(wKk_symbol(model)),
+    output = first(x_symbol(model)),
+    standard = :output_controllability,
+    threshold = 1e-8,
+)
+resp.responsive
+resp.score
+```
+
+Supported responsiveness standards are:
+
+- `:direct_flux`,
+- `:output_controllability`,
+- `:output_reachability`,
+- `:gramian`,
+- `:steady_state_gain`.
+
+For batch comparisons across regimes and outputs:
+
+```julia
+rows = compare_input_responsiveness(
+    get_bnc_regimes(model; stable=true);
+    input = first(wKk_symbol(model)),
+    outputs = (first(x_symbol(model)), first(q_cat_symbol(model))),
+    standards = (:direct_flux, :output_controllability),
+    threshold = 1e-8,
+)
+```
+
+## 12. Catalysis and Adaptation Simulations
 
 For full catalysis dynamics from an initial `x`:
 
@@ -565,7 +661,7 @@ solves the binding problem along the trajectory.  Always inspect `NaN` values
 in `result.logobserve`; they indicate that the binding solve failed at that
 time point.
 
-## 12. Symbolic Output
+## 13. Symbolic Output
 
 The symbolic display helpers return equations or inequalities that are useful
 for notebooks and reports:
@@ -584,7 +680,7 @@ show_catalysis_dynamics(bnc_rgm)
 Use `log_space=false` when you want expressions in ordinary symbolic variables
 rather than log variables.
 
-## 13. SIMO Workflows
+## 14. SIMO Workflows
 
 For one-input sweeps and path summaries:
 
@@ -604,7 +700,7 @@ SIMO_plot(
 The SIMO tools are useful when one coordinate changes and the other coordinates
 are fixed.
 
-## 14. Recommended Names and Legacy API
+## 15. Recommended Names and Legacy API
 
 Use explicit names in new code:
 
@@ -637,7 +733,7 @@ Recommended rules:
 - Use `get_catalysis_regime` / `get_catalysis_regimes` for catalysis regimes.
 - Prefer explicit `binding`, `catalysis`, and `bnc` names in user-facing code.
 
-## 15. Common Issues
+## 16. Common Issues
 
 ### `qK2x` warns that `L * N' is nonzero`
 
@@ -701,7 +797,7 @@ everything:
 get_bnc_regimes(model; feasible=nothing)
 ```
 
-## 16. Complete Small Example
+## 17. Complete Small Example
 
 ```julia
 using CairoMakie, GraphMakie

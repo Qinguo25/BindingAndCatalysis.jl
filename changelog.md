@@ -55,7 +55,7 @@
 
 ### 5. 文档与测试
 
-- `Archetecture.md` 已更新初始化流水线
+- `Architecture.md` 已更新初始化流水线
 - `test/runtests.jl` 新增断言：`find_all_regimes!` 后 graph 已存在，且所有 `nullity <= 1` 的 regime 已有 `H/H0`
 
 ## 2026-03-24
@@ -207,7 +207,7 @@ H_{0,ssk} = H_{0,ss} - H_R P_0^\theta.
 
 新增或更新了：
 
-- `Archetecture.md`
+- `Architecture.md`
 - `Matrix_relation.md`
 
 这两份文档现在都明确写了：
