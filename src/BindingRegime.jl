@@ -644,26 +644,6 @@ function get_interface_direct(
 end
 
 """
-    hyperplane_project_func(polyhedra::Polyhedron) -> Function
-
-Return a projection function onto the affine subspace defined by polyhedron hyperplanes.
-"""
-function hyperplane_project_func(polyhedra::T)::Function where {T <: Polyhedron}
-    if !hashyperplanes(polyhedra)
-        error("polyhedra doesn't have hyperplanes")
-    end
-    # A^⊤y =b to project to this subspace   
-    A = stack([i.a for i in hyperplanes(polyhedra)])
-    b = stack([i.β for i in hyperplanes(polyhedra)])
-    @show A, b
-    # Now we need to generate a function to project a point into this hyperplanes
-    AAtA_inv = A * pinv(A' * A)
-    b0 = AAtA_inv * b
-    P0 = I(size(A, 1)) - AAtA_inv * A'
-    return x -> P0 * x + b0
-end
-
-"""
     get_one_inner_point(args...; kwargs...) -> Vector
 
 Convenience wrapper that builds a polyhedron from a regime/model.

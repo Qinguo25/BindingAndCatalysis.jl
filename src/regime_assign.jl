@@ -12,46 +12,50 @@ export condition_contains, solve_logx_checked, assign_bnc_regime_wKk
 Hot-loop-friendly qK hyperplane classifier.
 
 For each hyperplane h:
-- `allow_pos[h]` is a BitVector of regimes still possible if a point is on the positive side.
-- `allow_neg[h]` is a BitVector of regimes still possible if a point is on the negative side.
+
+  - `allow_pos[h]` is a BitVector of regimes still possible if a point is on the positive side.
+  - `allow_neg[h]` is a BitVector of regimes still possible if a point is on the negative side.
 
 Boundary points keep both sides.
 """
 struct CompiledClassifier
     regime_ids::Vector{Int}
-    dirs::Vector{SparseVector{Float64,Int}}
-    bias::Vector{Float64} 
+    dirs::Vector{SparseVector{Float64, Int}}
+    bias::Vector{Float64}
     allow_pos::Vector{BitVector} # Should be caring about the growing 
     allow_neg::Vector{BitVector}
 end
 
 Base.length(c::CompiledClassifier) = length(c.regime_ids)
 
-@inline _hyperplane_side(val::Real, tol::Real) = val >= tol ? Int8(1) : val < -tol ? Int8(-1) : Int8(0)
-
+@inline _hyperplane_side(val::Real, tol::Real) = if val >= tol
+    Int8(1)
+elseif val < -tol
+    Int8(-1)
+else
+    Int8(0)
+end
 
 # Given a point decide the signature of which side of each hyperplane it is on
-
-
-
-
 
 function _classifier_candidates(
     classifier::CompiledClassifier,
     logqK::AbstractVector{<:Real};
-    tol::Real = 0,
+    tol::Real=0,
     asymptotic_only::Bool=false,
 )
     sides = let
         sides = Vector{Int8}(undef, length(classifier.dirs))
-        
+
         if asymptotic_only
             @inbounds for i in eachindex(classifier.dirs)
                 sides[i] = _hyperplane_side(dot(classifier.dirs[i], logqK), tol)
             end
-        else 
+        else
             @inbounds for i in eachindex(classifier.dirs)
-                sides[i] = _hyperplane_side(dot(classifier.dirs[i], logqK) + classifier.bias[i], tol)
+                sides[i] = _hyperplane_side(
+                    dot(classifier.dirs[i], logqK) + classifier.bias[i], tol
+                )
             end
         end
 
@@ -72,13 +76,12 @@ function _classifier_candidates(
         any(alive) || break
     end
 
-    return classifier.regime_ids[findall(alive)],  sides
+    return classifier.regime_ids[findall(alive)], sides
 end
 
 # shrink a classifier to only the candidates.
 function _restrict_classifier(
-    classifier::CompiledClassifier,
-    candidate_ids::AbstractVector{<:Integer},
+    classifier::CompiledClassifier, candidate_ids::AbstractVector{<:Integer}
 )
     pos_map = Dict(classifier.regime_ids[i] => i for i in eachindex(classifier.regime_ids))
     selected_pos = [pos_map[Int(idx)] for idx in candidate_ids if haskey(pos_map, Int(idx))]
@@ -134,7 +137,7 @@ function _C_C0_from_pool(
     if isnothing(rebase_mat)
         @inbounds for (j, hid0) in pairs(active_hids)
             hid = Int(hid0)
-            dirs[j] = SparseVector{Float64,Int}(hyperplanes[hid].change_dir_qK)
+            dirs[j] = SparseVector{Float64, Int}(hyperplanes[hid].change_dir_qK)
             bias[j] = Float64(hyperplanes[hid].intersect_qK)
         end
     else
@@ -171,11 +174,7 @@ function compile_classifier(
 
     if isempty(rows)
         return CompiledClassifier(
-            Int[],
-            SparseVector{Float64, Int}[],
-            Float64[],
-            BitVector[],
-            BitVector[],
+            Int[], SparseVector{Float64, Int}[], Float64[], BitVector[], BitVector[]
         )
     end
 
@@ -194,7 +193,7 @@ end
 function _get_regime_qK_hyperplane_id_signs(grh::RegimeGraph, regime)
     Bnc = get_binding_network(grh)
     idx = get_idx(Bnc, regime)
-    Hpid_dir = Dict{Int,Int8}()
+    Hpid_dir = Dict{Int, Int8}()
 
     for edge in grh.neighbors[idx]
         _edge_has_qK_interface(grh, edge) || continue
@@ -202,17 +201,16 @@ function _get_regime_qK_hyperplane_id_signs(grh::RegimeGraph, regime)
         dir = -sign
 
         old = get(Hpid_dir, hid, dir)
-        old == dir || error("Inconsistent qK hyperplane sign, BUGGY code: regime=$idx, hyperplane_id=$hid")
+        old == dir || error(
+            "Inconsistent qK hyperplane sign, BUGGY code: regime=$idx, hyperplane_id=$hid",
+        )
         Hpid_dir[hid] = dir
     end
     return Hpid_dir
 end
 
-
-
 function _build_qK_hyperplane_classifier(
-    grh::RegimeGraph;
-    candidates::Union{Nothing,AbstractVector}=nothing,
+    grh::RegimeGraph; candidates::Union{Nothing, AbstractVector}=nothing
 )
     model = get_binding_network(grh)
     regimes = if isnothing(candidates)
@@ -222,13 +220,8 @@ function _build_qK_hyperplane_classifier(
     end
 
     qK_hp_data = grh.hp_data[_space(grh, :qK)]
-    return compile_classifier(
-        qK_hp_data.hyperplanes,
-        qK_hp_data.hp_to_poly.M,
-        regimes,
-    )
+    return compile_classifier(qK_hp_data.hyperplanes, qK_hp_data.hp_to_poly.M, regimes)
 end
-
 
 function _get_qK_hyperplane_classifier(Bnc::Bnc)
     grh = get_regimes_graph!(Bnc; full=true)
@@ -240,9 +233,6 @@ function _get_qK_hyperplane_classifier(Bnc::Bnc)
     return classifier
 end
 
-
-
-
 """
     assign_regime_qK(bnc::Bnc; x, input=:linear, kwargs...) -> Vector
 
@@ -252,7 +242,7 @@ function assign_regime_qK(
     Bnc::Bnc;
     x::AbstractVector{<:Real},
     input::Symbol=:linear,
-    input_logspace::Union{Bool,Nothing}=nothing,
+    input_logspace::Union{Bool, Nothing}=nothing,
     kwargs...,
 )
     input = _resolve_space_mode(input, input_logspace, :input_logspace)
@@ -268,7 +258,7 @@ function assign_regime_qK_index(
     Bnc::Bnc;
     x::AbstractVector{<:Real},
     input::Symbol=:linear,
-    input_logspace::Union{Bool,Nothing}=nothing,
+    input_logspace::Union{Bool, Nothing}=nothing,
     kwargs...,
 )
     input = _resolve_space_mode(input, input_logspace, :input_logspace)
@@ -280,7 +270,7 @@ function assign_regime_qK_index(
     Bnc::Bnc,
     qK::AbstractVector{<:Real};
     input::Symbol=:linear,
-    input_logspace::Union{Bool,Nothing}=nothing,
+    input_logspace::Union{Bool, Nothing}=nothing,
     asymptotic_only::Bool=false,
     eps=0,
 )
@@ -289,25 +279,21 @@ function assign_regime_qK_index(
     classifier = _get_qK_hyperplane_classifier(Bnc)
 
     candidate_ids, sig = _classifier_candidates(
-        classifier,
-        logqK;
-        tol=abs(eps),
-        asymptotic_only=asymptotic_only,
+        classifier, logqK; tol=abs(eps), asymptotic_only=asymptotic_only
     )
 
     if length(candidate_ids) == 1
         return Int(candidate_ids[1])
     elseif isempty(candidate_ids)
         return _assign_regime_qK_fallback_index(
-            Bnc,
-            logqK;
-            asymptotic_only=asymptotic_only,
-            eps=eps,
-            warn_on_fallback=false,
+            Bnc, logqK; asymptotic_only=asymptotic_only, eps=eps, warn_on_fallback=false
         )
     else
         msg = "qK hyperplane classifier is not unique"
-        error(msg * ": logqK=$(repr(collect(logqK))), signature=$(repr(collect(sig))), candidate_ids=$(repr(Int.(candidate_ids)))")
+        error(
+            msg *
+            ": logqK=$(repr(collect(logqK))), signature=$(repr(collect(sig))), candidate_ids=$(repr(Int.(candidate_ids)))",
+        )
     end
 end
 
@@ -320,10 +306,10 @@ function assign_regime_qK(
     Bnc::Bnc,
     qK::AbstractVector{<:Real};
     input::Symbol=:linear,
-    input_logspace::Union{Bool,Nothing}=nothing,
+    input_logspace::Union{Bool, Nothing}=nothing,
     asymptotic_only::Bool=false,
     eps=0,
-    return_idx::Union{Bool,Nothing}=nothing,
+    return_idx::Union{Bool, Nothing}=nothing,
 )
     idx = assign_regime_qK_index(
         Bnc,
@@ -347,9 +333,9 @@ function assign_regime_x_index(
     Bnc::Bnc{T},
     x::AbstractVector{<:Real};
     input::Symbol=:linear,
-    input_logspace::Union{Bool,Nothing}=nothing,
+    input_logspace::Union{Bool, Nothing}=nothing,
     asymptotic_only::Bool=true,
-) where T
+) where {T}
     input = _resolve_space_mode(input, input_logspace, :input_logspace)
     helper = _integration_helper!(Bnc)
     L = Bnc.L
@@ -369,7 +355,7 @@ function assign_regime_x_index(
 
     @inbounds for col in 1:n
         col_start_idx = colptr[col]
-        col_end_idx   = colptr[col+1] - 1
+        col_end_idx = colptr[col + 1] - 1
         if col_start_idx <= col_end_idx #escape empty column
             @inbounds for idx in col_start_idx:col_end_idx
                 v = nzval[idx]
@@ -393,16 +379,12 @@ function assign_regime_x(
     Bnc::Bnc,
     x::AbstractVector{<:Real};
     input::Symbol=:linear,
-    input_logspace::Union{Bool,Nothing}=nothing,
+    input_logspace::Union{Bool, Nothing}=nothing,
     asymptotic_only::Bool=true,
-    return_idx::Union{Bool,Nothing}=nothing,
+    return_idx::Union{Bool, Nothing}=nothing,
 )
     idx = assign_regime_x_index(
-        Bnc,
-        x;
-        input=input,
-        input_logspace=input_logspace,
-        asymptotic_only=asymptotic_only,
+        Bnc, x; input=input, input_logspace=input_logspace, asymptotic_only=asymptotic_only
     )
     return return_idx === true ? idx : get_perm(Bnc, idx)
 end
@@ -415,30 +397,25 @@ Alias for `assign_regime_qK`.
 assign_regime(args...; kwargs...) = assign_regime_qK(args...; kwargs...)
 assign_regime_index(args...; kwargs...) = assign_regime_qK_index(args...; kwargs...)
 
-function condition_contains(C, C0, nullity::Integer, z::AbstractVector{<:Real}; tol::Float64=1e-8)
+function condition_contains(
+    C, C0, nullity::Integer, z::AbstractVector{<:Real}; tol::Float64=1e-8
+)
     vals = Vector{Float64}(C * z .+ C0)
     nullity > 0 && any(abs.(vals[1:nullity]) .> tol) && return false
-    length(vals) > nullity && any(vals[nullity + 1:end] .< -tol) && return false
+    length(vals) > nullity && any(vals[(nullity + 1):end] .< -tol) && return false
     return true
 end
 
 function solve_logx_checked(
     model::Bnc,
     logqK::AbstractVector{<:Real};
-    method::Union{Symbol,Nothing}=nothing,
+    method::Union{Symbol, Nothing}=nothing,
     tol::Float64=1e-6,
 )
     method = _resolve_qK2x_method(model, method)
     logx = try
         if method === :free_energy
-            qK2x(
-                model,
-                logqK;
-                input=:log,
-                output=:log,
-                method=method,
-                warn_on_maxiters=false,
-            )
+            qK2x(model, logqK; input=:log, output=:log, method=method, warn_on_maxiters=false)
         else
             qK2x(model, logqK; input=:log, output=:log, method=method)
         end
@@ -451,7 +428,9 @@ function solve_logx_checked(
     return logx
 end
 
-function assign_bnc_regime_wKk(model::Bnc, logwKk::AbstractVector{<:Real}; tol::Float64=1e-8, max_nullity::Integer=0)
+function assign_bnc_regime_wKk(
+    model::Bnc, logwKk::AbstractVector{<:Real}; tol::Float64=1e-8, max_nullity::Integer=0
+)
     rgms = get_bnc_regimes(model)
     for (idx, rgm) in pairs(rgms)
         C, C0, nlt = get_C_C0_nullity_wKk(rgm)
@@ -471,7 +450,7 @@ function _assign_regime_qK_fallback_index(
     real_only = asymptotic_only ? true : nothing
     all_regime_idx = get_binding_indices(Bnc; singular=false, asymptotic=real_only)
 
-    record = Vector{Float64}(undef,length(all_regime_idx))
+    record = Vector{Float64}(undef, length(all_regime_idx))
     for (i, idx) in enumerate(all_regime_idx)
         C, C0 = get_C_C0_qK(Bnc, idx)
         min_val = if !asymptotic_only
@@ -485,7 +464,9 @@ function _assign_regime_qK_fallback_index(
             return idx
         end
     end
-    warn_on_fallback && @warn("All regime conditions failed for logqK=$logqK. Returning the best-fit regime.")
+    warn_on_fallback && @warn(
+        "All regime conditions failed for logqK=$logqK. Returning the best-fit regime."
+    )
     idx = all_regime_idx[findmax(record)[2]]
     return idx
 end

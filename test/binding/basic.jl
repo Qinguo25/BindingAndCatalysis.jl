@@ -3,8 +3,8 @@
 
     @test (model.r, model.n, model.d) == (1, 3, 2)
     @test length(show_conservation(model)) == model.d
-    @test length(show_equilibrium(model; log_space = true)) == model.r
-    @test length(show_equilibrium(model; log_space = false)) == model.r
+    @test length(show_equilibrium(model; log_space=true)) == model.r
+    @test length(show_equilibrium(model; log_space=false)) == model.r
 
     find_all_vertices!(model)
     @test ensure_binding_regimes!(model) === nothing
@@ -33,35 +33,37 @@
     @test zeros(BindingAndCatalysis.Volume, 3) == fill(zero(BindingAndCatalysis.Volume), 3)
 
     Random.seed!(42)
-    logqK = randomize(model, 1; log_lower = -2, log_upper = 2)[1]
-    logx = qK2x(model, logqK; input = :log, output = :log)
-    logqK_back = x2qK(model, logx; input = :log, output = :log)
-    @test isapprox(logqK_back, logqK; atol = 1e-6, rtol = 1e-6)
+    logqK = randomize(model, 1; log_lower=-2, log_upper=2)[1]
+    logx = qK2x(model, logqK; input=:log, output=:log)
+    logqK_back = x2qK(model, logx; input=:log, output=:log)
+    @test isapprox(logqK_back, logqK; atol=1e-6, rtol=1e-6)
 end
 
 @testset "Default qK2x Method Avoids Free Energy For Nonorthogonal L N" begin
-    model = Bnc(N = [1 0], L = [1 1])
+    model = Bnc(; N=[1 0], L=[1 1])
 
     @test BindingAndCatalysis._default_method(model) === :homotopy
     @test BindingAndCatalysis._resolve_qK2x_method(model, :free_energy) === :homotopy
 
     logqK = [0.0, 0.0]
-    logx_default = qK2x(model, logqK; input = :log, output = :log)
-    logx_explicit = qK2x(model, logqK; input = :log, output = :log, method = :free_energy)
-    @test isapprox(logx_default, logx_explicit; atol = 1e-8, rtol = 1e-8)
+    logx_default = qK2x(model, logqK; input=:log, output=:log)
+    logx_explicit = qK2x(model, logqK; input=:log, output=:log, method=:free_energy)
+    @test isapprox(logx_default, logx_explicit; atol=1e-8, rtol=1e-8)
 end
 
 @testset "Export Hygiene" begin
-    undefined_exports = [s for s in names(BindingAndCatalysis, all=false) if !isdefined(BindingAndCatalysis, s)]
+    undefined_exports = [
+        s for
+        s in names(BindingAndCatalysis; all=false) if !isdefined(BindingAndCatalysis, s)
+    ]
     @test isempty(undefined_exports)
-    @test :benchmark_qK2x_methods ∉ names(BindingAndCatalysis, all=false)
-    @test :lines ∉ names(BindingAndCatalysis, all=false)
+    @test :benchmark_qK2x_methods ∉ names(BindingAndCatalysis; all=false)
+    @test :lines ∉ names(BindingAndCatalysis; all=false)
 end
 
 @testset "Construction And Empty Catalysis Edge Cases" begin
     model = @test_logs (:warn, r"N has been reduced") Bnc(
-        N = [1 1 -1; 2 2 -2],
-        K_sym = [:K1, :K2],
+        N=[1 1 -1; 2 2 -2], K_sym=[:K1, :K2]
     )
     @test model.r == 1
     @test string.(K_sym(model)) == ["K1"]
@@ -73,10 +75,7 @@ end
 
 @testset "Uniform Box Per-Dimension Sampling" begin
     sampling = BindingAndCatalysis._prepare_sampling_config(
-        :uniform_box,
-        2;
-        log_lower = [-1, -2],
-        log_upper = [1, 4],
+        :uniform_box, 2; log_lower=[-1, -2], log_upper=[1, 4]
     )
 
     @test sampling.log_lower == [-1.0, -2.0]
@@ -92,10 +91,7 @@ end
     end
 
     @test_throws AssertionError BindingAndCatalysis._prepare_sampling_config(
-        :uniform_box,
-        2;
-        log_lower = [-1],
-        log_upper = [1, 4],
+        :uniform_box, 2; log_lower=[-1], log_upper=[1, 4]
     )
 
     C = [
@@ -111,29 +107,29 @@ end
     direct_fraction = calc_volume(
         C,
         C0;
-        sampler = :uniform_box,
-        log_lower = log_lower,
-        log_upper = log_upper,
-        batch_size = 5_000,
-        reltol = 0.2,
-        abstol = 1.0e-3,
-        time_limit = 3.0,
+        sampler=:uniform_box,
+        log_lower=log_lower,
+        log_upper=log_upper,
+        batch_size=5_000,
+        reltol=0.2,
+        abstol=1.0e-3,
+        time_limit=3.0,
     )
-    @test isapprox(direct_fraction.mean, 1 / 16; atol = 0.01)
+    @test isapprox(direct_fraction.mean, 1 / 16; atol=0.01)
 
-    poly = get_polyhedron(C, C0, 0; canonicalize = false)
+    poly = get_polyhedron(C, C0, 0; canonicalize=false)
     poly_fraction = calc_volume(
         poly;
-        asymptotic = false,
-        sampler = :uniform_box,
-        log_lower = log_lower,
-        log_upper = log_upper,
-        batch_size = 5_000,
-        reltol = 0.2,
-        abstol = 1.0e-3,
-        time_limit = 3.0,
+        asymptotic=false,
+        sampler=:uniform_box,
+        log_lower=log_lower,
+        log_upper=log_upper,
+        batch_size=5_000,
+        reltol=0.2,
+        abstol=1.0e-3,
+        time_limit=3.0,
     )
-    @test isapprox(poly_fraction.mean, 1 / 16; atol = 0.01)
+    @test isapprox(poly_fraction.mean, 1 / 16; atol=0.01)
 end
 
 @testset "Minimal Notebook Workflow" begin
@@ -145,15 +141,21 @@ end
     idxs = get_indices(model)
     perm_dict = get_binding_regimes_dict(model)
 
-    @test length(rgms) == length(perms) == n_regimes(model) == length(idxs) == length(perm_dict)
+    @test length(rgms) ==
+        length(perms) ==
+        n_regimes(model) ==
+        length(idxs) ==
+        length(perm_dict)
     @test idxs == collect(1:n_regimes(model))
     @test all(r -> r isa BindingAndCatalysis.BindRegime, rgms)
     @test get_perms(rgms) == perms
     @test get_indices(rgms) == idxs
     @test model.vertices_graph !== nothing
     bind_data = BindingAndCatalysis._bind_regimes_data(model)
-    @test all(i -> !isnothing(bind_data[i].H) && !isnothing(bind_data[i].H0),
-        filter(i -> get_nullity(model, i) <= 1, idxs))
+    @test all(
+        i -> !isnothing(bind_data[i].H) && !isnothing(bind_data[i].H0),
+        filter(i -> get_nullity(model, i) <= 1, idxs),
+    )
 
     r1_perm = perms[1]
     r2_perm = perms[2]
@@ -192,8 +194,8 @@ end
     @test nltqK == get_nullity(r1)
 
     @test !isempty(show_condition_x(r1))
-    @test !isempty(show_condition_qK(model, 1; log_space = false))
-    @test !isempty(show_dominant_condition(r1; log_space = false))
+    @test !isempty(show_condition_qK(model, 1; log_space=false))
+    @test !isempty(show_dominant_condition(r1; log_space=false))
 
     poly = get_polyhedron(model, r1_perm)
     Cpoly, C0poly, nltpoly = get_C_C0_nullity(poly)
@@ -202,52 +204,58 @@ end
     @test nltpoly == nltqK
 
     inner = get_one_inner_point(model, 2)
-    @test assign_regime_index(model, inner; input = :log, asymptotic_only = false) == 2
+    @test assign_regime_index(model, inner; input=:log, asymptotic_only=false) == 2
 
     C_add = [1 -1 0]
     C0_add = [-log10(2)]
-    feas = check_feasibility_with_constraint(model, 4; C = C_add, C0 = C0_add)
-    feas_list = feasible_vertices_with_constraint(model; C = C_add, C0 = C0_add, return_idx = true)
+    feas = check_feasibility_with_constraint(model, 4; C=C_add, C0=C0_add)
+    feas_list = feasible_vertices_with_constraint(
+        model; C=C_add, C0=C0_add, return_idx=true
+    )
     @test feas isa Bool
     @test all(i -> i in idxs, feas_list)
 
-    vg = get_regimes_graph!(model; full = true)
+    vg = get_regimes_graph!(model; full=true)
     @test length(vg.neighbors) == n_regimes(model)
     @test size(get_regimes_neighbor_mat(model), 1) == n_regimes(model)
     @test BindingAndCatalysis.Graphs.nv(get_neighbor_graph_x(model)) == n_regimes(model)
 
     @test get_edge(vg, r2_perm, r1_perm) !== nothing
     @test get_edge(vg, r2_perm, r3_perm) === nothing
-    edge_21 = get_edge(vg, r2_perm, r1_perm; full = true)
-    edge_12 = get_edge(vg, r1_perm, r2_perm; full = true)
+    edge_21 = get_edge(vg, r2_perm, r1_perm; full=true)
+    edge_12 = get_edge(vg, r1_perm, r2_perm; full=true)
     qK_21 = BindingAndCatalysis._edge_idx_sign(edge_21, vg, :qK)
     qK_12 = BindingAndCatalysis._edge_idx_sign(edge_12, vg, :qK)
     @test qK_21[1] == qK_12[1] != 0
     @test qK_21[2] == -qK_12[2]
 
     Random.seed!(42)
-    logqK_vec = randomize(model, 4; log_lower = -3, log_upper = 3)
-    logx_vec = logqK_vec .|> qK -> qK2x(model, qK; input = :log, output = :log)
-    logqK_vec_back = logx_vec .|> x -> x2qK(model, x; input = :log, output = :log)
-    @test all(isapprox.(logqK_vec_back, logqK_vec; atol = 1e-6, rtol = 1e-6))
+    logqK_vec = randomize(model, 4; log_lower=-3, log_upper=3)
+    logx_vec = (qK -> qK2x(model, qK; input=:log, output=:log)).(logqK_vec)
+    logqK_vec_back = (x -> x2qK(model, x; input=:log, output=:log)).(logx_vec)
+    @test all(isapprox.(logqK_vec_back, logqK_vec; atol=1e-6, rtol=1e-6))
 
-    assigned_qK = logqK_vec .|> qK -> assign_regime_index(model, qK; input = :log, asymptotic_only = false)
-    assigned_from_x_qK = logx_vec .|> x -> assign_regime_qK_index(model; x = x, input = :log, asymptotic_only = false)
-    assigned_from_x_x = logx_vec .|> x -> assign_regime_x_index(model, x; input = :log, asymptotic_only = true)
+    assigned_qK =
+        (qK -> assign_regime_index(model, qK; input=:log, asymptotic_only=false)).(logqK_vec)
+    assigned_from_x_qK =
+        (x -> assign_regime_qK_index(model; x=x, input=:log, asymptotic_only=false)).(logx_vec)
+    assigned_from_x_x =
+        (x -> assign_regime_x_index(model, x; input=:log, asymptotic_only=true)).(logx_vec)
     @test assigned_qK == assigned_from_x_qK
     @test assigned_from_x_qK == assigned_from_x_x
 
-    singular_bind_idx = only(filter(i -> get_nullity(model, i) == 1, get_binding_indices(model)))
+    singular_bind_idx = only(
+        filter(i -> get_nullity(model, i) == 1, get_binding_indices(model))
+    )
     Hs, H0s = get_H_H0(model, singular_bind_idx)
     @test size(Hs, 1) == model.n
     @test length(H0s) == model.n
-    @test get_volume(model, singular_bind_idx; recompute = true) == zero(BindingAndCatalysis.Volume)
+    @test get_volume(model, singular_bind_idx; recompute=true) ==
+        zero(BindingAndCatalysis.Volume)
 
     subset = [1, singular_bind_idx, 2]
     filtered_subset, subset_mask = BindingAndCatalysis.filter_regimes_with_mask(
-        model,
-        subset;
-        singular = false,
+        model, subset; singular=false
     )
     @test filtered_subset == [1, 2]
     @test subset_mask == BitVector([true, false, true])
@@ -259,8 +267,8 @@ end
     idxs = get_binding_indices(model)
 
     polys_default = get_polyhedra(model)
-    polys_unc = get_polyhedra(model; canonicalize = false)
-    polys_can = get_polyhedra(model; canonicalize = true)
+    polys_unc = get_polyhedra(model; canonicalize=false)
+    polys_can = get_polyhedra(model; canonicalize=true)
 
     @test length(polys_default) == length(polys_unc) == length(idxs) == length(polys_can)
     @test all(p -> p isa BindingAndCatalysis.Polyhedron, polys_default)
@@ -269,32 +277,36 @@ end
     @test all(BindingAndCatalysis.same_polyhedron.(polys_default, polys_unc))
     @test all(BindingAndCatalysis.same_polyhedron.(polys_default, polys_can))
 
-    regular_idx = first(filter(i -> get_nullity(model, i) == 0 && is_asymptotic(model, i), idxs))
+    regular_idx = first(
+        filter(i -> get_nullity(model, i) == 0 && is_asymptotic(model, i), idxs)
+    )
     @test BindingAndCatalysis._bind_volume_route(model, [regular_idx]) == :classifier
-    @test BindingAndCatalysis._bind_volume_route(model, [regular_idx]; contain_overlap = true) == :polyhedra
+    @test BindingAndCatalysis._bind_volume_route(
+        model, [regular_idx]; contain_overlap=true
+    ) == :polyhedra
 
     classifier_vol = get_volume(
         model,
         regular_idx;
-        recompute = true,
-        batch_size = 1_500,
-        reltol = 0.2,
-        abstol = 1e-3,
-        time_limit = 1.0,
+        recompute=true,
+        batch_size=1_500,
+        reltol=0.2,
+        abstol=1e-3,
+        time_limit=1.0,
     )
-    rgm = get_regime(model, regular_idx; inv_info = true)
+    rgm = get_regime(model, regular_idx; inv_info=true)
     poly_vol = calc_volume(
         [rgm];
-        contain_overlap = true,
-        batch_size = 1_500,
-        reltol = 0.2,
-        abstol = 1e-3,
-        time_limit = 1.0,
+        contain_overlap=true,
+        batch_size=1_500,
+        reltol=0.2,
+        abstol=1e-3,
+        time_limit=1.0,
     )[1]
 
     @test classifier_vol.mean >= 0
     @test poly_vol.mean >= 0
-    @test isapprox(classifier_vol.mean, poly_vol.mean; rtol = 0.35, atol = 0.02)
+    @test isapprox(classifier_vol.mean, poly_vol.mean; rtol=0.35, atol=0.02)
 
     qK_dim = model.d + model.r
     rebase_mat = Matrix(1.0I, qK_dim, qK_dim)
@@ -302,25 +314,25 @@ end
     rebase_mat[model.d + 2, model.d + 3] = -0.5
     classifier_rebased_vol = calc_volume(
         [rgm];
-        rebase_mat = rebase_mat,
-        batch_size = 1_500,
-        reltol = 0.2,
-        abstol = 1e-3,
-        time_limit = 1.0,
+        rebase_mat=rebase_mat,
+        batch_size=1_500,
+        reltol=0.2,
+        abstol=1e-3,
+        time_limit=1.0,
     )[1]
     poly_rebased_vol = calc_volume(
         [rgm];
-        contain_overlap = true,
-        rebase_mat = rebase_mat,
-        batch_size = 1_500,
-        reltol = 0.2,
-        abstol = 1e-3,
-        time_limit = 1.0,
+        contain_overlap=true,
+        rebase_mat=rebase_mat,
+        batch_size=1_500,
+        reltol=0.2,
+        abstol=1e-3,
+        time_limit=1.0,
     )[1]
 
     @test classifier_rebased_vol.mean >= 0
     @test poly_rebased_vol.mean >= 0
-    @test isapprox(classifier_rebased_vol.mean, poly_rebased_vol.mean; rtol = 0.35, atol = 0.02)
+    @test isapprox(classifier_rebased_vol.mean, poly_rebased_vol.mean; rtol=0.35, atol=0.02)
 end
 @testset "Exact Affine Data" begin
     model = minimal_model()
@@ -330,9 +342,11 @@ end
     H0 = get_H0(model, 1)
     CqK = get_C_qK(model, 1)
     poly = get_polyhedron(model, 1)
-    vg = get_regimes_graph!(model; full = true)
+    vg = get_regimes_graph!(model; full=true)
     perms = get_perms(model)
-    rational_singular_idx = only(filter(i -> get_nullity(model, i) == 1, get_indices(model)))
+    rational_singular_idx = only(
+        filter(i -> get_nullity(model, i) == 1, get_indices(model))
+    )
     Hs, H0s = get_H_H0(model, rational_singular_idx)
 
     @test eltype(H) <: Rational
@@ -343,14 +357,16 @@ end
     @test eltype(Hs) <: Rational
     @test eltype(H0s) == ExactLogExpr
 
-    edge_21 = get_edge(vg, perms[2], perms[1]; full = true)
-    edge_12 = get_edge(vg, perms[1], perms[2]; full = true)
+    edge_21 = get_edge(vg, perms[2], perms[1]; full=true)
+    edge_12 = get_edge(vg, perms[1], perms[2]; full=true)
     qK_21 = BindingAndCatalysis._edge_idx_sign(edge_21, vg, :qK)
     qK_12 = BindingAndCatalysis._edge_idx_sign(edge_12, vg, :qK)
     @test qK_21[1] == qK_12[1] != 0
     @test qK_21[2] == -qK_12[2]
 
-    singular_C, singular_C0, singular_nullity = get_C_C0_nullity_qK(model, rational_singular_idx)
+    singular_C, singular_C0, singular_nullity = get_C_C0_nullity_qK(
+        model, rational_singular_idx
+    )
     singular_poly = get_polyhedron(model, rational_singular_idx)
 
     @test singular_nullity == 1

@@ -1,12 +1,12 @@
 @testset "Two-Row N Singular H Sign Invariance" begin
     N = [
         1 1 -1 0
-        0 1  1 -1
+        0 1 1 -1
     ]
     singular_perm = [3, 3]
 
-    model = Bnc(N = N)
-    swapped_model = Bnc(N = N[[2, 1], :])
+    model = Bnc(; N=N)
+    swapped_model = Bnc(; N=N[[2, 1], :])
 
     find_all_regimes!(model)
     find_all_regimes!(swapped_model)
@@ -49,10 +49,11 @@ end
     model = notebook_model2()
     find_all_regimes!(model)
 
-    regular_ids = get_binding_indices(model; singular = false)
+    regular_ids = get_binding_indices(model; singular=false)
     assigned = [
-        assign_regime_index(model, get_one_inner_point(model, idx); input = :log, asymptotic_only = false)
-        for idx in regular_ids
+        assign_regime_index(
+            model, get_one_inner_point(model, idx); input=:log, asymptotic_only=false
+        ) for idx in regular_ids
     ]
     @test assigned == regular_ids
 
@@ -68,10 +69,10 @@ end
 @testset "qK Classifier Sign Info" begin
     model = minimal_model()
     find_all_regimes!(model)
-    grh = get_regimes_graph!(model; full = true)
+    grh = get_regimes_graph!(model; full=true)
 
     info = BindingAndCatalysis._get_regime_qK_hyperplane_id_signs(grh, 1)
-    edge_12 = get_edge(grh, 1, 2; full = true)
+    edge_12 = get_edge(grh, 1, 2; full=true)
     qK_12 = BindingAndCatalysis._edge_idx_sign(edge_12, grh, :qK)
     @test haskey(info, qK_12[1])
     @test info[qK_12[1]] == -qK_12[2]
@@ -88,7 +89,7 @@ end
     find_all_regimes!(model)
     idx = first(filter(i -> get_nullity(model, i) > 1, get_indices(model)))
     cond_log = show_condition_qK(model, idx)
-    cond_lin = show_condition_qK(model, idx; log_space = false)
+    cond_lin = show_condition_qK(model, idx; log_space=false)
 
     @test get_nullity(model, idx) == 2
     @test !isempty(cond_log)

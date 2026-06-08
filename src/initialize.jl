@@ -12,32 +12,29 @@ matrices and optional symbol metadata. Catalysis data can be attached through
 `Γ`, `Π`, `k_sym`, `v_sym`, `w_sym`, `x_picked`, and `q_picked`.
 
 # Keyword Arguments
-- `N`: Stoichiometry matrix (reactions × species).
-- `L`: Conservation matrix (totals × species).
-- `x_sym`: Symbols for species concentrations.
-- `q_sym`: Symbols for total concentrations.
-- `K_sym`: Symbols for binding constants.
-- `Γ`: Catalysis change matrix in qK space.
-- `Π`: Catalysis index and coefficient matrix. If omitted while `Γ` and
-  `x_picked` are supplied, defaults to the identity on the picked species.
-- `F`, `F0`: Optional affine constraints on old catalysis rate constants,
-  `log k_old = F * log k + F0`.
-- `k_sym`: Symbols for catalysis rate constants.
-- `v_sym`: Symbols for catalysis fluxes.
-- `w_sym`: Symbols for the new conservation quantities induced by catalysis.
-- `x_picked`: Picked species for catalysis flux monomials.
-- `q_picked`: Picked qK coordinates affected by catalysis.
+
+  - `N`: Stoichiometry matrix (reactions × species).
+  - `L`: Conservation matrix (totals × species).
+  - `x_sym`: Symbols for species concentrations.
+  - `q_sym`: Symbols for total concentrations.
+  - `K_sym`: Symbols for binding constants.
+  - `Γ`: Catalysis change matrix in qK space.
+  - `Π`: Catalysis index and coefficient matrix. If omitted while `Γ` and
+    `x_picked` are supplied, defaults to the identity on the picked species.
+  - `F`, `F0`: Optional affine constraints on old catalysis rate constants,
+    `log k_old = F * log k + F0`.
+  - `k_sym`: Symbols for catalysis rate constants.
+  - `v_sym`: Symbols for catalysis fluxes.
+  - `w_sym`: Symbols for the new conservation quantities induced by catalysis.
+  - `x_picked`: Picked species for catalysis flux monomials.
+  - `q_picked`: Picked qK coordinates affected by catalysis.
 
 # Returns
-- A `Bnc` model with derived matrices and caches initialized.
+
+  - A `Bnc` model with derived matrices and caches initialized.
 """
 function Bnc(;
-    N=nothing,
-    L=nothing,
-    x_sym=nothing,
-    q_sym=nothing,
-    K_sym=nothing,
-    kwargs...
+    N=nothing, L=nothing, x_sym=nothing, q_sym=nothing, K_sym=nothing, kwargs...
 )::Bnc
     # If N is not provided, derive it from L; otherwise validate row rank.
     N = isnothing(N) ? N_from_L(L) : N
@@ -73,7 +70,6 @@ function Bnc(;
     return model
 end
 
-
 #========================================================================================#
 # qK2x method selection
 #========================================================================================#
@@ -89,9 +85,13 @@ end
 
 _default_method(model::Bnc) = _free_energy_qK2x_allowed(model) ? :free_energy : :homotopy
 
-function _resolve_qK2x_method(model::Bnc, method::Union{Symbol,Nothing})
+function _resolve_qK2x_method(model::Bnc, method::Union{Symbol, Nothing})
     resolved = isnothing(method) ? _default_method(model) : method
-    return (resolved === :free_energy && !_free_energy_qK2x_allowed(model)) ? :homotopy : resolved
+    return if (resolved === :free_energy && !_free_energy_qK2x_allowed(model))
+        :homotopy
+    else
+        resolved
+    end
 end
 
 function _warn_if_free_energy_qK2x_disabled(model::Bnc)
@@ -99,7 +99,6 @@ function _warn_if_free_energy_qK2x_disabled(model::Bnc)
     @warn "L * N' is nonzero; qK2x defaults to :homotopy and :free_energy requests are redirected to :homotopy for this model."
     return nothing
 end
-
 
 #========================================================================================#
 # Catalysis initialization
@@ -111,43 +110,54 @@ end
 Attach or update catalysis data on a `Bnc` model in-place.
 
 # Arguments
-- `bnc`: Binding network model to update.
+
+  - `bnc`: Binding network model to update.
 
 # Keyword Arguments
-- `Γ`: Catalysis change matrix in qK space.
-- `Π`: Catalysis index and coefficient matrix. If omitted while `Γ` and
-  `x_picked` are supplied, defaults to the identity on the picked species.
-- `F`, `F0`: Optional affine constraints on old catalysis rate constants,
-  `log k_old = F * log k + F0`.
-- `k_sym`: Symbols for catalysis rate constants.
-- `v_sym`: Symbols for catalysis fluxes, where `log v = Π log x + F log k + F0`.
-- `w_sym`: Symbols for the new conservation quantities induced by catalysis.
-- `x_picked`: Picked species for catalysis flux monomials.
-- `q_picked`: Picked qK coordinates affected by catalysis.
+
+  - `Γ`: Catalysis change matrix in qK space.
+  - `Π`: Catalysis index and coefficient matrix. If omitted while `Γ` and
+    `x_picked` are supplied, defaults to the identity on the picked species.
+  - `F`, `F0`: Optional affine constraints on old catalysis rate constants,
+    `log k_old = F * log k + F0`.
+  - `k_sym`: Symbols for catalysis rate constants.
+  - `v_sym`: Symbols for catalysis fluxes, where `log v = Π log x + F log k + F0`.
+  - `w_sym`: Symbols for the new conservation quantities induced by catalysis.
+  - `x_picked`: Picked species for catalysis flux monomials.
+  - `q_picked`: Picked qK coordinates affected by catalysis.
 
 # Returns
-- `nothing`. The supplied `bnc` is updated in-place.
+
+  - `nothing`. The supplied `bnc` is updated in-place.
 """
 function update_catalysis!(
     model::Bnc;
-    Γ::Union{<:AbstractMatrix{Int},Nothing}=nothing,
-    Π::Union{<:AbstractMatrix{Int},Nothing}=nothing,
-    F::Union{<:AbstractMatrix{<:Real},Nothing}=nothing,
-    F0::Union{<:AbstractVector{<:Real},Nothing}=nothing,
-    k_sym::Union{<:AbstractVector,Nothing}=nothing,
-    v_sym::Union{<:AbstractVector,Nothing}=nothing,
-    w_sym::Union{<:AbstractVector,Nothing}=nothing,
-    x_picked::Union{<:AbstractVector,Nothing}=nothing,
-    q_picked::Union{<:AbstractVector,Nothing}=nothing,
+    Γ::Union{<:AbstractMatrix{Int}, Nothing}=nothing,
+    Π::Union{<:AbstractMatrix{Int}, Nothing}=nothing,
+    F::Union{<:AbstractMatrix{<:Real}, Nothing}=nothing,
+    F0::Union{<:AbstractVector{<:Real}, Nothing}=nothing,
+    k_sym::Union{<:AbstractVector, Nothing}=nothing,
+    v_sym::Union{<:AbstractVector, Nothing}=nothing,
+    w_sym::Union{<:AbstractVector, Nothing}=nothing,
+    x_picked::Union{<:AbstractVector, Nothing}=nothing,
+    q_picked::Union{<:AbstractVector, Nothing}=nothing,
 )
     if isnothing(Γ) && isnothing(Π)
         return nothing
     elseif isnothing(Γ)
         throw(ArgumentError("You shall provide Γ when providing Π."))
     elseif isnothing(Π)
-        isnothing(x_picked) && throw(ArgumentError("You shall provide Π, or provide x_picked so Π can default to the identity on picked species."))
+        isnothing(x_picked) && throw(
+            ArgumentError(
+                "You shall provide Π, or provide x_picked so Π can default to the identity on picked species.",
+            ),
+        )
         n_flux = size(Γ, 2)
-        length(x_picked) == n_flux || throw(ArgumentError("When Π is omitted, length(x_picked) must match the number of catalysis fluxes, got $(length(x_picked)) and $n_flux."))
+        length(x_picked) == n_flux || throw(
+            ArgumentError(
+                "When Π is omitted, length(x_picked) must match the number of catalysis fluxes, got $(length(x_picked)) and $n_flux.",
+            ),
+        )
         Π = Matrix{Int}(I, n_flux, n_flux)
     end
 
@@ -164,7 +174,7 @@ function update_catalysis!(
 
     if !isnothing(q_picked)
         q_idx = locate_sym_qK.(Ref(model), q_picked)
-        new_order = vcat(q_idx, setdiff(1:model.d, q_idx))
+        new_order = vcat(q_idx, setdiff(1:(model.d), q_idx))
         _change_q_L_order!(model, new_order)
         _remove_regime_data!(model)
     else
@@ -173,14 +183,17 @@ function update_catalysis!(
 
     n_old_k = size(Π, 1)
     n_independent_k = isnothing(F) ? n_old_k : size(F, 2)
-    k_sym = isnothing(k_sym) ? Symbolics.variables(:k, 1:n_independent_k) : name_converter(k_sym)
+    k_sym = if isnothing(k_sym)
+        Symbolics.variables(:k, 1:n_independent_k)
+    else
+        name_converter(k_sym)
+    end
     v_sym = isnothing(v_sym) ? Symbolics.variables(:v, 1:size(Π, 1)) : name_converter(v_sym)
     w_sym = isnothing(w_sym) ? nothing : name_converter(w_sym)
     model.catalysis = CatalysisData(model, Γ, Π, k_sym, w_sym, v_sym, F, F0)
     _warn_if_free_energy_qK2x_disabled(model)
     return nothing
 end
-
 
 #========================================================================================#
 # Catalysis-induced conservation basis repair
@@ -243,14 +256,13 @@ function fix_bn_catalysis!(bn::Bnc, new_ord::Vector{Int}, L_Γ::AbstractMatrix{I
     return nothing
 end
 
-
 #========================================================================================#
 # Cache invalidation and lazy helpers
 #========================================================================================#
 
 @inline function _change_q_L_order!(bn::Bnc, new_ord::Vector{Int})
     bn.q_sym[1:length(new_ord)] = bn.q_sym[new_ord]
-    bn.L[1:length(new_ord), :] = bn.L[new_ord, :]
+    return bn.L[1:length(new_ord), :] = bn.L[new_ord, :]
 end
 
 function _primitive_int_vector(v::AbstractVector{<:Integer})
@@ -301,7 +313,7 @@ function _nonnegative_conservation_basis(L_Γ::AbstractMatrix{<:Integer}; max_co
     components = _row_components_from_basis(L_Γ)
 
     for radius in 1:max_coeff
-        ranges = ntuple(_ -> -radius:radius, n_basis)
+        ranges = ntuple(_ -> (-radius):radius, n_basis)
         for coeff_tuple in Iterators.product(ranges...)
             all(iszero, coeff_tuple) && continue
             y = _primitive_int_vector(vec(Matrix{Int}(L_Γ) * collect(Int, coeff_tuple)))
@@ -315,12 +327,21 @@ function _nonnegative_conservation_basis(L_Γ::AbstractMatrix{<:Integer}; max_co
             push!(candidates, y)
         end
 
-        component_rank(y) = begin
+        function component_rank(y)
             support = findall(!iszero, y)
             idx = findfirst(component -> all(in(component), support), components)
-            isnothing(idx) ? typemax(Int) : minimum(components[idx])
+            return isnothing(idx) ? typemax(Int) : minimum(components[idx])
         end
-        sort!(candidates; by = y -> (component_rank(y), findfirst(!iszero, y), count(!iszero, y), sum(abs, y), y))
+        sort!(
+            candidates;
+            by=y -> (
+                component_rank(y),
+                findfirst(!iszero, y),
+                count(!iszero, y),
+                sum(abs, y),
+                y,
+            ),
+        )
         selected = Vector{Vector{Int}}()
         for y in candidates
             old_basis = isempty(selected) ? zeros(Int, n_rows, 0) : hcat(selected...)
@@ -360,15 +381,15 @@ end
     end
 end
 
-@inline function _remove_regime_data!(bn::Bnc{T}) where T
+@inline function _remove_regime_data!(bn::Bnc{T}) where {T}
     bn.BindRegimes = nothing
     bn.BncRegimes = nothing
     bn.vertices_graph = nothing
-    bn._vertices_Nρ_inv_dict = Dict{Vector{T}, Tuple{SparseMatrixCSC{Float64, Int},T}}()
+    bn._vertices_Nρ_inv_dict = Dict{Vector{T}, Tuple{SparseMatrixCSC{Float64, Int}, T}}()
     bn._regimes_affine_ready = false
+    empty!(bn._diagnostics)
     return nothing
 end
-
 
 #========================================================================================#
 # Display helpers
@@ -381,7 +402,9 @@ function _print_bnc_summary(io::IO, model::Bnc; final_newline::Bool=true)
     println(io, "Number of reactions (r): ", model.r)
     println(io, "L matrix: ", model.L)
     println(io, "N matrix: ", model.N)
-    println(io, "Direction of binding reactions: ", model.direction > 0 ? "forward" : "backward")
+    println(
+        io, "Direction of binding reactions: ", model.direction > 0 ? "forward" : "backward"
+    )
     println(io, "Catalysis involved: ", isnothing(model.catalysis) ? "No" : "Yes")
     println(io, "Regimes constructed: ", is_bind_regimes_built(model) ? "Yes" : "No")
 
@@ -391,12 +414,19 @@ function _print_bnc_summary(io::IO, model::Bnc; final_newline::Bool=true)
         println(io, "Number of regimes: ", length(regimes))
         println(io, "  - Invertible + Asymptotic: ", get(regime_counts, (true, false), 0))
         println(io, "  - Singular +  Asymptotic: ", get(regime_counts, (true, true), 0))
-        println(io, "  - Invertible +  Non-Asymptotic: ", get(regime_counts, (false, false), 0))
-        println(io, "  - Singular +  Non-Asymptotic: ", get(regime_counts, (false, true), 0))
+        println(
+            io, "  - Invertible +  Non-Asymptotic: ", get(regime_counts, (false, false), 0)
+        )
+        println(
+            io, "  - Singular +  Non-Asymptotic: ", get(regime_counts, (false, true), 0)
+        )
     end
 
-    final_newline ? println(io, "-----------------------------------------------") :
-                    print(io, "-----------------------------------------------")
+    if final_newline
+        println(io, "-----------------------------------------------")
+    else
+        print(io, "-----------------------------------------------")
+    end
     return nothing
 end
 
@@ -416,5 +446,5 @@ end
 Pretty-print a `Bnc` model in plain text contexts.
 """
 function show(io::IO, ::MIME"text/plain", bnc::Bnc)
-    _print_bnc_summary(io, bnc; final_newline=false)
+    return _print_bnc_summary(io, bnc; final_newline=false)
 end

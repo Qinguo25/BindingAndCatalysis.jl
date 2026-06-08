@@ -12,6 +12,7 @@ export get_binding_perm_dict, get_binding_regimes_dict
 export get_binding_index, get_catalysis_index, get_bnc_index
 export get_binding_nullities, get_bnc_nullities
 export filter_regimes, filter_regimes_mask, filter_regimes_with_mask
+export bnc_regime_diagnostics
 
 #========================================================================================#
 # Index helpers
@@ -92,9 +93,38 @@ end
 
 Compute and cache matched binding-catalysis regimes for `model` if needed.
 """
-function ensure_bnc_regimes!(model::AbstractBnc)
-    match_regimes!(get_binding_network(model))
+function ensure_bnc_regimes!(model::AbstractBnc; kwargs...)
+    match_regimes!(get_binding_network(model); kwargs...)
     return nothing
+end
+
+function _empty_bnc_regime_diagnostics()
+    return (;
+        initialized=false,
+        n_regimes=0,
+        n_feasible=0,
+        n_infeasible=0,
+        n_singular=0,
+        n_nonsingular=0,
+        singular_propagation_inconsistencies=NamedTuple[],
+        n_singular_propagation_inconsistencies=0,
+        warning_affects_nonsingular=false,
+        warning_scope=:singular_inner_affine_propagation,
+        infeasible_removed=0,
+    )
+end
+
+"""
+    bnc_regime_diagnostics(model) -> NamedTuple
+
+Return BNC regime initialization diagnostics recorded by `match_regimes!`.
+This includes singular inner-affine propagation inconsistencies and counts of
+feasible, infeasible, singular, and nonsingular BNC regimes.
+"""
+function bnc_regime_diagnostics(model::Bnc)
+    return get(
+        model._diagnostics, :bnc_regime_initialization, _empty_bnc_regime_diagnostics()
+    )
 end
 
 @inline _bind_regimes(model::Bnc) =

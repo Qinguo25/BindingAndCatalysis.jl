@@ -16,7 +16,9 @@ end
 
 Generate a random vector with entries sampled uniformly in log10 space.
 """
-function randomize(n::Int; log_lower=-6, log_upper=6, output_logspace::Bool=true)::Vector{Float64}
+function randomize(
+    n::Int; log_lower=-6, log_upper=6, output_logspace::Bool=true
+)::Vector{Float64}
     if !output_logspace
         exp10.(rand(n) .* (log_upper - log_lower) .+ log_lower)
     else
@@ -37,7 +39,7 @@ function N_generator(r::Int, n::Int; min_binder::Int=2, max_binder::Int=2)::Matr
     d = n - r
     N = [zeros(r, d) -I(r)]
     Threads.@threads for i in 1:r
-        idx = sample(1:d + i - 1, rand(min_binder:max_binder); replace=true)
+        idx = sample(1:(d + i - 1), rand(min_binder:max_binder); replace=true)
         for j in idx
             N[i, j] += 1
         end
@@ -64,7 +66,11 @@ Locate a symbol in a list of Symbolics variables.
 function locate_sym(syms, target_sym)
     target_sym = Symbol(target_sym)
     idx = findfirst(x -> x.val.name == target_sym, syms)
-    isnothing(idx) && throw(ArgumentError("Unknown symbol $(repr(target_sym)). Available symbols are $(string.(syms))."))
+    isnothing(idx) && throw(
+        ArgumentError(
+            "Unknown symbol $(repr(target_sym)). Available symbols are $(string.(syms)).",
+        ),
+    )
     return idx
 end
 

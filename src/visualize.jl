@@ -16,29 +16,45 @@ end
 
 SIMO_plot(args...; kwargs...) = _visualization_extension_required(:SIMO_plot)
 get_edge_labels(args...; kwargs...) = _visualization_extension_required(:get_edge_labels)
-set_proper_bounds_for_graph_plot!(args...; kwargs...) =
-    _visualization_extension_required(:set_proper_bounds_for_graph_plot!)
-get_node_positions(args...; kwargs...) = _visualization_extension_required(:get_node_positions)
+function set_proper_bounds_for_graph_plot!(args...; kwargs...)
+    return _visualization_extension_required(:set_proper_bounds_for_graph_plot!)
+end
+function get_node_positions(args...; kwargs...)
+    return _visualization_extension_required(:get_node_positions)
+end
 get_node_colors(args...; kwargs...) = _visualization_extension_required(:get_node_colors)
 get_node_labels(args...; kwargs...) = _visualization_extension_required(:get_node_labels)
 get_node_size(args...; kwargs...) = _visualization_extension_required(:get_node_size)
 draw_graph(args...; kwargs...) = _visualization_extension_required(:draw_graph)
-add_vertices_idx!(args...; kwargs...) = _visualization_extension_required(:add_vertices_idx!)
+function add_vertices_idx!(args...; kwargs...)
+    return _visualization_extension_required(:add_vertices_idx!)
+end
 add_arrows!(args...; kwargs...) = _visualization_extension_required(:add_arrows!)
 add_nodes_text!(args...; kwargs...) = _visualization_extension_required(:add_nodes_text!)
-set_node_positions(args...; kwargs...) = _visualization_extension_required(:set_node_positions)
-draw_vertices_neighbor_graph(args...; kwargs...) =
-    _visualization_extension_required(:draw_vertices_neighbor_graph)
-draw_qK_neighbor_grh(args...; kwargs...) = _visualization_extension_required(:draw_qK_neighbor_grh)
+function set_node_positions(args...; kwargs...)
+    return _visualization_extension_required(:set_node_positions)
+end
+function draw_vertices_neighbor_graph(args...; kwargs...)
+    return _visualization_extension_required(:draw_vertices_neighbor_graph)
+end
+function draw_qK_neighbor_grh(args...; kwargs...)
+    return _visualization_extension_required(:draw_qK_neighbor_grh)
+end
 find_bounds(args...; kwargs...) = _visualization_extension_required(:find_bounds)
-add_rgm_colorbar!(args...; kwargs...) = _visualization_extension_required(:add_rgm_colorbar!)
+function add_rgm_colorbar!(args...; kwargs...)
+    return _visualization_extension_required(:add_rgm_colorbar!)
+end
 get_color_map(args...; kwargs...) = _visualization_extension_required(:get_color_map)
 draw_ROP(args...; kwargs...) = _visualization_extension_required(:draw_ROP)
-plot_polyhedron_slices(args...; kwargs...) =
-    _visualization_extension_required(:plot_polyhedron_slices)
-plot_binding_regime_partition(args...; kwargs...) =
-    _visualization_extension_required(:plot_binding_regime_partition)
-plot_bnc_regime_partition(args...; kwargs...) =
-    _visualization_extension_required(:plot_bnc_regime_partition)
-plot_qcat_slice_with_flux(args...; kwargs...) =
-    _visualization_extension_required(:plot_qcat_slice_with_flux)
+function plot_polyhedron_slices(args...; kwargs...)
+    return _visualization_extension_required(:plot_polyhedron_slices)
+end
+function plot_binding_regime_partition(args...; kwargs...)
+    return _visualization_extension_required(:plot_binding_regime_partition)
+end
+function plot_bnc_regime_partition(args...; kwargs...)
+    return _visualization_extension_required(:plot_bnc_regime_partition)
+end
+function plot_qcat_slice_with_flux(args...; kwargs...)
+    return _visualization_extension_required(:plot_qcat_slice_with_flux)
+end

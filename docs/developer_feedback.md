@@ -1184,8 +1184,13 @@ p2[locate_sym_wKk(model, :tI)] += log10(2.0)
 
 ### Current State
 
-`simulate_adaptation` is useful and should stay.  For report-grade analysis,
-however, I also needed:
+`simulate_adaptation` is useful and should stay. The package now also exposes
+`simulate_catalysis_trajectory` as the general reduced qcat trajectory wrapper:
+callers can provide fixed or time-dependent combined `wKk` values, or split
+`w`, `K`, and reduced `k` blocks. It returns matrix-shaped `logqcat` and `qcat`
+trajectories for plotting and diagnostics.
+
+For report-grade adaptation analysis, however, I also needed:
 
 - pre-relaxation to a nearby steady state,
 - a two-fold input step,
@@ -1207,8 +1212,9 @@ binding-update loop:
 3. solve `x` from binding again,
 4. repeat along the trajectory.
 
-The package already has the core machinery.  It needs a higher-level wrapper
-that returns diagnostics, not only raw trajectories.
+The package now has the model-independent trajectory wrapper. Higher-level
+adaptation-specific diagnostics should be layered on top of that wrapper rather
+than embedded into the core qK/x mapping code.
 
 ### Suggested API
 

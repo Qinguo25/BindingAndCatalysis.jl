@@ -8,8 +8,8 @@ function L_from_N(N::Matrix{Int})::Matrix{Int}
     r, n = size(N)
     d = n - r
     N_1 = @view N[:, 1:d]
-    N_2 = @view N[:, d+1:n]
-    hcat(Matrix(I, d, d), -(N_2 \ N_1)')
+    N_2 = @view N[:, (d + 1):n]
+    return hcat(Matrix(I, d, d), -(N_2 \ N_1)')
 end
 
 """
@@ -20,8 +20,8 @@ Recover a stoichiometry matrix `N` from a conservation matrix `L`.
 function N_from_L(L::Matrix{Int})::Matrix{Int}
     d, n = size(L)
     r = n - d
-    L2 = @view L[:, d+1:n]
-    hcat(L2', Matrix(-I, r, r))
+    L2 = @view L[:, (d + 1):n]
+    return hcat(L2', Matrix(-I, r, r))
 end
 
 """
@@ -50,7 +50,7 @@ end
 
 function _sparse_top_incidence(A::SparseMatrixCSC, end_row::Int)
     rows_for_col = [Int[] for _ in axes(A, 2)]
-    nzidx_for_pair = Dict{Tuple{Int,Int},Int}()
+    nzidx_for_pair = Dict{Tuple{Int, Int}, Int}()
 
     for col in axes(A, 2)
         for nzidx in A.colptr[col]:(A.colptr[col + 1] - 1)
@@ -92,9 +92,7 @@ function _transversal_independent(
 end
 
 function _dual_bottom_independent(
-    A::SparseMatrixCSC,
-    selected_cols::AbstractVector{<:Integer},
-    end_row::Int,
+    A::SparseMatrixCSC, selected_cols::AbstractVector{<:Integer}, end_row::Int
 )
     n_rows, n_cols = size(A)
     bottom_rank = n_rows - end_row
@@ -127,7 +125,8 @@ end
 function _matroid_intersection_diag_cols(A::SparseMatrixCSC, end_row::Int)
     n_rows, n_cols = size(A)
     n_rows == n_cols || throw(ArgumentError("A must be square"))
-    0 <= end_row <= n_rows || throw(ArgumentError("end_row must be between 0 and size(A, 1)"))
+    0 <= end_row <= n_rows ||
+        throw(ArgumentError("end_row must be between 0 and size(A, 1)"))
     end_row == 0 && return Int[]
 
     rows_for_col, _ = _sparse_top_incidence(A, end_row)
@@ -141,7 +140,7 @@ function _matroid_intersection_diag_cols(A::SparseMatrixCSC, end_row::Int)
         selected_set = Set(selected)
         unselected = [col for col in ground_cols if !(col in selected_set)]
 
-        prev = Dict{Int,Int}()
+        prev = Dict{Int, Int}()
         queue = Int[]
         found = 0
 
@@ -180,7 +179,9 @@ function _matroid_intersection_diag_cols(A::SparseMatrixCSC, end_row::Int)
             end
         end
 
-        found == 0 && throw(ArgumentError("Could not find a nonsingular top-row perturbation pattern."))
+        found == 0 && throw(
+            ArgumentError("Could not find a nonsingular top-row perturbation pattern.")
+        )
 
         path = Int[]
         col = found
@@ -224,10 +225,12 @@ function _perfect_top_matching(
     end
 
     for col in cols
-        try_match(col, falses(end_row)) || throw(ArgumentError("Selected columns do not match all top rows."))
+        try_match(col, falses(end_row)) ||
+            throw(ArgumentError("Selected columns do not match all top rows."))
     end
 
-    all(!iszero, row_to_col) || throw(ArgumentError("Selected columns do not match all top rows."))
+    all(!iszero, row_to_col) ||
+        throw(ArgumentError("Selected columns do not match all top rows."))
     return row_to_col
 end
 
@@ -263,8 +266,8 @@ end
 
 Return indices of linearly independent rows in `N`.
 """
-function independent_row_idx(N::AbstractMatrix{T}) where T
-    Nt_lu = lu(N', check=false)
+function independent_row_idx(N::AbstractMatrix{T}) where {T}
+    Nt_lu = lu(N'; check=false)
     issuccess(Nt_lu) && return collect(1:size(N, 1))
     tol = 1e-8
     pivot_indices = findall(abs.(diag(Nt_lu.U)) .> tol)
@@ -296,7 +299,7 @@ end
 
 Convert a single-nonzero-per-row matrix into index and value vectors.
 """
-function _Mtx2idx_val(Mtx::Matrix{<:T}) where T
+function _Mtx2idx_val(Mtx::Matrix{<:T}) where {T}
     row_num, col_num = size(Mtx)
     idx = Vector{Int}(undef, row_num)
     val = Vector{T}(undef, row_num)
@@ -317,7 +320,9 @@ end
 
 Create a matrix with one nonzero per row from index and value vectors.
 """
-function _idx_val2Mtx(idx::Vector{Int}, val::T=1, col_num::Union{Int,Nothing}=nothing) where T
+function _idx_val2Mtx(
+    idx::Vector{Int}, val::T=1, col_num::Union{Int, Nothing}=nothing
+) where {T}
     n = length(idx)
     col_num = isnothing(col_num) ? n : col_num
     Mtx = zeros(T, n, col_num)
@@ -334,7 +339,9 @@ end
 
 Create a matrix with one nonzero per row using per-row values.
 """
-function _idx_val2Mtx(idx::Vector{Int}, val::Vector{<:T}, col_num::Union{Int,Nothing}=nothing) where T
+function _idx_val2Mtx(
+    idx::Vector{Int}, val::Vector{<:T}, col_num::Union{Int, Nothing}=nothing
+) where {T}
     n = length(idx)
     col_num = isnothing(col_num) ? n : col_num
     @assert length(val) == n "val must have the same length as idx"
@@ -352,7 +359,9 @@ end
 
 Apply a function to each row or column of a matrix and collect results.
 """
-function matrix_iter(f::Function, M::AbstractArray{<:Any,2}; byrow::Bool=true, multithread::Bool=true)
+function matrix_iter(
+    f::Function, M::AbstractArray{<:Any, 2}; byrow::Bool=true, multithread::Bool=true
+)
     if byrow
         num_rows = size(M, 1)
         if num_rows == 0
@@ -408,7 +417,7 @@ end
 
 Row-reduced echelon form over an arbitrary exact scalar type.
 """
-function rref_exact(A::AbstractMatrix{T}) where {T<:Number}
+function rref_exact(A::AbstractMatrix{T}) where {T <: Number}
     M = copy(A)
     m, n = size(M)
     pivotcols = Int[]
@@ -511,7 +520,7 @@ end
 
 Split signed sparse rows into positive/negative duplicated rows.
 """
-function S_to_S_pos_neg(S::SparseMatrixCSC{T,Ti}) where {T<:Real,Ti<:Integer}
+function S_to_S_pos_neg(S::SparseMatrixCSC{T, Ti}) where {T <: Real, Ti <: Integer}
     m, n = size(S)
     nnzS = nnz(S)
 

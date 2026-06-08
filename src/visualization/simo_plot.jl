@@ -14,7 +14,14 @@ function _full_qK(params::AbstractVector{<:Real}, change_idx::Integer, q::Real)
     return out
 end
 
-function _simo_logx_grid(model::Bnc, params, change_idx, qvals; method::Union{Symbol,Nothing}=nothing, show_params::Bool=false)
+function _simo_logx_grid(
+    model::Bnc,
+    params,
+    change_idx,
+    qvals;
+    method::Union{Symbol, Nothing}=nothing,
+    show_params::Bool=false,
+)
     method = _resolve_qK2x_method(model, method)
     if show_params
         qK_syms = qK_symbol(model)
@@ -26,12 +33,7 @@ function _simo_logx_grid(model::Bnc, params, change_idx, qvals; method::Union{Sy
         start_qK = _full_qK(params, change_idx, first(qvals))
         end_qK = _full_qK(params, change_idx, last(qvals))
         _, xs = x_traj_with_qK_change(
-            model,
-            start_qK,
-            end_qK;
-            input=:log,
-            output=:log,
-            npoints=length(qvals),
+            model, start_qK, end_qK; input=:log, output=:log, npoints=length(qvals)
         )
         return reduce(hcat, xs)
     end
@@ -43,7 +45,7 @@ function _simo_logx_grid(model::Bnc, params, change_idx, qvals; method::Union{Sy
             _full_qK(params, change_idx, qvals[i]);
             input=:log,
             output=:log,
-            method= method,
+            method=method,
         )
     end
     return out
@@ -53,10 +55,7 @@ function _simo_assign_rgms(model::Bnc, logx)
     out = Vector{Int}(undef, size(logx, 2))
     Threads.@threads for i in axes(logx, 2)
         out[i] = assign_regime_x_index(
-            model,
-            collect(@view logx[:, i]);
-            input=:log,
-            asymptotic_only=false,
+            model, collect(@view logx[:, i]); input=:log, asymptotic_only=false
         )
     end
     return out
@@ -69,7 +68,9 @@ function _simo_rgm_runs(qvals, rgms)
         if i > length(rgms) || rgms[i] != rgms[start_i]
             left = start_i == 1 ? qvals[1] : (qvals[start_i - 1] + qvals[start_i]) / 2
             right = i > length(rgms) ? qvals[end] : (qvals[i - 1] + qvals[i]) / 2
-            push!(runs, (; rgm=Int(rgms[start_i]), left=Float64(left), right=Float64(right)))
+            push!(
+                runs, (; rgm=Int(rgms[start_i]), left=Float64(left), right=Float64(right))
+            )
             start_i = i
         end
     end
@@ -98,7 +99,7 @@ function SIMO_plot(
     stop::Real=6,
     observe_x=nothing,
     npoints::Integer=300,
-    method::Union{Symbol,Nothing}=nothing,
+    method::Union{Symbol, Nothing}=nothing,
     add_regime_line::Bool=true,
     shade_background::Bool=true,
     show_regime_label::Bool=true,
@@ -114,20 +115,28 @@ function SIMO_plot(
     if length(params) == model.d + model.r
         deleteat!(params, change_idx)
     end
-    length(params) == model.d + model.r - 1 || throw(ArgumentError("Expected reduced qK parameter length $(model.d + model.r - 1)."))
+    length(params) == model.d + model.r - 1 || throw(
+        ArgumentError("Expected reduced qK parameter length $(model.d + model.r - 1).")
+    )
 
     qvals = collect(range(Float64(start), Float64(stop); length=max(npoints, 2)))
     x_idx, xsyms, _ = _normalize_simo_observe_x(model, observe_x)
 
-    logx = _simo_logx_grid(model, params, change_idx, qvals; method=method, show_params=show_params)
-    rgm_logx = add_regime_line ? _simo_logx_grid(model, params, change_idx, qvals; method=:regime) : nothing
+    logx = _simo_logx_grid(
+        model, params, change_idx, qvals; method=method, show_params=show_params
+    )
+    rgm_logx = if add_regime_line
+        _simo_logx_grid(model, params, change_idx, qvals; method=:regime)
+    else
+        nothing
+    end
     rgms = _simo_assign_rgms(model, logx)
     runs = _simo_rgm_runs(qvals, rgms)
     rgm_cmap = get_color_map(unique(rgms); colormap=region_colormap)
     line_colors = Makie.wong_colors()
 
     ymin, ymax = _simo_y_limits(logx, rgm_logx)
-    fig = Figure(size=size)
+    fig = Figure(; size=size)
     ax = Axis(
         fig[1, 1];
         xlabel="log" * _txt(qK_sym(model)[change_idx]),
@@ -157,13 +166,28 @@ function SIMO_plot(
     if add_regime_line
         for (j, xi) in enumerate(x_idx)
             c = line_colors[mod1(j, length(line_colors))]
-            lines!(ax, qvals, @view rgm_logx[xi, :]; color=c, linestyle=:dash, linewidth=2, label="$(_txt(xsyms[j])) regime")
+            lines!(
+                ax,
+                qvals,
+                @view rgm_logx[xi, :];
+                color=c,
+                linestyle=:dash,
+                linewidth=2,
+                label="$(_txt(xsyms[j])) regime",
+            )
         end
     end
 
     for (j, xi) in enumerate(x_idx)
         c = line_colors[mod1(j, length(line_colors))]
-        lines!(ax, qvals, @view logx[xi, :]; color=c, linewidth=2.5, label="$(_txt(xsyms[j])) numeric")
+        lines!(
+            ax,
+            qvals,
+            @view logx[xi, :];
+            color=c,
+            linewidth=2.5,
+            label="$(_txt(xsyms[j])) numeric",
+        )
     end
 
     axislegend(ax; position=:lb)
@@ -172,14 +196,12 @@ function SIMO_plot(
 end
 
 function SIMO_plot(
-    grh::SIMOPaths,
-    path_idx::Integer;
-    title="Path $path_idx",
-    extend::Real=4.0,
-    kwargs...,
+    grh::SIMOPaths, path_idx::Integer; title="Path $path_idx", extend::Real=4.0, kwargs...
 )
     model = get_binding_network(grh)
-    params = get_one_inner_point(get_polyhedron(grh, path_idx); rand_line=false, rand_ray=false, extend=extend)
+    params = get_one_inner_point(
+        get_polyhedron(grh, path_idx); rand_line=false, rand_ray=false, extend=extend
+    )
     return SIMO_plot(model, params, grh.change_qK_idx; title=title, kwargs...)
 end
 

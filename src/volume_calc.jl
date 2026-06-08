@@ -21,10 +21,7 @@ function _volume_summary_string(V::Volume)
     mean, relerr = fetch_mean_re(V)
     relpct = isfinite(relerr) ? Printf.@sprintf("%.2f%%", relerr * 100) : string(relerr)
     return Printf.@sprintf(
-        "Volume(Mean=%.3e, STD=%.3e, RelError=%s)",
-        mean,
-        sqrt(V.var),
-        relpct,
+        "Volume(Mean=%.3e, STD=%.3e, RelError=%s)", mean, sqrt(V.var), relpct,
     )
 end
 

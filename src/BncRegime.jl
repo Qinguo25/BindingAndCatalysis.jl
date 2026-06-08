@@ -527,7 +527,7 @@ end
 
 #=================================================THE main ENTRY=============================#
 
-function match_regimes!(model::Bnc)
+function match_regimes!(model::Bnc; warn_singular_propagation::Bool=true)
     if is_bnc_regimes_built(model)
         return nothing
     end
@@ -539,7 +539,9 @@ function match_regimes!(model::Bnc)
         _catalysis_regimes_data(model), _bind_regimes_data(model)
     )
 
-    _initialize_regime!(model.BncRegimes) # The real calculation
+    model._diagnostics[:bnc_regime_initialization] = _initialize_regime!(
+        model.BncRegimes; warn_singular_propagation=warn_singular_propagation
+    ) # The real calculation
 
     return nothing
 end
@@ -569,13 +571,34 @@ function _build_BncRegime(
     return bncrgms
 end
 
-function _initialize_regime!(rgms::AbstractVector{BncRegime})
-    isempty(rgms) && return nothing
+function _bnc_regime_initialization_diagnostics(
+    rgms::AbstractVector{BncRegime}, inconsistencies, n_removed::Integer
+)
+    return (;
+        initialized=true,
+        n_regimes=length(rgms),
+        n_feasible=count(is_feasible, rgms),
+        n_infeasible=count(rgm -> !is_feasible(rgm), rgms),
+        n_singular=count(is_singular, rgms),
+        n_nonsingular=count(rgm -> !is_singular(rgm), rgms),
+        singular_propagation_inconsistencies=inconsistencies,
+        n_singular_propagation_inconsistencies=length(inconsistencies),
+        warning_affects_nonsingular=false,
+        warning_scope=:singular_inner_affine_propagation,
+        infeasible_removed=n_removed,
+    )
+end
+
+function _initialize_regime!(
+    rgms::AbstractVector{BncRegime}; warn_singular_propagation::Bool=true
+)
+    isempty(rgms) && return _empty_bnc_regime_diagnostics()
 
     @info "Initializing BncRegimes..."
     inconsistencies = _initialize_inner_affine_by_graph!(rgms)
-    isempty(inconsistencies) ||
-        @warn "Inconsistent singular BncRegime H_inner directions found during graph propagation: $(length(inconsistencies)) cases. See `_initialize_inner_affine_by_graph!` for details."
+    if warn_singular_propagation && !isempty(inconsistencies)
+        @warn "Inconsistent singular BncRegime H_inner directions found during graph propagation: $(length(inconsistencies)) cases. These inconsistencies are confined to nlt == 1 singular inner-affine propagation and do not change nonsingular BNC regimes. Inspect `bnc_regime_diagnostics(model)` after `match_regimes!`, or pass `warn_singular_propagation=false` when scripted analyses later filter `singular=false`."
+    end
 
     @showprogress Threads.@threads for idx in eachindex(rgms)
         vtx = rgms[idx]
@@ -592,5 +615,5 @@ function _initialize_regime!(rgms::AbstractVector{BncRegime})
 
     @info "Finished initializing BncRegimes."
 
-    return nothing
+    return _bnc_regime_initialization_diagnostics(rgms, inconsistencies, n_removed)
 end

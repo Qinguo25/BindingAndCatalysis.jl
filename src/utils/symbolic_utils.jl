@@ -3,7 +3,7 @@
 
 Convert a vector of symbols or numbers into Symbolics variables.
 """
-function name_converter(name::Vector{<:T})::Vector{Num} where T
+function name_converter(name::Vector{<:T})::Vector{Num} where {T}
     if T <: Num
         return name
     else
@@ -16,14 +16,14 @@ end
 
 Symbolic `log10` wrapper that preserves `Num(0)` for unity.
 """
-log10_sym(x) = x == 1 ? Num(0) : Symbolics.wrap(Symbolics.Term(log10, [x, ]))
+log10_sym(x) = x == 1 ? Num(0) : Symbolics.wrap(Symbolics.Term(log10, [x]))
 
 """
     exp10_sym(x) -> Num
 
 Symbolic `exp10` wrapper.
 """
-exp10_sym(x) = Symbolics.wrap(Symbolics.Term(exp10, [x, ]))
+exp10_sym(x) = Symbolics.wrap(Symbolics.Term(exp10, [x]))
 
 """
     render_array(M, empty_posi_subs=nothing) -> String

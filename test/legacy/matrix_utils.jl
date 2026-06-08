@@ -21,6 +21,5 @@
     dropzeros!(kept)
 
     @test rank(Matrix(kept)) == 3
-    @test sort([A.rowval[idx] => findfirst(>(idx), A.colptr) - 1 for idx in idxs]) ==
-          [1 => 2, 2 => 1]
+    @test sort([A.rowval[idx] => findfirst(>(idx), A.colptr) - 1 for idx in idxs]) == [1 => 2, 2 => 1]
 end

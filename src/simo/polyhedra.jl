@@ -8,7 +8,9 @@ function _ensure_node_polyhedra!(grh::SIMOPaths, rgm_idxs::AbstractVector{<:Inte
         if !grh.node_polys_is_calc[idx]
             rgm = regimes[idx]
             _materialize_qK_conditions!(rgm)
-            grh.node_polys[idx] = get_polyhedron(rgm.C_qK, rgm.C0_qK, rgm.nullity; canonicalize=false)
+            grh.node_polys[idx] = get_polyhedron(
+                rgm.C_qK, rgm.C0_qK, rgm.nullity; canonicalize=false
+            )
             grh.node_polys_is_calc[idx] = true
         end
         return nothing
@@ -19,7 +21,6 @@ function _ensure_node_polyhedra!(grh::SIMOPaths, rgm_idxs::AbstractVector{<:Inte
     end
     return nothing
 end
-
 
 function _ensure_edge_polyhedra!(grh::SIMOPaths, edge_idxs::AbstractVector{<:Integer})
     edge_idxs_unique = unique(Int.(edge_idxs))
@@ -40,7 +41,9 @@ function _ensure_edge_polyhedra!(grh::SIMOPaths, edge_idxs::AbstractVector{<:Int
     @showprogress Threads.@threads for pos in eachindex(edge_idxs_to_calc)
         edge_idx = edge_idxs_to_calc[pos]
         u, v = grh.edge_keys[edge_idx]
-        grh.edge_polys[edge_idx] = _poly_intersect_eliminate(grh.node_polys[u], grh.node_polys[v], el_dim; canonicalize=false)
+        grh.edge_polys[edge_idx] = _poly_intersect_eliminate(
+            grh.node_polys[u], grh.node_polys[v], el_dim; canonicalize=false
+        )
         grh.edge_polys_is_calc[edge_idx] = true
     end
 
@@ -48,27 +51,24 @@ function _ensure_edge_polyhedra!(grh::SIMOPaths, edge_idxs::AbstractVector{<:Int
 end
 
 function _build_path_polyhedron(
-    grh::SIMOPaths,
-    path::AbstractVector{<:Integer},
-    edge_idxs::AbstractVector{<:Integer},
+    grh::SIMOPaths, path::AbstractVector{<:Integer}, edge_idxs::AbstractVector{<:Integer}
 )::Polyhedron
     el_dim = BitSet((grh.change_qK_idx,))
     if isempty(edge_idxs)
         v = Int(first(path))
         _ensure_node_polyhedra!(grh, [v])
         return _clean_polyhedron!(
-            _poly_eliminate(grh.node_polys[v], el_dim; canonicalize=false),
+            _poly_eliminate(grh.node_polys[v], el_dim; canonicalize=false)
         )
     end
 
     return _clean_polyhedron!(
-        _poly_intersect_many(grh.edge_polys[Int.(edge_idxs)]; canonicalize=false),
+        _poly_intersect_many(grh.edge_polys[Int.(edge_idxs)]; canonicalize=false)
     )
 end
 
 function _calc_polyhedra_for_paths_bulk_suffix_dag!(
-    grh::SIMOPaths,
-    path_idxs::AbstractVector{<:Integer},
+    grh::SIMOPaths, path_idxs::AbstractVector{<:Integer}
 )::Vector{Polyhedron}
     path_idxs = Int.(path_idxs)
     isempty(path_idxs) && return Polyhedron[]
@@ -83,8 +83,8 @@ function _calc_polyhedra_for_paths_bulk_suffix_dag!(
     child_of = Int[]
     vertex_of = Int[]
     edge_of = Int[]
-    poly_of = Union{Nothing,Polyhedron}[]
-    key_to_node = Dict{Tuple{Int,Int},Int}()
+    poly_of = Union{Nothing, Polyhedron}[]
+    key_to_node = Dict{Tuple{Int, Int}, Int}()
 
     function make_node(child::Int, vertex::Int, edge_idx::Int)
         push!(child_of, child)
@@ -130,7 +130,8 @@ function _calc_polyhedra_for_paths_bulk_suffix_dag!(
     end
 
     @info "Start building polyhedra for paths (total: $(length(path_idxs))) via suffix DAG with $(n_nodes) unique suffix states across $(max_depth + 1) layers"
-    @showprogress dt=0.1 desc="Building polyhedra via suffix DAG" for depth in 0:max_depth
+    @showprogress dt = 0.1 desc = "Building polyhedra via suffix DAG" for depth in
+                                                                          0:max_depth
         layer_nodes = nodes_by_depth[depth + 1]
         isempty(layer_nodes) && continue
         @info "Suffix DAG layer $(depth + 1)/$(max_depth + 1): $(length(layer_nodes)) states"
@@ -150,15 +151,13 @@ function _calc_polyhedra_for_paths_bulk_suffix_dag!(
 end
 
 function _calc_polyhedra_for_path(
-    model::Bnc,
-    paths::AbstractVector{<:AbstractVector{<:Integer}},
-    change_qK_idx::Integer,
+    model::Bnc, paths::AbstractVector{<:AbstractVector{<:Integer}}, change_qK_idx::Integer
 )::Vector{Polyhedron}
     el_dim = BitSet((change_qK_idx,))
 
     node_polyhedra = let
         unique_rgms = unique(vcat(paths...))
-        dic = Dict{Int,Polyhedron}()
+        dic = Dict{Int, Polyhedron}()
         for r in unique_rgms
             dic[Int(r)] = get_polyhedron(model, r)
         end
@@ -170,31 +169,37 @@ function _calc_polyhedra_for_path(
     @info "Start building polyhedra for edges (total: $(length(edges)))"
     @showprogress Threads.@threads for i in eachindex(edges)
         (u, v) = edges[i]
-        edge_poly[i] = _poly_intersect_eliminate(node_polyhedra[u], node_polyhedra[v], el_dim; canonicalize=false)
+        edge_poly[i] = _poly_intersect_eliminate(
+            node_polyhedra[u], node_polyhedra[v], el_dim; canonicalize=false
+        )
     end
 
     out = Vector{Polyhedron}(undef, length(edge_paths))
     @info "Start building polyhedra for paths (total: $(length(edge_paths)))"
     @showprogress Threads.@threads for i in eachindex(edge_paths)
         if isempty(edge_paths[i])
-            out[i] = _poly_eliminate(node_polyhedra[Int(first(paths[i]))], el_dim; canonicalize=false) |> _clean_polyhedron!
+            out[i] = _clean_polyhedron!(_poly_eliminate(
+                node_polyhedra[Int(first(paths[i]))], el_dim; canonicalize=false
+            ))
         else
-            out[i] = _poly_intersect_many(edge_poly[edge_paths[i]]; canonicalize=false) |> _clean_polyhedron!
+            out[i] = _clean_polyhedron!(_poly_intersect_many(
+                edge_poly[edge_paths[i]]; canonicalize=false
+            ))
         end
     end
     return out
 end
 
 function _calc_polyhedra_for_path(
-    model::Bnc,
-    path::AbstractVector{<:Integer},
-    change_qK,
+    model::Bnc, path::AbstractVector{<:Integer}, change_qK
 )::Polyhedron
     change_qK_idx = change_qK isa Integer ? Int(change_qK) : locate_sym_qK(model, change_qK)
     return _calc_polyhedra_for_path(model, [Int.(path)], change_qK_idx)[1]
 end
 
-function get_polyhedra(grh::SIMOPaths, pth_idx::Union{AbstractVector,Nothing}=nothing)::Vector{Polyhedron}
+function get_polyhedra(
+    grh::SIMOPaths, pth_idx::Union{AbstractVector, Nothing}=nothing
+)::Vector{Polyhedron}
     path_idxs = get_indices(grh, pth_idx)
     path_idxs_to_calc = _path_indices_to_calculate(grh.path_polys_is_calc, path_idxs)
     isempty(path_idxs_to_calc) && return grh.path_polys[path_idxs]
@@ -203,7 +208,9 @@ function get_polyhedra(grh::SIMOPaths, pth_idx::Union{AbstractVector,Nothing}=no
         idx = only(path_idxs_to_calc)
         edge_idxs_to_calc = grh.path_edge_idxs[idx]
         _ensure_edge_polyhedra!(grh, edge_idxs_to_calc)
-        grh.path_polys[idx] = _build_path_polyhedron(grh, grh.rgm_paths[idx], edge_idxs_to_calc)
+        grh.path_polys[idx] = _build_path_polyhedron(
+            grh, grh.rgm_paths[idx], edge_idxs_to_calc
+        )
         grh.path_polys_is_calc[idx] = true
     else
         polys = _calc_polyhedra_for_paths_bulk_suffix_dag!(grh, path_idxs_to_calc)
@@ -216,11 +223,7 @@ end
 
 get_polyhedron(grh::SIMOPaths, pth) = get_polyhedra(grh, [get_idx(grh, pth)])[1]
 
-function _resolve_simo_rebase_mat(
-    grh::SIMOPaths;
-    rebase_K::Bool=false,
-    rebase_mat=nothing,
-)
+function _resolve_simo_rebase_mat(grh::SIMOPaths; rebase_K::Bool=false, rebase_mat=nothing)
     if !isnothing(rebase_mat)
         @assert !rebase_K "Cannot specify both rebase_K and providing rebase_mat"
         return rebase_mat
@@ -235,17 +238,21 @@ end
 
 function get_volumes(
     grh::SIMOPaths,
-    pth_idx::Union{AbstractVector,Nothing}=nothing;
+    pth_idx::Union{AbstractVector, Nothing}=nothing;
     rebase_K=false,
     rebase_mat=nothing,
     recompute=false,
     kwargs...,
 )
     path_idxs = get_indices(grh, pth_idx)
-    path_idxs_to_calculate = _path_indices_to_calculate(grh.path_volume_is_calc, path_idxs; recompute=recompute)
+    path_idxs_to_calculate = _path_indices_to_calculate(
+        grh.path_volume_is_calc, path_idxs; recompute=recompute
+    )
 
     if !isempty(path_idxs_to_calculate)
-        resolved_rebase_mat = _resolve_simo_rebase_mat(grh; rebase_K=rebase_K, rebase_mat=rebase_mat)
+        resolved_rebase_mat = _resolve_simo_rebase_mat(
+            grh; rebase_K=rebase_K, rebase_mat=rebase_mat
+        )
         polys = get_polyhedra(grh, path_idxs_to_calculate)
         rlts = calc_volume(polys; rebase_mat=resolved_rebase_mat, kwargs...)
         for (i, idx) in enumerate(path_idxs_to_calculate)
@@ -256,4 +263,6 @@ function get_volumes(
     return grh.path_volume[path_idxs]
 end
 
-get_volume(grh::SIMOPaths, pth; kwargs...) = get_volumes(grh, [get_idx(grh, pth)]; kwargs...)[1]
+function get_volume(grh::SIMOPaths, pth; kwargs...)
+    return get_volumes(grh, [get_idx(grh, pth)]; kwargs...)[1]
+end

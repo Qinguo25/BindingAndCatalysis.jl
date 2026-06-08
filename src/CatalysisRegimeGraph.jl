@@ -44,8 +44,12 @@ function _fulfill_catalysis_regimes_graph!(grh::RegimeGraph)
             hid, dir = _edge_idx_sign(e, v_space)
             hid == 0 && continue
 
-            push!(I, p1); push!(J, hid); push!(V, -dir)
-            push!(I, p2); push!(J, hid); push!(V, dir)
+            push!(I, p1)
+            push!(J, hid)
+            push!(V, -dir)
+            push!(I, p2)
+            push!(J, hid)
+            push!(V, dir)
 
             _set_edge_idx_sign!(e, xk_space, hid, dir)
             _set_edge_idx_sign!(e_rev, xk_space, hid, -dir)
@@ -86,11 +90,30 @@ function _neighbor_graph_by_space(grh::RegimeGraph, space; both_side::Bool=false
     return g
 end
 
-get_neighbor_graph_v(grh::RegimeGraph; kwargs...) = _neighbor_graph_by_space(grh, :v; kwargs...)
-get_neighbor_graph_xk(grh::RegimeGraph; kwargs...) = _neighbor_graph_by_space(grh, :xk; kwargs...)
-get_neighbor_graph(grh::RegimeGraph; edge_space=nothing, kwargs...) =
-    _neighbor_graph_by_space(grh, isnothing(edge_space) ? _first_space(grh, (:qK, :qKk, :xk, :wKk, :v, :x)) : edge_space; kwargs...)
+function get_neighbor_graph_v(grh::RegimeGraph; kwargs...)
+    return _neighbor_graph_by_space(grh, :v; kwargs...)
+end
+function get_neighbor_graph_xk(grh::RegimeGraph; kwargs...)
+    return _neighbor_graph_by_space(grh, :xk; kwargs...)
+end
+function get_neighbor_graph(grh::RegimeGraph; edge_space=nothing, kwargs...)
+    return _neighbor_graph_by_space(
+        grh,
+        if isnothing(edge_space)
+            _first_space(grh, (:qK, :qKk, :xk, :wKk, :v, :x))
+        else
+            edge_space
+        end;
+        kwargs...,
+    )
+end
 
-get_neighbor_graph_v(args...; kwargs...) = get_neighbor_graph_v(get_catalysis_regimes_graph!(args...); kwargs...)
-get_neighbor_graph_xk(args...; kwargs...) = get_neighbor_graph_xk(get_catalysis_regimes_graph!(args...); kwargs...)
-get_neighbor_graph(model::CatalysisData; kwargs...) = get_neighbor_graph_xk(model; kwargs...)
+function get_neighbor_graph_v(args...; kwargs...)
+    return get_neighbor_graph_v(get_catalysis_regimes_graph!(args...); kwargs...)
+end
+function get_neighbor_graph_xk(args...; kwargs...)
+    return get_neighbor_graph_xk(get_catalysis_regimes_graph!(args...); kwargs...)
+end
+function get_neighbor_graph(model::CatalysisData; kwargs...)
+    return get_neighbor_graph_xk(model; kwargs...)
+end

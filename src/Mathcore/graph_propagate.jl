@@ -3,10 +3,8 @@
 #==================================================================================#
 
 function _sparse_outer(
-    c::SparseVector{Tc,Int},
-    s::SparseVector{Tc,Int},
-    scale::Tc,
-) where {Tc<:Real}
+    c::SparseVector{Tc, Int}, s::SparseVector{Tc, Int}, scale::Tc
+) where {Tc <: Real}
     nrow = length(c)
     ncol = length(s)
     Ic, Vc = findnz(c)
@@ -37,30 +35,29 @@ function _sparse_outer(
 end
 
 function _rank1_step_update_from_regular(
-    H::SparseMatrixCSC{Tc,Int}, # source H
+    H::SparseMatrixCSC{Tc, Int}, # source H
     H0::AbstractVector{<:Real}, # source H0
     i::Int,
     c_c0::Hyperplane_perm,
     sign::Int8,
     atol::Float64=1e-12,
-) where {Tc<:Real}
-
+) where {Tc <: Real}
     c_qK = c_c0 * H .* sign
     c0_qK = c_c0 * H0 * sign
     dropzeros!(c_qK)
     a = 1 + c_qK[i]
 
     if abs(a) <= atol # target is singular
-        H_to =  _sparse_outer(H[:, i], c_qK, -one(Tc))
-        H0_to =  -H[:, i] .* c0_qK
+        H_to = _sparse_outer(H[:, i], c_qK, -one(Tc))
+        H0_to = -H[:, i] .* c0_qK
         nlt_to = 1
     else
         scale = inv(a)
-        H_to  = H - _sparse_outer(H[:, i], c_qK, scale) 
+        H_to = H - _sparse_outer(H[:, i], c_qK, scale)
         dropzeros!(H_to)
         H0_to = H0 - H[:, i] .* (scale * c0_qK)
         nlt_to = 0
-        
+
         # if a < 0
         #     @show a
         #     @show inv(float.(H))
@@ -72,8 +69,6 @@ function _rank1_step_update_from_regular(
 
     return H_to, H0_to, nlt_to, c_qK, c0_qK
 end
-
-
 
 """
     _lowrank_update_H_H0(H, H0, U, V, δ0; kwargs...)
@@ -89,10 +84,10 @@ with
     H0' = H0 - H U (I + V' H U)^(-1) (V' H0 + δ0).
 """
 function _lowrank_update_H_H0(
-    H::SparseMatrixCSC{Float64,Int},
+    H::SparseMatrixCSC{Float64, Int},
     H0::AbstractVector{<:Real},
-    U::SparseMatrixCSC{Float64,Int},
-    V::SparseMatrixCSC{Float64,Int},
+    U::SparseMatrixCSC{Float64, Int},
+    V::SparseMatrixCSC{Float64, Int},
     δ0::AbstractVector{<:Real};
     atol::Float64=1e-12,
 )
@@ -109,7 +104,6 @@ function _lowrank_update_H_H0(
 
     return H_new, vec(H0_new), K
 end
-
 
 mutable struct AffinePropagateWorkspace
     remaining::Vector{UInt8}
@@ -215,7 +209,7 @@ function _get_or_build_Nρ_entry_threadsafe!(
     atol::Float64=1e-12,
     rtol::Float64=1e-10,
     drop_tol::Float64=1e-12,
-) where {Tv<:Real}
+) where {Tv <: Real}
     tkey = Tuple(Int.(key))
 
     lock(cache_lock)
@@ -254,7 +248,7 @@ function _analyze_seed!(
     rgm::BindRegime,
     N::AbstractMatrix{Tv};
     drop_tol::Float64=1e-10,
-) where {Tv<:Real}
+) where {Tv <: Real}
     perm = rgm.perm
     n = size(N, 2)
     key, pdef = _get_Nρ_key_and_perm_nullity(perm, n)
@@ -268,19 +262,13 @@ function _analyze_seed!(
         status = _SEED_STATUS_HIGH
     elseif pdef == 0
         _, total_nullity, key, _, entry = _calc_H_and_nullity_uncached(
-            perm,
-            N,
-            rgm.network.direction;
-            drop_tol=drop_tol,
+            perm, N, rgm.network.direction; drop_tol=drop_tol
         )
         stored_key = Tuple(Int.(key))
 
         if entry.deficiency > 0
             entry, stored_key = _store_Nρ_entry_threadsafe!(
-                state.cache,
-                state.cache_lock,
-                key,
-                entry,
+                state.cache, state.cache_lock, key, entry
             )
         end
 
@@ -291,11 +279,7 @@ function _analyze_seed!(
         end
     else
         entry, stored_key = _get_or_build_Nρ_entry_threadsafe!(
-            state.cache,
-            state.cache_lock,
-            N,
-            key;
-            drop_tol=drop_tol,
+            state.cache, state.cache_lock, N, key; drop_tol=drop_tol
         )
         total_nullity = _perm_total_nullity(pdef, entry)
         total_nullity >= 2 && (status = _SEED_STATUS_HIGH)
@@ -305,23 +289,19 @@ function _analyze_seed!(
 end
 
 function _initialize_regular_seed_affine!(
-    rgm::BindRegime,
-    state::SeedAnalysisState,
-    idx::Int;
-    drop_tol::Float64=1e-10,
+    rgm::BindRegime, state::SeedAnalysisState, idx::Int; drop_tol::Float64=1e-10
 )
     _initialize_regime!(rgm)
     _affine_info_ready(rgm) && return nothing
-    state.statuses[idx] == _SEED_STATUS_REGULAR || error("Requested regular seed initialization for a non-regular regime.")
+    state.statuses[idx] == _SEED_STATUS_REGULAR ||
+        error("Requested regular seed initialization for a non-regular regime.")
 
     H = let
         perm_key = state.perm_keys[idx]
-        perm_key === nothing && error("Missing complement key for exact regular seed initialization.")
+        perm_key === nothing &&
+            error("Missing complement key for exact regular seed initialization.")
         _build_regular_H_from_key_entry_exact(
-            rgm.perm,
-            rgm.network.N,
-            collect(perm_key);
-            drop_tol=drop_tol,
+            rgm.perm, rgm.network.N, collect(perm_key); drop_tol=drop_tol
         )
     end
 
@@ -337,16 +317,13 @@ function _ensure_seed_analysis!(
     regimes::Vector{BindRegime},
     N::AbstractMatrix{Tv};
     drop_tol::Float64=1e-10,
-) where {Tv<:Real}
+) where {Tv <: Real}
     flag = state.analyzed[idx][]
     flag == 2 && return _load_seed_analysis(state, idx)
 
     if _try_claim!(state.analyzed, idx)
         status, pdef, stored_key, total_nullity, entry = _analyze_seed!(
-            state,
-            regimes[idx],
-            N;
-            drop_tol=drop_tol,
+            state, regimes[idx], N; drop_tol=drop_tol
         )
         _store_seed_analysis!(state, idx, status, pdef, stored_key, total_nullity)
         return status, pdef, stored_key, entry
@@ -362,7 +339,9 @@ end
 function _initial_seed_ranges(n::Int, nt::Int)
     n == 0 && return UnitRange{Int}[]
     chunk = cld(n, max(nt, 1))
-    return [((k - 1) * chunk + 1):min(k * chunk, n) for k in 1:nt if (k - 1) * chunk + 1 <= n]
+    return [
+        ((k - 1) * chunk + 1):min(k * chunk, n) for k in 1:nt if (k - 1) * chunk + 1 <= n
+    ]
 end
 
 function _prefill_affine_cache!(model::Bnc; ensure_built::Bool=true)
@@ -393,7 +372,9 @@ function _prefill_affine_cache_core!(model::Bnc)
     end
 
     state = SeedAnalysisState(length(regimes), length(comps))
-    workspaces = [AffinePropagateWorkspace(length(regimes)) for _ in 1:Threads.maxthreadid()]
+    workspaces = [
+        AffinePropagateWorkspace(length(regimes)) for _ in 1:Threads.maxthreadid()
+    ]
     deferred_locals = [Int[] for _ in 1:Threads.maxthreadid()]
 
     ranges = _initial_seed_ranges(length(regimes), Threads.nthreads())
@@ -413,12 +394,7 @@ function _prefill_affine_cache_core!(model::Bnc)
             append!(
                 deferred_local,
                 _process_component_from_seed_scan!(
-                    regimes,
-                    grh,
-                    comps[cid],
-                    ws,
-                    state;
-                    frontier_parallel_threshold=256,
+                    regimes, grh, comps[cid], ws, state; frontier_parallel_threshold=256
                 ),
             )
         end
@@ -474,7 +450,9 @@ function _take_regular_seed!(
     @inbounds for idx in comp
         remaining[idx] == 0x01 || continue
 
-        status, _, _, _ = _ensure_seed_analysis!(state, idx, regimes, regimes[idx].network.N; drop_tol=drop_tol)
+        status, _, _, _ = _ensure_seed_analysis!(
+            state, idx, regimes, regimes[idx].network.N; drop_tol=drop_tol
+        )
         if status == _SEED_STATUS_HIGH
             _defer_high_nullity_seed!(deferred_idxs, regimes, state, remaining, idx)
         elseif status == _SEED_STATUS_REGULAR
@@ -497,9 +475,12 @@ function _defer_remaining_component!(
 )
     @inbounds for idx in comp
         remaining[idx] == 0x01 || continue
-        status, _, _, _ = _ensure_seed_analysis!(state, idx, regimes, regimes[idx].network.N; drop_tol=drop_tol)
+        status, _, _, _ = _ensure_seed_analysis!(
+            state, idx, regimes, regimes[idx].network.N; drop_tol=drop_tol
+        )
         remaining[idx] = 0x00
-        status == _SEED_STATUS_HIGH && (regimes[idx].nullity = max(2, state.total_nullities[idx]))
+        status == _SEED_STATUS_HIGH &&
+            (regimes[idx].nullity = max(2, state.total_nullities[idx]))
         push!(deferred_idxs, idx)
     end
 
@@ -521,22 +502,22 @@ function _process_component_from_seed_scan!(
     deferred_idxs = Int[]
 
     while true
-        seed = _take_regular_seed!(regimes, comp, remaining, state, deferred_idxs; drop_tol=drop_tol)
+        seed = _take_regular_seed!(
+            regimes, comp, remaining, state, deferred_idxs; drop_tol=drop_tol
+        )
         seed == 0 && break
 
         remaining[seed] = 0x00
         discovered = _propagate_from_regular_seed!(
-            regimes,
-            grh,
-            ws,
-            seed;
-            frontier_parallel_threshold=frontier_parallel_threshold,
+            regimes, grh, ws, seed; frontier_parallel_threshold=frontier_parallel_threshold
         )
         _set_vertices!(remaining, discovered, 0x00)
         _reset_claims!(ws.claimed, discovered)
     end
 
-    return _defer_remaining_component!(regimes, comp, remaining, state, deferred_idxs; drop_tol=drop_tol)
+    return _defer_remaining_component!(
+        regimes, comp, remaining, state, deferred_idxs; drop_tol=drop_tol
+    )
 end
 
 function _finalize_deferred_affine_and_nullity!(
@@ -560,7 +541,9 @@ function _finalize_deferred_affine_and_nullity!(
 
         _initialize_regime!(rgm)
 
-        H, nlt = _build_singular_H_from_perm_exact(rgm.perm, rgm.network.N, rgm.network.direction)
+        H, nlt = _build_singular_H_from_perm_exact(
+            rgm.perm, rgm.network.N, rgm.network.direction
+        )
         nlt == 1 || continue
 
         rgm.H = H
@@ -608,7 +591,9 @@ function _expand_frontier_serial!(
 )
     for from_idx in frontier
         for edge in grh.neighbors[from_idx]
-            _visit_edge!(regimes, remaining, claimed, from_idx, edge, discovered, next_frontier)
+            _visit_edge!(
+                regimes, remaining, claimed, from_idx, edge, discovered, next_frontier
+            )
         end
     end
     return nothing
@@ -638,7 +623,9 @@ function _expand_frontier_parallel!(
 
         from_idx = frontier[pos]
         for edge in grh.neighbors[from_idx]
-            _visit_edge!(regimes, remaining, claimed, from_idx, edge, disc_local, next_local)
+            _visit_edge!(
+                regimes, remaining, claimed, from_idx, edge, disc_local, next_local
+            )
         end
     end
     _append_locals!(discovered, disc_locals)
@@ -672,7 +659,9 @@ function _propagate_from_regular_seed!(
         empty!(next_frontier)
 
         if nt == 1 || length(frontier) < frontier_parallel_threshold
-            _expand_frontier_serial!(regimes, grh, remaining, claimed, frontier, discovered, next_frontier)
+            _expand_frontier_serial!(
+                regimes, grh, remaining, claimed, frontier, discovered, next_frontier
+            )
         else
             _expand_frontier_parallel!(
                 regimes,
@@ -698,14 +687,10 @@ end
 @inline function propagate_regime!(rgm1::BindRegime, rgm2::BindRegime, edge::RegimeEdge)
     x_idx, x_sign = _edge_idx_sign(edge, 1)
     H_to, H0_to, nlt_to, _, _ = _rank1_step_update_from_regular(
-        rgm1.H,
-        rgm1.H0,
-        edge.i,
-        rgm1.network._L_helper.hyperplanes[x_idx],
-        x_sign,
+        rgm1.H, rgm1.H0, edge.i, rgm1.network._L_helper.hyperplanes[x_idx], x_sign
     )
 
     rgm2.H = H_to
     rgm2.H0 = H0_to
-    rgm2.nullity = nlt_to
+    return rgm2.nullity = nlt_to
 end

@@ -6,18 +6,17 @@ Edge metadata connecting neighboring vertices in a regime graph.
 """
 mutable struct RegimeEdge
     to::Int
-    i ::Int # different row index
+    i::Int # different row index
 
-    idx_sign::Vector{Tuple{Int,Int8}}
+    idx_sign::Vector{Tuple{Int, Int8}}
 
     function RegimeEdge(to::Int, i::Int, idx::Int, sign::Int8)
-        return new(to, i, Tuple{Int,Int8}[(idx, sign), (0, 0)])
+        return new(to, i, Tuple{Int, Int8}[(idx, sign), (0, 0)])
     end
 
-    function RegimeEdge(to::Int, i::Int, idx_sign::Vector{Tuple{Int,Int8}})
+    function RegimeEdge(to::Int, i::Int, idx_sign::Vector{Tuple{Int, Int8}})
         return new(to, i, idx_sign)
     end
-
 end
 
 @inline function _ensure_edge_space!(edge::RegimeEdge, space::Int)
@@ -51,33 +50,41 @@ mutable struct RegimeGraph{Tv}
     edge_pos::Vector{Dict{Int, Int}}  # (u,v) -> (u,edge_pos[u][v]) to locate the RegimeEdge.
 
     hp_data::Vector{Any}
-    space_idx::Dict{Symbol,Int}
+    space_idx::Dict{Symbol, Int}
 
     qK_classifier_full::Any # numeric classifier for classifying regimes based on qK hyperplanes, to be filled when needed.
 
-    function RegimeGraph{Tv}(bn, neighbors, edge_pos, hp_data, space_idx, qK_classifier_full) where {Tv}
-        return new{Tv}(bn, neighbors, edge_pos, hp_data, Dict{Symbol,Int}(space_idx), qK_classifier_full)
+    function RegimeGraph{Tv}(
+        bn, neighbors, edge_pos, hp_data, space_idx, qK_classifier_full
+    ) where {Tv}
+        return new{Tv}(
+            bn,
+            neighbors,
+            edge_pos,
+            hp_data,
+            Dict{Symbol, Int}(space_idx),
+            qK_classifier_full,
+        )
     end
 
     function RegimeGraph(
         L_helper::MatrixHelper{Tv},
         neighbors::Vector{Vector{RegimeEdge}};
-        space_idx::Dict{Symbol,Int}=Dict(:x => 1, :qK => 2),
+        space_idx::Dict{Symbol, Int}=Dict(:x => 1, :qK => 2),
     ) where {Tv}
-        
         edge_pos = let
-            edge_pos = Vector{Dict{Int,Int}}(undef, length(neighbors))
-                for i in eachindex(neighbors)
-                    edges = neighbors[i]
-                    d = Dict{Int,Int}()
-                    sizehint!(d, length(edges))
-                    for (k, e) in enumerate(edges)
-                        d[e.to] = k
-                    end
-                    edge_pos[i] = d
+            edge_pos = Vector{Dict{Int, Int}}(undef, length(neighbors))
+            for i in eachindex(neighbors)
+                edges = neighbors[i]
+                d = Dict{Int, Int}()
+                sizehint!(d, length(edges))
+                for (k, e) in enumerate(edges)
+                    d[e.to] = k
                 end
-                edge_pos
+                edge_pos[i] = d
             end
+            edge_pos
+        end
 
         return new{Tv}(
             nothing,
@@ -94,11 +101,11 @@ function RegimeGraph(
     neighbors::Vector{Vector{RegimeEdge}},
     hp_data::Vector{Any};
     bn=nothing,
-    space_idx::Dict{Symbol,Int}=Dict(Symbol("space$i") => i for i in eachindex(hp_data)),
+    space_idx::Dict{Symbol, Int}=Dict(Symbol("space$i") => i for i in eachindex(hp_data)),
 )
-    edge_pos = Vector{Dict{Int,Int}}(undef, length(neighbors))
+    edge_pos = Vector{Dict{Int, Int}}(undef, length(neighbors))
     for i in eachindex(neighbors)
-        d = Dict{Int,Int}()
+        d = Dict{Int, Int}()
         sizehint!(d, length(neighbors[i]))
         for (k, e) in enumerate(neighbors[i])
             d[e.to] = k
@@ -110,12 +117,18 @@ end
 
 @inline function _space(grh::RegimeGraph, space::Symbol)
     return get(grh.space_idx, space) do
-        throw(ArgumentError("RegimeGraph does not have edge space :$space. Available spaces: $(sort!(collect(keys(grh.space_idx))))"))
+        throw(
+            ArgumentError(
+                "RegimeGraph does not have edge space :$space. Available spaces: $(sort!(collect(keys(grh.space_idx))))",
+            ),
+        )
     end
 end
-@inline _edge_idx_sign(edge::RegimeEdge, grh::RegimeGraph, space::Symbol) = _edge_idx_sign(edge, _space(grh, space))
-@inline _set_edge_idx_sign!(edge::RegimeEdge, grh::RegimeGraph, space, idx::Int, sign::Integer) =
-    _set_edge_idx_sign!(edge, _space(grh, Symbol(space)), idx, sign)
+@inline _edge_idx_sign(edge::RegimeEdge, grh::RegimeGraph, space::Symbol) =
+    _edge_idx_sign(edge, _space(grh, space))
+@inline _set_edge_idx_sign!(
+    edge::RegimeEdge, grh::RegimeGraph, space, idx::Int, sign::Integer
+) = _set_edge_idx_sign!(edge, _space(grh, Symbol(space)), idx, sign)
 @inline _edge_has_space(edge::RegimeEdge, grh::RegimeGraph, space) =
     _edge_has_space(edge, _space(grh, Symbol(space)))
 function _first_space(grh::RegimeGraph, preferences)
@@ -125,11 +138,18 @@ function _first_space(grh::RegimeGraph, preferences)
     return first(keys(grh.space_idx))
 end
 
-
-
-Base.display(io::IO, grh::RegimeGraph) = print(io, "RegimeGraph with $(length(grh.neighbors)) vertices and $(sum(length.(grh.neighbors))) edges")
-Base.show(io::IO, grh::RegimeGraph) = print(io, "RegimeGraph with $(length(grh.neighbors)) vertices and $(sum(length.(grh.neighbors))) edges")
-
+function Base.display(io::IO, grh::RegimeGraph)
+    return print(
+        io,
+        "RegimeGraph with $(length(grh.neighbors)) vertices and $(sum(length.(grh.neighbors))) edges",
+    )
+end
+function Base.show(io::IO, grh::RegimeGraph)
+    return print(
+        io,
+        "RegimeGraph with $(length(grh.neighbors)) vertices and $(sum(length.(grh.neighbors))) edges",
+    )
+end
 
 #-----------------------------------------------------------------------------------------------
 #This is graph associated functions for Bnc models and archetyple behaviors associated code
@@ -145,7 +165,7 @@ function _calc_regimes_graph(
     perms::Vector{<:AbstractVector{T}};
     primary_space::Symbol=:x,
     secondary_space::Symbol=:qK,
-) where {T<:Integer}
+) where {T <: Integer}
     # n = helper.n
     n_vtxs = length(perms)
     d = length(perms[1])
@@ -153,19 +173,22 @@ function _calc_regimes_graph(
 
     # 按行分桶：key 为去掉该行后的签名（Tuple），值为该签名下的 (regime idx, row choice)
     @showprogress for i in 1:d
-        buckets = Dict{Tuple{Vararg{T}}, Vector{Tuple{Int,T}}}()
+        buckets = Dict{Tuple{Vararg{T}}, Vector{Tuple{Int, T}}}()
         @inbounds for q in 1:n_vtxs
             v = perms[q]
             sig = if i == 1
-                    Tuple(v[2:end])
-                elseif i == d
-                    Tuple(v[1:end-1])
-                else
-                    Tuple((v[1:i-1]..., v[i+1:end]...))
-                end
-            push!(get!(buckets, sig) do
-                Vector{Tuple{Int,T}}()
-            end, (q, v[i]))
+                Tuple(v[2:end])
+            elseif i == d
+                Tuple(v[1:(end - 1)])
+            else
+                Tuple((v[1:(i - 1)]..., v[(i + 1):end]...))
+            end
+            push!(
+                get!(buckets, sig) do
+                    Vector{Tuple{Int, T}}()
+                end,
+                (q, v[i]),
+            )
         end
 
         groups = collect(values(buckets))
@@ -178,9 +201,9 @@ function _calc_regimes_graph(
             m = length(group)
             m <= 1 && continue
 
-            @inbounds for a in 1:m-1
+            @inbounds for a in 1:(m - 1)
                 from_idx, j_from = group[a]
-                for b in a+1:m
+                for b in (a + 1):m
                     to_idx, j_to = group[b]
                     j_from == j_to && continue
 
@@ -198,39 +221,28 @@ function _calc_regimes_graph(
         push!(neighbors[from], e)
     end
     return RegimeGraph(
-        helper,
-        neighbors;
-        space_idx=Dict(primary_space => 1, secondary_space => 2),
+        helper, neighbors; space_idx=Dict(primary_space => 1, secondary_space => 2)
     )
 end
-
-
-
 
 #=============================================================================================#
 #          Calc qK-space change directions for edges with nullity <= 1 regimes
 #=============================================================================================#
 
-
-
-
-@inline _edge_has_qK_interface(grh::RegimeGraph, edge::RegimeEdge) = _edge_has_space(edge, grh, :qK)
+@inline _edge_has_qK_interface(grh::RegimeGraph, edge::RegimeEdge) =
+    _edge_has_space(edge, grh, :qK)
 
 function _edge_interface(grh::RegimeGraph, edge::RegimeEdge, space::Symbol)
     space_idx = _space(grh, space)
     idx, dir = _edge_idx_sign(edge, space_idx)
     idx == 0 && return nothing
-    
+
     hp = get_hyperplane(grh.hp_data[space_idx], idx)
 
     return _calc_c_c0(hp, dir)
 end
 
 _edge_qK_interface(grh::RegimeGraph, edge::RegimeEdge) = _edge_interface(grh, edge, :qK)
-
-
-
-
 
 """
     _fulfill_regimes_graph!(vtx_graph::RegimeGraph) -> nothing
@@ -259,14 +271,12 @@ function _fulfill_regimes_graph!(vtx_graph::RegimeGraph)
         for e in edges
             p2 = e.to
             p1 < p2 || continue
-            
+
             nlt2 = regimes[p2].nullity
             nlt2 > 1 && continue  #skip regimes with nullity >1
-        
-
 
             rev_pos = vtx_graph.edge_pos[p2][p1]
-            
+
             e_rev = vtx_graph.neighbors[p2][rev_pos]
 
             src_rgm = regimes[p1]
@@ -274,12 +284,7 @@ function _fulfill_regimes_graph!(vtx_graph::RegimeGraph)
             x_idx, dir_x = _edge_idx_sign(e, x_space)
             c_c0 = get_hyperplane(vtx_graph.hp_data[x_space], x_idx)
 
-            c_qK, c0_qK = _calc_dir(
-                src_rgm.nullity,
-                src_rgm.H,
-                src_rgm.H0,
-                c_c0
-            ) # already dropped zeros in c_qK
+            c_qK, c0_qK = _calc_dir(src_rgm.nullity, src_rgm.H, src_rgm.H0, c_c0) # already dropped zeros in c_qK
 
             hid, dir = add_halfspace!(db, c_qK, c0_qK, dir_x; canonicalize=true)
 
@@ -305,15 +310,14 @@ function _fulfill_regimes_graph!(vtx_graph::RegimeGraph)
     return nothing
 end
 
-
 @inline function _calc_dir(
     nlt::Int,
-    H::SparseMatrixCSC{<:Real,Int},
+    H::SparseMatrixCSC{<:Real, Int},
     H0::AbstractVector{<:Real},
     c_c0::Hyperplane_perm,
 )
-    c_qK = c_c0 * H 
-    c0_qK = nlt ==0 ? c_c0 * H0  : mul(c_c0, H0; with_c0=false) 
+    c_qK = c_c0 * H
+    c0_qK = nlt == 0 ? c_c0 * H0 : mul(c_c0, H0; with_c0=false)
     dropzeros!(c_qK)
     return c_qK, c0_qK
 end

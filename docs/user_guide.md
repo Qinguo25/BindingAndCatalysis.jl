@@ -946,21 +946,49 @@ t, logx_traj = x_traj_cat(
 )
 ```
 
-For reduced qcat dynamics with a fixed or time-dependent `wKk`:
+For reduced qcat dynamics with fixed or time-dependent parameters, prefer
+`simulate_catalysis_trajectory`. It accepts combined `wKk` parameters:
 
 ```julia
 logqcat0 = fill(-2.0, length(q_cat_sym(model)))
 logwKk = zeros(length(wKk_sym(model)))
 
-t, logqcat_traj = qcat_traj_cat(
-    model,
-    logqcat0,
-    logwKk,
-    (0.0, 100.0);
-    input=:log,
-    output=:log,
+traj = simulate_catalysis_trajectory(
+    model;
+    logqcat0 = logqcat0,
+    logwKk = t -> logwKk,
+    tspan = (0.0, 100.0),
+)
+
+traj.t
+traj.logqcat
+traj.qcat
+traj.diagnostics
+```
+
+or split `w`, `K`, and reduced `k` blocks:
+
+```julia
+traj = simulate_catalysis_trajectory(
+    model;
+    qcat0 = fill(1e-2, length(q_cat_sym(model))),
+    w = t -> ones(length(w_sym(model))),
+    K = ones(length(K_sym(model))),
+    k = ones(length(k_sym(model))),
+    tspan = (0.0, 100.0),
+    output = :linear,
 )
 ```
+
+The lower-level `qcat_traj_cat(model, logqcat0, logwKk, tspan; ...)` remains
+available and returns `(t, states)`, where `states` is a vector of state vectors.
+Use `trajectory_matrix(states)` to convert those states into a matrix with one
+column per saved time point.
+
+Always inspect `traj.diagnostics` for long report-generation runs.  It records
+the SciML `retcode`, whether the solve was successful, whether the saved
+trajectory reached the requested final time, and the `maxiters` limit used by
+the solve.
 
 For a step-response/adaptation workflow, use `simulate_adaptation`:
 
@@ -1085,6 +1113,31 @@ using BindingAndCatalysis
 
 If the error persists, restart the Julia kernel and make sure the active
 environment contains `GraphMakie` and a Makie backend.
+
+### Catalysis trajectories hit `maxiters`
+
+For long or stiff trajectories, inspect:
+
+```julia
+traj = simulate_catalysis_trajectory(model; ...)
+traj.diagnostics
+```
+
+If `successful=false` or `reached_final_time=false`, retry with a larger
+`maxiters`, tighter or looser tolerances, or a stiff ODE solver passed through
+`alg`.
+
+### Singular BNC propagation warnings appear during matching
+
+`match_regimes!` may warn about inconsistent singular inner-affine propagation.
+These warnings are confined to singular BNC regimes with `nlt == 1`; they do
+not change nonsingular BNC regimes.  For report scripts that later filter
+`singular=false`, use:
+
+```julia
+match_regimes!(model; warn_singular_propagation=false)
+bnc_regime_diagnostics(model)
+```
 
 ### `show_expression_x` fails on a singular regime
 

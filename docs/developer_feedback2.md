@@ -774,3 +774,57 @@ Highest priority for future case studies:
 These additions would let a user express the biological model and constraints
 directly, while leaving the package responsible for coordinate bookkeeping,
 polyhedral feasibility, and volume semantics.
+
+## Report-generation usability notes, 2026-06-08
+
+These notes came from generating the polished toggle-switch report in
+`/home/joker/Realizibility_index/CASE_STUDY/Toggle_switch_constraints`.  The
+report enumerates monomer and dimer toggle-switch models under equality,
+symmetry, and dimer-DNA-affinity constraints, then validates representative
+bistable pairs by nonlinear phase portraits.
+
+### `qcat_traj_cat` trajectory shape could be documented or wrapped
+
+For plotting, `qcat_traj_cat` returned a vector of state vectors.  That is a
+reasonable DifferentialEquations-style representation, but report code needed a
+small conversion helper before it could plot trajectories as a `2 x T` matrix.
+A documented helper such as `trajectory_matrix(us)` or a short note in the
+simulation section would make downstream plotting scripts more direct.
+
+### Dimer-toggle simulations can hit `maxiters` warnings
+
+Several representative dimer-toggle trajectories emitted SciML `maxiters`
+warnings during phase-portrait generation.  The trajectories were still usable
+for the report, and every tested parameter family showed both attracting basins,
+but this is easy for a user to misread as a package failure.  It would help if
+`qcat_traj_cat` documented recommended stiff solver / `maxiters` settings for
+toggle-like dimer regimes, or exposed a compact diagnostic summary that clearly
+separates integration warnings from binding-network feasibility problems.
+
+### Singular-regime propagation warnings need context or a quiet mode
+
+Calling `match_regimes!` for the monomer and dimer toggle models produced
+warnings such as `Inconsistent singular BncRegime H_inner directions found
+during graph propagation`.  The report later filters to feasible,
+full-dimensional, non-singular, stable regimes, so these warnings did not affect
+the final R-index table or phase-portrait examples.  Still, the warning appears
+before the user has filtered regimes, and it is not obvious whether it indicates
+a real problem for the current analysis.  A short diagnostic note, a warning
+category, or a keyword for suppressing warnings from regimes that will be marked
+singular would make scripted report generation easier to audit.
+
+### Maintainer response and implementation status
+
+These report-generation notes are package-level usability issues, not
+toggle-switch-specific code. The package response is:
+
+- keep `qcat_traj_cat` as the low-level DifferentialEquations-style API, but
+  add `trajectory_matrix(states)` and recommend `simulate_catalysis_trajectory`
+  for matrix-shaped report output;
+- add `simulate_catalysis_trajectory(...).diagnostics`, including solver
+  `retcode`, success status, final-time reachability, saved-point count, and
+  `maxiters`;
+- add `bnc_regime_diagnostics(model)` and
+  `match_regimes!(model; warn_singular_propagation=false)` so report scripts
+  can suppress expected singular-propagation warnings after deciding to filter
+  `singular=false`, while still retaining an auditable diagnostic record.

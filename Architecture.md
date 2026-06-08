@@ -343,6 +343,14 @@ diagnostic count of all feasible full-dimensional restricted BNC regimes;
 candidate counts, pair intersections, and `R_multistability` use the stable and
 singular filters.
 
+`bnc_regime_diagnostics(model)` reports BNC initialization diagnostics after
+`match_regimes!`, including singular inner-affine propagation inconsistencies.
+Those inconsistencies are scoped to singular `nlt == 1` regimes and do not
+change nonsingular BNC regimes. Report scripts that later filter
+`singular=false` can call
+`match_regimes!(model; warn_singular_propagation=false)` and inspect the
+diagnostics explicitly.
+
 ## Public API Conventions
 
 The maintained API favors explicit function names and clear keyword semantics.
@@ -524,7 +532,7 @@ with `x=...` first maps through `x2qK`.
 - `x2qK`: direct map from x to qK;
 - `qK2x`: numerical inverse map from qK to x;
 - `qK2x_residual`: log-coordinate residual check;
-- homotopy trajectories and catalysis simulations.
+- homotopy trajectories in qK/x coordinates.
 
 `qK2x` supports:
 
@@ -540,6 +548,30 @@ hold, `:free_energy` requests are redirected to `:homotopy`.
 
 Solver-specific kwargs should document their forwarding target. SciML-style
 kwargs should use `reltol`, `abstol`, `alg`, and `maxiters`.
+
+## Catalysis Dynamics Layer
+
+`src/catalysis_dynamics.jl` owns simulation code that depends on the catalysis
+layer:
+
+- `catalysis_logx`: full x-space catalysis ODE in log coordinates;
+- `qcat_traj_cat`: lower-level reduced qcat ODE returning `(t, states)`;
+- `trajectory_matrix`: conversion from saved state vectors to a plotting matrix;
+- `simulate_catalysis_trajectory`: high-level reduced trajectory wrapper with
+  matrix-shaped `logqcat`/`qcat` output and solver diagnostics;
+- `simulate_adaptation`: adaptation-circuit convenience wrapper built on top of
+  `simulate_catalysis_trajectory`.
+
+The general package-level API should be `simulate_catalysis_trajectory`. It
+accepts either combined `logwKk`/`wKk` values or split `w`, `K`, and reduced `k`
+blocks. Each parameter source can be a fixed vector or a function of time.
+Project-specific adaptation diagnostics should stay in wrappers or examples
+unless the quantity has a model-independent definition.
+
+`simulate_catalysis_trajectory(...).diagnostics` records the solver `retcode`,
+whether the integration was successful, whether it reached the requested final
+time, and the `maxiters` value used for the solve. This keeps SciML warnings
+visible while giving report scripts a structured way to audit them.
 
 ## Volume Layer
 
@@ -673,6 +705,7 @@ Maintenance notes:
 6. Numerical and assignment layers:
    - `helperfunctions.jl`
    - `qK_x_mapping.jl`
+   - `catalysis_dynamics.jl`
    - `regime_assign.jl`
    - `volume_calc_impl.jl`
    - `numeric.jl`
@@ -723,9 +756,10 @@ files that depend on methods loaded later.
 
 ### Numerical and Assignment
 
-- `src/qK_x_mapping.jl`: qK/x maps, homotopy, catalysis simulations.
+- `src/qK_x_mapping.jl`: qK/x maps and homotopy trajectories.
+- `src/catalysis_dynamics.jl`: full and reduced catalysis ODE simulations.
 - `src/regime_assign.jl`: compiled classifiers and assignment.
-- `src/numeric.jl`: Jacobian and reaction-order numerical helpers.
+- `src/numeric.jl`: qK/x Jacobian numerical helpers.
 - `src/volume_calc.jl`: `Volume` type.
 - `src/volume_calc_impl.jl`: Monte Carlo volume estimation and volume routing.
 - `src/RegimeConstraints.jl`: analysis-time parameter constraints, restricted
@@ -753,7 +787,10 @@ files that depend on methods loaded later.
 
 Compatibility policy:
 
-- Old aliases may call maintained APIs and issue deprecation warnings.
+- SISO aliases are kept for notebook/report compatibility, but new code should
+  use SIMO names.
+- Other old aliases may call maintained APIs and issue deprecation warnings
+  through the 1.x maintenance window.
 - New internal code should use maintained names, not legacy aliases.
 - Avoid adding new APIs whose primary style depends on `return_idx`,
   `return_code`, `return_mask`, `input_logspace`, or `output_logspace`.

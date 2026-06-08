@@ -14,6 +14,36 @@
     @test isdefined(Main, :get_catalysis_perms)
     @test isdefined(Main, :get_bnc_indices)
     @test isdefined(Main, :get_bnc_perms)
+    @test isdefined(Main, :simulate_catalysis_trajectory)
+    @test isdefined(Main, :trajectory_matrix)
+    @test isdefined(Main, :bnc_regime_diagnostics)
+
+    logwKk0 = zeros(length(wKk_symbol(model)))
+    logqcat0 = fill(-1.0, cn.r_v)
+    traj = simulate_catalysis_trajectory(
+        model; logqcat0=logqcat0, logwKk=t -> logwKk0, tspan=(0.0, 0.01), saveat=[0.0, 0.01]
+    )
+    @test traj.output == :log
+    @test size(traj.logqcat) == (cn.r_v, length(traj.t))
+    @test all(isfinite, traj.logqcat)
+    @test trajectory_matrix(traj.states) == traj.logqcat
+    @test traj.diagnostics.successful === true
+    @test traj.diagnostics.reached_final_time === true
+    @test traj.diagnostics.maxiters == 100_000
+
+    split_traj = simulate_catalysis_trajectory(
+        model;
+        qcat0=exp10.(logqcat0),
+        w=t -> ones(cn.d_w),
+        K=ones(model.r),
+        k=ones(cn.n_k),
+        tspan=(0.0, 0.01),
+        output=:linear,
+        saveat=[0.0, 0.01],
+    )
+    @test split_traj.output == :linear
+    @test size(split_traj.qcat) == (cn.r_v, length(split_traj.t))
+    @test all(isfinite, split_traj.logqcat)
 
     cat_perm = first(get_catalysis_regimes(model))
     cat_rgm = get_catalysis_regime(model, cat_perm)
@@ -39,6 +69,10 @@
 
     @test match_regimes!(model) === nothing
     @test ensure_bnc_regimes!(model) === nothing
+    init_diag = bnc_regime_diagnostics(model)
+    @test init_diag.initialized === true
+    @test init_diag.n_regimes == n_bnc_regimes(model)
+    @test init_diag.warning_affects_nonsingular === false
     @test n_bnc_regimes(model) > 0
     @test get_bnc_indices(model) == get_idx.(get_bnc_regimes(model))
     @test get_bnc_perms(model) == get_perm.(get_bnc_regimes(model))
@@ -426,7 +460,11 @@ end
         @test size(C_xk, 2) == model.n + cn.n_v
     end
 
-    match_regimes!(model)
+    match_regimes!(model; warn_singular_propagation=false)
+    diag = bnc_regime_diagnostics(model)
+    @test diag.initialized === true
+    @test diag.warning_scope == :singular_inner_affine_propagation
+    @test diag.warning_affects_nonsingular === false
     regular_bnc_rgm = first(
         filter(
             r -> r.nlt == 0 && !is_singular(get_binding_regime(r)), get_bnc_regimes(model)

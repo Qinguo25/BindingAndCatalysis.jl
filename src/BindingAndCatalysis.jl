@@ -520,6 +520,7 @@ mutable struct Bnc{T} <: AbstractBnc # T is the int type used for regime indices
     _regimes_affine_ready::Bool
     _regimes_affine_lock::ReentrantLock
     _integration_helper_lock::ReentrantLock
+    _diagnostics::Dict{Symbol, Any}
 
     # Numeric helpers
     direction::Int8 # direction of the binding reactions, determine the ray direction for invertible regime, calculated by sign of det[L;N]
@@ -567,6 +568,7 @@ mutable struct Bnc{T} <: AbstractBnc # T is the int type used for regime indices
             false,                           # _regimes_affine_ready
             ReentrantLock(),                 # _regimes_affine_lock
             ReentrantLock(),                 # _integration_helper_lock
+            Dict{Symbol, Any}(),             # _diagnostics
             direction,
             nothing,
             _L_helper,
@@ -590,6 +592,7 @@ _include_mathcore("graph_propagate.jl")
 
 _include_src("helperfunctions.jl")
 _include_src("qK_x_mapping.jl")
+_include_src("catalysis_dynamics.jl")
 _include_src("regime_assign.jl")
 _include_src("volume_calc_impl.jl")
 _include_src("numeric.jl")
