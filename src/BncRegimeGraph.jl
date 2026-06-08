@@ -21,9 +21,11 @@ function _split_xk(c_xk::SparseVector, n_x::Int)
         idx = c_xk.nzind[p]
         val = c_xk.nzval[p]
         if idx <= n_x
-            push!(I_x, idx); push!(V_x, val)
+            push!(I_x, idx)
+            push!(V_x, val)
         else
-            push!(I_k, idx - n_x); push!(V_k, val)
+            push!(I_k, idx - n_x)
+            push!(V_k, val)
         end
     end
     return sparsevec(I_x, V_x, n_x), sparsevec(I_k, V_k, length(c_xk) - n_x)
@@ -56,16 +58,26 @@ function _xk_to_wKk_edge(c_xk::SparseVector, c0_xk, rgm::BncRegime)
 end
 
 function _add_bnc_edge_pair!(neighbors, from::Int, to::Int, i::Int)
-    e = RegimeEdge(to, i, Tuple{Int,Int8}[(0, 0), (0, 0), (0, 0)])
-    e_rev = RegimeEdge(from, i, Tuple{Int,Int8}[(0, 0), (0, 0), (0, 0)])
+    e = RegimeEdge(to, i, Tuple{Int, Int8}[(0, 0), (0, 0), (0, 0)])
+    e_rev = RegimeEdge(from, i, Tuple{Int, Int8}[(0, 0), (0, 0), (0, 0)])
     push!(neighbors[from], e)
     push!(neighbors[to], e_rev)
     return e, e_rev
 end
 
-function _add_space_halfspace_pair!(db::RegimeToHyperplanePool, e::RegimeEdge, e_rev::RegimeEdge, space::Int, c, c0, sign::Integer)
+function _add_space_halfspace_pair!(
+    db::RegimeToHyperplanePool,
+    e::RegimeEdge,
+    e_rev::RegimeEdge,
+    space::Int,
+    c,
+    c0,
+    sign::Integer,
+)
     c0_exact = c0 isa ExactLogExpr ? c0 : ExactLogExpr(rationalize(Int, c0; tol=1e-10))
-    hid, dir = add_halfspace!(db, _sparse_rational_vec(c), c0_exact, Int8(sign); canonicalize=true)
+    hid, dir = add_halfspace!(
+        db, _sparse_rational_vec(c), c0_exact, Int8(sign); canonicalize=true
+    )
     hid == 0 && return nothing
     _set_edge_idx_sign!(e, space, hid, dir)
     _set_edge_idx_sign!(e_rev, space, hid, -dir)
@@ -169,7 +181,9 @@ function _finalize_bnc_hp_incidence!(grh::RegimeGraph, space::Int)
         for e in edges
             idx, sign = _edge_idx_sign(e, space)
             idx == 0 && continue
-            push!(I, i); push!(J, idx); push!(V, -sign)
+            push!(I, i)
+            push!(J, idx)
+            push!(V, -sign)
         end
     end
     db.hp_to_poly = FacetIncidence(
@@ -185,12 +199,12 @@ function _bnc_xk_dominance_polyhedron(rgm::BncRegime)
 end
 
 function _bnc_feasible_xk_polyhedra(rgms::AbstractVector{BncRegime})
-    poly_by_idx = Dict{Int,Polyhedron}()
+    poly_by_idx = Dict{Int, Polyhedron}()
     for idx in eachindex(rgms)
         is_feasible(rgms[idx]) || continue
         poly = _bnc_xk_dominance_polyhedron(rgms[idx])
         isempty(poly) && continue
-        dim(poly) == fulldim(poly) || continue
+        _poly_is_full_dimensional(poly; canonicalize=false) || continue
         poly_by_idx[idx] = poly
     end
     return poly_by_idx
@@ -274,7 +288,7 @@ function _try_add_reduced_xk_bnc_edge!(
     hp_qKk::RegimeToHyperplanePool,
     hp_wKk::RegimeToHyperplanePool,
     rgms::AbstractVector{BncRegime},
-    poly_by_idx::Dict{Int,Polyhedron},
+    poly_by_idx::Dict{Int, Polyhedron},
     from::Int,
     to::Int,
     ambient_dim::Int,
@@ -325,15 +339,7 @@ function _build_reduced_xk_bnc_regimes_graph!(model::Bnc)
         for j in (i + 1):length(feasible)
             to = feasible[j]
             _try_add_reduced_xk_bnc_edge!(
-                neighbors,
-                hp_xk,
-                hp_qKk,
-                hp_wKk,
-                rgms,
-                poly_by_idx,
-                from,
-                to,
-                dim_xk,
+                neighbors, hp_xk, hp_qKk, hp_wKk, rgms, poly_by_idx, from, to, dim_xk
             )
         end
     end
@@ -371,10 +377,34 @@ function get_bnc_regimes_graph!(model::Bnc)
     for cat_idx in 1:n_cat
         for bind_idx in 1:n_bind
             for e in bind_grh.neighbors[bind_idx]
-                _copy_binding_edge!(neighbors, hp_xk, hp_qKk, hp_wKk, bind_grh, rgms, e, bind_idx, cat_idx, n_bind, model.n, cn.n_k)
+                _copy_binding_edge!(
+                    neighbors,
+                    hp_xk,
+                    hp_qKk,
+                    hp_wKk,
+                    bind_grh,
+                    rgms,
+                    e,
+                    bind_idx,
+                    cat_idx,
+                    n_bind,
+                    model.n,
+                    cn.n_k,
+                )
             end
             for e in cat_grh.neighbors[cat_idx]
-                _copy_catalysis_edge!(neighbors, hp_xk, hp_qKk, hp_wKk, cat_grh, rgms, e, bind_idx, cat_idx, n_bind)
+                _copy_catalysis_edge!(
+                    neighbors,
+                    hp_xk,
+                    hp_qKk,
+                    hp_wKk,
+                    cat_grh,
+                    rgms,
+                    e,
+                    bind_idx,
+                    cat_idx,
+                    n_bind,
+                )
             end
         end
     end
@@ -391,8 +421,16 @@ function get_bnc_regimes_graph!(model::Bnc)
     return grh
 end
 
-get_neighbor_graph_qKk(grh::RegimeGraph; kwargs...) = _neighbor_graph_by_space(grh, :qKk; kwargs...)
-get_neighbor_graph_wKk(grh::RegimeGraph; kwargs...) = _neighbor_graph_by_space(grh, :wKk; kwargs...)
+function get_neighbor_graph_qKk(grh::RegimeGraph; kwargs...)
+    return _neighbor_graph_by_space(grh, :qKk; kwargs...)
+end
+function get_neighbor_graph_wKk(grh::RegimeGraph; kwargs...)
+    return _neighbor_graph_by_space(grh, :wKk; kwargs...)
+end
 
-get_neighbor_graph_qKk(model::Bnc; kwargs...) = get_neighbor_graph_qKk(get_bnc_regimes_graph!(model); kwargs...)
-get_neighbor_graph_wKk(model::Bnc; kwargs...) = get_neighbor_graph_wKk(get_bnc_regimes_graph!(model); kwargs...)
+function get_neighbor_graph_qKk(model::Bnc; kwargs...)
+    return get_neighbor_graph_qKk(get_bnc_regimes_graph!(model); kwargs...)
+end
+function get_neighbor_graph_wKk(model::Bnc; kwargs...)
+    return get_neighbor_graph_wKk(get_bnc_regimes_graph!(model); kwargs...)
+end

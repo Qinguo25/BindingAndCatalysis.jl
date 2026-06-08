@@ -111,17 +111,7 @@ end
 get_qcat_F_F0(rgm::BncRegime) = get_affine_wKk2qcat(rgm)
 
 function get_polyhedron(rgm::BncRegime; chart::Symbol=:wKk, canonicalize::Bool=true)
-    C, C0, nullity = if chart === :wKk || chart === :auto
-        get_C_C0_nullity_wKk(rgm)
-    elseif chart === :qKk
-        get_C_C0_nullity_qKk(rgm)
-    else
-        throw(
-            ArgumentError(
-                "BNC regimes support `chart=:wKk` or `chart=:qKk`, got $(repr(chart))."
-            ),
-        )
-    end
+    C, C0, nullity = _regime_C_C0_nullity(rgm, chart)
     return _build_polyhedron_from_C_C0(C, C0, nullity; canonicalize=canonicalize)
 end
 
@@ -463,7 +453,7 @@ function _is_feasible_under_current_k_map(rgm::BncRegime)
         end
     end
     poly = _build_polyhedron_from_C_C0(C, C0, 0; canonicalize=true)
-    return !isempty(poly) && dim(poly) == fulldim(poly)
+    return _poly_is_full_dimensional(poly; canonicalize=false)
 end
 
 function _mark_feasible_bnc_regimes!(rgms::AbstractVector{BncRegime})

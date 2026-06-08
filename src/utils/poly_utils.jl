@@ -1,6 +1,5 @@
 export get_one_inner_point, polyhedra_hrep_library, polyhedra_regime_graph
 
-
 function same_polyhedron(P, Q)
     fulldim(P) == fulldim(Q) || return false
 
@@ -14,12 +13,7 @@ function same_polyhedron(P, Q)
 end
 
 function _poly_canonical_copy(poly::Polyhedron; canonicalize::Bool=true)
-    out = polyhedron(hrep(poly), POLY_BACK_END)
-    if canonicalize
-        removehredundancy!(out)
-    end
-    detecthlinearity!(out)
-    return out
+    return _poly_normalized_copy(poly; canonicalize=canonicalize, detect_linearities=true)
 end
 
 function _poly_exact_log_constant(x; tol::Float64=1.0e-10)
@@ -43,11 +37,7 @@ function _poly_sparse_rational_vec(v; tol::Float64=1.0e-10)
 end
 
 function _poly_add_halfspace!(
-    db::RegimeToHyperplanePool,
-    c,
-    c0,
-    sign::Integer=1;
-    tol::Float64=1.0e-10,
+    db::RegimeToHyperplanePool, c, c0, sign::Integer=1; tol::Float64=1.0e-10
 )
     return add_halfspace!(
         db,
@@ -95,8 +85,9 @@ function _poly_validate_same_ambient_dim(polys::AbstractVector{<:Polyhedron})
     isempty(polys) && throw(ArgumentError("polys must not be empty"))
     ambient_dim = fulldim(first(polys))
     for (i, poly) in enumerate(polys)
-        fulldim(poly) == ambient_dim ||
-            throw(ArgumentError("polys[$i] has fulldim=$(fulldim(poly)); expected $ambient_dim"))
+        fulldim(poly) == ambient_dim || throw(
+            ArgumentError("polys[$i] has fulldim=$(fulldim(poly)); expected $ambient_dim"),
+        )
     end
     return ambient_dim
 end
@@ -109,9 +100,7 @@ Build a hyperplane library from the H-representations of `polys`. Rows of
 polyhedron is represented as one indexed regime in the library.
 """
 function polyhedra_hrep_library(
-    polys::AbstractVector{<:Polyhedron};
-    canonicalize::Bool=true,
-    tol::Float64=1.0e-10,
+    polys::AbstractVector{<:Polyhedron}; canonicalize::Bool=true, tol::Float64=1.0e-10
 )
     ambient_dim = _poly_validate_same_ambient_dim(polys)
     db = RegimeToHyperplanePool(ambient_dim)
@@ -128,13 +117,10 @@ function polyhedra_hrep_library(
 end
 
 function _poly_intersection_dim(poly1::Polyhedron, poly2::Polyhedron)
-    ins = intersect(poly1, poly2)
-    try
-        detecthlinearity!(ins)
-        return dim(ins), ins
-    catch
-        return typemin(Int), ins
-    end
+    status = _poly_intersection_status(
+        poly1, poly2; canonicalize=false, detect_linearities=true
+    )
+    return status.dim, status.poly
 end
 
 function _poly_interface_from_intersection(ins::Polyhedron; tol::Float64=1.0e-10)
@@ -161,7 +147,9 @@ function polyhedra_regime_graph(
     edge_space::Symbol=:poly,
 )
     ambient_dim = _poly_validate_same_ambient_dim(polys)
-    canonical_polys = [_poly_canonical_copy(poly; canonicalize=canonicalize) for poly in polys]
+    canonical_polys = [
+        _poly_canonical_copy(poly; canonicalize=canonicalize) for poly in polys
+    ]
     db = RegimeToHyperplanePool(ambient_dim)
     I = Int[]
     J = Int[]
@@ -186,28 +174,22 @@ function polyhedra_regime_graph(
             hid, dir = _poly_add_halfspace!(db, c, c0, 1; tol=tol)
             hid == 0 && continue
 
-            push!(neighbors[i], RegimeEdge(j, 0, Tuple{Int,Int8}[(hid, dir)]))
-            push!(neighbors[j], RegimeEdge(i, 0, Tuple{Int,Int8}[(hid, -dir)]))
+            push!(neighbors[i], RegimeEdge(j, 0, Tuple{Int, Int8}[(hid, dir)]))
+            push!(neighbors[j], RegimeEdge(i, 0, Tuple{Int, Int8}[(hid, -dir)]))
         end
     end
 
     _poly_finalize_incidence!(db, I, J, V, n)
-    return RegimeGraph(
-        neighbors,
-        Any[db];
-        bn=nothing,
-        space_idx=Dict(edge_space => 1),
-    )
+    return RegimeGraph(neighbors, Any[db]; bn=nothing, space_idx=Dict(edge_space => 1))
 end
 
-get_neighbor_graph(polys::AbstractVector{<:Polyhedron}; kwargs...) =
-    get_neighbor_graph(polyhedra_regime_graph(polys); kwargs...)
+function get_neighbor_graph(polys::AbstractVector{<:Polyhedron}; kwargs...)
+    return get_neighbor_graph(polyhedra_regime_graph(polys); kwargs...)
+end
 
-draw_graph(polys::AbstractVector{<:Polyhedron}; kwargs...) =
-    draw_graph(polyhedra_regime_graph(polys); kwargs...)
-
-
-
+function draw_graph(polys::AbstractVector{<:Polyhedron}; kwargs...)
+    return draw_graph(polyhedra_regime_graph(polys); kwargs...)
+end
 
 """
         get_one_inner_point(poly::Polyhedron; rand_line=true, rand_ray=true, extend=3, normalize_to_extend=false) -> Vector
@@ -215,14 +197,17 @@ draw_graph(polys::AbstractVector{<:Polyhedron}; kwargs...) =
 Return a point guaranteed to lie inside the polyhedron.
 
 Options:
-- `rand_line`: include randomized contribution from linear rays (default: `true`).
-- `rand_ray`: randomize scaling of ray directions (default: `true`).
-- `extend`: scale factor for ray contributions (default: `3`).
-- `normalize_to_extend`: if `true`, the combined ray displacement is normalized
+
+  - `rand_line`: include randomized contribution from linear rays (default: `true`).
+  - `rand_ray`: randomize scaling of ray directions (default: `true`).
+  - `extend`: scale factor for ray contributions (default: `3`).
+  - `normalize_to_extend`: if `true`, the combined ray displacement is normalized
     so its Euclidean norm is approximately `extend` (useful when you want `extend`
     to correspond roughly to distance from `point`). Default: `false`.
 """
-function get_one_inner_point(poly::T;rand_line=true,rand_ray=true,extend=3,normalize_to_extend=false) where T<:Polyhedron
+function get_one_inner_point(
+    poly::T; rand_line=true, rand_ray=true, extend=3, normalize_to_extend=false
+) where {T <: Polyhedron}
     vrep_poly = MixedMatVRep(vrep(poly))
     point = if size(vrep_poly.V, 1) == 0
         zeros(Float64, fulldim(poly))

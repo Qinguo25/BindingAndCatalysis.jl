@@ -352,7 +352,7 @@ function get_binding_perm(Bnc::Bnc, perm::AbstractVector; check::Bool=false)
     return Vector{Int}(perm)
 end
 function get_binding_perm(Bnc::Bnc, idx::Integer; kwargs...)
-    (ensure_binding_regimes!(Bnc); _bind_regimes_data(Bnc)[idx].perm)
+    return (ensure_binding_regimes!(Bnc); _bind_regimes_data(Bnc)[idx].perm)
 end
 get_bind_perm(args...; kwargs...) = get_binding_perm(args...; kwargs...)
 
@@ -364,7 +364,7 @@ function get_catalysis_perm(
     return Vector{Int}(perm)
 end
 function get_catalysis_perm(model::CatalysisData, idx::Integer; kwargs...)
-    (ensure_catalysis_regimes!(model); _catalysis_regimes_data(model)[idx].perm)
+    return (ensure_catalysis_regimes!(model); _catalysis_regimes_data(model)[idx].perm)
 end
 
 get_binding_index(args...; kwargs...) = get_binding_regime(args...; kwargs...).idx
@@ -479,13 +479,13 @@ Check if given key is valid for regime fetching.
 have_perm(model::Bnc, perm::AbstractVector) =
     haskey(get_binding_perm_dict(model), get_binding_perm(model, perm))
 function have_perm(model::Bnc, idx::Integer)
-    (ensure_binding_regimes!(model); 1 <= idx <= n_bind_regimes(model))
+    return (ensure_binding_regimes!(model); 1 <= idx <= n_bind_regimes(model))
 end
 function have_perm(model::CatalysisData, perm::AbstractVector)
     return haskey(get_catalysis_perm_dict(model), get_catalysis_perm(model, perm))
 end
 function have_perm(model::CatalysisData, idx::Integer)
-    (ensure_catalysis_regimes!(model); idx >= 1 && idx <= n_catalysis_regimes(model))
+    return (ensure_catalysis_regimes!(model); idx >= 1 && idx <= n_catalysis_regimes(model))
 end
 
 have_perm(model::AbstractBnc, rgm::BindRegime) = get_binding_network(rgm) === model
@@ -902,6 +902,15 @@ function get_C_C0_nullity_qK(rgm::BindRegime; remove_h_redundancy::Bool=false)
         rgm.C_qK, rgm.C0_qK, rgm.nullity; remove_h_redundancy=remove_h_redundancy
     )
 end
+
+function _regime_C_C0_nullity(rgm::BindRegime, chart::Symbol)
+    resolved = chart === :auto ? :qK : chart
+    resolved === :qK || throw(
+        ArgumentError("Binding regimes currently support `chart=:qK`, got $(repr(chart))."),
+    )
+    return get_C_C0_nullity_qK(rgm)
+end
+
 function get_C_C0_nullity_qKk(rgm::BindRegime; remove_h_redundancy::Bool=false)
     let
         C_qK, C0_qK, nullity = get_C_C0_nullity_qK(rgm)
@@ -1111,6 +1120,20 @@ get_F_F0(rgm::BncRegime) = get_affine_wKk2qcat(rgm)
 function get_C_C0_nullity_wKk(rgm::BncRegime; remove_h_redundancy::Bool=false)
     return _maybe_remove_h_redundancy(
         rgm.C_wKk, rgm.C0_wKk, rgm.nlt_wKk; remove_h_redundancy=remove_h_redundancy
+    )
+end
+
+function _regime_C_C0_nullity(rgm::BncRegime, chart::Symbol)
+    resolved = chart === :auto ? :wKk : chart
+    if resolved === :wKk
+        return get_C_C0_nullity_wKk(rgm)
+    elseif resolved === :qKk
+        return get_C_C0_nullity_qKk(rgm)
+    end
+    throw(
+        ArgumentError(
+            "BNC regimes currently support `chart=:wKk` or `chart=:qKk`, got $(repr(chart)).",
+        ),
     )
 end
 

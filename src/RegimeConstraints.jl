@@ -711,46 +711,16 @@ function parameter_constraints(
     )
 end
 
-function _regime_C_C0_nullity(rgm::BindRegime, chart::Symbol)
-    resolved = chart === :auto ? :qK : chart
-    resolved === :qK || throw(
-        ArgumentError("Binding regimes currently support `chart=:qK`, got $(repr(chart))."),
-    )
-    return get_C_C0_nullity_qK(rgm)
-end
-
-function _regime_C_C0_nullity(rgm::BncRegime, chart::Symbol)
-    resolved = chart === :auto ? :wKk : chart
-    if resolved === :wKk
-        return get_C_C0_nullity_wKk(rgm)
-    elseif resolved === :qKk
-        return get_C_C0_nullity_qKk(rgm)
-    end
-    throw(
-        ArgumentError(
-            "BNC regimes currently support `chart=:wKk` or `chart=:qKk`, got $(repr(chart)).",
-        ),
-    )
-end
-
-function get_polyhedron(rgm::BindRegime; chart::Symbol=:qK, canonicalize::Bool=true)
-    C, C0, nlt = _regime_C_C0_nullity(rgm, chart)
-    return get_polyhedron(C, C0, nlt; canonicalize=canonicalize)
-end
-
 function _pullback_constraints(C, C0, nullity::Integer, constraints::ParameterConstraints)
-    C_mat = Matrix{Float64}(C)
-    C0_vec = Float64.(vec(C0))
-    nlt = Int(nullity)
-
-    eq_C = C_mat[1:nlt, :] * constraints.basis
-    eq_C0 = C_mat[1:nlt, :] * constraints.offset + C0_vec[1:nlt]
-    ineq_C = C_mat[(nlt + 1):end, :] * constraints.basis
-    ineq_C0 = C_mat[(nlt + 1):end, :] * constraints.offset + C0_vec[(nlt + 1):end]
-
-    C_reduced = vcat(eq_C, ineq_C, constraints.reduced_inequality_C)
-    C0_reduced = vcat(eq_C0, ineq_C0, constraints.reduced_inequality_C0)
-    return C_reduced, C0_reduced, nlt
+    return _poly_pullback_hrep(
+        C,
+        C0,
+        nullity,
+        constraints.basis,
+        constraints.offset;
+        inequality_C=constraints.reduced_inequality_C,
+        inequality_C0=constraints.reduced_inequality_C0,
+    )
 end
 
 function _restriction_result(
@@ -898,10 +868,9 @@ function restrict_regimes(
 end
 
 function is_full_dimensional(poly::Polyhedron; ambient_dim=nothing, canonicalize::Bool=true)
-    p = canonicalize ? polyhedron(hrep(poly)) : poly
-    canonicalize && detecthlinearity!(p)
-    resolved_dim = isnothing(ambient_dim) ? fulldim(p) : ambient_dim
-    return !isempty(p) && dim(p) == resolved_dim
+    return _poly_is_full_dimensional(
+        poly; ambient_dim=ambient_dim, canonicalize=canonicalize
+    )
 end
 
 function _intersect_restricted(
@@ -913,14 +882,10 @@ function _intersect_restricted(
     if isnothing(a.poly) || isnothing(b.poly)
         return nothing, -1, false
     end
-    poly = intersect(a.poly, b.poly)
-    if canonicalize
-        detecthlinearity!(poly)
-        removehredundancy!(poly)
-    end
-    feasible = !isempty(poly)
-    dim_val = feasible ? dim(poly) : -1
-    return poly, dim_val, feasible && dim_val == a.ambient_dim
+    status = _poly_intersection_status(
+        a.poly, b.poly; ambient_dim=a.ambient_dim, canonicalize=canonicalize
+    )
+    return status.poly, status.dim, status.full_dim
 end
 
 """
