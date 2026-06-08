@@ -3,18 +3,24 @@
     cn = get_catalysis_network(model)
 
     @test cn !== nothing
-    @test all(isequal.(q_cat_sym(model), model.q_sym[1:cn.r_v]))
-    @test all(isequal.(w_sym(model), model.q_sym[cn.r_v + 1:model.d]))
+    @test all(isequal.(q_cat_sym(model), model.q_sym[1:(cn.r_v)]))
+    @test all(isequal.(w_sym(model), model.q_sym[(cn.r_v + 1):(model.d)]))
     @test all(isequal.(k_sym(model), cn.k_sym))
 
     find_catalysis_regimes!(model)
     @test ensure_catalysis_regimes!(model) === nothing
     @test n_regimes(cn) == 1
+    @test isdefined(Main, :get_catalysis_indices)
+    @test isdefined(Main, :get_catalysis_perms)
+    @test isdefined(Main, :get_bnc_indices)
+    @test isdefined(Main, :get_bnc_perms)
 
     cat_perm = first(get_catalysis_regimes(model))
     cat_rgm = get_catalysis_regime(model, cat_perm)
     @test get_idx(cn, cat_perm) == get_idx(cat_rgm)
     @test get_perm(cn, get_idx(cat_rgm)) == cat_perm
+    @test get_catalysis_indices(model) == get_idx.(get_catalysis_regimes(model))
+    @test get_catalysis_perms(model) == get_perm.(get_catalysis_regimes(model))
     @test size(get_P(cat_rgm), 1) == cn.r_v
     @test occursin("dominant mode", sprint(show, MIME"text/plain"(), cat_rgm))
     @test occursin("nullity", sprint(show, MIME"text/plain"(), cat_rgm))
@@ -25,8 +31,8 @@
     @test length(C0_xk_cat) == size(C_xk_cat, 1)
     @test nlt_xk_cat == cn.r_v
 
-    dyn_full = show_catalysis_dynamics(model; reduced = false)
-    dyn_reduced = show_catalysis_dynamics(model; reduced = true)
+    dyn_full = show_catalysis_dynamics(model; reduced=false)
+    dyn_reduced = show_catalysis_dynamics(model; reduced=true)
     @test length(dyn_full) == cn.r_v + cn.d_w
     @test length(dyn_reduced) == cn.r_v + cn.d_w
     @test length(show_condition_xk(cat_rgm)) == size(C_xk_cat, 1)
@@ -34,6 +40,10 @@
     @test match_regimes!(model) === nothing
     @test ensure_bnc_regimes!(model) === nothing
     @test n_bnc_regimes(model) > 0
+    @test get_bnc_indices(model) == get_idx.(get_bnc_regimes(model))
+    @test get_bnc_perms(model) == get_perm.(get_bnc_regimes(model))
+    @test get_binding_nullities(model) == get_nullity.(get_binding_regimes(model))
+    @test get_bnc_nullities(model) == get_nullity.(get_bnc_regimes(model))
 
     bind_perm = first(get_perms(model))
     @test have_perm(model, bind_perm, cat_perm)
@@ -58,10 +68,10 @@
     @test length(C0_wKk) == size(C_wKk, 1)
     @test nlt_wKk >= 0
 
-    @test !isempty(show_condition_xk(bnc_rgm; kind = :binding))
-    @test !isempty(show_condition_xk(bnc_rgm; kind = :catalysis))
-    @test !isempty(show_condition_qKk(bnc_rgm; kind = :binding))
-    @test show_condition_qKk(bnc_rgm; kind = :catalysis) isa AbstractVector
+    @test !isempty(show_condition_xk(bnc_rgm; kind=:binding))
+    @test !isempty(show_condition_xk(bnc_rgm; kind=:catalysis))
+    @test !isempty(show_condition_qKk(bnc_rgm; kind=:binding))
+    @test show_condition_qKk(bnc_rgm; kind=:catalysis) isa AbstractVector
     @test !isempty(show_condition_qKk(bnc_rgm))
     @test !isempty(show_condition_wKk(bnc_rgm))
     @test !isempty(show_consistency_condition(bnc_rgm))
@@ -90,11 +100,11 @@ end
     model = minimal_model()
     update_catalysis!(
         model;
-        Γ = [1 -1; -1 1],
-        Π = [1 0 0; 0 1 0],
-        q_picked = [:tE, :tS],
-        k_sym = [:β, :γ],
-        w_sym = [:wtot],
+        Γ=[1 -1; -1 1],
+        Π=[1 0 0; 0 1 0],
+        q_picked=[:tE, :tS],
+        k_sym=[:β, :γ],
+        w_sym=[:wtot],
     )
 
     @test string.(k_sym(model)) == ["β", "γ"]
@@ -105,11 +115,7 @@ end
 @testset "Catalysis Default Identity Pi From Picked Species" begin
     model = minimal_model()
     update_catalysis!(
-        model;
-        Γ = [1 -1; -1 1],
-        x_picked = [:E, :S],
-        q_picked = [:tE, :tS],
-        k_sym = [:β, :γ],
+        model; Γ=[1 -1; -1 1], x_picked=[:E, :S], q_picked=[:tE, :tS], k_sym=[:β, :γ]
     )
 
     @test Matrix(get_catalysis_network(model).Π) == [1 0 0; 0 1 0]
@@ -122,14 +128,8 @@ end
         1 0 1
     ]
     N = [1 1 -1]
-    model = Bnc(L = L, N = N, x_sym = [:E, :S, :C], q_sym = [:tS, :tE], K_sym = [:K])
-    update_catalysis!(
-        model;
-        Γ = [1 -1],
-        Π = [0 0 1; 0 1 0],
-        q_picked = [:tS],
-        k_sym = [:β, :γ],
-    )
+    model = Bnc(; L=L, N=N, x_sym=[:E, :S, :C], q_sym=[:tS, :tE], K_sym=[:K])
+    update_catalysis!(model; Γ=[1 -1], Π=[0 0 1; 0 1 0], q_picked=[:tS], k_sym=[:β, :γ])
 
     find_all_regimes!(model)
     find_catalysis_regimes!(model)
@@ -138,11 +138,11 @@ end
     @test n_regimes(model) == 4
     @test n_regimes(get_catalysis_network(model)) == 1
 
-    bnc_rgm = get_bnc_regime(model, 1, 1; check = true)
+    bnc_rgm = get_bnc_regime(model, 1, 1; check=true)
     @test get_binding_perm(bnc_rgm) == [2, 1]
     @test get_catalysis_perm(bnc_rgm) == [1, 2]
     @test string.(BindingAndCatalysis.wKk_sym(bnc_rgm)) == ["tE", "K", "β", "γ"]
-    @test string.(show_condition_wKk(bnc_rgm; log_space = false)) == ["K*γ ~ tE*β", "K > tE"]
+    @test string.(show_condition_wKk(bnc_rgm; log_space=false)) == ["K*γ ~ tE*β", "K > tE"]
 
     C_wKk, C0_wKk, nlt_wKk = get_C_C0_nullity_wKk(bnc_rgm)
     @test Matrix(C_wKk) == Rational{Int}[-1 1 -1 1; -1 1 0 0]
@@ -154,12 +154,12 @@ end
     model = minimal_model()
     update_catalysis!(
         model;
-        Γ = [1 -1],
-        Π = [1 0 0; 0 1 0],
-        q_picked = [:tE],
-        F = reshape([1, 1], 2, 1),
-        F0 = zeros(2),
-        k_sym = [:κ],
+        Γ=[1 -1],
+        Π=[1 0 0; 0 1 0],
+        q_picked=[:tE],
+        F=reshape([1, 1], 2, 1),
+        F0=zeros(2),
+        k_sym=[:κ],
     )
 
     cn = get_catalysis_network(model)
@@ -180,11 +180,11 @@ end
         1 0 0 1 -1 0
         0 1 1 0 0 -1
     ]
-    model = Bnc(
-        N = N,
-        x_sym = [:P1, :P2, :D1, :D2, :C1, :C2],
-        q_sym = [:tP1, :tP2, :tD1, :tD2],
-        K_sym = [:K1, :K2],
+    model = Bnc(;
+        N=N,
+        x_sym=[:P1, :P2, :D1, :D2, :C1, :C2],
+        q_sym=[:tP1, :tP2, :tD1, :tD2],
+        K_sym=[:K1, :K2],
     )
     Pi = diagm(ones(Int, 6))
     Gamma = [
@@ -201,13 +201,7 @@ end
     ]
 
     update_catalysis!(
-        model;
-        Π = Pi,
-        Γ = Gamma,
-        q_picked = [1, 2],
-        F = F,
-        F0 = zeros(6),
-        k_sym = [:gamma, :beta],
+        model; Π=Pi, Γ=Gamma, q_picked=[1, 2], F=F, F0=zeros(6), k_sym=[:gamma, :beta]
     )
     match_regimes!(model)
 
@@ -216,7 +210,9 @@ end
 
     grh = get_bnc_regimes_graph!(model)
     n_bind = n_bind_regimes(model)
-    edges = [(i, e.to) for i in eachindex(grh.neighbors) for e in grh.neighbors[i] if i < e.to]
+    edges = [
+        (i, e.to) for i in eachindex(grh.neighbors) for e in grh.neighbors[i] if i < e.to
+    ]
     simultaneous = count(edges) do (i, j)
         bind_i, cat_i = BindingAndCatalysis._bnc_cart_index(n_bind, i)
         bind_j, cat_j = BindingAndCatalysis._bnc_cart_index(n_bind, j)
@@ -246,15 +242,12 @@ end
 
 @testset "High-Nullity Binding-Catalysis Regimes Keep Consistency" begin
     model = sparse_singular_model()
-    update_catalysis!(
-        model;
-        Γ = [1 -1],
-        Π = [1 0 0 0 0 0; 0 1 0 0 0 0],
-        k_sym = [:k1, :k2],
-    )
+    update_catalysis!(model; Γ=[1 -1], Π=[1 0 0 0 0 0; 0 1 0 0 0 0], k_sym=[:k1, :k2])
     match_regimes!(model)
 
-    bind_high = filter(r -> get_binding_regime(r).nullity > 1 && r.nlt <= 1, get_bnc_regimes(model))
+    bind_high = filter(
+        r -> get_binding_regime(r).nullity > 1 && r.nlt <= 1, get_bnc_regimes(model)
+    )
     @test !isempty(bind_high)
 
     low_bnc_rgm = first(bind_high)
@@ -269,12 +262,7 @@ end
     @test length(H0_low) == model.n
 
     high_model = sparse_singular_model()
-    update_catalysis!(
-        high_model;
-        Γ = [1 -1],
-        Π = [1 0 0 0 0 0; 1 0 0 0 0 0],
-        k_sym = [:k1, :k2],
-    )
+    update_catalysis!(high_model; Γ=[1 -1], Π=[1 0 0 0 0 0; 1 0 0 0 0 0], k_sym=[:k1, :k2])
     match_regimes!(high_model)
 
     consistency_only = filter(r -> r.nlt > 1, get_bnc_regimes(high_model))
@@ -305,21 +293,25 @@ end
     for cat_rgm in cat_rgms
         C_xk, C0_xk, nlt = get_C_C0_nullity_xk(cat_rgm)
         @test nlt == cn.r_v
-        @test C0_xk[1:cn.r_v] == get_P0(cat_rgm)
-        @test C0_xk[cn.r_v+1:end] == get_C0(cat_rgm)
-        @test !isempty(show_condition_xk(cat_rgm; kind = :steady_state))
-        @test !isempty(show_condition_xk(cat_rgm; kind = :dominance))
+        @test C0_xk[1:(cn.r_v)] == get_P0(cat_rgm)
+        @test C0_xk[(cn.r_v + 1):end] == get_C0(cat_rgm)
+        @test !isempty(show_condition_xk(cat_rgm; kind=:steady_state))
+        @test !isempty(show_condition_xk(cat_rgm; kind=:dominance))
         @test size(C_xk, 2) == model.n + cn.n_v
     end
 
     match_regimes!(model)
-    regular_bnc_rgm = first(filter(r -> r.nlt == 0 && !is_singular(get_binding_regime(r)), get_bnc_regimes(model)))
+    regular_bnc_rgm = first(
+        filter(
+            r -> r.nlt == 0 && !is_singular(get_binding_regime(r)), get_bnc_regimes(model)
+        ),
+    )
     bind_rgm = get_binding_regime(regular_bnc_rgm)
     cat_rgm = get_catalysis_regime(regular_bnc_rgm)
     r_v = size(get_P(cat_rgm), 1)
 
-    P_ss = Matrix{Float64}(bind_rgm.P[r_v+1:end, :])
-    P0_ss = Vector{Float64}(bind_rgm.P0[r_v+1:end])
+    P_ss = Matrix{Float64}(bind_rgm.P[(r_v + 1):end, :])
+    P0_ss = Vector{Float64}(bind_rgm.P0[(r_v + 1):end])
     N = Matrix{Float64}(bind_rgm.network.N)
     PΠ = Matrix{Float64}(get_PΠ(cat_rgm))
     Pθ = Matrix{Float64}(get_P(cat_rgm))
@@ -330,7 +322,7 @@ end
     H_ss = inv(M_ss)
     H0_ss = -(H_ss * M0_ss)
     split = size(H_ss, 2) - r_v
-    H_right = H_ss[:, split+1:end]
+    H_right = H_ss[:, (split + 1):end]
     H_expected = hcat(H_ss[:, 1:split], -(H_right * Pθ))
     H0_expected = vec(H0_ss - H_right * P0θ)
 
@@ -339,12 +331,14 @@ end
 
     C_cat_qKk, C0_cat_qKk, nlt_cat_qKk = get_C_C0_nullity_qKk(regular_bnc_rgm, :catalysis)
     H_bind, H0_bind = get_H_H0(bind_rgm)
-    C_expected = hcat(Matrix{Float64}(get_CΠ(cat_rgm) * H_bind), Matrix{Float64}(get_C_k(cat_rgm)))
+    C_expected = hcat(
+        Matrix{Float64}(get_CΠ(cat_rgm) * H_bind), Matrix{Float64}(get_C_k(cat_rgm))
+    )
     C0_expected = vec(get_CΠ(cat_rgm) * H0_bind + get_C0(cat_rgm))
 
     @test nlt_cat_qKk == 0
     @test Matrix(C_cat_qKk) ≈ C_expected
     @test C0_cat_qKk ≈ C0_expected
-    @test !isempty(show_condition_qKk(regular_bnc_rgm; kind = :catalysis))
+    @test !isempty(show_condition_qKk(regular_bnc_rgm; kind=:catalysis))
     @test !isempty(show_condition_wKk(regular_bnc_rgm))
 end
