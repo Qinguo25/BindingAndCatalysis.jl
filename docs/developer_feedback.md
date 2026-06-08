@@ -79,6 +79,488 @@ Each priority was committed separately.
   is `get_H_bd_info(rgm)`, which avoids changing the existing `get_H_bd(rgm)`
   call contract while still exposing provenance.
 
+## Validation on Competitive Adaptation Example, 2026-06-08
+
+I tested the implemented APIs on the current competitive adaptation example in:
+
+```text
+/home/joker/Realizibility_index/NFBLB_saver/code/common.jl
+```
+
+using:
+
+```julia
+model = build_competitive_adaptation_model()
+stable = filter(is_stable, get_bnc_regimes(model; singular=false))
+```
+
+This gives 116 stable BNC regimes under the same regular-regime filter used in
+the report scripts.
+
+### What Works
+
+- `get_catalysis_indices`, `get_catalysis_perms`, `get_bnc_indices`, and
+  `get_bnc_perms` are exported and callable.
+- `compare_input_responsiveness` runs on the 116-regime stable set with
+  two outputs and five standards, producing 1160 rows with zero API errors.
+- `input_responsiveness(...; standard=:output_controllability, threshold=0.1)`
+  reproduces the report's output-control threshold counts on the exact
+  steady-state-invariant subset:
+
+```text
+Astar:  46 regimes
+tAstar: 45 regimes
+```
+
+These match the report's `1e-1` output-control-row standard.
+
+### Issue 1: `steady_state_invariance` Does Not Match the Xiao/Affine Steady-State Standard
+
+The package currently implements `steady_state_invariance` as a local dynamic
+DC-gain check:
+
+```julia
+D - C * inv(A) * B
+```
+
+Formula-level mismatch:
+
+Let
+
+```text
+z = log(q_cat),    u = log(tI),    y = selected output
+```
+
+and let the package linear model be
+
+```text
+dz/dt = A z + B u
+y     = C z + D u.
+```
+
+The current package criterion is:
+
+```text
+G_dyn = D - C A^{-1} B
+steady-state invariant iff ||G_dyn||_∞ <= atol.
+```
+
+The Xiao/report criterion is instead the exact affine steady-state coefficient
+from the regime's steady-state map.  If the output is an `x` species,
+
+```text
+log(x*) = H_x(wKk) * log(wKk) + h0
+g_aff(output, input) = e_output' H_x(wKk) e_input.
+```
+
+If the output is a qcat coordinate,
+
+```text
+log(q_cat*) = F * log(wKk) + F0
+g_aff(output, input) = e_output' F e_input.
+```
+
+The affine/Xiao standard is:
+
+```text
+steady-state invariant iff g_aff(output, input) = 0
+```
+
+or numerically:
+
+```text
+abs(Float64(g_aff(output, input))) <= atol.
+```
+
+Therefore the disagreement is not just a tolerance issue.  The package is
+testing the DC gain of the local dynamic realization, while the report is
+testing exact invariance of the regime's affine steady-state map.
+
+That is not the same standard used in the report or in Xiao-style
+steady-state invariance.  The report standard uses the exact affine
+steady-state map:
+
+- for `Astar`: the `Astar` row of `get_H(rgm)` with respect to `:tI`,
+- for `tAstar`: the `tAstar` row of `get_qcat_F_F0(rgm)` with respect to `:tI`.
+
+On the competitive adaptation example:
+
+```text
+output   package steady_state_invariance   exact affine/Xiao standard
+Astar    27                               68
+tAstar   26                               74
+```
+
+Concrete false-negative example:
+
+```text
+regime 10, Astar:
+  exact affine gain = 0//1
+  package DC residual = 9.983224234578937e-5
+  package invariant = false
+
+regime 10, tAstar:
+  exact affine gain = 0//1
+  package DC residual = 9.985548675947353e-5
+  package invariant = false
+```
+
+Suggested fix:
+
+- Keep the current dynamic DC-gain check, but rename it to something explicit
+  like `dynamic_steady_state_gain` or `dc_gain_invariance`.
+- Add a separate exact affine steady-state standard, for example:
+
+```julia
+steady_state_invariance(
+    rgm::BncRegime;
+    input=:tI,
+    output=:Astar,
+    standard=:affine,
+    atol=1e-8,
+)
+```
+
+where `standard=:affine` is the Xiao/report standard and
+`standard=:dynamic_dc_gain` is the current `D - C*A\\B` calculation.
+
+The user guide should explicitly distinguish these two meanings of
+"steady-state invariance"; otherwise users will assume the current function
+checks the Xiao condition.
+
+### Issue 2: `:direct_flux` Is Implemented as Direct Feedthrough, Not the Report's Direct-Flux Rule
+
+The package currently scores `standard=:direct_flux` as:
+
+```julia
+maximum(abs, ctrl.D)
+```
+
+Formula-level mismatch:
+
+Using the same local model,
+
+```text
+dz/dt = A z + B u
+y     = C z + D u,
+```
+
+the package currently computes:
+
+```text
+s_feedthrough = ||D||_∞
+responsive iff s_feedthrough > threshold.
+```
+
+This is a direct feedthrough test.  In the competitive adaptation report,
+`direct_flux` means a flux-dominance drive into the tAstar catalytic state,
+not the observation direct term `D`.
+
+For this circuit the report's direct-flux drive was:
+
+```text
+Δ_f = ∂log(C1)/∂log(tI) - ∂log(C2)/∂log(tI).
+```
+
+Using the binding order matrix `H_bind = ∂log(x)/∂log(qK)`, this is:
+
+```text
+Δ_f = e_C1' H_bind e_tI - e_C2' H_bind e_tI.
+```
+
+The report's direct-flux responsiveness rule was:
+
+```text
+tAstar responsive iff
+    Δ_f > θ.
+
+Astar responsive iff
+    Δ_f > θ
+    and
+    ∂log(Astar)/∂log(tAstar) > θ.
+```
+
+Equivalently, the Astar gate is:
+
+```text
+e_Astar' H_bind e_tAstar > θ.
+```
+
+Thus the package's current `:direct_flux` formula tests `D`, while the report's
+formula tests a signed flux-drive difference in the binding/catalysis
+structure.
+
+On the exact steady-state-invariant subset of the competitive adaptation
+example, this gives:
+
+```text
+Astar:  0 regimes
+tAstar: 0 regimes
+```
+
+The report's direct-flux rule gives:
+
+```text
+Astar:  14 regimes
+tAstar: 20 regimes
+```
+
+The report rule was:
+
+```julia
+flux_drive = ∂log(C1)/∂log(tI) - ∂log(C2)/∂log(tI)
+
+tAstar direct-flux responsive:
+    flux_drive > threshold
+
+Astar direct-flux responsive:
+    flux_drive > threshold &&
+    ∂log(Astar)/∂log(tAstar) > threshold
+```
+
+Suggested fix:
+
+- Rename the current `:direct_flux` standard to `:direct_feedthrough` if it is
+  meant to represent `D`.
+- Implement the report's direct-flux rule as `:direct_flux`, at least for the
+  competitive adaptation output convention where the relevant catalytic
+  complexes are `:C1` and `:C2`.
+- If the package wants a generic version, the API needs to accept the positive
+  and negative flux species/symbols instead of inferring them silently.
+
+### Issue 3: `:output_reachability` Currently Duplicates Output-Controllability Semantics
+
+The package currently defines `:output_reachability` as the norm of the
+output-controllability matrix:
+
+```julia
+norm([D C*B C*A*B ...])
+```
+
+Formula-level mismatch:
+
+The package currently forms the output-control row/matrix:
+
+```text
+R_y = [D, C B, C A B, C A^2 B, ...]
+```
+
+and scores:
+
+```text
+s_norm = ||R_y||
+responsive iff s_norm > θ.
+```
+
+This is sign-agnostic: a large negative first response and a large positive
+first response both pass.  The report's thresholded output-reachability
+criterion was signed and ordered.  Define the Markov/output coefficients:
+
+```text
+m_0 = D,
+m_1 = C B,
+m_2 = C A B,
+...
+```
+
+Let
+
+```text
+m_first = first m_j with abs(m_j) > atol.
+```
+
+The signed coefficient part of the report standard was:
+
+```text
+m_first > θ.
+```
+
+not:
+
+```text
+abs(m_first) > θ
+```
+
+and not:
+
+```text
+norm([m_0, m_1, m_2, ...]) > θ.
+```
+
+The report also allowed an energy-based route:
+
+```text
+E_y > θ^2,
+```
+
+where `E_y` is the output Gramian energy defined below in Issue 4.  Therefore
+the report standard was:
+
+```text
+responsive iff (m_first > θ) or (E_y > θ^2).
+```
+
+The package's current norm test collapses sign and coefficient order, so it
+does not implement the same reachability notion.
+
+For a single input and single output, this is sign-agnostic and gives the same
+responsive regimes as `:output_controllability` in the competitive adaptation
+example:
+
+```text
+Astar:  output_controllability = 46, output_reachability = 46
+tAstar: output_controllability = 45, output_reachability = 45
+```
+
+This is not the thresholded output-reachability standard used in the report.
+The report standard was stricter and gave:
+
+```text
+Astar:  20 regimes
+tAstar: 20 regimes
+```
+
+The report standard used:
+
+```julia
+first positive signed nonzero coefficient > threshold
+```
+
+or a Gramian energy condition:
+
+```julia
+output_energy > threshold^2
+```
+
+where the `Astar` output energy included the direct term:
+
+```julia
+D^2 + C * W * C'
+```
+
+Suggested fix:
+
+- Rename the current `:output_reachability` to `:output_controllability_norm`
+  or document that it is sign-agnostic and not the report standard.
+- Add the report standard under a less ambiguous name, for example
+  `:thresholded_output_reachability`.
+- The signed-first-coefficient part must preserve sign; using a norm loses the
+  distinction between positive response and negative response.
+
+### Issue 4: `:gramian` Threshold Semantics Do Not Match the Report
+
+The package currently scores `:gramian` as:
+
+```julia
+norm(C * W * C')
+```
+
+and compares it directly to `threshold`.
+
+Formula-level mismatch:
+
+For the local state equation
+
+```text
+dz/dt = A z + B u,
+```
+
+with stable `A`, the controllability Gramian satisfies:
+
+```text
+A W + W A' + B B' = 0.
+```
+
+The package currently uses:
+
+```text
+s_pkg = ||C W C'||
+responsive iff s_pkg > θ.
+```
+
+The report used an output energy and compared it to `θ^2`.  For a qcat output,
+where `D = 0`,
+
+```text
+E_y = C W C'.
+```
+
+For an `x` output with direct dependence on the input,
+
+```text
+E_y = D D' + C W C'.
+```
+
+For scalar output/input this is:
+
+```text
+E_y = D^2 + C W C'.
+```
+
+The report's energy criterion was:
+
+```text
+responsive iff E_y > θ^2.
+```
+
+The mismatch is therefore twofold:
+
+1. the package compares an energy-like quantity to `θ`, while the report
+   compares energy to `θ^2`;
+2. for `x` outputs, the package omits the direct output/input energy term
+   `D D'`.
+
+On the exact steady-state-invariant subset with `threshold=0.1`, it gives:
+
+```text
+Astar:  15 regimes
+tAstar: 8 regimes
+```
+
+The report's Gramian/energy part was compared to `threshold^2`, and for `x`
+outputs included the direct term `D^2`.  Under the report's thresholded
+reachability rule, the accepted counts were:
+
+```text
+Astar:  20 regimes
+tAstar: 20 regimes
+```
+
+Suggested fix:
+
+- Decide whether `:gramian` should return an energy or an amplitude-like score.
+- If it returns energy, compare against `threshold^2`, not `threshold`.
+- For `output_space=:x`, include the direct term when reporting output energy:
+
+```julia
+D * D' + C * W * C'
+```
+
+- Document this clearly in `user_guide.md`, because users will otherwise expect
+  `threshold=0.1` to mean the same threshold used by the other standards.
+
+### Issue 5: `hbd_source` Needs a Documentation Note About BNC Regularity vs Binding Singularity
+
+In the competitive adaptation example, some regimes selected by:
+
+```julia
+get_bnc_regimes(model; singular=false)
+```
+
+still report:
+
+```julia
+hbd_source(rgm) == :numerical_binding_derivative
+```
+
+For example regimes 10, 146, and 226 are stable under the BNC regular-regime
+filter but have `hbd_source=:numerical_binding_derivative`.
+
+This is not necessarily a bug: `singular=false` filters BNC regime nullity, not
+whether the underlying binding regime is singular.  However, the user guide
+should state this explicitly.  Otherwise users may assume `singular=false`
+implies exact binding derivatives.
+
 ## 1. Export Symmetric Regime Index and Permutation Helpers
 
 ### Current State
