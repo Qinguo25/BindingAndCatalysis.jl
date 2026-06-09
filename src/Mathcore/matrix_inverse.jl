@@ -1,23 +1,23 @@
 # #--------------Matrix inverse helpers-------------------------
 
-
 struct NρCacheEntry
     deficiency::Int                    # row-rank deficiency of Nρ; for square Nρ this is nullity(Nρ)
     kind::UInt8                        # 0x00 = deficiency only, 0x01 = explicit inverse, 0x02 = rank-1 adjugate factors
-    inv::SparseMatrixCSC{Float64,Int}  # valid iff kind == 0x01
+    inv::SparseMatrixCSC{Float64, Int}  # valid iff kind == 0x01
     α::Float64                         # valid iff kind == 0x02
     u::Vector{Float64}                 # left null vector  (length r)
     v::Vector{Float64}                 # right null vector (length r)
 end
 
-
 const _EMPTY_SPM64 = spzeros(Float64, 0, 0)
 const _EMPTY_VEC64 = Float64[]
 const NρKey = Tuple{Vararg{Int}}
-const NρCache = Dict{NρKey,NρCacheEntry}
+const NρCache = Dict{NρKey, NρCacheEntry}
 
-@inline _entry_only_def(def::Int) = NρCacheEntry(def, 0x00, _EMPTY_SPM64, 0.0, _EMPTY_VEC64, _EMPTY_VEC64)
-@inline _entry_inv(inv::SparseMatrixCSC{Float64,Int}) = NρCacheEntry(0, 0x01, inv, 0.0, _EMPTY_VEC64, _EMPTY_VEC64)
+@inline _entry_only_def(def::Int) =
+    NρCacheEntry(def, 0x00, _EMPTY_SPM64, 0.0, _EMPTY_VEC64, _EMPTY_VEC64)
+@inline _entry_inv(inv::SparseMatrixCSC{Float64, Int}) =
+    NρCacheEntry(0, 0x01, inv, 0.0, _EMPTY_VEC64, _EMPTY_VEC64)
 @inline _entry_rank1(def::Int, α::Float64, u::Vector{Float64}, v::Vector{Float64}) =
     NρCacheEntry(def, 0x02, _EMPTY_SPM64, α, u, v)
 
@@ -33,7 +33,7 @@ const NρCache = Dict{NρKey,NρCacheEntry}
     n::Int,
 )
     ntouched = 0
-    nunique  = 0
+    nunique = 0
 
     @inbounds for p0 in perm
         p = Int(p0)
@@ -65,17 +65,17 @@ end
 end
 
 function _get_Nρ_key(perm::AbstractVector{<:Integer}, n::Int)::Vector{Int}
-    seen    = zeros(UInt8, n)
+    seen = zeros(UInt8, n)
     touched = Vector{Int}(undef, length(perm))
-    keybuf  = Vector{Int}(undef, n)
-    k, _    = _key_from_perm!(keybuf, seen, touched, perm, n)
+    keybuf = Vector{Int}(undef, n)
+    k, _ = _key_from_perm!(keybuf, seen, touched, perm, n)
     return copy(@view keybuf[1:k])
 end
 
 function _get_Nρ_key_and_perm_nullity(perm::AbstractVector{<:Integer}, n::Int)
-    seen    = zeros(UInt8, n)
+    seen = zeros(UInt8, n)
     touched = Vector{Int}(undef, length(perm))
-    keybuf  = Vector{Int}(undef, n)
+    keybuf = Vector{Int}(undef, n)
     k, pdef = _key_from_perm!(keybuf, seen, touched, perm, n)
     return copy(@view keybuf[1:k]), pdef
 end
@@ -84,8 +84,7 @@ end
 # -----------------------------------------------------------------------------
 
 @inline function _perm_sign_perm_key(
-    perm::AbstractVector{<:Integer},
-    key::AbstractVector{<:Integer},
+    perm::AbstractVector{<:Integer}, key::AbstractVector{<:Integer}
 )::Float64
     d = length(perm)
     n = d + length(key)
@@ -117,9 +116,9 @@ function _rank1_adjugate_data!(A::Matrix{Float64}; atol::Float64=1e-12, rtol::Fl
     S = F.S
 
     σmax = isempty(S) ? 0.0 : maximum(S)
-    tol  = max(atol, rtol * σmax)
-    rk   = count(σ -> σ > tol, S)
-    def  = size(A, 1) - rk
+    tol = max(atol, rtol * σmax)
+    rk = count(σ -> σ > tol, S)
+    def = size(A, 1) - rk
 
     if size(A, 1) == size(A, 2) && def == 1
         k = findfirst(σ -> σ <= tol, S)
@@ -144,11 +143,11 @@ function _rank1_adjugate_data!(A::Matrix{Float64}; atol::Float64=1e-12, rtol::Fl
 end
 
 function _factor_Nρ(
-    Nρ::SparseMatrixCSC{Tv,Int};
+    Nρ::SparseMatrixCSC{Tv, Int};
     atol::Float64=1e-12,
     rtol::Float64=1e-10,
     drop_tol::Float64=1e-12,
-) where {Tv<:Real}
+) where {Tv <: Real}
     r, c = size(Nρ)
 
     # Square case: try sparse LU first. If it succeeds, cache the explicit inverse.
@@ -157,7 +156,7 @@ function _factor_Nρ(
         if issuccess(F)
             # X = F \ Matrix{Float64}(I, r, r)
             # Xsp = sparse(X)
-            Xsp = luFac(F) \ spdiagm(0=>ones(Float64,r))
+            Xsp = luFac(F) \ spdiagm(0 => ones(Float64, r))
             # return  H, 0
             drop_tol > 0 && droptol!(Xsp, drop_tol)
             return _entry_inv(Xsp)
@@ -175,8 +174,8 @@ function _factor_Nρ(
 
     # Rectangular case: only the deficiency matters for nullity prefiltering.
     # We deliberately do NOT cache any inverse-like object here.
-    A   = Matrix{Float64}(Nρ)
-    rk  = rank(A; atol=atol, rtol=rtol)
+    A = Matrix{Float64}(Nρ)
+    rk = rank(A; atol=atol, rtol=rtol)
     def = r - rk
     return _entry_only_def(def)
 end
@@ -188,7 +187,7 @@ function _get_Nρ_entry!(
     atol::Float64=1e-12,
     rtol::Float64=1e-10,
     drop_tol::Float64=1e-12,
-) where {Tv<:Real}
+) where {Tv <: Real}
     tkey = Tuple(Int.(key))
     return get!(cache, tkey) do
         Nρ = sparse(N[:, collect(key)])
@@ -197,11 +196,8 @@ function _get_Nρ_entry!(
 end
 
 @inline function _get_Nρ_entry_from_perm!(
-    cache::NρCache,
-    N::AbstractMatrix{Tv},
-    perm;
-    kwargs...,
-) where {Tv<:Real}
+    cache::NρCache, N::AbstractMatrix{Tv}, perm; kwargs...
+) where {Tv <: Real}
     key = _get_Nρ_key(perm, size(N, 2))
     return _get_Nρ_entry!(cache, N, key; kwargs...), key
 end
@@ -213,7 +209,7 @@ function _build_Nρ_cache_parallel!(
     atol::Float64=1e-12,
     rtol::Float64=1e-10,
     drop_tol::Float64=1e-12,
-) where {Tv<:Real}
+) where {Tv <: Real}
     nperm = length(perms)
     n = size(N, 2)
     nperm == 0 && return NρKey[], Int[]
@@ -237,7 +233,7 @@ function _build_Nρ_cache_parallel!(
         perm_defs[i] = pdef
     end
 
-    uniq_index = Dict{NρKey,Int}()
+    uniq_index = Dict{NρKey, Int}()
     keys = Vector{Vector{Int}}()
 
     sizehint!(uniq_index, nperm)
@@ -265,8 +261,10 @@ function _build_Nρ_cache_parallel!(
     return perm_keys, perm_defs
 end
 
-@inline _perm_total_nullity(perm_def::Int, entry::NρCacheEntry) = perm_def + entry.deficiency
-@inline _is_regular_seed(perm_def::Int, entry::NρCacheEntry) = perm_def == 0 && entry.deficiency == 0
+@inline _perm_total_nullity(perm_def::Int, entry::NρCacheEntry) =
+    perm_def + entry.deficiency
+@inline _is_regular_seed(perm_def::Int, entry::NρCacheEntry) =
+    perm_def == 0 && entry.deficiency == 0
 
 function _build_regular_H_from_key_entry(
     perm::AbstractVector{<:Integer},
@@ -274,7 +272,7 @@ function _build_regular_H_from_key_entry(
     key::AbstractVector{<:Integer},
     entry::NρCacheEntry;
     drop_tol::Float64=1e-12,
-) where {Tv<:Real}
+) where {Tv <: Real}
     perm_int = perm isa Vector{Int} ? perm : Int.(perm)
     n = size(N, 2)
 
@@ -310,7 +308,7 @@ function _build_singular_H_from_perm(
     scale::Real=1;
     atol::Float64=1e-12,
     drop_tol::Float64=1e-12,
-) where {Tv<:Real}
+) where {Tv <: Real}
     d = length(perm)
     n = size(N, 2)
     P = sparse(1:d, Int.(perm), ones(Int, d), d, n)
@@ -349,15 +347,10 @@ function _calc_nullity(
     atol::Float64=1e-12,
     rtol::Float64=1e-10,
     drop_tol::Float64=1e-12,
-) where {Tv<:Real}
+) where {Tv <: Real}
     cache = NρCache()
     perm_keys, perm_defs = _build_Nρ_cache_parallel!(
-        cache,
-        N,
-        perms;
-        atol=atol,
-        rtol=rtol,
-        drop_tol=drop_tol,
+        cache, N, perms; atol=atol, rtol=rtol, drop_tol=drop_tol
     )
 
     nullity = Vector{Int}(undef, length(perms))
@@ -365,20 +358,11 @@ function _calc_nullity(
         nullity[i] = perm_defs[i] + cache[perm_keys[i]].deficiency
     end
 
-    return nullity,cache
+    return nullity, cache
 end
 
-
-function _calc_nullity(
-    perms::Vector{<:AbstractVector{<:Integer}},
-    model::Bnc;
-    kwargs...,
-)
-    nullity,cache = _calc_nullity(
-        perms,
-        model.N;
-        kwargs...,
-    )
+function _calc_nullity(perms::Vector{<:AbstractVector{<:Integer}}, model::Bnc; kwargs...)
+    nullity, cache = _calc_nullity(perms, model.N; kwargs...)
     model._vertices_Nρ_inv_dict = cache
     return nullity
 end
@@ -394,8 +378,8 @@ function _append_block_triplets!(
     p::Int,
     rowmap::Vector{Int},
     coloffset::Int,
-    A::SparseMatrixCSC{Tc,Int},
-) where {Tc<:Real}
+    A::SparseMatrixCSC{Tc, Int},
+) where {Tc <: Real}
     @inbounds for col in 1:size(A, 2)
         for ptr in A.colptr[col]:(A.colptr[col + 1] - 1)
             p += 1
@@ -410,10 +394,10 @@ end
 function _assemble_H_from_blocks(
     perm::AbstractVector{<:Integer},
     key::Vector{Int},
-    BL::SparseMatrixCSC{Tc,Int},
-    BR::SparseMatrixCSC{Tc,Int},
+    BL::SparseMatrixCSC{Tc, Int},
+    BR::SparseMatrixCSC{Tc, Int},
     n::Int,
-) where {Tc<:Real}
+) where {Tc <: Real}
     d = length(perm)
     nnzH = d + nnz(BL) + nnz(BR)
 
@@ -429,7 +413,7 @@ function _assemble_H_from_blocks(
         V[p] = one(Tc)
     end
 
-    p = _append_block_triplets!(I, J, V, p, key, 1,     BL)
+    p = _append_block_triplets!(I, J, V, p, key, 1, BL)
     p = _append_block_triplets!(I, J, V, p, key, d + 1, BR)
 
     @assert p == nnzH
@@ -446,10 +430,9 @@ function _materialize_rank1_adjugate(
     α::Float64,
     u::AbstractVector{<:Real},
     v::AbstractVector{<:Real};
-    scale::Real = 1.0,
-    drop_tol::Float64 = 0.0,
-) where {Tv<:Real}
-
+    scale::Real=1.0,
+    drop_tol::Float64=0.0,
+) where {Tv <: Real}
     d = length(perm)
     r = length(key)
     n = d + r
@@ -471,7 +454,7 @@ function _materialize_rank1_adjugate(
 
     # 先筛掉明显无效的行/列
     active_rows = Vector{Int}(undef, r)
-    row_coeffs  = Vector{Float64}(undef, r)
+    row_coeffs = Vector{Float64}(undef, r)
     nr = 0
     @inbounds for j in 1:r
         c = γ * Float64(v[j])
@@ -479,13 +462,13 @@ function _materialize_rank1_adjugate(
             if c != 0.0
                 nr += 1
                 active_rows[nr] = Int(key[j])
-                row_coeffs[nr]  = c
+                row_coeffs[nr] = c
             end
         else
             if abs(c) > drop_tol
                 nr += 1
                 active_rows[nr] = Int(key[j])
-                row_coeffs[nr]  = c
+                row_coeffs[nr] = c
             end
         end
     end
@@ -537,7 +520,7 @@ function _materialize_rank1_adjugate(
     p = 0
     @inbounds for a in 1:nr
         row = active_rows[a]
-        ca  = row_coeffs[a]
+        ca = row_coeffs[a]
         for b in 1:nc
             col = active_cols[b]
             val = ca * right[col]
@@ -569,7 +552,6 @@ function droptol!(A::Real, tol)
     return A = abs(A) < tol ? zero(eltype(A)) : A
 end
 
-
 # -----------------------------------------------------------------------------
 # Main H interface
 # -----------------------------------------------------------------------------
@@ -578,21 +560,24 @@ function _calc_H(
     N::AbstractMatrix{Tv},
     cache::NρCache,
     perm::AbstractVector{<:Integer};
-
     scale::Real=1.0,
     atol::Float64=1e-12,
     rtol::Float64=1e-10,
     drop_tol::Float64=1e-12,
-    kwargs...
-) where {Tv<:Real}
+    kwargs...,
+) where {Tv <: Real}
     n = size(N, 2)
     key, perm_def = _get_Nρ_key_and_perm_nullity(perm, n)
-    perm_def == 0 || error("_calc_H only supports perms with unique entries; use _calc_nullity first to prefilter invalid perms.")
+    perm_def == 0 || error(
+        "_calc_H only supports perms with unique entries; use _calc_nullity first to prefilter invalid perms.",
+    )
 
     entry = _get_Nρ_entry!(cache, N, key; atol=atol, rtol=rtol, drop_tol=drop_tol)
 
     if entry.deficiency == 0
-        entry.kind == 0x01 || error("Internal cache inconsistency: expected explicit inverse for deficiency == 0.")
+        entry.kind == 0x01 || error(
+            "Internal cache inconsistency: expected explicit inverse for deficiency == 0.",
+        )
 
         BR = entry.inv
         Nc = sparse(N[:, Int.(perm)])
@@ -602,58 +587,41 @@ function _calc_H(
     end
 
     if entry.deficiency == 1
-        entry.kind == 0x02 || error("Internal cache inconsistency: expected rank-1 adjugate factors for deficiency == 1.")
+        entry.kind == 0x02 || error(
+            "Internal cache inconsistency: expected rank-1 adjugate factors for deficiency == 1.",
+        )
 
         Nc = sparse(N[:, Int.(perm)])
 
         return _materialize_rank1_adjugate(
-                perm,
-                key,
-                Nc,
-                entry.α,
-                entry.u,
-                entry.v;
-                scale=scale,
-                kwargs...,
-            )
+            perm, key, Nc, entry.α, entry.u, entry.v; scale=scale, kwargs...
+        )
     end
 
-    error("nullity([P;N]) >= 2 is not supported by _calc_H; call _calc_nullity first and skip those perms.")
-end
-
-
-
-function _calc_H(
-    model::Bnc,
-    perm::AbstractVector{<:Integer};
-    kwargs...
-)
-    if isnothing(model._vertices_Nρ_inv_dict)
-        error("Nρ cache is not initialized. Call _calc_nullity first to populate the cache before calling _calc_H.")
-    end
-
-    return _calc_H(
-        model.N,
-        model._vertices_Nρ_inv_dict,
-        perm;
-        scale= model.direction,
-        kwargs...
+    return error(
+        "nullity([P;N]) >= 2 is not supported by _calc_H; call _calc_nullity first and skip those perms.",
     )
 end
 
+function _calc_H(model::Bnc, perm::AbstractVector{<:Integer}; kwargs...)
+    if isnothing(model._vertices_Nρ_inv_dict)
+        error(
+            "Nρ cache is not initialized. Call _calc_nullity first to populate the cache before calling _calc_H.",
+        )
+    end
+
+    return _calc_H(
+        model.N, model._vertices_Nρ_inv_dict, perm; scale=model.direction, kwargs...
+    )
+end
 
 function calc_H_and_nullity(
     perm::AbstractVector{<:Integer},
     N::AbstractMatrix{Tv},
     scale::Real=1;
     drop_tol::Float64=1e-12,
-) where {Tv<:Real}
-    H, nullity, _, _, _ = _calc_H_and_nullity_uncached(
-        perm,
-        N,
-        scale;
-        drop_tol=drop_tol,
-    )
+) where {Tv <: Real}
+    H, nullity, _, _, _ = _calc_H_and_nullity_uncached(perm, N, scale; drop_tol=drop_tol)
     return H, nullity
 end
 
@@ -662,15 +630,15 @@ function _calc_H_and_nullity_uncached(
     N::AbstractMatrix{Tv},
     scale::Real=1;
     drop_tol::Float64=1e-12,
-) where {Tv<:Real}
-    atol     = 1e-12
-    rtol     = 1e-10
+) where {Tv <: Real}
+    atol = 1e-12
+    rtol = 1e-10
 
     n = size(N, 2)
     perm_int = perm isa Vector{Int} ? perm : Int.(perm)
-    seen    = zeros(UInt8, n)
+    seen = zeros(UInt8, n)
     touched = Vector{Int}(undef, length(perm_int))
-    keybuf  = Vector{Int}(undef, n)
+    keybuf = Vector{Int}(undef, n)
 
     k, perm_def = _key_from_perm!(keybuf, seen, touched, perm_int, n)
     key = copy(@view keybuf[1:k])
@@ -691,13 +659,7 @@ function _calc_H_and_nullity_uncached(
         Nc = sparse(N[:, perm_int])
 
         H = _materialize_rank1_adjugate(
-            perm_int,
-            key,
-            Nc,
-            entry.α,
-                entry.u,
-                entry.v;
-                scale=scale,
+            perm_int, key, Nc, entry.α, entry.u, entry.v; scale=scale
         )
 
         return H, nullity, key, perm_def, entry
@@ -705,17 +667,6 @@ function _calc_H_and_nullity_uncached(
 
     return nothing, nullity, key, perm_def, entry
 end
-
-
-
-
-
-
-
-
-
-
-
 
 # helper funtions to taking inverse when the matrix is singular.
 """
@@ -725,15 +676,18 @@ Compute a sparse adjugate-like matrix for a near-singular square matrix using
 its smallest singular vector, and return the inferred nullity.
 
 # Arguments
-- A: Square matrix to analyze.
+
+  - A: Square matrix to analyze.
 
 # Keyword Arguments
-- atol: Absolute tolerance for identifying zero singular values.
+
+  - atol: Absolute tolerance for identifying zero singular values.
 
 # Returns
-- Tuple (adj_A, nullity).
+
+  - Tuple (adj_A, nullity).
 """
-function _adj_singular_matrix(A::AbstractMatrix; atol=1e-12)::Tuple{SparseMatrixCSC,Int}
+function _adj_singular_matrix(A::AbstractMatrix; atol=1e-12)::Tuple{SparseMatrixCSC, Int}
     n, m = size(A)
     @assert n == m "A must be square"
     F = svd(Array(A))
@@ -822,8 +776,7 @@ function _exact_inverse_matrix(A::AbstractMatrix{<:Integer})
 end
 
 function _exact_calc_H_regular(
-    perm::AbstractVector{<:Integer},
-    N::AbstractMatrix{<:Integer},
+    perm::AbstractVector{<:Integer}, N::AbstractMatrix{<:Integer}
 )
     n = size(N, 2)
     key, perm_def = _get_Nρ_key_and_perm_nullity(perm, n)
@@ -852,7 +805,7 @@ function _exact_adjugate_matrix(A::AbstractMatrix{<:Integer})
             if isodd(i + j)
                 cof = -cof
             end
-            Adj[i, j] = Int(cof) // 1
+            Adj[i, j] = Int(cof)//1
         end
     end
 
@@ -901,14 +854,15 @@ function _exact_direct_inverse_or_adjugate(
     return _exact_direct_inverse_or_adjugate(M, scale)
 end
 
-
-function direct_inverse_or_adjugate(A::AbstractMatrix; atol::Float64=1e-12)::Tuple{SparseMatrixCSC,Int}
+function direct_inverse_or_adjugate(
+    A::AbstractMatrix; atol::Float64=1e-12
+)::Tuple{SparseMatrixCSC, Int}
     n, m = size(A)
     @assert n == m "A must be square"
     F = lu(sparse(A); check=false)
     if issuccess(F)
-        H = luFac(F) \ spdiagm(0=>ones(Float64,n))
-        return  H, 0
+        H = luFac(F) \ spdiagm(0 => ones(Float64, n))
+        return H, 0
     else
         adj_A, nullity = _adj_singular_matrix(A; atol=atol)
         return adj_A, nullity
@@ -921,13 +875,13 @@ function direct_inverse_or_adjugate(
     scale::Real=1;
     atol::Float64=1e-12,
     drop_tol::Float64=1e-12,
-)::Tuple{SparseMatrixCSC,Int} where {Tv<:Real}
-
+)::Tuple{SparseMatrixCSC, Int} where {Tv <: Real}
     H_regular, nlt = calc_H_and_nullity(perm, N, scale; drop_tol=drop_tol)
     if !isnothing(H_regular)
         return H_regular, nlt
     end
 
-    nlt == 1 && return _build_singular_H_from_perm(perm, N, scale; atol=atol, drop_tol=drop_tol)
+    nlt == 1 &&
+        return _build_singular_H_from_perm(perm, N, scale; atol=atol, drop_tol=drop_tol)
     return spzeros(Float64, size(N, 2), size(N, 2)), nlt
 end

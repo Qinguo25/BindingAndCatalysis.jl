@@ -6,7 +6,9 @@ function show_regime_path(grh::SIMOPaths, pth)
     return nothing
 end
 
-function summary(grh::SIMOPaths; show_volume::Bool=true, prefix::AbstractString="#", kwargs...)
+function summary(
+    grh::SIMOPaths; show_volume::Bool=true, prefix::AbstractString="#", kwargs...
+)
     paths = grh.rgm_paths
     if show_volume
         vols = get_volumes(grh; kwargs...)
@@ -33,10 +35,14 @@ function summary_RO_path(
         keep_singular=keep_singular,
         keep_nonasymptotic=keep_nonasymptotic,
     )
-    !isempty(ord_pth) && ord_pth[1] isa AbstractMatrix &&
-        error("summary_RO_path currently supports a single observed x. Use get_RO_paths(...) directly for multi-x data.")
+    !isempty(ord_pth) &&
+        ord_pth[1] isa AbstractMatrix &&
+        error(
+            "summary_RO_path currently supports a single observed x. Use get_RO_paths(...) directly for multi-x data.",
+        )
 
-    volumes = show_volume ? get_volumes(grh; kwargs...) : fill(nothing, length(grh.rgm_paths))
+    volumes =
+        show_volume ? get_volumes(grh; kwargs...) : fill(nothing, length(grh.rgm_paths))
     rsts = group_sum(ord_pth, volumes)
     ids = getindex.(rsts, 1)
     ords = getindex.(rsts, 2)
@@ -46,8 +52,15 @@ function summary_RO_path(
 end
 
 function Base.display(grh::SIMOPaths)
-    println("SIMOPaths object with $(length(grh.rgm_paths)) paths for qK coordinate index $(grh.change_qK_idx)")
+    println(
+        "SIMOPaths object with $(length(grh.rgm_paths)) paths for qK coordinate index $(grh.change_qK_idx)",
+    )
     return nothing
 end
 
-Base.show(io::IO, grh::SIMOPaths) = print(io, "SIMOPaths object with $(length(grh.rgm_paths)) paths for qK coordinate index $(grh.change_qK_idx)")
+function Base.show(io::IO, grh::SIMOPaths)
+    return print(
+        io,
+        "SIMOPaths object with $(length(grh.rgm_paths)) paths for qK coordinate index $(grh.change_qK_idx)",
+    )
+end

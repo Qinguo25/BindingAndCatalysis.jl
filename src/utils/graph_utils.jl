@@ -9,7 +9,7 @@ get_sources(g::AbstractGraph) = Set(v for v in vertices(g) if indegree(g, v) == 
 
 Return sink vertices with zero outdegree.
 """
-get_sinks(g::AbstractGraph)   = Set(v for v in vertices(g) if outdegree(g, v) == 0)
+get_sinks(g::AbstractGraph) = Set(v for v in vertices(g) if outdegree(g, v) == 0)
 """
     get_sources_sinks(g::AbstractGraph) -> (Set{Int}, Set{Int})
 
@@ -23,8 +23,8 @@ get_sources_sinks(g::AbstractGraph) = (get_sources(g), get_sinks(g))
 Return sources and sinks while excluding singular regimes.
 """
 function get_sources_sinks(model::Bnc, g::AbstractGraph)
-    sources_all = get_sources(g) 
-    sinks_all   = get_sinks(g) 
+    sources_all = get_sources(g)
+    sinks_all = get_sinks(g)
     common_vs = intersect(sources_all, sinks_all)
     filter!(common_vs) do v
         get_nullity(model, v) > 0
@@ -95,18 +95,15 @@ end
 Enumerate all paths in a DAG from `sources` to `sinks`.
 """
 function _enumerate_paths(
-    g::AbstractGraph;
-    sources::AbstractVector{Int},
-    sinks::AbstractVector{Int},
+    g::AbstractGraph; sources::AbstractVector{Int}, sinks::AbstractVector{Int}
 )::Vector{Vector{Int}}
-
     @info "sources: $sources"
     @info "sinks: $sinks"
     n = nv(g)
 
     # 剪枝：只处理相关子图
     fromS = _reachable_from_sources(g, sources)
-    toT   = _can_reach_sinks(g, sinks)
+    toT = _can_reach_sinks(g, sinks)
     active = fromS .& toT
 
     is_sink = falses(n)
@@ -166,13 +163,14 @@ function _enumerate_paths(
     return out
 end
 
-
 """
     graph_from_paths(paths; nv=nothing) -> SimpleDiGraph
 
 Construct a directed graph from a collection of vertex paths.
 """
-function graph_from_paths(paths::AbstractVector{<:AbstractVector{<:Integer}}, nv=nothing)::SimpleDiGraph
+function graph_from_paths(
+    paths::AbstractVector{<:AbstractVector{<:Integer}}, nv=nothing
+)::SimpleDiGraph
     nv = nv === nothing ? maximum(Iterators.flatten(paths)) : nv
     grh = SimpleDiGraph(nv)
     for p in paths
@@ -184,16 +182,15 @@ function graph_from_paths(paths::AbstractVector{<:AbstractVector{<:Integer}}, nv
     return grh
 end
 
-
 """
     vector_difference(v1, v2) -> Vector
 
 Summarize differences between two vectors as counts of value transitions.
 """
-function vector_difference(v1::AbstractVector{T}, v2::AbstractVector{T}) where T
+function vector_difference(v1::AbstractVector{T}, v2::AbstractVector{T}) where {T}
     diff_index = findall(v1 .!= v2)
     mp = countmap(zip(v1[diff_index], v2[diff_index]))
-    mp_sort = sort(collect(mp), by=x -> x.second, rev=true)
+    mp_sort = sort(collect(mp); by=x -> x.second, rev=true)
     return mp_sort
 end
 
@@ -208,9 +205,7 @@ function norm_vec_space(x::AbstractVector{<:Real})::Vector{Float64}
 end
 
 function compress_adjacency(
-    A::SparseMatrixCSC,
-    keep::AbstractVector{<:Integer};
-    drop_stored_zeros::Bool=true,
+    A::SparseMatrixCSC, keep::AbstractVector{<:Integer}; drop_stored_zeros::Bool=true
 )
     n = size(A, 1)
     size(A, 2) == n || throw(ArgumentError("A must be square"))
@@ -218,7 +213,8 @@ function compress_adjacency(
     A2 = drop_stored_zeros ? dropzeros(A) : A
     keep_set = Set(keep)
     length(keep_set) == length(keep) || throw(ArgumentError("keep contains duplicates"))
-    all(1 <= v <= n for v in keep) || throw(ArgumentError("keep contains out-of-range indices"))
+    all(1 <= v <= n for v in keep) ||
+        throw(ArgumentError("keep contains out-of-range indices"))
 
     m = length(keep)
     keep_pos = zeros(Int, n)
@@ -291,8 +287,10 @@ function compress_adjacency(
             ia = touched[a]
             for b in (a + 1):t
                 ib = touched[b]
-                push!(I, ia); push!(J, ib)
-                push!(I, ib); push!(J, ia)
+                push!(I, ia)
+                push!(J, ib)
+                push!(I, ib)
+                push!(J, ia)
             end
         end
     end
@@ -346,9 +344,11 @@ end
 
 Group values by keys, returning indices, key, and summed values.
 """
-function group_sum(keys::AbstractVector{I}, vals::AbstractVector{J}; sort_values::Bool=true)::Vector{Tuple{Vector{Int}, I, J}} where {I,J}
+function group_sum(
+    keys::AbstractVector{I}, vals::AbstractVector{J}; sort_values::Bool=true
+)::Vector{Tuple{Vector{Int}, I, J}} where {I, J}
     @assert length(keys) == length(vals)
-    dict = Dict{I,J}()
+    dict = Dict{I, J}()
     index_dict = Dict{I, Vector{Int}}()
 
     @inbounds for (i, (k, v)) in enumerate(zip(keys, vals))
@@ -358,7 +358,7 @@ function group_sum(keys::AbstractVector{I}, vals::AbstractVector{J}; sort_values
 
     dict_vec = collect(dict)
     if sort_values
-        sort!(dict_vec, by=x -> x[2], rev=true)
+        sort!(dict_vec; by=x -> x[2], rev=true)
     end
 
     result = Vector{Tuple{Vector{Int}, I, J}}(undef, length(dict))
@@ -371,9 +371,7 @@ function group_sum(keys::AbstractVector{I}, vals::AbstractVector{J}; sort_values
 end
 
 function group_sum(
-    keys::AbstractVector{I},
-    vals::AbstractVector{Nothing};
-    sort_values::Bool=true,
+    keys::AbstractVector{I}, vals::AbstractVector{Nothing}; sort_values::Bool=true
 )::Vector{Tuple{Vector{Int}, I, Nothing}} where {I}
     @assert length(keys) == length(vals)
 
@@ -387,7 +385,7 @@ function group_sum(
     end
 
     if sort_values
-        sort!(order, by=k -> length(index_dict[k]), rev=true)
+        sort!(order; by=k -> length(index_dict[k]), rev=true)
     end
     return [(index_dict[k], k, nothing) for k in order]
 end

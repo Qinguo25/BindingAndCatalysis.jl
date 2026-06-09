@@ -1,30 +1,34 @@
-show_condition_x(args...; remove_h_redundancy::Bool=false, kwargs...) =
-    _render_condition_from(
+function show_condition_x(args...; remove_h_redundancy::Bool=false, kwargs...)
+    return _render_condition_from(
         get_C_C0_x(args...; remove_h_redundancy=remove_h_redundancy),
         x_sym(args...);
         kwargs...,
     )
-show_condition_qK(args...; remove_h_redundancy::Bool=false, kwargs...) =
-    _render_condition_from(
+end
+function show_condition_qK(args...; remove_h_redundancy::Bool=false, kwargs...)
+    return _render_condition_from(
         get_C_C0_nullity_qK(args...; remove_h_redundancy=remove_h_redundancy),
         qK_sym(args...);
         kwargs...,
     )
+end
 show_condition(args...; kwargs...) = show_condition_qK(args...; kwargs...)
 
-function show_condition_path(Bnc::Bnc, path::AbstractVector{<:Integer}, change_qK; kwargs...)
+function show_condition_path(
+    Bnc::Bnc, path::AbstractVector{<:Integer}, change_qK; kwargs...
+)
     poly = _calc_polyhedra_for_path(Bnc, path, change_qK)
-    syms = copy(qK_sym(Bnc)) |> x -> deleteat!(x, locate_sym_qK(Bnc, change_qK))
-    show_condition_poly(poly; syms=syms, kwargs...)
+    syms = (x -> deleteat!(x, locate_sym_qK(Bnc, change_qK)))(copy(qK_sym(Bnc)))
+    return show_condition_poly(poly; syms=syms, kwargs...)
 end
 
 function show_condition_path(grh::SIMOPaths, pth_idx; kwargs...)
     poly = get_polyhedron(grh, pth_idx)
-    show_condition_poly(poly; syms=qK_sym(grh), kwargs...)
+    return show_condition_poly(poly; syms=qK_sym(grh), kwargs...)
 end
 
-show_expression_x(args...; kwargs...) = begin
-    rgm = get_bind_regime(args...;kwargs...)
+function show_expression_x(args...; kwargs...)
+    rgm = get_binding_regime(args...; kwargs...)
     bn = get_binding_network(rgm)
     if is_singular(rgm)
         @error "The regime is singular. The expression is not valid."
@@ -32,30 +36,44 @@ show_expression_x(args...; kwargs...) = begin
     _render_expression_from(get_H_H0(rgm), x_sym(bn), qK_sym(bn); kwargs...)
 end
 
-show_expression_x(rgm::BncRegime; kwargs...) = let
-    if is_singular(rgm)
-        @error "The regime is singular. The expression is not valid."
+function show_expression_x(rgm::BncRegime; kwargs...)
+    let
+        if is_singular(rgm)
+            @error "The regime is singular. The expression is not valid."
+        end
+        _render_expression_from(get_H_H0(rgm), x_sym(rgm), wKk_sym(rgm); kwargs...)
     end
-    _render_expression_from(get_H_H0(rgm), x_sym(rgm), wKk_sym(rgm); kwargs...)
 end
 
-show_expression_x(model::Bnc, bind, cat; kwargs...) = show_expression_x(get_bnc_regime(model, bind, cat; check=true); kwargs...)
+function show_expression_x(model::Bnc, bind, cat; kwargs...)
+    return show_expression_x(get_bnc_regime(model, bind, cat; check=true); kwargs...)
+end
 
-show_expression_qK(args...; kwargs...) = begin
+function show_expression_qK(args...; kwargs...)
     bn = get_binding_network(args...)
     _render_expression_from(get_M_M0(args...), qK_sym(bn), x_sym(bn); kwargs...)
 end
 
-show_expression_qcat(rgm::BncRegime; kwargs...) = _render_expression_from(get_qcat_F_F0(rgm), q_cat_sym(rgm), wKk_sym(rgm); kwargs...)
-show_expression_qcat(model::Bnc, bind, cat; kwargs...) = show_expression_qcat(get_bnc_regime(model, bind, cat; check=true); kwargs...)
+function show_expression_qcat(rgm::BncRegime; kwargs...)
+    return _render_expression_from(
+        get_qcat_F_F0(rgm), q_cat_sym(rgm), wKk_sym(rgm); kwargs...
+    )
+end
+function show_expression_qcat(model::Bnc, bind, cat; kwargs...)
+    return show_expression_qcat(get_bnc_regime(model, bind, cat; check=true); kwargs...)
+end
 
-show_dominant_condition(args...; kwargs...) = begin
+function show_dominant_condition(args...; kwargs...)
     bn = get_binding_network(args...)
-    _render_expression_from(get_P_P0(args...), q_sym(bn), x_sym(bn);  kwargs...)
+    _render_expression_from(get_P_P0(args...), q_sym(bn), x_sym(bn); kwargs...)
 end
 
 show_conservation(Bnc::Bnc) = Bnc.q_sym .~ Bnc.L * Bnc.x_sym
-show_equilibrium(Bnc::Bnc; kwargs...) = show_expression_mapping(Bnc.N, zeros(Int, Bnc.r), Bnc.K_sym, Bnc.x_sym; kwargs...)
+function show_equilibrium(Bnc::Bnc; kwargs...)
+    return show_expression_mapping(
+        Bnc.N, zeros(Int, Bnc.r), Bnc.K_sym, Bnc.x_sym; kwargs...
+    )
+end
 
 function _catalysis_dynamics(args...; reduced::Bool=false)
     cn = get_catalysis_network(args...)
@@ -69,7 +87,7 @@ function _catalysis_dynamics(args...; reduced::Bool=false)
         a_w = cn.a_w
         q_cat_w = [q_cat_sym(args...); w[1:a_w]]
         append!(eqs, _d_dt(q_cat_w) .~ (cn.Γ * v))
-        append!(eqs, _d_dt(w[a_w + 1:end]) .~ 0)
+        append!(eqs, _d_dt(w[(a_w + 1):end]) .~ 0)
     end
     return eqs
 end
@@ -80,8 +98,10 @@ end
     P_pos_neg = get_P_pos_neg(cat_rgm)
     P0_pos_neg = get_P0_pos_neg(cat_rgm)
     z, z0 = get_affine_xk2v(cn)
-    flux_terms = handle_log_weighted_sum(P_pos_neg * z, xk_sym(args...), P_pos_neg * z0 + P0_pos_neg)
-    return flux_terms[1:cn.r_v], flux_terms[cn.r_v + 1:end]
+    flux_terms = handle_log_weighted_sum(
+        P_pos_neg * z, xk_sym(args...), P_pos_neg * z0 + P0_pos_neg
+    )
+    return flux_terms[1:(cn.r_v)], flux_terms[(cn.r_v + 1):end]
 end
 
 function _dominant_catalysis_dynamics(args...)
@@ -92,32 +112,42 @@ function _dominant_catalysis_dynamics(args...)
     return eqs
 end
 
-@inline function _substitute_binding_chart(eqs::AbstractVector{<:Symbolics.Equation}, rgm::Union{BindRegime,BncRegime})
+@inline function _substitute_binding_chart(
+    eqs::AbstractVector{<:Symbolics.Equation}, rgm::Union{BindRegime, BncRegime}
+)
     bind_rgm = rgm isa BncRegime ? get_binding_regime(rgm) : rgm
     subs = Dict(eq.lhs => eq.rhs for eq in show_expression_x(bind_rgm; log_space=false))
     return [eq.lhs ~ Symbolics.substitute(eq.rhs, subs) for eq in eqs]
 end
 
-show_catalysis_dynamics(args...; reduced::Bool=true) = _catalysis_dynamics(args...; reduced=reduced)
+function show_catalysis_dynamics(args...; reduced::Bool=true)
+    return _catalysis_dynamics(args...; reduced=reduced)
+end
 
-show_catalysis_dynamics(rgm::BindRegime; reduced::Bool=true) =
-    _substitute_binding_chart(_catalysis_dynamics(rgm; reduced=reduced), rgm)
+function show_catalysis_dynamics(rgm::BindRegime; reduced::Bool=true)
+    return _substitute_binding_chart(_catalysis_dynamics(rgm; reduced=reduced), rgm)
+end
 
-show_catalysis_dynamics(rgm::CatalysisRegime; reduced::Bool=true) = _dominant_catalysis_dynamics(rgm)
+function show_catalysis_dynamics(rgm::CatalysisRegime; reduced::Bool=true)
+    return _dominant_catalysis_dynamics(rgm)
+end
 
-show_catalysis_dynamics(rgm::BncRegime; reduced::Bool=true) =
-    _substitute_binding_chart(_dominant_catalysis_dynamics(rgm), rgm)
+function show_catalysis_dynamics(rgm::BncRegime; reduced::Bool=true)
+    return _substitute_binding_chart(_dominant_catalysis_dynamics(rgm), rgm)
+end
 
-show_catalysis_dynamics(model::Bnc, bind, cat; reduced::Bool=true) =
-    show_catalysis_dynamics(get_bnc_regime(model, bind, cat; check=true); reduced=reduced)
+function show_catalysis_dynamics(model::Bnc, bind, cat; reduced::Bool=true)
+    return show_catalysis_dynamics(
+        get_bnc_regime(model, bind, cat; check=true); reduced=reduced
+    )
+end
 
-show_reduced_catalysis_dynamics(args...; kwargs...) = show_catalysis_dynamics(args...; reduced=true, kwargs...)
+function show_reduced_catalysis_dynamics(args...; kwargs...)
+    return show_catalysis_dynamics(args...; reduced=true, kwargs...)
+end
 
 function show_condition_xk(
-    rgm::CatalysisRegime;
-    kind::Symbol=:all,
-    remove_h_redundancy::Bool=false,
-    kwargs...,
+    rgm::CatalysisRegime; kind::Symbol=:all, remove_h_redundancy::Bool=false, kwargs...
 )
     syms = xk_sym(rgm)
     if kind === :steady_state
@@ -130,9 +160,7 @@ function show_condition_xk(
         return show_condition_poly(data...; syms=syms, kwargs...)
     elseif kind === :dominance
         return _render_condition_from(
-            get_C_C0_xk(rgm; remove_h_redundancy=remove_h_redundancy),
-            syms;
-            kwargs...,
+            get_C_C0_xk(rgm; remove_h_redundancy=remove_h_redundancy), syms; kwargs...
         )
     elseif kind === :all || kind === :combined
         return _render_condition_from(
@@ -144,42 +172,57 @@ function show_condition_xk(
         error("Unsupported kind=$kind. Use :steady_state, :dominance, or :all.")
     end
 end
-show_condition_xk(model::CatalysisData, perm_or_idx; kwargs...) = show_condition_xk(get_catalysis_regime(model, perm_or_idx; check=true); kwargs...)
-show_condition_xk(model::AbstractBnc, perm_or_idx; kwargs...) = show_condition_xk(get_catalysis_regime(model, perm_or_idx; check=true); kwargs...)
-show_condition_xk(
-    rgm::BncRegime;
-    kind::Symbol=:combined,
-    remove_h_redundancy::Bool=false,
-    kwargs...,
-) = _render_condition_from(
-    get_C_C0_nullity_xk(rgm, kind; remove_h_redundancy=remove_h_redundancy),
-    xk_sym(rgm);
-    kwargs...,
+function show_condition_xk(model::CatalysisData, perm_or_idx; kwargs...)
+    return show_condition_xk(
+        get_catalysis_regime(model, perm_or_idx; check=true); kwargs...
+    )
+end
+function show_condition_xk(model::AbstractBnc, perm_or_idx; kwargs...)
+    return show_condition_xk(
+        get_catalysis_regime(model, perm_or_idx; check=true); kwargs...
+    )
+end
+function show_condition_xk(
+    rgm::BncRegime; kind::Symbol=:combined, remove_h_redundancy::Bool=false, kwargs...
 )
-show_condition_xk(model::Bnc, bind, cat; kwargs...) = show_condition_xk(get_bnc_regime(model, bind, cat; check=true); kwargs...)
+    return _render_condition_from(
+        get_C_C0_nullity_xk(rgm, kind; remove_h_redundancy=remove_h_redundancy),
+        xk_sym(rgm);
+        kwargs...,
+    )
+end
+function show_condition_xk(model::Bnc, bind, cat; kwargs...)
+    return show_condition_xk(get_bnc_regime(model, bind, cat; check=true); kwargs...)
+end
 
-show_condition_qKk(
-    rgm::BncRegime;
-    kind::Symbol=:combined,
-    remove_h_redundancy::Bool=false,
-    kwargs...,
-) = _render_condition_from(
-    get_C_C0_nullity_qKk(rgm, kind; remove_h_redundancy=remove_h_redundancy),
-    qKk_sym(rgm);
-    kwargs...,
+function show_condition_qKk(
+    rgm::BncRegime; kind::Symbol=:combined, remove_h_redundancy::Bool=false, kwargs...
 )
-show_condition_qKk(model::Bnc, bind, cat; kwargs...) = show_condition_qKk(get_bnc_regime(model, bind, cat; check=true); kwargs...)
+    return _render_condition_from(
+        get_C_C0_nullity_qKk(rgm, kind; remove_h_redundancy=remove_h_redundancy),
+        qKk_sym(rgm);
+        kwargs...,
+    )
+end
+function show_condition_qKk(model::Bnc, bind, cat; kwargs...)
+    return show_condition_qKk(get_bnc_regime(model, bind, cat; check=true); kwargs...)
+end
 
-show_condition_wKk(rgm::BncRegime; remove_h_redundancy::Bool=false, kwargs...) =
-    _render_condition_from(
+function show_condition_wKk(rgm::BncRegime; remove_h_redundancy::Bool=false, kwargs...)
+    return _render_condition_from(
         get_C_C0_nullity_wKk(rgm; remove_h_redundancy=remove_h_redundancy),
         wKk_sym(rgm);
         kwargs...,
     )
-show_condition_wKk(model::Bnc, bind, cat; kwargs...) = show_condition_wKk(get_bnc_regime(model, bind, cat; check=true); kwargs...)
+end
+function show_condition_wKk(model::Bnc, bind, cat; kwargs...)
+    return show_condition_wKk(get_bnc_regime(model, bind, cat; check=true); kwargs...)
+end
 show_consistency_condition(args...; kwargs...) = show_condition_wKk(args...; kwargs...)
 
-function show_interface(Bnc::Bnc, from, to; lhs_idx::Union{Nothing,Integer}=nothing, kwargs...)
+function show_interface(
+    Bnc::Bnc, from, to; lhs_idx::Union{Nothing, Integer}=nothing, kwargs...
+)
     C, C0 = get_interface(Bnc, from, to)
     if isnothing(lhs_idx)
         return show_condition_poly(C, C0, 1; syms=qK_sym(Bnc), kwargs...)

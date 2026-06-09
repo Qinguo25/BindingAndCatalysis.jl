@@ -2,21 +2,23 @@ function _lock_current_limits!(ax::Axis)
     r = ax.finallimits[]
     x0, y0 = r.origin
     wx, wy = r.widths
-    limits!(ax, x0, x0 + wx, y0, y0 + wy)
+    return limits!(ax, x0, x0 + wx, y0, y0 + wy)
 end
 
 function _lock_current_limits!(ax::Axis3)
     r = ax.targetlimits[]
     x0, y0, z0 = r.origin
     wx, wy, wz = r.widths
-    limits!(ax, x0, x0 + wx, y0, y0 + wy, z0, z0 + wz)
+    return limits!(ax, x0, x0 + wx, y0, y0 + wy, z0, z0 + wz)
 end
 
-_rop_axis_label(model::Bnc, i, j) = "∂log $(string(x_sym(model)[i]))/∂log $(string(qK_sym(model)[j]))"
+function _rop_axis_label(model::Bnc, i, j)
+    return "∂log $(string(x_sym(model)[i]))/∂log $(string(qK_sym(model)[j]))"
+end
 
 function draw_ROP(
     model::Bnc,
-    pairs::AbstractVector{<:Tuple{Any,Any}};
+    pairs::AbstractVector{<:Tuple{Any, Any}};
     emphasize_regimes::AbstractVector=Int[],
     add_inner_points::Bool=true,
     npoints=50000,
@@ -26,7 +28,7 @@ function draw_ROP(
     regular_color="#CCFFCC",
     emphasize_color="#FF0000",
 )
-    V = get_regimes(model, singular=1, return_idx=true)
+    V = get_binding_indices(model; singular=1)
     V_non_singular = filter(v -> !is_singular(model, v), V)
     V_singular = filter(v -> is_singular(model, v), V)
 
@@ -38,19 +40,21 @@ function draw_ROP(
 
     rgm_dct = let
         groups, labels = connected_components_sparse(singular_neighbor_mat)
-        dct = Dict{Int,Set{Int}}()
+        dct = Dict{Int, Set{Int}}()
         for i in eachindex(V_singular)
             dct[i] = Set(groups[labels[i]])
         end
         dct
     end
 
-    get_direct_neighbor_with_singular_regime(i) = [idx for (idx, j) in enumerate(V_non_singular) if neighbor_mat[i, j] == 1]
+    function get_direct_neighbor_with_singular_regime(i)
+        return [idx for (idx, j) in enumerate(V_non_singular) if neighbor_mat[i, j] == 1]
+    end
 
     function fill_indirect_adj!(j)
         rgms = getindex.(Ref(rgm_dct), collect(vtx_bag[j][1]))
         all_rgms = isempty(rgms) ? Set{Int}() : union(rgms...)
-        union!(vtx_bag[j][2], setdiff(all_rgms, vtx_bag[j][1]))
+        return union!(vtx_bag[j][2], setdiff(all_rgms, vtx_bag[j][1]))
     end
 
     for (idx, i) in enumerate(V_singular)
@@ -87,23 +91,27 @@ function draw_ROP(
         return nothing
     end
 
-    pairs = pairs .|> x -> (locate_sym_x(model, x[1]), locate_sym_qK(model, x[2]))
+    pairs = (x -> (locate_sym_x(model, x[1]), locate_sym_qK(model, x[2]))).(pairs)
     get_val(H) = [H[pair...] for pair in pairs]
 
     Ptype = length(pairs) == 3 ? Point3f : Point2f
     get_col(i) = is_asymptotic(model, i) ? asymptotic_color : regular_color
 
-    pnts = get_H.(Ref(model), V_non_singular) .|> get_val
-    dirs = get_H.(Ref(model), V_singular) .|> get_val
+    pnts = get_val.(get_H.(Ref(model), V_non_singular))
+    dirs = get_val.(get_H.(Ref(model), V_singular))
     Points = Ptype.(pnts)
     Points_color = get_col.(V_non_singular)
 
-    direct_lines = Tuple{Ptype,Ptype}[(Points[i], Points[j]) for (i, j) in direct_neighbor_pairs]
-    indirect_lines = Tuple{Ptype,Ptype}[(Points[i], Points[j]) for (i, j) in indirect_neighbor_pairs]
+    direct_lines = Tuple{Ptype, Ptype}[
+        (Points[i], Points[j]) for (i, j) in direct_neighbor_pairs
+    ]
+    indirect_lines = Tuple{Ptype, Ptype}[
+        (Points[i], Points[j]) for (i, j) in indirect_neighbor_pairs
+    ]
 
     direct_rays, indirect_rays = let
-        rays1 = Tuple{Ptype,Ptype}[]
-        rays2 = Tuple{Ptype,Ptype}[]
+        rays1 = Tuple{Ptype, Ptype}[]
+        rays2 = Tuple{Ptype, Ptype}[]
         for i in eachindex(vtx_bag)
             for j in vtx_bag[i][1]
                 push!(rays1, (Points[i], Points[i] + dirs[j] * singular_extends))
@@ -117,15 +125,15 @@ function draw_ROP(
 
     inner_pnts = if add_inner_points
         x_smp = randomize(model, npoints)
-        pnts = x_smp .|> x -> ∂logx_∂logqK(model; x=x, input_logspace=true) |> get_val
+        pnts = (x -> get_val(∂logx_∂logqK(model; x=x, input=:log))).(x_smp)
         Ptype.(pnts)
     else
         nothing
     end
 
     emphasize_Points = Ptype[]
-    emph_rays_direct = Tuple{Ptype,Ptype}[]
-    emph_rays_indirect = Tuple{Ptype,Ptype}[]
+    emph_rays_direct = Tuple{Ptype, Ptype}[]
+    emph_rays_indirect = Tuple{Ptype, Ptype}[]
     if !isempty(emphasize_regimes)
         idx = get_idx.(Ref(model), emphasize_regimes)
         inv_rgm = Set{Int}()
@@ -141,10 +149,16 @@ function draw_ROP(
         emphasize_Points = Points[collect(inv_rgm)]
         for i in eachindex(vtx_bag)
             for j in vtx_bag[i][1]
-                j in singular_rgm && push!(emph_rays_direct, (Points[i], Points[i] + dirs[j] * singular_extends))
+                j in singular_rgm && push!(
+                    emph_rays_direct,
+                    (Points[i], Points[i] + dirs[j] * singular_extends),
+                )
             end
             for j in vtx_bag[i][2]
-                j in singular_rgm && push!(emph_rays_indirect, (Points[i], Points[i] + dirs[j] * singular_extends))
+                j in singular_rgm && push!(
+                    emph_rays_indirect,
+                    (Points[i], Points[i] + dirs[j] * singular_extends),
+                )
             end
         end
     end
@@ -152,7 +166,7 @@ function draw_ROP(
     f = Figure()
     ax = if length(pairs) == 3
         Axis3(
-            f[1, 1],
+            f[1, 1];
             title="Reaction Order Polyhedra",
             xlabel=_rop_axis_label(model, pairs[1]...),
             ylabel=_rop_axis_label(model, pairs[2]...),
@@ -160,7 +174,7 @@ function draw_ROP(
         )
     else
         Axis(
-            f[1, 1],
+            f[1, 1];
             title="Reaction Order Polyhedra",
             xlabel=_rop_axis_label(model, pairs[1]...),
             ylabel=_rop_axis_label(model, pairs[2]...),

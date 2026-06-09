@@ -10,8 +10,8 @@ Clarabel = "61c947e1-3e6d-4ee4-985a-eec8c727bd6e"
 DataStructures = "864edb3b-99cc-5e75-8d2d-829cb0a9cfe8"
 DiffEqCallbacks = "459566f4-90b8-5000-8ac3-15dfb0a30def"
 Distributions = "31c24e10-a181-5473-b8eb-7969acd0382f"
-GraphMakie = "1ecd5474-83a3-4783-bb4f-06765db800d2"
 Graphs = "86223c79-3864-5bf0-83f7-82e725a168b6"
+GraphMakie = "1ecd5474-83a3-4783-bb4f-06765db800d2"
 ImageFiltering = "6a3955dd-da59-5b1f-98d4-e7296123deb5"
 JSON3 = "0f8b85d8-7281-11e9-16c2-39a750bddbf1"
 JuMP = "4076af6c-e467-56ae-b986-b466b2749572"
@@ -31,6 +31,9 @@ SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
 Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
 StatsBase = "2913bbd2-ae8a-5f71-8c99-4fb6c76f3a91"
 Symbolics = "0c5d862f-8b57-4792-8d23-62f2024744c7"
+
+[extensions]
+BindingAndCatalysisVisualizationExt = ["GraphMakie", "Makie"]
 
 [compat]
 CDDLib = "0.10.2"

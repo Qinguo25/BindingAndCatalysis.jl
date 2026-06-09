@@ -8,7 +8,9 @@ function _axis_indices(syms, axes)
     return Int[locate_sym(syms, ax) for ax in axes]
 end
 
-function _fixed_log_values(syms, fixed; default=0.0, input_logspace::Bool=true, axis_idxs=nothing)
+function _fixed_log_values(
+    syms, fixed; default=0.0, input_logspace::Bool=true, axis_idxs=nothing
+)
     vals = fill(Float64(default), length(syms))
     if fixed isa AbstractVector
         raw = input_logspace ? Float64.(fixed) : log10.(Float64.(fixed))
@@ -16,7 +18,11 @@ function _fixed_log_values(syms, fixed; default=0.0, input_logspace::Bool=true, 
             vals .= raw
         elseif !isnothing(axis_idxs)
             fixed_idxs = setdiff(collect(eachindex(syms)), Int.(axis_idxs))
-            length(raw) == length(fixed_idxs) || throw(ArgumentError("fixed vector length must be either $(length(syms)) for all coordinates or $(length(fixed_idxs)) for the non-axis coordinates."))
+            length(raw) == length(fixed_idxs) || throw(
+                ArgumentError(
+                    "fixed vector length must be either $(length(syms)) for all coordinates or $(length(fixed_idxs)) for the non-axis coordinates.",
+                ),
+            )
             vals[fixed_idxs] .= raw
         else
             throw(ArgumentError("fixed vector length must be $(length(syms))."))
@@ -29,14 +35,15 @@ function _fixed_log_values(syms, fixed; default=0.0, input_logspace::Bool=true, 
     return vals
 end
 
-
-
-function _axis_ranges(naxes::Int; ranges=(-3.0, 3.0), n::Integer=80, input_logspace::Bool=true)
+function _axis_ranges(
+    naxes::Int; ranges=(-3.0, 3.0), n::Integer=80, input_logspace::Bool=true
+)
     if ranges isa Tuple && length(ranges) == 2 && all(x -> x isa Real, ranges)
         lo, hi = input_logspace ? Float64.(ranges) : log10.(Float64.(ranges))
         return [range(lo, hi; length=n) for _ in 1:naxes]
     end
-    length(ranges) == naxes || throw(ArgumentError("ranges must have one range per selected axis."))
+    length(ranges) == naxes ||
+        throw(ArgumentError("ranges must have one range per selected axis."))
     return map(ranges) do rg
         if rg isa Tuple && length(rg) == 2
             lo, hi = input_logspace ? Float64.(rg) : log10.(Float64.(rg))
@@ -58,24 +65,50 @@ function _partition_color_matrix(vals; colormap=:Pastel1_9)
     return colors, cmap
 end
 
-function _draw_partition_2d(xs, ys, vals; xlabel="", ylabel="", title="", colormap=:Pastel1_9, categorical::Bool=true, colorrange=nothing)
-    fig = Figure(size=(760, 620))
-    ax = Axis(fig[1, 1], xlabel=xlabel, ylabel=ylabel, title=title)
+function _draw_partition_2d(
+    xs,
+    ys,
+    vals;
+    xlabel="",
+    ylabel="",
+    title="",
+    colormap=:Pastel1_9,
+    categorical::Bool=true,
+    colorrange=nothing,
+)
+    fig = Figure(; size=(760, 620))
+    ax = Axis(fig[1, 1]; xlabel=xlabel, ylabel=ylabel, title=title)
     if categorical
         colors, cmap = _partition_color_matrix(vals; colormap=colormap)
         heatmap!(ax, xs, ys, colors)
         isnothing(cmap) || add_rgm_colorbar!(fig, cmap)
     else
-        kwargs = isnothing(colorrange) ? (; colormap=colormap) : (; colormap=colormap, colorrange=colorrange)
+        kwargs = if isnothing(colorrange)
+            (; colormap=colormap)
+        else
+            (; colormap=colormap, colorrange=colorrange)
+        end
         hm = heatmap!(ax, xs, ys, vals; kwargs...)
         Colorbar(fig[1, 2], hm)
     end
     return fig, ax
 end
 
-function _draw_partition_3d(xs, ys, zs, vals; xlabel="", ylabel="", zlabel="", title="", colormap=:Pastel1_9, categorical::Bool=true, colorrange=nothing)
-    fig = Figure(size=(820, 720))
-    ax = Axis3(fig[1, 1], xlabel=xlabel, ylabel=ylabel, zlabel=zlabel, title=title)
+function _draw_partition_3d(
+    xs,
+    ys,
+    zs,
+    vals;
+    xlabel="",
+    ylabel="",
+    zlabel="",
+    title="",
+    colormap=:Pastel1_9,
+    categorical::Bool=true,
+    colorrange=nothing,
+)
+    fig = Figure(; size=(820, 720))
+    ax = Axis3(fig[1, 1]; xlabel=xlabel, ylabel=ylabel, zlabel=zlabel, title=title)
     coords = Point3f[]
     raw = eltype(vals)[]
     for I in CartesianIndices(vals)
@@ -84,11 +117,21 @@ function _draw_partition_3d(xs, ys, zs, vals; xlabel="", ylabel="", zlabel="", t
     end
     if categorical
         keep = findall(!=(0), raw)
-        cmap = isempty(keep) ? nothing : get_color_map(raw[keep]; colormap=colormap, appendix="#")
-        !isempty(keep) && meshscatter!(ax, coords[keep]; color=getindex.(Ref(cmap), raw[keep]), markersize=0.04)
+        cmap = if isempty(keep)
+            nothing
+        else
+            get_color_map(raw[keep]; colormap=colormap, appendix="#")
+        end
+        !isempty(keep) && meshscatter!(
+            ax, coords[keep]; color=getindex.(Ref(cmap), raw[keep]), markersize=0.04
+        )
         isnothing(cmap) || add_rgm_colorbar!(fig, cmap)
     else
-        kwargs = isnothing(colorrange) ? (; colormap=colormap) : (; colormap=colormap, colorrange=colorrange)
+        kwargs = if isnothing(colorrange)
+            (; colormap=colormap)
+        else
+            (; colormap=colormap, colorrange=colorrange)
+        end
         meshscatter!(ax, coords; color=Float64.(raw), markersize=0.04, kwargs...)
     end
     return fig, ax
@@ -99,18 +142,22 @@ function _binding_partition_value(
     logqK::AbstractVector{<:Real};
     chart::Symbol,
     value_func,
-    method::Union{Symbol,Nothing},
+    method::Union{Symbol, Nothing},
     asymptotic_only::Bool,
     tol::Float64,
 )
     if isnothing(value_func) && chart === :qK
-        return assign_regime_qK(model, logqK; input_logspace=true, asymptotic_only=asymptotic_only, return_idx=true)
+        return assign_regime_qK_index(
+            model, logqK; input=:log, asymptotic_only=asymptotic_only
+        )
     end
     logx = solve_logx_checked(model, logqK; method=method, tol=tol)
     isnothing(logx) && return nothing
     if isnothing(value_func)
         chart === :x || throw(ArgumentError("chart must be :qK or :x."))
-        return assign_regime_x(model, logx; input_logspace=true, asymptotic_only=asymptotic_only, return_idx=true)
+        return assign_regime_x_index(
+            model, logx; input=:log, asymptotic_only=asymptotic_only
+        )
     end
     return Float64(value_func(logx, logqK))
 end
@@ -123,7 +170,7 @@ function _fill_binding_partition_direct!(
     rgs;
     chart::Symbol,
     value_func,
-    method::Union{Symbol,Nothing},
+    method::Union{Symbol, Nothing},
     asymptotic_only::Bool,
     tol::Float64,
     categorical::Bool,
@@ -165,9 +212,17 @@ function _fill_binding_partition_homotopy!(
     categorical::Bool,
 )
     length(idxs) in (2, 3) || return _fill_binding_partition_direct!(
-        vals, model, fixed_logqK, idxs, rgs;
-        chart=chart, value_func=value_func, method=:homotopy,
-        asymptotic_only=asymptotic_only, tol=tol, categorical=categorical,
+        vals,
+        model,
+        fixed_logqK,
+        idxs,
+        rgs;
+        chart=chart,
+        value_func=value_func,
+        method=:homotopy,
+        asymptotic_only=asymptotic_only,
+        tol=tol,
+        categorical=categorical,
     )
     rest_shape = length(idxs) == 2 ? (length(rgs[2]),) : (length(rgs[2]), length(rgs[3]))
     Threads.@threads for rest_linear in 1:prod(rest_shape)
@@ -193,7 +248,11 @@ function _fill_binding_partition_homotopy!(
             nothing
         end
         for i in eachindex(rgs[1])
-            I = length(idxs) == 2 ? CartesianIndex(i, rest_I[1]) : CartesianIndex(i, rest_I[1], rest_I[2])
+            I = if length(idxs) == 2
+                CartesianIndex(i, rest_I[1])
+            else
+                CartesianIndex(i, rest_I[1], rest_I[2])
+            end
             logqK = copy(start_logqK)
             logqK[idxs[1]] = rgs[1][i]
             vals[I] = try
@@ -201,13 +260,20 @@ function _fill_binding_partition_homotopy!(
                     categorical ? 0 : NaN
                 else
                     logx = logxs[i]
-                    resid_ok = maximum(abs.(qK2x_residual(model, logx, logqK; input_logspace=true))) <= tol
+                    resid_ok =
+                        maximum(abs.(qK2x_residual(model, logx, logqK; input=:log))) <= tol
                     if !resid_ok
                         categorical ? 0 : NaN
                     elseif isnothing(value_func)
-                        chart === :qK ?
-                            assign_regime_qK(model, logqK; input_logspace=true, asymptotic_only=asymptotic_only, return_idx=true) :
-                            assign_regime_x(model, logx; input_logspace=true, asymptotic_only=asymptotic_only, return_idx=true)
+                        if chart === :qK
+                            assign_regime_qK_index(
+                            model, logqK; input=:log, asymptotic_only=asymptotic_only
+                        )
+                        else
+                            assign_regime_x_index(
+                            model, logx; input=:log, asymptotic_only=asymptotic_only
+                        )
+                        end
                     else
                         Float64(value_func(logx, logqK))
                     end
@@ -237,7 +303,7 @@ function plot_binding_regime_partition(
     n::Integer=100,
     chart::Symbol=:qK,
     value_func=nothing,
-    method::Union{Symbol,Nothing}=nothing,
+    method::Union{Symbol, Nothing}=nothing,
     input_logspace::Bool=true,
     colormap=:Pastel1_9,
     colorrange=nothing,
@@ -248,32 +314,72 @@ function plot_binding_regime_partition(
     syms = qK_sym(model)
     idxs = _axis_indices(syms, axes)
     rgs = _axis_ranges(length(idxs); ranges=ranges, n=n, input_logspace=input_logspace)
-    fixed_logqK = _fixed_log_values(syms, fixed; input_logspace=input_logspace, axis_idxs=idxs)
+    fixed_logqK = _fixed_log_values(
+        syms, fixed; input_logspace=input_logspace, axis_idxs=idxs
+    )
     categorical = isnothing(value_func)
     T = categorical ? Int : Float64
     vals = Array{T}(undef, length.(rgs)...)
-    find_all_regimes!(model) 
+    find_all_regimes!(model)
 
     if method === :homotopy && (chart === :x || !isnothing(value_func))
         _fill_binding_partition_homotopy!(
-            vals, model, fixed_logqK, idxs, rgs;
-            chart=chart, value_func=value_func, asymptotic_only=asymptotic_only,
-            tol=tol, categorical=categorical,
+            vals,
+            model,
+            fixed_logqK,
+            idxs,
+            rgs;
+            chart=chart,
+            value_func=value_func,
+            asymptotic_only=asymptotic_only,
+            tol=tol,
+            categorical=categorical,
         )
     else
         _fill_binding_partition_direct!(
-            vals, model, fixed_logqK, idxs, rgs;
-            chart=chart, value_func=value_func, method=method,
-            asymptotic_only=asymptotic_only, tol=tol, categorical=categorical,
+            vals,
+            model,
+            fixed_logqK,
+            idxs,
+            rgs;
+            chart=chart,
+            value_func=value_func,
+            method=method,
+            asymptotic_only=asymptotic_only,
+            tol=tol,
+            categorical=categorical,
         )
     end
 
     labels = _sym_text.(syms[idxs])
-    title = isnothing(value_func) ? "Binding regime partition ($chart)" : "Binding scalar field"
+    title =
+        isnothing(value_func) ? "Binding regime partition ($chart)" : "Binding scalar field"
     if length(idxs) == 2
-        fig, ax = _draw_partition_2d(rgs[1], rgs[2], vals; xlabel=labels[1], ylabel=labels[2], title=title, colormap=colormap, categorical=categorical, colorrange=colorrange)
+        fig, ax = _draw_partition_2d(
+            rgs[1],
+            rgs[2],
+            vals;
+            xlabel=labels[1],
+            ylabel=labels[2],
+            title=title,
+            colormap=colormap,
+            categorical=categorical,
+            colorrange=colorrange,
+        )
     elseif length(idxs) == 3
-        fig, ax = _draw_partition_3d(rgs[1], rgs[2], rgs[3], vals; xlabel=labels[1], ylabel=labels[2], zlabel=labels[3], title=title, colormap=colormap, categorical=categorical, colorrange=colorrange)
+        fig, ax = _draw_partition_3d(
+            rgs[1],
+            rgs[2],
+            rgs[3],
+            vals;
+            xlabel=labels[1],
+            ylabel=labels[2],
+            zlabel=labels[3],
+            title=title,
+            colormap=colormap,
+            categorical=categorical,
+            colorrange=colorrange,
+        )
     else
         throw(ArgumentError("Select 2 or 3 qK axes."))
     end
@@ -297,12 +403,15 @@ function plot_bnc_regime_partition(
     tol::Float64=1e-6,
     max_nullity::Integer=0,
 )
-    chart === :wKk || throw(ArgumentError("plot_bnc_regime_partition currently supports chart=:wKk."))
+    chart === :wKk ||
+        throw(ArgumentError("plot_bnc_regime_partition currently supports chart=:wKk."))
     match_regimes!(model)
     syms = wKk_sym(model)
     idxs = _axis_indices(syms, axes)
     rgs = _axis_ranges(length(idxs); ranges=ranges, n=n, input_logspace=input_logspace)
-    fixed_logwKk = _fixed_log_values(syms, fixed; input_logspace=input_logspace, axis_idxs=idxs)
+    fixed_logwKk = _fixed_log_values(
+        syms, fixed; input_logspace=input_logspace, axis_idxs=idxs
+    )
     vals = Array{Int}(undef, length.(rgs)...)
 
     Threads.@threads for linear_idx in eachindex(vals)
@@ -316,9 +425,27 @@ function plot_bnc_regime_partition(
 
     labels = _sym_text.(syms[idxs])
     if length(idxs) == 2
-        fig, ax = _draw_partition_2d(rgs[1], rgs[2], vals; xlabel=labels[1], ylabel=labels[2], title="Bnc regime partition", colormap=colormap)
+        fig, ax = _draw_partition_2d(
+            rgs[1],
+            rgs[2],
+            vals;
+            xlabel=labels[1],
+            ylabel=labels[2],
+            title="Bnc regime partition",
+            colormap=colormap,
+        )
     elseif length(idxs) == 3
-        fig, ax = _draw_partition_3d(rgs[1], rgs[2], rgs[3], vals; xlabel=labels[1], ylabel=labels[2], zlabel=labels[3], title="Bnc regime partition", colormap=colormap)
+        fig, ax = _draw_partition_3d(
+            rgs[1],
+            rgs[2],
+            rgs[3],
+            vals;
+            xlabel=labels[1],
+            ylabel=labels[2],
+            zlabel=labels[3],
+            title="Bnc regime partition",
+            colormap=colormap,
+        )
     else
         throw(ArgumentError("Select 2 or 3 wKk axes."))
     end
@@ -329,7 +456,7 @@ function _qcat_flux_at(
     model::Bnc,
     logqcat::AbstractVector{<:Real},
     logwKk::AbstractVector{<:Real};
-    method::Union{Symbol,Nothing}=nothing,
+    method::Union{Symbol, Nothing}=nothing,
     tol::Float64=1e-6,
 )
     method = _resolve_qK2x_method(model, method)
@@ -363,13 +490,12 @@ function _finite_difference_jacobian(f, x::Vector{Float64}; h::Float64=1e-4)
     return J
 end
 
-
 function _newton_refine_qcat_root(
     model::Bnc,
     seed::AbstractVector{<:Real},
     logwKk::AbstractVector{<:Real},
     bounds;
-    method::Union{Symbol,Nothing}=nothing,
+    method::Union{Symbol, Nothing}=nothing,
     tol::Float64=1e-6,
     root_tol::Float64=1e-7,
     maxiters::Integer=30,
@@ -419,7 +545,7 @@ function _is_numerically_stable_qcat_root(
     model::Bnc,
     logqcat::Vector{Float64},
     logwKk::AbstractVector{<:Real};
-    method::Union{Symbol,Nothing}=nothing,
+    method::Union{Symbol, Nothing}=nothing,
     tol::Float64=1e-6,
 )
     f_log(u) = begin
@@ -429,13 +555,11 @@ function _is_numerically_stable_qcat_root(
     J = _finite_difference_jacobian(f_log, logqcat)
     isnothing(J) && return missing
     vals = eigvals(J)
-    all(real.(vals) .< 0) ? true : false
+    return all(real.(vals) .< 0) ? true : false
 end
 
 function _push_unique_qcat_root!(
-    roots::Vector{Vector{Float64}},
-    root::Vector{Float64};
-    dedup_tol::Float64=1e-3,
+    roots::Vector{Vector{Float64}}, root::Vector{Float64}; dedup_tol::Float64=1e-3
 )
     any(r -> norm(r .- root, Inf) <= dedup_tol, roots) && return false
     push!(roots, root)
@@ -454,7 +578,7 @@ function _qcat_root_seeds(rgs, flux, feasible; max_norm_seeds::Integer=80)
 
     xs = collect(rgs[1])
     ys = collect(rgs[2])
-    for i in 1:length(xs)-1, j in 1:length(ys)-1
+    for i in 1:(length(xs) - 1), j in 1:(length(ys) - 1)
         all(feasible[i + di, j + dj] for di in 0:1, dj in 0:1) || continue
         f1s = [flux[i + di, j + dj][1] for di in 0:1, dj in 0:1]
         f2s = [flux[i + di, j + dj][2] for di in 0:1, dj in 0:1]
@@ -463,7 +587,7 @@ function _qcat_root_seeds(rgs, flux, feasible; max_norm_seeds::Integer=80)
         push!(seeds, [(xs[i] + xs[i + 1]) / 2, (ys[j] + ys[j + 1]) / 2])
     end
 
-    norms = Tuple{Float64,Int,Int}[]
+    norms = Tuple{Float64, Int, Int}[]
     for i in eachindex(xs), j in eachindex(ys)
         feasible[i, j] || continue
         push!(norms, (norm(flux[i, j], Inf), i, j))
@@ -481,7 +605,7 @@ function _numeric_fixed_points_qcat(
     rgs,
     flux,
     feasible;
-    method::Union{Symbol,Nothing}=nothing,
+    method::Union{Symbol, Nothing}=nothing,
     tol::Float64=1e-6,
     root_tol::Float64=1e-7,
 )
@@ -490,8 +614,10 @@ function _numeric_fixed_points_qcat(
     if length(rgs) == 1
         xs = collect(rgs[1])
         fvals = [feasible[i] ? flux[i][1] : NaN for i in eachindex(xs)]
-        for i in 1:length(xs)-1
-            isfinite(fvals[i]) && abs(fvals[i]) <= root_tol && _push_unique_qcat_root!(roots, [xs[i]])
+        for i in 1:(length(xs) - 1)
+            isfinite(fvals[i]) &&
+                abs(fvals[i]) <= root_tol &&
+                _push_unique_qcat_root!(roots, [xs[i]])
             (isfinite(fvals[i]) && isfinite(fvals[i + 1])) || continue
             fvals[i] == 0 && continue
             sign(fvals[i]) == sign(fvals[i + 1]) && continue
@@ -516,13 +642,7 @@ function _numeric_fixed_points_qcat(
 
     for seed in _qcat_root_seeds(rgs, flux, feasible)
         root = _newton_refine_qcat_root(
-            model,
-            seed,
-            logwKk,
-            bounds;
-            method=method,
-            tol=tol,
-            root_tol=root_tol,
+            model, seed, logwKk, bounds; method=method, tol=tol, root_tol=root_tol
         )
         isnothing(root) && continue
         _push_unique_qcat_root!(roots, root)
@@ -531,26 +651,27 @@ function _numeric_fixed_points_qcat(
     sort!(roots; by=x -> Tuple(x))
     pts = NamedTuple[]
     for (i, root) in pairs(roots)
-        stable = _is_numerically_stable_qcat_root(model, root, logwKk; method=method, tol=tol)
+        stable = _is_numerically_stable_qcat_root(
+            model, root, logwKk; method=method, tol=tol
+        )
         push!(pts, (; idx=i, logqcat=root, stable, source=:numeric))
     end
     return pts
 end
 
-function _draw_qcat_nullclines!(ax, rgs, flux, feasible; colors=(:red, :blue), linewidth::Real=2.5)
+function _draw_qcat_nullclines!(
+    ax, rgs, flux, feasible; colors=(:red, :blue), linewidth::Real=2.5
+)
     length(rgs) == 2 || return nothing
     xs = collect(rgs[1])
     ys = collect(rgs[2])
     for component in 1:2
-        field = [feasible[i, j] ? flux[i, j][component] : NaN for i in eachindex(xs), j in eachindex(ys)]
+        field = [
+            feasible[i, j] ? flux[i, j][component] : NaN for i in eachindex(xs),
+            j in eachindex(ys)
+        ]
         contour!(
-            ax,
-            xs,
-            ys,
-            field;
-            levels=[0.0],
-            color=colors[component],
-            linewidth=linewidth,
+            ax, xs, ys, field; levels=[0.0], color=colors[component], linewidth=linewidth
         )
     end
     return nothing
@@ -568,7 +689,15 @@ function _draw_qcat_fixed_points!(
         xs = [pt.logqcat[1] for pt in fixed_points]
         ys = zeros(length(xs))
         colors = [pt.stable === true ? :black : :white for pt in fixed_points]
-        scatter!(ax, xs, ys; color=colors, strokecolor=:black, strokewidth=1.5, markersize=markersize)
+        scatter!(
+            ax,
+            xs,
+            ys;
+            color=colors,
+            strokecolor=:black,
+            strokewidth=1.5,
+            markersize=markersize,
+        )
         labels && text!(
             ax,
             xs,
@@ -583,7 +712,15 @@ function _draw_qcat_fixed_points!(
         xs = [pt.logqcat[1] for pt in fixed_points]
         ys = [pt.logqcat[2] for pt in fixed_points]
         colors = [pt.stable === true ? :black : :white for pt in fixed_points]
-        scatter!(ax, xs, ys; color=colors, strokecolor=:black, strokewidth=1.5, markersize=markersize)
+        scatter!(
+            ax,
+            xs,
+            ys;
+            color=colors,
+            strokecolor=:black,
+            strokewidth=1.5,
+            markersize=markersize,
+        )
         labels && text!(
             ax,
             xs,
@@ -613,7 +750,7 @@ function plot_qcat_slice_with_flux(
     ranges=(-3.0, 3.0),
     n::Integer=45,
     chart::Symbol=:qK,
-    method::Union{Symbol,Nothing}=nothing,
+    method::Union{Symbol, Nothing}=nothing,
     input_logspace::Bool=true,
     colormap=:Pastel1_9,
     arrow_stride::Integer=5,
@@ -626,12 +763,16 @@ function plot_qcat_slice_with_flux(
 )
     method = _resolve_qK2x_method(model, method)
     cn = model.catalysis
-    cn.r_v <= 2 || throw(ArgumentError("plot_qcat_slice_with_flux currently keeps plots readable for q_cat dimension <= 2."))
+    cn.r_v <= 2 || throw(
+        ArgumentError(
+            "plot_qcat_slice_with_flux currently keeps plots readable for q_cat dimension <= 2.",
+        ),
+    )
     logwKk = _fixed_log_values(wKk_sym(model), wKk; input_logspace=input_logspace)
     qcat_syms = q_cat_sym(model)
     qK_base = zeros(Float64, model.d + model.r)
-    qK_base[cn.r_v + 1:model.d] .= logwKk[1:cn.d_w]
-    qK_base[model.d + 1:end] .= logwKk[cn.d_w + 1:cn.d_w + model.r]
+    qK_base[(cn.r_v + 1):(model.d)] .= logwKk[1:(cn.d_w)]
+    qK_base[(model.d + 1):end] .= logwKk[(cn.d_w + 1):(cn.d_w + model.r)]
     logk_old = _old_logk_from_logwKk(model, logwKk)
 
     rgs = _axis_ranges(cn.r_v; ranges=ranges, n=n, input_logspace=input_logspace)
@@ -642,15 +783,17 @@ function plot_qcat_slice_with_flux(
     Threads.@threads for linear_idx in eachindex(vals)
         I = CartesianIndices(vals)[linear_idx]
         logqK = copy(qK_base)
-        for ax_i in 1:cn.r_v
+        for ax_i in 1:(cn.r_v)
             logqK[ax_i] = rgs[ax_i][I[ax_i]]
         end
         try
             logx = solve_logx_checked(model, logqK; method=method, tol=tol)
             isnothing(logx) && error("No feasible qK point.")
-            vals[I] = chart === :x ?
-                assign_regime_x(model, logx; input_logspace=true, asymptotic_only=false, return_idx=true) :
-                assign_regime_qK(model, logqK; input_logspace=true, asymptotic_only=false, return_idx=true)
+            vals[I] = if chart === :x
+                assign_regime_x_index(model, logx; input=:log, asymptotic_only=false)
+            else
+                assign_regime_qK_index(model, logqK; input=:log, asymptotic_only=false)
+            end
             logv = cn.Π * logx .+ logk_old
             vshift = maximum(logv)
             vscaled = exp10.(logv .- vshift)
@@ -664,8 +807,8 @@ function plot_qcat_slice_with_flux(
 
     labels = _sym_text.(qcat_syms)
     if cn.r_v == 1
-        fig = Figure(size=(760, 420))
-        ax = Axis(fig[1, 1], xlabel=labels[1], ylabel="flux", title="q_cat slice")
+        fig = Figure(; size=(760, 420))
+        ax = Axis(fig[1, 1]; xlabel=labels[1], ylabel="flux", title="q_cat slice")
         xs = collect(rgs[1])
         ys = [flux[i][1] for i in eachindex(xs)]
         lines!(ax, xs, ys; color=:black)
@@ -687,10 +830,20 @@ function plot_qcat_slice_with_flux(
             label_prefix=fixed_point_label_prefix,
             markersize=12,
         )
-        return fig, ax, (; ranges=rgs, values=vals, flux=flux, feasible=feasible, fixed_points)
+        return fig,
+        ax,
+        (; ranges=rgs, values=vals, flux=flux, feasible=feasible, fixed_points)
     end
 
-    fig, ax = _draw_partition_2d(rgs[1], rgs[2], vals; xlabel=labels[1], ylabel=labels[2], title="q_cat regime and flux slice", colormap=colormap)
+    fig, ax = _draw_partition_2d(
+        rgs[1],
+        rgs[2],
+        vals;
+        xlabel=labels[1],
+        ylabel=labels[2],
+        title="q_cat regime and flux slice",
+        colormap=colormap,
+    )
     xs = collect(rgs[1])
     ys = collect(rgs[2])
     arrow_points = Point2f[]
@@ -703,8 +856,17 @@ function plot_qcat_slice_with_flux(
         push!(arrow_points, Point2f(xs[i], ys[j]))
         push!(arrow_dirs, Vec2f(f[1], f[2]) / scale * 0.15)
     end
-    arrows2d!(ax, arrow_points, arrow_dirs; color=(:black, 0.65), shaftwidth=2, tipwidth=8, tiplength=10)
-    show_nullclines && _draw_qcat_nullclines!(ax, rgs, flux, feasible; colors=nullcline_colors)
+    arrows2d!(
+        ax,
+        arrow_points,
+        arrow_dirs;
+        color=(:black, 0.65),
+        shaftwidth=2,
+        tipwidth=8,
+        tiplength=10,
+    )
+    show_nullclines &&
+        _draw_qcat_nullclines!(ax, rgs, flux, feasible; colors=nullcline_colors)
     fixed_points = _numeric_fixed_points_qcat(
         model,
         logwKk,

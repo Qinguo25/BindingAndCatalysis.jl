@@ -1,6 +1,6 @@
 function sym_direction(Bnc::Bnc, dir)::String
     rst = ""
-    for i in 1:Bnc.d
+    for i in 1:(Bnc.d)
         if dir[i] > 1e-6
             rst *= "+" * repr(Bnc.q_sym[i]) * " "
         elseif dir[i] < -1e-6
@@ -8,7 +8,7 @@ function sym_direction(Bnc::Bnc, dir)::String
         end
     end
     rst *= "; "
-    for j in 1:Bnc.r
+    for j in 1:(Bnc.r)
         if dir[j + Bnc.d] > 1e-6
             rst *= "+" * repr(Bnc.K_sym[j]) * " "
         elseif dir[j + Bnc.d] < -1e-6
@@ -46,7 +46,9 @@ end
     end
 end
 
-function format_arrow(path::AbstractVector; prefix::AbstractString="", digits::Int=3)::String
+function format_arrow(
+    path::AbstractVector; prefix::AbstractString="", digits::Int=3
+)::String
     isempty(path) && return ""
     parts = Vector{String}(undef, length(path))
     @inbounds for i in eachindex(path)
@@ -55,13 +57,15 @@ function format_arrow(path::AbstractVector; prefix::AbstractString="", digits::I
     return join(parts, " → ")
 end
 
-struct PathRow{I,P,V}
+struct PathRow{I, P, V}
     id::I
     path::P
     volume::V
 end
 
-function _normalize_rows(paths::AbstractVector{<:AbstractVector}; ids=nothing, volumes=nothing)
+function _normalize_rows(
+    paths::AbstractVector{<:AbstractVector}; ids=nothing, volumes=nothing
+)
     n = length(paths)
     ids === nothing && (ids = collect(1:n))
     volumes === nothing && (volumes = fill(nothing, n))
@@ -74,7 +78,9 @@ function _normalize_rows(paths::AbstractVector{<:AbstractVector}; ids=nothing, v
     return rows
 end
 
-function print_paths(rows::AbstractVector{<:PathRow}; prefix::AbstractString="", digits::Int=3, io::IO=stdout)
+function print_paths(
+    rows::AbstractVector{<:PathRow}; prefix::AbstractString="", digits::Int=3, io::IO=stdout
+)
     isempty(rows) && return nothing
     id_strs = [repr(r.id) for r in rows]
     path_strs = [format_arrow(r.path; prefix=prefix, digits=digits) for r in rows]
@@ -87,17 +93,37 @@ function print_paths(rows::AbstractVector{<:PathRow}; prefix::AbstractString="",
             @assert typeof(r.volume) <: Volume
             v = r.volume.mean
             e = sqrt(r.volume.var)
-            Printf.@printf(io, "Path %-*s  %-*s  Volume: %.4f ± %.4f\n", id_width, id_s, path_width, path_s, v, e)
+            Printf.@printf(
+                io,
+                "Path %-*s  %-*s  Volume: %.4f ± %.4f\n",
+                id_width,
+                id_s,
+                path_width,
+                path_s,
+                v,
+                e
+            )
         end
     end
     return nothing
 end
 
-print_paths(paths::AbstractVector{<:AbstractVector}; volumes=nothing, ids=nothing, kwargs...) =
-    print_paths(_normalize_rows(paths; volumes=volumes, ids=ids); kwargs...)
+function print_paths(
+    paths::AbstractVector{<:AbstractVector}; volumes=nothing, ids=nothing, kwargs...
+)
+    return print_paths(_normalize_rows(paths; volumes=volumes, ids=ids); kwargs...)
+end
 
-print_path(path::AbstractVector; id=nothing, volume=nothing, kwargs...) =
-    print_paths(_normalize_rows([path]; ids=id === nothing ? nothing : [id], volumes=volume === nothing ? nothing : [volume]); kwargs...)
+function print_path(path::AbstractVector; id=nothing, volume=nothing, kwargs...)
+    return print_paths(
+        _normalize_rows(
+            [path];
+            ids=id === nothing ? nothing : [id],
+            volumes=volume === nothing ? nothing : [volume],
+        );
+        kwargs...,
+    )
+end
 
 @inline function _simo_marker_vars()
     continuous, upward, downward = :→, :↑, :↓
@@ -112,15 +138,31 @@ end
     end
 end
 
-struct ExpressionPathView{P,E,B}
+struct ExpressionPathView{P, E, B}
     rgm_path::P
     expr_rows::E
     boundary_exprs::B
 end
 
 Base.length(::ExpressionPathView) = 2
-Base.getindex(v::ExpressionPathView, i::Integer) = i == 1 ? v.expr_rows : i == 2 ? v.boundary_exprs : throw(BoundsError(v, i))
-Base.iterate(v::ExpressionPathView, state::Int=1) = state == 1 ? (v.expr_rows, 2) : state == 2 ? (v.boundary_exprs, 3) : nothing
+function Base.getindex(v::ExpressionPathView, i::Integer)
+    return if i == 1
+        v.expr_rows
+    elseif i == 2
+        v.boundary_exprs
+    else
+        throw(BoundsError(v, i))
+    end
+end
+function Base.iterate(v::ExpressionPathView, state::Int=1)
+    return if state == 1
+        (v.expr_rows, 2)
+    elseif state == 2
+        (v.boundary_exprs, 3)
+    else
+        nothing
+    end
+end
 
 @inline _path_block(x) = x isa AbstractVector ? x : Any[x]
 @inline _path_line(x) = replace(sprint(show, MIME"text/plain"(), x), '\n' => ' ')
@@ -138,13 +180,20 @@ function _merged_expression_path_blocks(view::ExpressionPathView)
     blocks = NamedTuple[]
     for (k, start) in enumerate(starts)
         stop = k == length(starts) ? length(view.rgm_path) : starts[k + 1] - 1
-        push!(blocks, (
-            rgms=view.rgm_path[start:stop],
-            exprs=_path_block(view.expr_rows[start]),
-            boundary=stop < length(view.rgm_path) ? view.boundary_exprs[stop] : nothing,
-            boundary_from=stop < length(view.rgm_path) ? view.rgm_path[stop] : nothing,
-            boundary_to=stop < length(view.rgm_path) ? view.rgm_path[stop + 1] : nothing,
-        ))
+        push!(
+            blocks,
+            (
+                rgms=view.rgm_path[start:stop],
+                exprs=_path_block(view.expr_rows[start]),
+                boundary=stop < length(view.rgm_path) ? view.boundary_exprs[stop] : nothing,
+                boundary_from=stop < length(view.rgm_path) ? view.rgm_path[stop] : nothing,
+                boundary_to=if stop < length(view.rgm_path)
+                    view.rgm_path[stop + 1]
+                else
+                    nothing
+                end,
+            ),
+        )
     end
     return blocks
 end
@@ -200,11 +249,7 @@ function _path_expression_rows(
     boundary_exprs = Vector{Any}(undef, max(length(rgm_path) - 1, 0))
     for i in eachindex(boundary_exprs)
         boundary_exprs[i] = show_interface(
-            model,
-            rgm_path[i],
-            rgm_path[i + 1];
-            lhs_idx=change_qK_idx,
-            log_space=log_space,
+            model, rgm_path[i], rgm_path[i + 1]; lhs_idx=change_qK_idx, log_space=log_space
         )
     end
 
@@ -226,7 +271,11 @@ function get_expression_path(
         observe_x_idx;
         log_space=log_space,
     )
-    return scalar_observe ? (first.(expr_rows), boundary_exprs) : (expr_rows, boundary_exprs)
+    return if scalar_observe
+        (first.(expr_rows), boundary_exprs)
+    else
+        (expr_rows, boundary_exprs)
+    end
 end
 
 function get_expression_path(grh::SIMOPaths, pth; observe_x=nothing, kwargs...)
@@ -244,14 +293,21 @@ end
 function show_expression_path(grh::SIMOPaths, pth; observe_x=nothing, kwargs...)
     pth_idx = get_idx(grh, pth)
     rgm_path = get_path(grh, pth_idx; return_idx=true)
-    expr_rows, boundary_exprs = get_expression_path(grh, pth; observe_x=observe_x, kwargs...)
+    expr_rows, boundary_exprs = get_expression_path(
+        grh, pth; observe_x=observe_x, kwargs...
+    )
     return ExpressionPathView(rgm_path, expr_rows, boundary_exprs)
 end
 
 function show_expression_path(model::Bnc, rgm_path, change_qK_idx, observe_x; kwargs...)
-    expr_rows, boundary_exprs = get_expression_path(model, rgm_path, change_qK_idx; observe_x=observe_x, kwargs...)
-    return ExpressionPathView(Int.(get_idx.(Ref(model), rgm_path)), expr_rows, boundary_exprs)
+    expr_rows, boundary_exprs = get_expression_path(
+        model, rgm_path, change_qK_idx; observe_x=observe_x, kwargs...
+    )
+    return ExpressionPathView(
+        Int.(get_idx.(Ref(model), rgm_path)), expr_rows, boundary_exprs
+    )
 end
 
-show_expression_path(grh::SIMOPaths, pth_idx, observe_x; kwargs...) =
-    show_expression_path(grh, pth_idx; observe_x=observe_x, kwargs...)
+function show_expression_path(grh::SIMOPaths, pth_idx, observe_x; kwargs...)
+    return show_expression_path(grh, pth_idx; observe_x=observe_x, kwargs...)
+end

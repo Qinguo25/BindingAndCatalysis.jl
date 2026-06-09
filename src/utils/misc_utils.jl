@@ -10,7 +10,7 @@ function arr_to_vector(arr)
     elseif d == 1
         return [x for x in arr]
     else
-        return [arr_to_vector(s) for s in eachslice(arr, dims=1)]
+        return [arr_to_vector(s) for s in eachslice(arr; dims=1)]
     end
 end
 
@@ -20,7 +20,7 @@ end
 Pretty-print an array in JSON format for inspection.
 """
 function pythonprint(arr)
-    txt = JSON3.write(arr_to_vector(arr), pretty=true, indent=4, escape_unicode=false)
+    txt = JSON3.write(arr_to_vector(arr); pretty=true, indent=4, escape_unicode=false)
     println(txt)
     return nothing
 end
@@ -30,7 +30,8 @@ end
 
 Convert a DifferentialEquations solution into time and state arrays.
 """
-function _ode_solution_wrapper(solution::ODESolution)::Tuple{Vector{Float64}, Vector{Vector{Float64}}}
+function _ode_solution_wrapper(
+    solution::ODESolution
+)::Tuple{Vector{Float64}, Vector{Vector{Float64}}}
     return solution.t, solution.u
 end
-

@@ -23,14 +23,13 @@ using StatsBase
 using Statistics: quantile
 
 import Base: summary, show
-import CDDLib
-import JSON3
-import Printf
-import Random
+using CDDLib: CDDLib
+using JSON3: JSON3
+using Printf: Printf
+using Random: Random
 
 # Latex rendering is used by symbolic display helpers.
 using Latexify
-
 
 #========================================================================================#
 # Internal paths and exact numeric types
@@ -46,7 +45,6 @@ _include_mathcore(path...) = include(joinpath(_MATHCORE_DIR, path...))
 _include_src("ExactTypes.jl")
 using .ExactTypes: ExactLogExpr, exact_log10, exact_log10_ratio
 
-
 #========================================================================================#
 # Public API exports
 #========================================================================================#
@@ -61,13 +59,11 @@ export HalfSpace, HyperPlane, intersect, eliminate, detecthlinearity!, removehre
 export dim, fulldim, hashyperplanes, hyperplanes, allhalfspaces, issubset
 export get_Lcat
 
-
 #========================================================================================#
 # Core shared types
 #========================================================================================#
 
 _include_src("volume_calc.jl")
-
 
 #========================================================================================#
 # Numerical integration cache
@@ -92,10 +88,9 @@ mutable struct IntegrationHelper
     _LN_bottom_cols::Vector{Int} # the corresponding column number in N for _LN_bottom_idx
     _LN_top_diag_idx::Vector{Int} # one perturbation nzval index per top row, chosen to preserve nonsingularity
 
-    _LN_sparse::SparseMatrixCSC{Float64,Int} # cached Float64.(sparse([L; N])) for numerical integration
-    _LN_lu::Union{SparseArrays.UMFPACK.UmfpackLU{Float64,Int}, Nothing} # LU decomposition of _LNt_sparse, used for fast calculation
+    _LN_sparse::SparseMatrixCSC{Float64, Int} # cached Float64.(sparse([L; N])) for numerical integration
+    _LN_lu::Union{SparseArrays.UMFPACK.UmfpackLU{Float64, Int}, Nothing} # LU decomposition of _LNt_sparse, used for fast calculation
 end
-
 
 @inline function calc_integration_helper(L, N)
     n = size(L, 2)
@@ -106,12 +101,14 @@ end
 
     _LN_sparse = Float64.(sparse([L; N]))
     (_LN_top_rows, _LN_top_cols, _LN_top_idx) = rowmask_indices(_LN_sparse, 1, d)
-    (_LN_bottom_rows, _LN_bottom_cols, _LN_bottom_idx) = rowmask_indices(_LN_sparse, d + 1, n)
+    (_LN_bottom_rows, _LN_bottom_cols, _LN_bottom_idx) = rowmask_indices(
+        _LN_sparse, d + 1, n
+    )
     _LN_top_diag_idx = diag_indices(_LN_sparse, d)
 
     _LN_lu = rank(_LN_sparse) == n ? lu(_LN_sparse) : nothing
 
-    IntegrationHelper(
+    return IntegrationHelper(
         _anchor_log_x,
         _anchor_log_qK,
         _LN_top_idx,
@@ -125,7 +122,6 @@ end
         _LN_lu,
     )
 end
-
 
 #========================================================================================#
 # Abstract interfaces
@@ -142,13 +138,12 @@ abstract type AbstractHelper end
 
 _include_src("utils", "HyperPlanes.jl")
 
-
 #========================================================================================#
 # Regime containers
 #========================================================================================#
 
-struct Regimes{T,R<:AbstractRegime,A<:AbstractArray{R}}
-    regimes_perm_dict::Dict{Vector{T},Int}
+struct Regimes{T, R <: AbstractRegime, A <: AbstractArray{R}}
+    regimes_perm_dict::Dict{Vector{T}, Int}
     regimes_data::A
 end
 
@@ -166,13 +161,11 @@ function Base.propertynames(::Regimes, private::Bool=false)
     return private ? (names..., :vertices_perm_dict, :vertices_data) : names
 end
 
-
 const BindAffineMatrix = Union{
-    SparseMatrixCSC{Float64,Int},  # Keep this for now as singular regimes's C
-    SparseMatrixCSC{Rational{Int},Int},
+    SparseMatrixCSC{Float64, Int},  # Keep this for now as singular regimes's C
+    SparseMatrixCSC{Rational{Int}, Int},
 }
 const BindConditionBiasVector = Union{Vector{Float64}, Vector{ExactLogExpr}}
-
 
 #========================================================================================#
 # Binding regimes
@@ -184,9 +177,9 @@ const BindConditionBiasVector = Union{Vector{Float64}, Vector{ExactLogExpr}}
 Representation of a binding regime in a binding network, including cached
 linear maps and polyhedral conditions.
 """
-mutable struct BindRegime{F,T} <: AbstractRegime
+mutable struct BindRegime{F, T} <: AbstractRegime
     #--- Parent Bnc model reference ---
-    network::Union{AbstractBnc,Nothing} # Reference to the parent Bnc model
+    network::Union{AbstractBnc, Nothing} # Reference to the parent Bnc model
 
     # --- Initial / Identifying Properties ---
     perm::Vector{T} # The regime vector
@@ -204,34 +197,42 @@ mutable struct BindRegime{F,T} <: AbstractRegime
     # --- Expensive Calculated Properties ---
     nullity::T
     H::Union{BindAffineMatrix, Nothing}
-    H0::Union{Vector{F}, Nothing} 
+    H0::Union{Vector{F}, Nothing}
     C_qK::Union{BindAffineMatrix, Nothing}
     C0_qK::Union{BindConditionBiasVector, Nothing}
 
     volume::Union{Volume, Nothing}
 
-    function BindRegime(; network=nothing, perm, idx, is_asymptotic, nullity::T) where {T<:Integer}
-        return new{ExactLogExpr,T}(
+    function BindRegime(;
+        network=nothing, perm, idx, is_asymptotic, nullity::T
+    ) where {T <: Integer}
+        return new{ExactLogExpr, T}(
             network,
             perm,
             idx,
             is_asymptotic,
-            nothing, nothing, nothing, nothing, nothing, nothing, # P, P0, M, M0, C_x, C0_x
+            nothing,
+            nothing,
+            nothing,
+            nothing,
+            nothing,
+            nothing, # P, P0, M, M0, C_x, C0_x
             nullity,
-            nothing, nothing, # H, H0
-            nothing, nothing, # C_qK,C0_qK
+            nothing,
+            nothing, # H, H0
+            nothing,
+            nothing, # C_qK,C0_qK
             nothing,
         )
     end
 end
 
-
 #========================================================================================#
 # Catalysis regimes
 #========================================================================================#
 
-mutable struct CatalysisRegime{F<:Real} <:AbstractRegime
-    network::Union{AbstractBnc,Nothing} # Reference to the parent Bnc model
+mutable struct CatalysisRegime{F <: Real} <: AbstractRegime
+    network::Union{AbstractBnc, Nothing} # Reference to the parent Bnc model
     perm::Vector{Int} # The regime vector
     idx::Int # Index of the regime in the parent Regimes container
     is_asymptotic::Bool # Whether this catalysis regime is asymptotic or not.
@@ -239,21 +240,25 @@ mutable struct CatalysisRegime{F<:Real} <:AbstractRegime
     #--- Basic Properties ---
     P_pos_neg::Union{SparseMatrixCSC{Int, Int}, Nothing} # the vcat of P_pos and P_neg
     P0_pos_neg::Union{Vector{F}, Nothing} # the vcat of P0_pos and P0_neg
-    
-    P:: Union{SparseMatrixCSC{Int, Int}, Nothing} # P_pos - P_neg
+
+    P::Union{SparseMatrixCSC{Int, Int}, Nothing} # P_pos - P_neg
     P0::Union{Vector{F}, Nothing} # P0_pos - P0_neg
     C::Union{SparseMatrixCSC{Int, Int}, Nothing} # the vcat of C_pos and C_neg
     C0::Union{Vector{F}, Nothing} # the vcat of C0_pos and C0_neg
 
-    CΠ:: Union{SparseMatrixCSC{Int, Int}, Nothing} # the vcat of C_pos*Π and C_neg*Π
+    CΠ::Union{SparseMatrixCSC{Int, Int}, Nothing} # the vcat of C_pos*Π and C_neg*Π
     # [CΠH C ] \log( (q_{cat},w,K), k) + C_0 + CΠH_0 >0 is the condition for catalysis regime
     # [CΠH*_{w,K} -CΠH*_{̃k}P +C] \log((w,K),k) + C_0 + CΠH*_0 >0 is the consistency condition for fixed point.
 
-    PΠ:: Union{SparseMatrixCSC{Int, Int}, Nothing} # the vcat of (P_pos - P_neg)*Π
+    PΠ::Union{SparseMatrixCSC{Int, Int}, Nothing} # the vcat of (P_pos - P_neg)*Π
     # Act as N for catalysis regime.
 
-    function CatalysisRegime(; network=nothing, perm, idx, is_asymptotic) 
-        return new{ExactLogExpr}(network, perm, idx, is_asymptotic,
+    function CatalysisRegime(; network=nothing, perm, idx, is_asymptotic)
+        return new{ExactLogExpr}(
+            network,
+            perm,
+            idx,
+            is_asymptotic,
             nothing, # P_pos_neg
             nothing, # P0_pos_neg
             nothing, # P
@@ -261,11 +266,10 @@ mutable struct CatalysisRegime{F<:Real} <:AbstractRegime
             nothing, # C
             nothing, # C0
             nothing, # CΠ
-            nothing  # PΠ
+            nothing,  # PΠ
         )
     end
 end
-
 
 #========================================================================================#
 # Matched binding-catalysis regimes
@@ -274,10 +278,9 @@ end
 # x/xk conditions live on the binding and catalysis regime objects. BncRegime
 # caches only the reduced steady-state maps and conditions in qKk/wKk bases.
 
-mutable struct BncRegime <:AbstractRegime
+mutable struct BncRegime <: AbstractRegime
     bind_rgm::BindRegime
     catalysis_rgm::CatalysisRegime
-
 
     # Fixed point information:
     H_bd::Union{SparseMatrixCSC{Float64, Int}, Nothing}
@@ -288,23 +291,21 @@ mutable struct BncRegime <:AbstractRegime
     H_inner::Union{AbstractMatrix{<:Real}, Nothing}
     H0_inner::Union{AbstractVector{<:Real}, Nothing}
 
-    nlt::Int  
+    nlt::Int
     H::Union{AbstractMatrix{<:Real}, Nothing} # x's reaction order to w,K,k
     H0::Union{AbstractVector{<:Real}, Nothing} # Intersection
-
 
     # Conditions
     ## x, k base
     # Directly extract from bind_rgm and catalysis_rgm, no need to calculate separately.
-    
+
     # bind_conds: bind_rgm.C_x, bind_rgm.C0_x,
     # Catalysis_conds: catalysis_rgm.
-
 
     ## q_cat, K, k base
     # Binding could directly extract from bind_rgm, catalysis needs to calculate seperately
     # If binding is singular, we need to Combine with M,M0 to do the elimination again
-    
+
     C_qKk_cat::Union{AbstractMatrix{<:Real}, Nothing}
     C0_qKk_cat::Union{AbstractVector{<:Real}, Nothing}
     nlt_qKk_cat::Int
@@ -334,9 +335,7 @@ mutable struct BncRegime <:AbstractRegime
             true, # is_feasible
             nothing, # H_inner
             nothing, # H0_inner
-
             -1, # nlt
-
             nothing,
             nothing,
             nothing,
@@ -350,7 +349,6 @@ mutable struct BncRegime <:AbstractRegime
     end
 end
 
-
 #========================================================================================#
 # Catalysis network data
 #========================================================================================#
@@ -361,19 +359,19 @@ end
 Container for catalysis network metadata, including stoichiometric changes,
 reaction orders, and rate constants.
 """
-mutable struct CatalysisData <:AbstractBnc
+mutable struct CatalysisData <: AbstractBnc
     # Parameters for the catalysis networks
     bn::AbstractBnc # reference to the parent Bnc model, used for validation and consistency checks
 
     # Catalysis determining Matrix
-    Γ::SparseMatrixCSC{Int,Int} # catalysis change in qK space, each column is a reaction
-    Π::SparseMatrixCSC{Int,Int} # catalysis index and coefficients, rate will be vⱼ=k_oldⱼ∏xᵢ^Π_{j,i}, denote what species catalysis the reaction.
-    F::SparseMatrixCSC{Rational{Int},Int} # affine map from independent log k to old flux log k: log k_old = F log k + F0
+    Γ::SparseMatrixCSC{Int, Int} # catalysis change in qK space, each column is a reaction
+    Π::SparseMatrixCSC{Int, Int} # catalysis index and coefficients, rate will be vⱼ=k_oldⱼ∏xᵢ^Π_{j,i}, denote what species catalysis the reaction.
+    F::SparseMatrixCSC{Rational{Int}, Int} # affine map from independent log k to old flux log k: log k_old = F log k + F0
     F0::Vector{ExactLogExpr}
 
     # Derived matrices 
-    S::SparseMatrixCSC{Int,Int} # the full row rank version of Γ
-    L_Γ::SparseMatrixCSC{Int,Int} # the left null space of Γ such that L_Γ^⊤ * Γ = 0
+    S::SparseMatrixCSC{Int, Int} # the full row rank version of Γ
+    L_Γ::SparseMatrixCSC{Int, Int} # the left null space of Γ such that L_Γ^⊤ * Γ = 0
 
     # Derived parameters
     r_v::Int # number of independent catalysis reactions, L_w = L[r_v+1:end, :]
@@ -386,29 +384,51 @@ mutable struct CatalysisData <:AbstractBnc
     k_sym::Vector{Num}
     v_sym::Vector{Num}
 
-
     # helper parameters for fast calculation, used for fast calculation of H and C_qK
-    _S_sparse::SparseMatrixCSC{Float64,Int} # sparse version of Γ, used for fast calculation
-    _Π_sparse::SparseMatrixCSC{Float64,Int}  # sparse version of Π, used for fast calculation
+    _S_sparse::SparseMatrixCSC{Float64, Int} # sparse version of Γ, used for fast calculation
+    _Π_sparse::SparseMatrixCSC{Float64, Int}  # sparse version of Π, used for fast calculation
 
     #Catalysis regimes
-    S_pos_neg::SparseMatrixCSC{Int,Int} # the vcat of positive and negative parts of S
+    S_pos_neg::SparseMatrixCSC{Int, Int} # the vcat of positive and negative parts of S
     _S_helper::AbstractHelper
 
-    CatalysisRegimes::Union{Regimes,Nothing} # Using Any for placeholder for CatalysisRegimes
-    vertices_graph::Union{Any,Nothing} # legacy field name for the regime graph
+    CatalysisRegimes::Union{Regimes, Nothing} # Using Any for placeholder for CatalysisRegimes
+    vertices_graph::Union{Any, Nothing} # legacy field name for the regime graph
 
-    function CatalysisData(bn, Γ, Π, k_sym, w_sym=nothing, v_sym=nothing, F=nothing, F0=nothing)
+    function CatalysisData(
+        bn, Γ, Π, k_sym, w_sym=nothing, v_sym=nothing, F=nothing, F0=nothing
+    )
         Γ = sparse(Γ)
         Π = sparse(Π)
         d_wv, nv = size(Γ)
         n = size(Π, 2)
-        F = isnothing(F) ? Matrix{Rational{Int}}(I, nv, nv) : rationalize.(Int, Float64.(F); tol=1e-10)
-        size(F, 1) == nv || throw(ArgumentError("F must have one row per catalysis flux/rate constant: expected $nv, got $(size(F, 1))."))
+        F = if isnothing(F)
+            Matrix{Rational{Int}}(I, nv, nv)
+        else
+            rationalize.(Int, Float64.(F); tol=1e-10)
+        end
+        size(F, 1) == nv || throw(
+            ArgumentError(
+                "F must have one row per catalysis flux/rate constant: expected $nv, got $(size(F, 1)).",
+            ),
+        )
         nk = size(F, 2)
-        F0 = isnothing(F0) ? fill(zero(ExactLogExpr), nv) :
-            [x isa ExactLogExpr ? x : ExactLogExpr(rationalize(Int, Float64(x); tol=1e-10)) for x in vec(F0)]
-        length(F0) == nv || throw(ArgumentError("F0 length must match the number of catalysis fluxes/rate constants: expected $nv, got $(length(F0))."))
+        F0 = if isnothing(F0)
+            fill(zero(ExactLogExpr), nv)
+        else
+            [
+                if x isa ExactLogExpr
+                    x
+                else
+                    ExactLogExpr(rationalize(Int, Float64(x); tol=1e-10))
+                end for x in vec(F0)
+            ]
+        end
+        length(F0) == nv || throw(
+            ArgumentError(
+                "F0 length must match the number of catalysis fluxes/rate constants: expected $nv, got $(length(F0)).",
+            ),
+        )
         F = sparse(F)
         v_sym = isnothing(v_sym) ? Symbolics.variables(:v, 1:nv) : name_converter(v_sym)
         # Validation
@@ -437,15 +457,30 @@ mutable struct CatalysisData <:AbstractBnc
         S_pos_neg = S_to_S_pos_neg(S)
         _S_helper = _build_matrix_helper(S_pos_neg)
 
-        new(
-            bn, Γ, Π, F, F0, S, L_Γ,
-            r_v, nv, nk, d_w, a_w,
-            k_sym, v_sym, _S_sparse, _Π_sparse,
-            S_pos_neg, _S_helper, nothing, nothing,
+        return new(
+            bn,
+            Γ,
+            Π,
+            F,
+            F0,
+            S,
+            L_Γ,
+            r_v,
+            nv,
+            nk,
+            d_w,
+            a_w,
+            k_sym,
+            v_sym,
+            _S_sparse,
+            _Π_sparse,
+            S_pos_neg,
+            _S_helper,
+            nothing,
+            nothing,
         )
     end
 end
-
 
 #========================================================================================#
 # Binding network model
@@ -459,8 +494,8 @@ structures for regime analysis.
 """
 mutable struct Bnc{T} <: AbstractBnc # T is the int type used for regime indices.
     # Binding network matrices
-    N::SparseMatrixCSC{Int,Int} # binding reaction matrix
-    L::SparseMatrixCSC{Int,Int} # conservation law matrix
+    N::SparseMatrixCSC{Int, Int} # binding reaction matrix
+    L::SparseMatrixCSC{Int, Int} # conservation law matrix
 
     r::Int # number of reactions
     n::Int # number of variables
@@ -473,27 +508,27 @@ mutable struct Bnc{T} <: AbstractBnc # T is the int type used for regime indices
     K_sym::Vector{Num}
 
     # Catalysis network data
-    catalysis::Union{Any,Nothing} # Using Any for placeholder for CatalysisData
+    catalysis::Union{Any, Nothing} # Using Any for placeholder for CatalysisData
 
     # Cached regime data
     BindRegimes::Union{Regimes, Nothing}
     BncRegimes::Union{Any, Nothing}
 
     # Graph and affine propagation caches
-    vertices_graph::Union{Any,Nothing} # legacy field name for the regime graph
-    _vertices_Nρ_inv_dict::Union{Any,Nothing} # legacy field name for regime affine caches
+    vertices_graph::Union{Any, Nothing} # legacy field name for the regime graph
+    _vertices_Nρ_inv_dict::Union{Any, Nothing} # legacy field name for regime affine caches
     _regimes_affine_ready::Bool
     _regimes_affine_lock::ReentrantLock
     _integration_helper_lock::ReentrantLock
+    _diagnostics::Dict{Symbol, Any}
 
     # Numeric helpers
     direction::Int8 # direction of the binding reactions, determine the ray direction for invertible regime, calculated by sign of det[L;N]
-    IntegrationHelper::Union{IntegrationHelper,Nothing}
+    IntegrationHelper::Union{IntegrationHelper, Nothing}
     _L_helper::AbstractHelper # MatrixHelper
 
-
     # Inner constructor
-    function Bnc{T}(N, L, x_sym, q_sym, K_sym, catalysis) where {T<:Integer}
+    function Bnc{T}(N, L, x_sym, q_sym, K_sym, catalysis) where {T <: Integer}
         N_sparse = sparse(N)
         L_sparse = sparse(L)
         N_dense = Matrix{Int}(N)
@@ -503,7 +538,7 @@ mutable struct Bnc{T} <: AbstractBnc # T is the int type used for regime indices
         r, n = size(N_dense)
         d, n_L = size(L_dense)
         # Validate dimensions for binding network, check if its legal.
-        let 
+        let
             @assert n == d + r "d+r is not equal to n"
             @assert n_L == n "L must have the same number of columns as N"
             @assert length(x_sym) == n "x_sym length must equal number of species (n)"
@@ -516,9 +551,16 @@ mutable struct Bnc{T} <: AbstractBnc # T is the int type used for regime indices
         direction = sign(det(M))
 
         _L_helper = _build_matrix_helper(L)
-        new(
-            N_sparse, L_sparse, r, n, d,
-            x_sym, q_sym, K_sym, catalysis,
+        return new(
+            N_sparse,
+            L_sparse,
+            r,
+            n,
+            d,
+            x_sym,
+            q_sym,
+            K_sym,
+            catalysis,
             nothing,                         # BindRegimes
             nothing,                         # BncRegimes
             nothing,                         # vertices_graph, legacy field name
@@ -526,6 +568,7 @@ mutable struct Bnc{T} <: AbstractBnc # T is the int type used for regime indices
             false,                           # _regimes_affine_ready
             ReentrantLock(),                 # _regimes_affine_lock
             ReentrantLock(),                 # _integration_helper_lock
+            Dict{Symbol, Any}(),             # _diagnostics
             direction,
             nothing,
             _L_helper,
@@ -549,6 +592,7 @@ _include_mathcore("graph_propagate.jl")
 
 _include_src("helperfunctions.jl")
 _include_src("qK_x_mapping.jl")
+_include_src("catalysis_dynamics.jl")
 _include_src("regime_assign.jl")
 _include_src("volume_calc_impl.jl")
 _include_src("numeric.jl")
@@ -558,6 +602,7 @@ _include_src("RegimeCore.jl")
 _include_src("BindingRegime.jl")
 _include_src("CatalysisRegime.jl")
 _include_src("BncRegime.jl")
+_include_src("BncControl.jl")
 
 # Regime graph APIs
 _include_src("BindingRegimeGraph.jl")
@@ -567,6 +612,7 @@ _include_src("BncRegimeGraph.jl")
 # Higher-level workflows, rendering, and compatibility
 _include_src("SIMO.jl")
 _include_src("symbolics.jl")
+_include_src("RegimeConstraints.jl")
 _include_src("visualize.jl")
 _include_src("old_api.jl")
 

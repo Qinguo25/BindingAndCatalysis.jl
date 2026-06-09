@@ -7,12 +7,13 @@ Build a directed graph from rows of `C`: positive entries are sources, negative
 entries are sinks, and every source in a row points to every sink in that row.
 
 Returns a named tuple with:
-- `chainlength`: longest directed path length in edge count, or `Inf` if cyclic.
-- `graph`: the constructed `SimpleDiGraph`.
-- `source_only`, `sink_only`, `both`: dimensions grouped by their role across all rows.
-- `sources`, `sinks`: all dimensions that ever appear as source/sink.
+
+  - `chainlength`: longest directed path length in edge count, or `Inf` if cyclic.
+  - `graph`: the constructed `SimpleDiGraph`.
+  - `source_only`, `sink_only`, `both`: dimensions grouped by their role across all rows.
+  - `sources`, `sinks`: all dimensions that ever appear as source/sink.
 """
-function calc_chainlength(C::AbstractMatrix{<:Real};eps = 1e-5)
+function calc_chainlength(C::AbstractMatrix{<:Real}; eps=1e-5)
     n_dim = size(C, 2)
     g = SimpleDiGraph(n_dim)
     sources = Set{Int}()
@@ -56,17 +57,8 @@ function calc_chainlength(C::AbstractMatrix{<:Real};eps = 1e-5)
     sink_only = setdiff(sinks, sources)
     both = intersect(sources, sinks)
 
-    return (;
-        chainlength,
-        graph=g,
-        sources,
-        sinks,
-        source_only,
-        sink_only,
-        both,
-    )
+    return (; chainlength, graph=g, sources, sinks, source_only, sink_only, both)
 end
-
 
 #=====================================================================================#
 # Statistical functions and utilities
@@ -85,9 +77,7 @@ end
 
 # 把标量或逐维向量参数整理成 Float64 向量。
 function _dimension_vector(
-    value::Union{Real,AbstractVector{<:Real}},
-    n_dim::Integer,
-    name::AbstractString,
+    value::Union{Real, AbstractVector{<:Real}}, n_dim::Integer, name::AbstractString
 )
     if value isa Real
         return fill(Float64(value), n_dim)
@@ -105,10 +95,10 @@ end
 function _prepare_sampling_config(
     sampler::Symbol, # should be :gaussian or :uniform_box
     n_dim::Integer;
-    μ::Union{Nothing,AbstractVector{<:Real}}=nothing,
+    μ::Union{Nothing, AbstractVector{<:Real}}=nothing,
     σ::Float64=1.0,
-    log_lower::Union{Real,AbstractVector{<:Real}}=-6.0,
-    log_upper::Union{Real,AbstractVector{<:Real}}=6.0,
+    log_lower::Union{Real, AbstractVector{<:Real}}=-6.0,
+    log_upper::Union{Real, AbstractVector{<:Real}}=6.0,
     μ_length_message::AbstractString="length(μ) must equal the sample dimension",
 )
     μ64 = fill(0.0, n_dim)
@@ -134,16 +124,8 @@ function _prepare_sampling_config(
         error("sampler must be :gaussian or :uniform_box, got $sampler")
     end
 
-    return (;
-        sampler,
-        μ64,
-        σ,
-        log_lower=log_lower64,
-        box_width=box_width64,
-        sample_weight,
-    )
+    return (; sampler, μ64, σ, log_lower=log_lower64, box_width=box_width64, sample_weight)
 end
-
 
 # 按采样配置，往向量 x 里写入一个随机样本。
 @inline function _draw_sample!(x::AbstractVector{Float64}, rng, sampling)
@@ -159,24 +141,19 @@ end
     return x
 end
 
-
-
 #=====================================================================================#
 # Volume calculation for direct C,C0
 #=====================================================================================#
 
 # 检查一个点是否满足线性不等式约束。
 @inline function _satisfies_constraints(
-    y::AbstractVector{<:Real},
-    b::AbstractVector{<:Real},
-    tol::Float64,
+    y::AbstractVector{<:Real}, b::AbstractVector{<:Real}, tol::Float64
 )
     @inbounds for k in eachindex(y, b)
         y[k] + b[k] >= -tol || return false
     end
     return true
 end
-
 
 # 把各线程本地计数器累加到全局计数器里，然后把线程局部计数清零。
 function _flush_thread_counts!(
@@ -200,8 +177,8 @@ function _update_volume_stats!(
     active_ids::AbstractVector{<:Integer},
     total_N::Int,
     z::Float64,
-    rel_tol::Float64,
-    abs_tol::Float64,
+    reltol::Float64,
+    abstol::Float64,
     sample_weight::Float64,
 )
     new_active = Int[]
@@ -214,7 +191,7 @@ function _update_volume_stats!(
         stats[idx] = Volume(scaled_center, scaled_margin^2)
 
         rel_error = scaled_center == 0.0 ? Inf : (scaled_margin / scaled_center)
-        if rel_error > rel_tol && scaled_margin > abs_tol
+        if rel_error > reltol && scaled_margin > abstol
             push!(new_active, idx)
         end
     end
@@ -226,19 +203,19 @@ function _estimate_volumes(
     accumulate!,
     n_regimes::Int,
     n_dim::Int;
-    sampler::Symbol = :gaussian,
-    μ::Union{Nothing,AbstractVector{<:Real}} = nothing,
-    σ::Float64 = 1.0,
-    log_lower::Union{Real,AbstractVector{<:Real}} = -6.0,
-    log_upper::Union{Real,AbstractVector{<:Real}} = 6.0,
-    confidence_level::Float64 = 0.95,
-    batch_size::Int = 100_000,
-    abs_tol::Float64 = 1.0e-8,
-    rel_tol::Float64 = 0.005,
-    time_limit::Float64 = 120.0,
-    show_progress::Bool = false,
-    rng_seed::Integer = 0x12345678,
-    μ_length_message::AbstractString = "length(μ) must equal the sample dimension",
+    sampler::Symbol=:gaussian,
+    μ::Union{Nothing, AbstractVector{<:Real}}=nothing,
+    σ::Float64=1.0,
+    log_lower::Union{Real, AbstractVector{<:Real}}=-6.0,
+    log_upper::Union{Real, AbstractVector{<:Real}}=6.0,
+    confidence_level::Float64=0.95,
+    batch_size::Int=100_000,
+    abstol::Float64=1.0e-8,
+    reltol::Float64=0.005,
+    time_limit::Float64=120.0,
+    show_progress::Bool=false,
+    rng_seed::Integer=0x12345678,
+    μ_length_message::AbstractString="length(μ) must equal the sample dimension",
 )::Vector{Volume}
     n_regimes == 0 && return Volume[]
 
@@ -264,7 +241,7 @@ function _estimate_volumes(
     thread_rng = [Random.MersenneTwister(seed + tid) for tid in 1:n_slots]
     thread_x = [Vector{Float64}(undef, n_dim) for _ in 1:n_slots]
 
-    p = show_progress ? Progress(n_regimes, desc="Calculating...", dt=1.0) : nothing
+    p = show_progress ? Progress(n_regimes; desc="Calculating...", dt=1.0) : nothing
     start_time = time()
 
     while true
@@ -287,12 +264,12 @@ function _estimate_volumes(
             active_ids,
             total_N,
             z,
-            rel_tol,
-            abs_tol,
+            reltol,
+            abstol,
             sampling.sample_weight,
         )
 
-        show_progress && next!(p, step = length(active_ids) - length(new_active))
+        show_progress && next!(p; step=length(active_ids) - length(new_active))
         active_ids = new_active
     end
 
@@ -300,12 +277,11 @@ function _estimate_volumes(
     return stats
 end
 
-
 # 把一组 (C, C0) 约束整理成后续 Monte Carlo 可直接使用的形式。
 function _prepare_hrep_volume_problem(
     Cs::AbstractVector{<:AbstractMatrix{<:Real}},
     C0s::AbstractVector{<:AbstractVector{<:Real}};
-    rebase_mat::Union{AbstractMatrix{<:Real},Nothing}=nothing,
+    rebase_mat::Union{AbstractMatrix{<:Real}, Nothing}=nothing,
 )
     @assert length(Cs) == length(C0s) "Cs and C0s must have same length"
     n_regimes = length(Cs)
@@ -317,12 +293,11 @@ function _prepare_hrep_volume_problem(
         @assert size(Cs[i], 1) == length(C0s[i]) "size(Cs[$i],1) must match length(C0s[$i])"
     end
 
-    rebased_Cs =
-        if isnothing(rebase_mat)
-            Cs
-        else
-            [Cs[i] * rebase_mat for i in eachindex(Cs)]
-        end
+    rebased_Cs = if isnothing(rebase_mat)
+        Cs
+    else
+        [Cs[i] * rebase_mat for i in eachindex(Cs)]
+    end
 
     b64 = Vector{Vector{Float64}}(undef, n_regimes)
     for i in eachindex(C0s)
@@ -333,7 +308,6 @@ function _prepare_hrep_volume_problem(
     return (; Cs=rebased_Cs, b64, n_dim)
 end
 
-
 # 把 [(C, C0), (C, C0), ...] 这种结构拆成 Cs 和 C0s 两个数组。
 # 如果 asymptotic=true，则 C0s 用零向量替代。
 function _split_C_C0(C_C0s; asymptotic::Bool)
@@ -342,14 +316,12 @@ function _split_C_C0(C_C0s; asymptotic::Bool)
     return Cs, C0s
 end
 
-
 # 对一组对象（只要支持 get_C_C0）提取约束并调用 calc_volume(Cs, C0s; ...)。
 function _calc_selected_constraint_volumes(items; asymptotic::Bool, kwargs...)
-    C_C0s = items .|> get_C_C0
+    C_C0s = get_C_C0.(items)
     Cs, C0s = _split_C_C0(C_C0s; asymptotic=asymptotic)
     return calc_volume(Cs, C0s; kwargs...)
 end
-
 
 # 并行采样 batch_size 个点，统计每个点命中了哪些 polyhedron。
 # contain_overlap=false：一个样本最多记到一个 regime。
@@ -388,7 +360,6 @@ function _accumulate_polyhedron_hits!(
     return nothing
 end
 
-
 """
     calc_volume(Cs, C0s; kwargs...) -> Vector{Volume}
 
@@ -401,28 +372,27 @@ function calc_volume(
     Cs::AbstractVector{<:AbstractMatrix{<:Real}},
     C0s::AbstractVector{<:AbstractVector{<:Real}};
     # --- sampling ---
-    sampler::Symbol = :gaussian,               # :gaussian (default) or :uniform_box
-    μ::Union{Nothing,AbstractVector{<:Real}} = nothing,
-    σ::Float64 = 1.0,                          # for gaussian: std (isotropic)
-    log_lower::Union{Real,AbstractVector{<:Real}} = -6.0,  # for uniform_box; scalar or per dimension
-    log_upper::Union{Real,AbstractVector{<:Real}} = 6.0,   # for uniform_box; scalar or per dimension
+    sampler::Symbol=:gaussian,               # :gaussian (default) or :uniform_box
+    μ::Union{Nothing, AbstractVector{<:Real}}=nothing,
+    σ::Float64=1.0,                          # for gaussian: std (isotropic)
+    log_lower::Union{Real, AbstractVector{<:Real}}=-6.0,  # for uniform_box; scalar or per dimension
+    log_upper::Union{Real, AbstractVector{<:Real}}=6.0,   # for uniform_box; scalar or per dimension
 
     # --- estimation control ---
-    confidence_level::Float64 = 0.95,
-    contain_overlap::Bool = false,
-    regime_judge_tol::Float64 = 0.0,
-    batch_size::Int = 100_000,
-    abs_tol::Float64 = 1.0e-8,
-    rel_tol::Float64 = 0.005,
-    time_limit::Float64 = 120.0,
+    confidence_level::Float64=0.95,
+    contain_overlap::Bool=false,
+    regime_judge_tol::Float64=0.0,
+    batch_size::Int=100_000,
+    abstol::Float64=1.0e-8,
+    reltol::Float64=0.005,
+    time_limit::Float64=120.0,
 
     # --- perf/UX ---
-    show_progress::Bool = false,
+    show_progress::Bool=false,
 
     # --- rebase---
-    rebase_mat:: Union{AbstractMatrix{<:Real},Nothing} = nothing
+    rebase_mat::Union{AbstractMatrix{<:Real}, Nothing}=nothing,
 )::Vector{Volume}
-
     problem = _prepare_hrep_volume_problem(Cs, C0s; rebase_mat=rebase_mat)
     n_regimes = length(problem.Cs)
     @info "Number of polyhedra to calc volume: $n_regimes"
@@ -431,8 +401,8 @@ function calc_volume(
     regime_judge_tol = abs(regime_judge_tol)
     n_slots = Threads.maxthreadid()
     thread_y = [
-        [Vector{Float64}(undef, size(problem.Cs[i], 1)) for i in 1:n_regimes]
-        for _ in 1:n_slots
+        [Vector{Float64}(undef, size(problem.Cs[i], 1)) for i in 1:n_regimes] for
+        _ in 1:n_slots
     ]
 
     return _estimate_volumes(
@@ -445,8 +415,8 @@ function calc_volume(
         log_upper=log_upper,
         confidence_level=confidence_level,
         batch_size=batch_size,
-        abs_tol=abs_tol,
-        rel_tol=rel_tol,
+        abstol=abstol,
+        reltol=reltol,
         time_limit=time_limit,
         show_progress=show_progress,
         rng_seed=0x12345678,
@@ -468,7 +438,6 @@ function calc_volume(
     end
 end
 
-
 """
     calc_volume(C, C0; kwargs...) -> Volume
 
@@ -479,34 +448,28 @@ calc_volume(C::AbstractMatrix{<:Real}, C0::AbstractVector{<:Real}; kwargs...)::V
 
 # calc_vertex_volume(Bnc::Bnc, perm;kwargs...) = calc_vertices_volume(Bnc,[perm]; kwargs...)[1]
 
-
 #=====================================================================================#
 # Volume calculation from qK-space classifier
 #=====================================================================================#
 
-_bind_volume_route(
-    ::Bnc,
-    ::AbstractVector{<:Integer};
-    contain_overlap::Bool=false,
-    kwargs...,
-) = contain_overlap ? :polyhedra : :classifier
+function _bind_volume_route(
+    ::Bnc, ::AbstractVector{<:Integer}; contain_overlap::Bool=false, kwargs...
+)
+    return contain_overlap ? :polyhedra : :classifier
+end
 
 function _calc_bind_regime_volumes(
     Bnc::Bnc,
     regime_ids::AbstractVector{<:Integer};
     asymptotic::Bool=true,
     contain_overlap::Bool=false,
-    rebase_mat::Union{AbstractMatrix{<:Real},Nothing}=nothing,
+    rebase_mat::Union{AbstractMatrix{<:Real}, Nothing}=nothing,
     kwargs...,
 )
     vals = zeros(Volume, length(regime_ids))
 
-    rgm_ids, rgm_mask = filter_regimes(
-        Bnc,
-        regime_ids;
-        singular=false,
-        asymptotic=asymptotic,
-        return_mask=true,
+    rgm_ids, rgm_mask = filter_regimes_with_mask(
+        Bnc, regime_ids; singular=false, asymptotic=asymptotic
     )
 
     positions = findall(rgm_mask)
@@ -516,14 +479,10 @@ function _calc_bind_regime_volumes(
     route = _bind_volume_route(Bnc, rgm_ids; contain_overlap=contain_overlap)
     vals[positions] .= if route === :classifier
         _calc_volume_via_classifier(
-            Bnc,
-            rgm_ids;
-            asymptotic=asymptotic,
-            rebase_mat=rebase_mat,
-            kwargs...,
+            Bnc, rgm_ids; asymptotic=asymptotic, rebase_mat=rebase_mat, kwargs...
         )
     elseif route === :polyhedra
-        rgms = [get_regime(Bnc, idx; inv_info=true) for idx in rgm_ids]
+        rgms = [get_binding_regime(Bnc, idx; inv_info=true) for idx in rgm_ids]
         _calc_selected_constraint_volumes(
             rgms;
             asymptotic=asymptotic,
@@ -543,10 +502,10 @@ function _accumulate_classifier_hits!(
     thread_x,
     batch_size::Int,
     classifier::CompiledClassifier,
-    idx_to_pos::AbstractDict{<:Integer,<:Integer},
+    idx_to_pos::AbstractDict{<:Integer, <:Integer},
     sampling;
-    asymptotic::Bool = false,
-    regime_judge_tol::Float64 = 0.0,
+    asymptotic::Bool=false,
+    regime_judge_tol::Float64=0.0,
 )
     Threads.@threads for _ in 1:batch_size
         tid = Threads.threadid()
@@ -556,10 +515,7 @@ function _accumulate_classifier_hits!(
 
         _draw_sample!(x, rng, sampling)
         regime_idx, sides = _classifier_candidates(
-            classifier,
-            x;
-            asymptotic_only=asymptotic,
-            tol=regime_judge_tol
+            classifier, x; asymptotic_only=asymptotic, tol=regime_judge_tol
         )
 
         for regime_id in regime_idx
@@ -571,25 +527,23 @@ function _accumulate_classifier_hits!(
     return nothing
 end
 
-
-
 function _calc_volume_via_classifier(
     Bnc::Bnc,
     regime_ids::AbstractVector{<:Integer};
-    sampler::Symbol = :gaussian,
-    μ::Union{Nothing,AbstractVector{<:Real}} = nothing,
-    σ::Float64 = 1.0,
-    log_lower::Union{Real,AbstractVector{<:Real}} = -6.0,
-    log_upper::Union{Real,AbstractVector{<:Real}} = 6.0,
-    confidence_level::Float64 = 0.95,
-    regime_judge_tol::Float64 = 0.0,
-    batch_size::Int = 100_000,
-    abs_tol::Float64 = 1.0e-8,
-    rel_tol::Float64 = 0.005,
-    time_limit::Float64 = 120.0,
-    show_progress::Bool = true,
-    asymptotic::Bool = false,
-    rebase_mat::Union{AbstractMatrix{<:Real},Nothing} = nothing,
+    sampler::Symbol=:gaussian,
+    μ::Union{Nothing, AbstractVector{<:Real}}=nothing,
+    σ::Float64=1.0,
+    log_lower::Union{Real, AbstractVector{<:Real}}=-6.0,
+    log_upper::Union{Real, AbstractVector{<:Real}}=6.0,
+    confidence_level::Float64=0.95,
+    regime_judge_tol::Float64=0.0,
+    batch_size::Int=100_000,
+    abstol::Float64=1.0e-8,
+    reltol::Float64=0.005,
+    time_limit::Float64=120.0,
+    show_progress::Bool=true,
+    asymptotic::Bool=false,
+    rebase_mat::Union{AbstractMatrix{<:Real}, Nothing}=nothing,
 )::Vector{Volume}
     n_regimes = length(regime_ids)
     n_regimes == 0 && return Volume[]
@@ -599,7 +553,7 @@ function _calc_volume_via_classifier(
     resolved_rebase = if isnothing(rebase_mat)
         nothing
     else
-        @assert size(rebase_mat,1) == Bnc.n "size(rebase_mat) must equal (qK dimension, qK dimension)"
+        @assert size(rebase_mat, 1) == Bnc.n "size(rebase_mat) must equal (qK dimension, qK dimension)"
         Float64.(rebase_mat)
     end
 
@@ -625,8 +579,8 @@ function _calc_volume_via_classifier(
         log_upper=log_upper,
         confidence_level=confidence_level,
         batch_size=batch_size,
-        abs_tol=abs_tol,
-        rel_tol=rel_tol,
+        abstol=abstol,
+        reltol=reltol,
         time_limit=time_limit,
         show_progress=show_progress,
         rng_seed=0x5eed1234,
@@ -646,7 +600,6 @@ function _calc_volume_via_classifier(
     end
 end
 
-
 #-------------------------------------------------------------------------------------
 # Volume calculation for polyhedra
 #--------------------------------------------------------------------------------------
@@ -658,7 +611,9 @@ Remove intersection offsets to test asymptoticity in polyhedra.
 """
 function _remove_poly_intersect(poly::Polyhedron)
     rep = MixedMatHRep(hrep(poly))
-    return polyhedron(hrep(rep.A, zeros(eltype(rep.b), size(rep.b)), rep.linset), POLY_BACK_END)
+    return polyhedron(
+        hrep(rep.A, zeros(eltype(rep.b), size(rep.b)), rep.linset), POLY_BACK_END
+    )
 end
 
 """
@@ -666,45 +621,49 @@ end
 
 Return a boolean mask for polyhedra matching singularity/asymptotic filters.
 """
-function _get_mask(polys::AbstractVector{<:Polyhedron};
-     singular::Union{Bool,Integer,Nothing}=nothing, 
-     asymptotic::Union{Bool,Nothing}=nothing)::Vector{Bool}
+function _get_mask(
+    polys::AbstractVector{<:Polyhedron};
+    singular::Union{Bool, Integer, Nothing}=nothing,
+    asymptotic::Union{Bool, Nothing}=nothing,
+)::Vector{Bool}
     n = length(polys)
     full_dim = fulldim(polys[1])
     nullities = full_dim .- dim.(polys)
 
-    asym_flags =
-        if isnothing(asymptotic)
-            fill(false, n)
-        else
-            stripped_polys = _remove_poly_intersect.(polys)
-            stripped_nullities = full_dim .- dim.(stripped_polys)
-            stripped_nullities .== nullities
-        end
+    asym_flags = if isnothing(asymptotic)
+        fill(false, n)
+    else
+        stripped_polys = _remove_poly_intersect.(polys)
+        stripped_nullities = full_dim .- dim.(stripped_polys)
+        stripped_nullities .== nullities
+    end
 
-    matches_singular(nullity) = isnothing(singular) || (
-        (singular === true  && nullity > 0) ||
-        (singular === false && nullity == 0) ||
-        (singular isa Int   && nullity ≤ singular)
-    )
+    function matches_singular(nullity)
+        return isnothing(singular) || (
+            (singular === true && nullity > 0) ||
+            (singular === false && nullity == 0) ||
+            (singular isa Int && nullity ≤ singular)
+        )
+    end
 
     matches_asymptotic(flag) = isnothing(asymptotic) || (asymptotic == flag)
-    
+
     return [
-        matches_singular(nullities[i]) && matches_asymptotic(asym_flags[i])
-        for i in 1:n
+        matches_singular(nullities[i]) && matches_asymptotic(asym_flags[i]) for i in 1:n
     ]
 end
 
 """
-    filter_polys(polys; return_idx=false, kwargs...) -> Vector
+    filter_polys(polys; kwargs...) -> Vector
 
 Filter polyhedra by singularity/asymptotic criteria.
 """
-function filter_polys(polys; return_idx::Bool=false, kwargs...)
+function filter_polys(polys; kwargs...)
     mask = _get_mask(polys; kwargs...)
-    return return_idx ? findall(mask) : polys[mask]
+    return polys[mask]
 end
+
+filter_polys_indices(polys; kwargs...) = findall(_get_mask(polys; kwargs...))
 
 #------------------------------------------------------------------------------------------------
 # calculate volume for Bnc regimes,
@@ -719,22 +678,23 @@ Compute volumes for a collection of polyhedra or vertices.
 
 Compute volumes for selected regimes in a model.
 """
-function calc_volume(rgms::AbstractVector{<:BindRegime};
+function calc_volume(
+    rgms::AbstractVector{<:BindRegime};
     asymptotic::Bool=true,
     contain_overlap::Bool=false,
-    rebase_mat::Union{AbstractMatrix{<:Real},Nothing}=nothing,
-    kwargs...
+    rebase_mat::Union{AbstractMatrix{<:Real}, Nothing}=nothing,
+    kwargs...,
 ) # singular/ asymptotic not be put here, as dimensions could reduce and change.
     n_all = length(rgms)
     vals = zeros(Volume, n_all)
     n_all == 0 && return vals
 
-    idxs = findall(_get_mask(rgms;
-        singular=false,
-        asymptotic=asymptotic ? true : nothing))
+    idxs = findall(_get_mask(rgms; singular=false, asymptotic=asymptotic ? true : nothing))
     isempty(idxs) && return vals
 
-    same_model = all(get_binding_network(rgm) === get_binding_network(rgms[1]) for rgm in rgms)
+    same_model = all(
+        get_binding_network(rgm) === get_binding_network(rgms[1]) for rgm in rgms
+    )
     if same_model
         Bnc = get_binding_network(rgms[1])
         regime_ids = get_idx.(rgms)
@@ -758,49 +718,41 @@ function calc_volume(rgms::AbstractVector{<:BindRegime};
     return vals
 end
 
-function calc_volume(rgms::AbstractVector{<:BncRegime};
-    asymptotic::Bool=true,
-    kwargs...
-)
+function calc_volume(rgms::AbstractVector{<:BncRegime}; asymptotic::Bool=true, kwargs...)
     n_all = length(rgms)
     vals = zeros(Volume, n_all)
     n_all == 0 && return vals
 
     asymptotic_filter = asymptotic ? true : nothing
     idxs = findall(rgms) do rgm
-        rgm.nlt == 0 && (isnothing(asymptotic_filter) || _is_asymptotic(rgm) == asymptotic_filter)
+        rgm.nlt == 0 &&
+            (isnothing(asymptotic_filter) || _is_asymptotic(rgm) == asymptotic_filter)
     end
     isempty(idxs) && return vals
 
     vals[idxs] .= _calc_selected_constraint_volumes(
-        rgms[idxs];
-        asymptotic=asymptotic,
-        kwargs...,
+        rgms[idxs]; asymptotic=asymptotic, kwargs...
     )
     return vals
 end
 
-function calc_volume(rgms::AbstractVector{<:Polyhedron};
+function calc_volume(
+    rgms::AbstractVector{<:Polyhedron};
     # model::Bnc, perms=nothing;
     asymptotic::Bool=true,
-    kwargs...
+    kwargs...,
 ) # singular/ asymptotic not be put here, as dimensions could reduce and change.
     n_all = length(rgms)
     vals = zeros(Volume, n_all)
     n_all == 0 && return vals
 
-    idxs = filter_polys(
-        rgms;
-        return_idx=true,
-        singular=false,
-        asymptotic=asymptotic ? true : nothing,
+    idxs = filter_polys_indices(
+        rgms; singular=false, asymptotic=asymptotic ? true : nothing
     )
     isempty(idxs) && return vals
 
     vals[idxs] .= _calc_selected_constraint_volumes(
-        rgms[idxs];
-        asymptotic=asymptotic,
-        kwargs...,
+        rgms[idxs]; asymptotic=asymptotic, kwargs...
     )
     return vals
 end
@@ -810,19 +762,17 @@ end
 
 Compute the volume for a single polyhedron.
 """
-calc_volume(poly::Polyhedron;kwargs...) = calc_volume([poly]; kwargs...)[1]
+calc_volume(poly::Polyhedron; kwargs...) = calc_volume([poly]; kwargs...)[1]
 
 """
-    get_volumes(rgms::AbstractVector{<:BncRegime}; recalculate=false, kwargs...) -> Vector{Volume}
+    get_volumes(rgms::AbstractVector{<:BncRegime}; recompute=false, kwargs...) -> Vector{Volume}
 
-Return cached wKk-space volumes for mixed regimes, computing missing entries
+Return cached wKk-space volumes for Bnc regimes, computing missing entries
 from each regime's `get_C_C0_nullity_wKk` polyhedron.
 """
-function get_volumes(rgms::AbstractVector{<:BncRegime};
-    recalculate::Bool=false,
-    kwargs...
-)
-    idxs = recalculate ? collect(eachindex(rgms)) : findall(rgm -> isnothing(rgm.volume), rgms)
+function get_volumes(rgms::AbstractVector{<:BncRegime}; recompute::Bool=false, kwargs...)
+    idxs =
+        recompute ? collect(eachindex(rgms)) : findall(rgm -> isnothing(rgm.volume), rgms)
     if !isempty(idxs)
         vals = calc_volume(rgms[idxs]; kwargs...)
         for (i, idx) in enumerate(idxs)
@@ -832,5 +782,6 @@ function get_volumes(rgms::AbstractVector{<:BncRegime};
     return [rgm.volume for rgm in rgms]
 end
 
-get_volume(rgm::BncRegime; recalculate::Bool=false, kwargs...) =
-    get_volumes(BncRegime[rgm]; recalculate=recalculate, kwargs...)[1]
+function get_volume(rgm::BncRegime; recompute::Bool=false, kwargs...)
+    return get_volumes(BncRegime[rgm]; recompute=recompute, kwargs...)[1]
+end

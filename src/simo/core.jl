@@ -5,10 +5,10 @@ mutable struct SIMOPaths{T}
 
     sources::Vector{Int}
     sinks::Vector{Int}
-    paths_dict::Union{Nothing,Dict{Vector{Int},Int}}
+    paths_dict::Union{Nothing, Dict{Vector{Int}, Int}}
     rgm_paths::Vector{Vector{Int}}
     path_edge_idxs::Vector{Vector{Int}}
-    edge_keys::Vector{Tuple{Int,Int}}
+    edge_keys::Vector{Tuple{Int, Int}}
     path_node_mask::BitVector
 
     node_polys::Vector{Polyhedron}
@@ -22,7 +22,9 @@ mutable struct SIMOPaths{T}
     path_volume_is_calc::BitVector
     path_polys_is_calc::BitVector
 
-    function SIMOPaths(model::Bnc{T}, qK_grh, change_qK_idx, sources, sinks, rgm_paths) where T
+    function SIMOPaths(
+        model::Bnc{T}, qK_grh, change_qK_idx, sources, sinks, rgm_paths
+    ) where {T}
         edge_keys, path_edge_idxs = _build_path_edge_index(rgm_paths)
         path_node_mask = falses(n_regimes(model))
         for path in rgm_paths
@@ -38,7 +40,7 @@ mutable struct SIMOPaths{T}
         path_volume = Vector{Volume}(undef, length(rgm_paths))
         path_volume_is_calc = falses(length(rgm_paths))
         path_polys_is_calc = falses(length(rgm_paths))
-        new{T}(
+        return new{T}(
             model,
             qK_grh,
             change_qK_idx,
@@ -62,15 +64,13 @@ mutable struct SIMOPaths{T}
 end
 
 @inline function _is_isolated_singular_simo_regime(
-    model::Bnc,
-    qK_grh::AbstractGraph,
-    idx::Integer,
+    model::Bnc, qK_grh::AbstractGraph, idx::Integer
 )::Bool
     v = Int(idx)
-    return indegree(qK_grh, v) == 0 && outdegree(qK_grh, v) == 0 && get_nullity(model, v) > 0
+    return indegree(qK_grh, v) == 0 &&
+           outdegree(qK_grh, v) == 0 &&
+           get_nullity(model, v) > 0
 end
-
-
 
 function SIMOPaths(model::Bnc{T}, change_qK; rgm_paths=nothing) where {T}
     change_qK_idx = locate_sym_qK(model, change_qK)
@@ -99,16 +99,11 @@ function SIMOPaths(model::Bnc{T}, change_qK; rgm_paths=nothing) where {T}
     return SIMOPaths(model, qK_grh, change_qK_idx, sources, sinks, rgm_paths)
 end
 
-
-
-
-
 function _ensure_paths_dict!(grh::SIMOPaths)
     isnothing(grh.paths_dict) || return grh.paths_dict
-    grh.paths_dict = Dict(p=>idx for (idx, p) in enumerate(grh.rgm_paths))
+    grh.paths_dict = Dict(p => idx for (idx, p) in enumerate(grh.rgm_paths))
     return grh.paths_dict
 end
-
 
 """
     _build_path_edge_index(rgm_paths::AbstractVector{<:AbstractVector{<:Integer}})
@@ -145,9 +140,9 @@ edge_keys, path_edge_idxs = _build_path_edge_index(rgm_paths)
 
 function _build_path_edge_index(rgm_paths::AbstractVector{<:AbstractVector{<:Integer}})
     total_refs = sum(max(length(path) - 1, 0) for path in rgm_paths)
-    edge_keys = Tuple{Int,Int}[]
+    edge_keys = Tuple{Int, Int}[]
     sizehint!(edge_keys, total_refs)
-    edge_dict = Dict{Tuple{Int,Int},Int}()
+    edge_dict = Dict{Tuple{Int, Int}, Int}()
     path_edge_idxs = Vector{Vector{Int}}(undef, length(rgm_paths))
 
     for (path_idx, path) in enumerate(rgm_paths)
@@ -170,25 +165,28 @@ function _build_path_edge_index(rgm_paths::AbstractVector{<:AbstractVector{<:Int
     return edge_keys, path_edge_idxs
 end
 
-
-
-function get_indices(grh::SIMOPaths,pth_idx::Union{Nothing,Integer,AbstractVector}=nothing)
-    return isnothing(pth_idx) ? collect(1:length(grh.rgm_paths)) : Int.(get_idx.(Ref(grh), pth_idx))
+function get_indices(
+    grh::SIMOPaths, pth_idx::Union{Nothing, Integer, AbstractVector}=nothing
+)
+    return if isnothing(pth_idx)
+        collect(1:length(grh.rgm_paths))
+    else
+        Int.(get_idx.(Ref(grh), pth_idx))
+    end
 end
 
-
 @inline function _path_indices_to_calculate(
-    is_calc::BitVector,
-    pth_idx::AbstractVector{<:Integer};
-    recalculate::Bool=false,
+    is_calc::BitVector, pth_idx::AbstractVector{<:Integer}; recompute::Bool=false
 )
     idxs = Int.(pth_idx)
-    return recalculate ? idxs : filter(i -> !is_calc[i], idxs)
+    return recompute ? idxs : filter(i -> !is_calc[i], idxs)
 end
 
 get_neighbor_graph_qK(grh::SIMOPaths; kwargs...) = grh.qK_grh
 get_SIMO_graph(grh::SIMOPaths) = grh.qK_grh
-get_SIMO_graph(model::Bnc, change_qK) = get_SIMO_graph(get_regimes_graph!(model; full=true), change_qK)
+function get_SIMO_graph(model::Bnc, change_qK)
+    return get_SIMO_graph(get_regimes_graph!(model; full=true), change_qK)
+end
 
 function get_SIMO_graph(grh::RegimeGraph, change_qK)::SimpleDiGraph
     bn = get_binding_network(grh)
@@ -214,8 +212,6 @@ function get_SIMO_graph(grh::RegimeGraph, change_qK)::SimpleDiGraph
     return g
 end
 
-
-
 function get_path(grh::SIMOPaths, pth_idx::Integer; return_idx::Bool=false)
     rgm_idxs = grh.rgm_paths[pth_idx]
     return return_idx ? rgm_idxs : get_perm.(Ref(get_binding_network(grh)), rgm_idxs)
@@ -227,23 +223,17 @@ function get_path(grh::SIMOPaths, pth::AbstractVector; return_idx::Bool=false)
 end
 
 get_binding_network(grh::SIMOPaths, args...) = grh.bn
-function get_C_C0_nullity_qK(
-    grh::SIMOPaths,
-    pth_idx;
-    remove_h_redundancy::Bool=false,
-)
-    C, C0, nullity = get_polyhedron(grh, pth_idx) |> get_C_C0_nullity
+function get_C_C0_nullity_qK(grh::SIMOPaths, pth_idx; remove_h_redundancy::Bool=false)
+    C, C0, nullity = get_C_C0_nullity(get_polyhedron(grh, pth_idx))
     return _maybe_remove_h_redundancy(
-        C,
-        C0,
-        nullity;
-        remove_h_redundancy=remove_h_redundancy,
+        C, C0, nullity; remove_h_redundancy=remove_h_redundancy
     )
 end
 
-get_idx(grh::SIMOPaths, pth::AbstractVector) = let
-    bn = get_binding_network(grh)
-    idxs = get_idx.(Ref(bn), pth)
-    _ensure_paths_dict!(grh)[idxs]
-end
+get_idx(grh::SIMOPaths, pth::AbstractVector) =
+    let
+        bn = get_binding_network(grh)
+        idxs = get_idx.(Ref(bn), pth)
+        _ensure_paths_dict!(grh)[idxs]
+    end
 get_idx(grh::SIMOPaths, pth::Integer) = pth

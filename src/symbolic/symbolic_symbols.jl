@@ -9,13 +9,13 @@ v_sym(args...) = get_catalysis_network(args...).v_sym
 function q_cat_sym(args...)
     bn = get_binding_network(args...)
     cn = get_catalysis_network(args...)
-    return bn.q_sym[1:cn.r_v]
+    return bn.q_sym[1:(cn.r_v)]
 end
 
 function w_sym(args...)
     bn = get_binding_network(args...)
     cn = get_catalysis_network(args...)
-    return bn.q_sym[cn.r_v + 1:bn.d]
+    return bn.q_sym[(cn.r_v + 1):(bn.d)]
 end
 
 @inline xk_sym(args...) = [x_sym(args...); k_sym(args...)]
@@ -56,7 +56,7 @@ q_sym(grh::SIMOPaths, args...) = begin
     end
 end
 
-K_sym(grh::SIMOPaths, args...) = begin
+function K_sym(grh::SIMOPaths, args...)
     bn = get_binding_network(grh)
     if grh.change_qK_idx > bn.d
         deleteat!(copy(bn.K_sym), grh.change_qK_idx - bn.d)
@@ -76,7 +76,7 @@ end
 logder_qK_x_sym(args...; kwargs...) = ∂logqK_∂logx_sym(args...; kwargs...)
 
 function ∂logx_∂logqK_sym(Bnc::Bnc; show_x_space::Bool=false)::Matrix{Num}
-    return inv(∂logqK_∂logx_sym(Bnc; show_x_space=show_x_space)) .|> Symbolics.simplify
+    return Symbolics.simplify.(inv(∂logqK_∂logx_sym(Bnc; show_x_space=show_x_space)))
 end
 
 logder_x_qK_sym(args...; kwargs...) = ∂logx_∂logqK_sym(args...; kwargs...)
