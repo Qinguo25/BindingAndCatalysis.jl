@@ -102,42 +102,46 @@ computed in exact arithmetic. Polyhedral projection and returned polyhedron
 objects are materialized through the floating-point `CDDLib` backend.
 """
 function find_all_regimes!(model::Bnc{T}) where {T}
-    is_bind_regimes_built(model) && return nothing
-    _remove_regime_data!(model)
-    @info "---------------------Start finding all regimes--------------------"
+    return _with_regime_cache_lock(model) do
+        is_bind_regimes_built(model) && return nothing
+        _remove_regime_data!(model)
+        @info "---------------------Start finding all regimes--------------------"
 
-    (all_perms, is_asymptotic) = let
-        perms, is_asymp = _enumerate_all_regimes(model._L_helper)
-        perms = [Vector{T}(v) for v in perms]
-        (perms, is_asymp)
+        (all_perms, is_asymptotic) = let
+            perms, is_asymp = _enumerate_all_regimes(model._L_helper)
+            perms = [Vector{T}(v) for v in perms]
+            (perms, is_asymp)
+        end
+
+        n_regimes = length(all_perms)
+        n_asym_rgms = sum(is_asymptotic)
+        @info "Finished, with $(n_regimes) regimes found and $(n_asym_rgms) asymptotic regimes."
+
+        @info "2.Building x-neighbor regime graph..."
+        model.vertices_graph = let
+            grh = _calc_regimes_graph(model._L_helper, all_perms)
+            grh.bn = model
+            grh
+        end
+
+        @info "3.Building regime objects..."
+        model.BindRegimes = let
+            regimes = _build_bind_regimes(
+                model, all_perms, is_asymptotic, fill(T(-1), n_regimes)
+            )
+            regimes_perm_dict = Dict(perm => idx for (idx, perm) in enumerate(all_perms))
+            Regimes(regimes_perm_dict, regimes)
+        end
+
+        @info "4.Propagating affine data and deferred nullity labels..."
+        _prefill_affine_cache!(model; ensure_built=false)
+
+        @info "5.Calculating qK change directions on the regime graph..."
+        _fulfill_regimes_graph!(model.vertices_graph)
+
+        @info "Finished."
+        return nothing
     end
-
-    n_regimes = length(all_perms)
-    n_asym_rgms = sum(is_asymptotic)
-    @info "Finished, with $(n_regimes) regimes found and $(n_asym_rgms) asymptotic regimes."
-
-    @info "2.Building x-neighbor regime graph..."
-    model.vertices_graph = let
-        grh = _calc_regimes_graph(model._L_helper, all_perms)
-        grh.bn = model
-        grh
-    end
-
-    @info "3.Building regime objects..."
-    model.BindRegimes = let
-        regimes = _build_bind_regimes(model, all_perms, is_asymptotic, fill(T(-1), n_regimes))
-        regimes_perm_dict = Dict(perm => idx for (idx, perm) in enumerate(all_perms))
-        Regimes(regimes_perm_dict, regimes)
-    end
-
-    @info "4.Propagating affine data and deferred nullity labels..."
-    _prefill_affine_cache!(model; ensure_built=false)
-
-    @info "5.Calculating qK change directions on the regime graph..."
-    _fulfill_regimes_graph!(model.vertices_graph)
-
-    @info "Finished."
-    return nothing
 end
 
 @inline function _build_bind_regimes(

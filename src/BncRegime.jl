@@ -528,22 +528,24 @@ end
 #=================================================THE main ENTRY=============================#
 
 function match_regimes!(model::Bnc; warn_singular_propagation::Bool=true)
-    if is_bnc_regimes_built(model)
+    return _with_regime_cache_lock(model) do
+        if is_bnc_regimes_built(model)
+            return nothing
+        end
+
+        find_all_regimes!(model)
+        find_catalysis_regimes!(model)
+
+        model.BncRegimes = _build_BncRegime(
+            _catalysis_regimes_data(model), _bind_regimes_data(model)
+        )
+
+        model._diagnostics[:bnc_regime_initialization] = _initialize_regime!(
+            model.BncRegimes; warn_singular_propagation=warn_singular_propagation
+        ) # The real calculation
+
         return nothing
     end
-
-    find_all_regimes!(model)
-    find_catalysis_regimes!(model)
-
-    model.BncRegimes = _build_BncRegime(
-        _catalysis_regimes_data(model), _bind_regimes_data(model)
-    )
-
-    model._diagnostics[:bnc_regime_initialization] = _initialize_regime!(
-        model.BncRegimes; warn_singular_propagation=warn_singular_propagation
-    ) # The real calculation
-
-    return nothing
 end
 
 function _build_BncRegime(cat_rgms::Regimes, bind_rgms::Regimes)

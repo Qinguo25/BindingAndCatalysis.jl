@@ -28,9 +28,6 @@ input = :log      # input vector is already log10-scaled
 output = :log     # return log10-scaled output
 ```
 
-The older `input_logspace=true` and `output_logspace=true` keywords still work,
-but new examples should use `input=:log` and `output=:log`.
-
 ## 2. Minimal Binding Workflow
 
 Build a binding model from a reaction matrix `N`:
@@ -223,8 +220,7 @@ Recommended convention:
 
 - use `get_binding_regimes` when you need objects,
 - use `get_binding_indices` when you need IDs,
-- use `get_binding_perms` when you need permutations,
-- avoid `return_idx=true` in new code when a dedicated getter exists.
+- use `get_binding_perms` when you need permutations.
 
 ## 6. Assigning Points to Regimes
 
@@ -292,10 +288,6 @@ Common binding affine maps:
 get_affine_x2q(rgm)       # log x -> log q
 get_affine_x2qK(rgm)      # log x -> log qK
 get_affine_qK2x(rgm)      # log qK -> log x
-
-get_P_P0(rgm)             # compatibility alias for log x -> log q
-get_M_M0(rgm)             # compatibility alias for log x -> log qK
-get_H_H0(rgm)             # compatibility alias for log qK -> log x
 ```
 
 Display symbolic conditions and formulas:
@@ -327,7 +319,7 @@ Query neighbors and edges:
 
 ```julia
 get_neighbors(model, 1)
-get_neighbors(model, 1; return_idx=true)
+neighbor_ids = get_binding_indices(model, get_neighbors(model, 1))
 
 edge = get_edge(model, 1, 2)
 ```
@@ -902,12 +894,13 @@ summary = multistability_R_index(
 
 `multistability_R_index` defaults to `mode=:asymptotic_R` and returns
 `full_dim_regimes`, `stable_full_dim_regimes`, `pair_intersections`,
-`R_multistability`, `stderr`, `basis_kind`, and `denominator`.
+`stable_count_histogram`, `R_exact_stable_count`, `R_atleast_stable_count`,
+`stderr_atleast_stable_count`, `basis_kind`, and `denominator`.
 
 `full_dim_regimes` is a broad diagnostic count of all feasible full-dimensional
 restricted BNC regimes. The stable candidate counts, pair intersections, and
-`R_multistability` use the candidate filter controlled by `singular`, which
-defaults to nonsingular regimes.
+stable-count R-index estimates use the candidate filter controlled by
+`singular`, which defaults to nonsingular regimes.
 
 Empty `map` or `groups` inputs are normalized to the identity chart. This is
 useful when a script shares one code path across unconstrained and grouped
@@ -919,16 +912,22 @@ Useful fields:
 profile.mode
 profile.denominator
 profile.basis_kind
-profile.R_atleast_1    # any stable regime
-profile.R_atleast_2    # bistability R-index
-profile.R_atleast_3    # multistability hint
-profile.max_hit_count
+profile.stable_count_histogram
+profile.R_exact_stable_count
+profile.R_atleast_stable_count
+profile.max_stable_count
 profile.combination_counts
 profile.pair_table
 ```
 
-`combination_counts` is useful for multistability exploration.  If many sampled
-points hit the same triple of stable regimes, that combination is a good
+`stable_count_histogram[k]` records how many accepted samples lie in exactly
+`k` stable regimes. `R_exact_stable_count[k]` is the corresponding probability,
+and `R_atleast_stable_count[k]` is the probability of lying in at least `k`
+stable regimes. For example, use `get(profile.R_atleast_stable_count, 2, 0.0)`
+when a downstream report needs the at-least-two-stable-regimes estimate.
+
+`combination_counts` is useful for stable-overlap exploration. If many sampled
+points hit the same combination of stable regimes, that combination is a good
 candidate for a later explicit intersection check.
 
 ## 13. Catalysis and Adaptation Simulations
@@ -1055,7 +1054,7 @@ SIMO_plot(
 The SIMO tools are useful when one coordinate changes and the other coordinates
 are fixed.
 
-## 16. Recommended Names and Legacy API
+## 16. Recommended Names
 
 Use explicit names in new code:
 
@@ -1072,18 +1071,8 @@ get_bnc_regime(model, idx)
 get_bnc_regimes(model)
 ```
 
-Legacy and convenience names still work:
-
-```julia
-get_regime(model, idx)
-get_regimes(model)
-get_indices(model)
-get_perms(model)
-```
-
 Recommended rules:
 
-- `get_regime` is a binding-regime alias, not a generic regime getter.
 - Use `get_bnc_regime` / `get_bnc_regimes` for BNC regimes.
 - Use `get_catalysis_regime` / `get_catalysis_regimes` for catalysis regimes.
 - Prefer explicit `binding`, `catalysis`, and `bnc` names in user-facing code.

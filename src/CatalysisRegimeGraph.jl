@@ -64,16 +64,20 @@ end
 
 function get_catalysis_regimes_graph!(args...; kwargs...)
     cn = get_catalysis_network(args...; kwargs...)
-    if !isnothing(cn.vertices_graph)
-        return cn.vertices_graph
+    return _with_regime_cache_lock(cn) do
+        if !isnothing(cn.vertices_graph)
+            return cn.vertices_graph
+        end
+        find_catalysis_regimes!(cn)
+        perms = _catalysis_regimes_perms(cn)
+        grh = _calc_regimes_graph(
+            cn._S_helper, perms; primary_space=:v, secondary_space=:xk
+        )
+        grh.bn = cn
+        _fulfill_catalysis_regimes_graph!(grh)
+        cn.vertices_graph = grh
+        return grh
     end
-    find_catalysis_regimes!(cn)
-    perms = _catalysis_regimes_perms(cn)
-    grh = _calc_regimes_graph(cn._S_helper, perms; primary_space=:v, secondary_space=:xk)
-    grh.bn = cn
-    _fulfill_catalysis_regimes_graph!(grh)
-    cn.vertices_graph = grh
-    return grh
 end
 
 function _neighbor_graph_by_space(grh::RegimeGraph, space; both_side::Bool=false)

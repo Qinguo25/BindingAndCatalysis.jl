@@ -35,10 +35,12 @@ Ensure the vertex graph is built and return the fulfilled graph.
 get_regimes_graph!(args...; kwargs...) =
     get_regimes_graph!(get_binding_network(args...); kwargs...)
 function get_regimes_graph!(model::Bnc; full::Bool=false)::RegimeGraph
-    if isnothing(model.vertices_graph)
-        find_all_regimes!(model)
+    return _with_regime_cache_lock(model) do
+        if isnothing(model.vertices_graph)
+            find_all_regimes!(model)
+        end
+        return model.vertices_graph
     end
-    return model.vertices_graph
 end
 
 """

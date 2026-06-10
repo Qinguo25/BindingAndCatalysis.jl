@@ -16,24 +16,26 @@ function find_catalysis_regimes!(args...; kwargs...)
 end
 find_all_regimes!(model::CatalysisData) = find_catalysis_regimes!(model)
 function find_catalysis_regimes!(model::CatalysisData)
-    if !isnothing(getfield(model, :CatalysisRegimes))
+    return _with_regime_cache_lock(model) do
+        if !isnothing(getfield(model, :CatalysisRegimes))
+            return nothing
+        end
+
+        @info "---------------------Start finding all catalysis regimes--------------------"
+        all_regimes, is_asymptotic = _enumerate_all_regimes(model._S_helper)
+
+        n_regimes = length(all_regimes)
+        n_asym_rgms = sum(is_asymptotic)
+        @info "Finished, with $(n_regimes) catalysis regimes found and $(n_asym_rgms) asymptotic regimes."
+
+        @info "3.Building Regimes..."
+        model.CatalysisRegimes = let
+            regimes = _build_catalysis_regimes(model, all_regimes, is_asymptotic)
+            regimes_perm_dict = Dict(perm => idx for (idx, perm) in enumerate(all_regimes))
+            Regimes(regimes_perm_dict, regimes)
+        end
         return nothing
     end
-
-    @info "---------------------Start finding all catalysis regimes--------------------"
-    all_regimes, is_asymptotic = _enumerate_all_regimes(model._S_helper)
-
-    n_regimes = length(all_regimes)
-    n_asym_rgms = sum(is_asymptotic)
-    @info "Finished, with $(n_regimes) catalysis regimes found and $(n_asym_rgms) asymptotic regimes."
-
-    @info "3.Building Regimes..."
-    model.CatalysisRegimes = let
-        regimes = _build_catalysis_regimes(model, all_regimes, is_asymptotic)
-        regimes_perm_dict = Dict(perm => idx for (idx, perm) in enumerate(all_regimes))
-        Regimes(regimes_perm_dict, regimes)
-    end
-    return nothing
 end
 
 @inline function _build_catalysis_regimes(model::CatalysisData, all_regimes, is_asymptotic)

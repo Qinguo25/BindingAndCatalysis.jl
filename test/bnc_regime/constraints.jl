@@ -37,7 +37,14 @@
     )
     @test profile.denominator == :constraint_region
     @test profile.accepted_samples == 50
-    @test profile.R_atleast_1 >= profile.R_atleast_2 >= profile.R_atleast_3
+    @test hasproperty(profile, :stable_count_histogram)
+    @test hasproperty(profile, :R_exact_stable_count)
+    @test hasproperty(profile, :R_atleast_stable_count)
+    @test hasproperty(profile, :max_stable_count)
+    @test get(profile.R_atleast_stable_count, 1, 0.0) >=
+        get(profile.R_atleast_stable_count, 2, 0.0) >=
+        get(profile.R_atleast_stable_count, 3, 0.0)
+    @test sum(values(profile.R_exact_stable_count)) ≈ 1.0
     @test hasproperty(profile, :combination_counts)
     @test hasproperty(profile, :pair_table)
 
@@ -108,9 +115,11 @@
     )
     @test summary.mode == :asymptotic_R
     @test summary.denominator == :constraint_cone
-    @test summary.R_multistability == summary.profile.R_atleast_2
+    @test summary.R_atleast_stable_count === summary.profile.R_atleast_stable_count
+    @test hasproperty(summary, :stderr_atleast_stable_count)
     @test hasproperty(summary, :full_dim_regimes)
     @test hasproperty(summary, :stable_full_dim_regimes)
+    @test hasproperty(summary, :max_stable_count)
     @test summary.full_dim_regimes >= summary.stable_full_dim_regimes
     @test summary.stable_full_dim_regimes == length(summary.profile.restricted_regimes)
 end

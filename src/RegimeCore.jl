@@ -67,6 +67,19 @@ get_catalysis_network(rgm::BncRegime, args...) = get_catalysis_network(rgm.catal
     !isnothing(model.CatalysisRegimes)
 @inline is_bnc_regimes_built(model::Bnc) = !isnothing(model.BncRegimes)
 
+@inline _regime_cache_lock(model::Bnc) = model._regimes_affine_lock
+@inline _regime_cache_lock(model::CatalysisData) =
+    get_binding_network(model)._regimes_affine_lock
+
+function _with_regime_cache_lock(f::F, model::AbstractBnc) where {F}
+    lock(_regime_cache_lock(model))
+    try
+        return f()
+    finally
+        unlock(_regime_cache_lock(model))
+    end
+end
+
 """
     ensure_binding_regimes!(model) -> nothing
 

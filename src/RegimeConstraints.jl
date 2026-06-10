@@ -1009,6 +1009,22 @@ function _combination_table(counts::Dict{Tuple, Int}, total::Int)
     return rows
 end
 
+function _count_histogram_dict(counts::Dict{Int, Int})
+    return Dict(k => v for (k, v) in sort(collect(counts)))
+end
+
+function _exact_stable_count_R(counts::Dict{Int, Int}, total::Int, max_count::Int)
+    denom = max(total, 1)
+    return Dict(k => get(counts, k, 0) / denom for k in 0:max_count)
+end
+
+function _atleast_stable_count_R(counts::Dict{Int, Int}, total::Int, max_count::Int)
+    denom = max(total, 1)
+    return Dict(
+        k => sum(v for (nhit, v) in counts if nhit >= k) / denom for k in 1:max_count
+    )
+end
+
 function _multistability_mode(mode::Symbol)
     mode in (:finite_region, :asymptotic_R) ||
         throw(ArgumentError("mode must be one of `:finite_region` or `:asymptotic_R`."))
@@ -1062,8 +1078,7 @@ function multistability_profile(
     draws = 0
     hit_hist = Dict{Int, Int}()
     combination_counts = Dict{Tuple, Int}()
-    at_least_counts = Dict{Int, Int}()
-    max_hit_count = 0
+    max_stable_count = 0
 
     while accepted < samples && draws < max_draws
         draws += 1
@@ -1083,19 +1098,18 @@ function multistability_profile(
                 push!(hits, get_idx(rr.regime))
         end
         nhit = length(hits)
-        max_hit_count = max(max_hit_count, nhit)
+        max_stable_count = max(max_stable_count, nhit)
         hit_hist[nhit] = get(hit_hist, nhit, 0) + 1
 
         if nhit > 0
             key = Tuple(sort!(hits))
             combination_counts[key] = get(combination_counts, key, 0) + 1
         end
-        for k in 1:nhit
-            at_least_counts[k] = get(at_least_counts, k, 0) + 1
-        end
     end
 
-    R_atleast = Dict(k => v / max(accepted, 1) for (k, v) in at_least_counts)
+    stable_count_histogram = _count_histogram_dict(hit_hist)
+    R_exact_stable_count = _exact_stable_count_R(hit_hist, accepted, max_stable_count)
+    R_atleast_stable_count = _atleast_stable_count_R(hit_hist, accepted, max_stable_count)
     pairs = if pair_intersections
         stable_regime_intersections(restricted; full_dim=true)
     else
@@ -1114,13 +1128,11 @@ function multistability_profile(
         stable_regimes=[get_idx(rr.regime) for rr in restricted],
         restricted_regimes=restricted,
         pair_table=pairs,
-        hit_histogram=Dict(k => v for (k, v) in sort(collect(hit_hist))),
+        stable_count_histogram,
         combination_counts=_combination_table(combination_counts, accepted),
-        max_hit_count=max_hit_count,
-        R_atleast=R_atleast,
-        R_atleast_1=get(R_atleast, 1, 0.0),
-        R_atleast_2=get(R_atleast, 2, 0.0),
-        R_atleast_3=get(R_atleast, 3, 0.0),
+        max_stable_count=max_stable_count,
+        R_exact_stable_count,
+        R_atleast_stable_count,
     )
 end
 
@@ -1129,12 +1141,12 @@ end
 
 Report-oriented constrained multistability summary. This wraps
 `multistability_profile` and returns deterministic regime counts together with
-the conditional `R_multistability = R_atleast_2`.
+stable-count R-index histograms.
 
 `full_dim_regimes` counts all feasible full-dimensional restricted BNC regimes.
-`stable_full_dim_regimes`, `pair_intersections`, and `R_multistability` use the
-candidate filter controlled by `singular`, which defaults to nonsingular
-regimes.
+`stable_full_dim_regimes`, pair intersections, and stable-count R-index
+histograms use the candidate filter controlled by `singular`, which defaults to
+nonsingular regimes.
 """
 function multistability_R_index(
     model::Bnc;
@@ -1182,9 +1194,13 @@ function multistability_R_index(
     )
     stable_full_dim_restricted = profile.restricted_regimes
 
-    p = profile.R_atleast_2
-    stderr =
-        profile.accepted_samples == 0 ? NaN : sqrt(p * (1 - p) / profile.accepted_samples)
+    stderr_atleast_stable_count = Dict(
+        k => if profile.accepted_samples == 0
+            NaN
+        else
+            sqrt(p * (1 - p) / profile.accepted_samples)
+        end for (k, p) in profile.R_atleast_stable_count
+    )
 
     return (;
         constraints=constraints,
@@ -1197,8 +1213,11 @@ function multistability_R_index(
         full_dim_regimes=length(full_dim_restricted),
         stable_full_dim_regimes=length(stable_full_dim_restricted),
         pair_intersections=length(profile.pair_table),
-        R_multistability=profile.R_atleast_2,
-        stderr=stderr,
+        stable_count_histogram=profile.stable_count_histogram,
+        R_exact_stable_count=profile.R_exact_stable_count,
+        R_atleast_stable_count=profile.R_atleast_stable_count,
+        stderr_atleast_stable_count,
+        max_stable_count=profile.max_stable_count,
         samples=profile.accepted_samples,
         requested_samples=profile.requested_samples,
         draws=profile.draws,
