@@ -813,6 +813,41 @@ a real problem for the current analysis.  A short diagnostic note, a warning
 category, or a keyword for suppressing warnings from regimes that will be marked
 singular would make scripted report generation easier to audit.
 
+### Follow-up observation from the expanded toggle report, 2026-06-09
+
+After the report was expanded to 48 parameter families, I initially tried to run
+finite `qcat_traj_cat` simulations for every selected stable-pair representative.
+For several dimer examples, the reduced ODE path emitted repeated internal logs
+from `src/qK_x_mapping.jl:686`:
+
+```text
+Error: M is still singular after maximum perturbation attempts.
+```
+
+The printed sparse matrices contained `Inf` entries.  The run was not used for
+the final report because the R-index is asymptotic and a finite representative
+point can be too close to a boundary or too extreme for robust trajectory
+integration.  The final report instead uses `plot_qcat_slice_with_flux(...;
+show_nullclines=true)` for representative nullcline diagnostics.
+
+Minimal reproduction context from the case-study script:
+
+```julia
+include("/home/joker/Realizibility_index/CASE_STUDY/Toggle_switch_constraints/code/generate_bistability_report_assets.jl")
+model = dimer_toggle_model()
+sc = only(filter(s -> s.family_id == "D02", all_scenarios()))
+constraints = constraints_for(model, sc)
+pairs = stable_regime_intersections(get_bnc_regimes(model); constraints, full_dim=true)
+best = choose_pair(model, constraints, pairs)
+qcat_traj_cat(model, best.q1, best.logwKk, (0.0, 500.0); fail_on_binding_error=false)
+```
+
+This is not blocking the R-index workflow, but it would help if the trajectory
+API exposed a quieter diagnostic mode for expected binding-solve failures, or if
+the internal `M is still singular` path could be downgraded when
+`fail_on_binding_error=false` and the caller is explicitly treating failures as
+nonfatal.
+
 ### Maintainer response and implementation status
 
 These report-generation notes are package-level usability issues, not
@@ -828,3 +863,106 @@ toggle-switch-specific code. The package response is:
   `match_regimes!(model; warn_singular_propagation=false)` so report scripts
   can suppress expected singular-propagation warnings after deciding to filter
   `singular=false`, while still retaining an auditable diagnostic record.
+
+## Multi-fate multistability scaling feedback, 2026-06-09
+
+Context:
+
+- Case-study directory:
+  `/home/joker/Realizibility_index/CASE_STUDY/Multi-fate`
+- Script:
+  `code/generate_multifate_rindex.jl`
+- Model:
+  multi-fate-3 with monomers `Ai`, homodimers `Hii`, heterodimers `Hij`,
+  DNA states `Di/Ci`, protein totals
+  `Ti = Ai + 2Hii + sum_j Hij`, and DNA totals `tDi = Di + Ci`.
+- The binding network has 496 binding regimes and the catalysis network has
+  496 catalysis regimes, so matching creates roughly 246k BNC regime
+  combinations.
+
+### Public CDD-based restriction is too heavy for exploratory multi-fate-3 scans
+
+Using the public report path:
+
+```julia
+profile = multistability_profile(
+    model;
+    constraints,
+    regimes,
+    samples=200,
+    stable=true,
+    singular=false,
+    feasible=true,
+    full_dim=true,
+    mode=:asymptotic_R,
+    pair_intersections=false,
+)
+```
+
+was still too slow for the unconstrained multi-fate-3 case.  The run was not
+limited by the number of Monte Carlo samples; it was spending time in
+`restrict_regimes` constructing and normalizing CDD polyhedra for a large number
+of stable BNC regimes.  The observed stack was inside CDDLib
+`removehredundancy!` called through:
+
+```text
+multistability_profile
+  restrict_regimes
+    restrict_regime
+      get_polyhedron
+        _build_polyhedron_from_C_C0
+          _poly_normalize!
+            CDDLib.removehredundancy!
+```
+
+This is a performance/API limitation rather than a correctness bug.
+
+### Workaround used in the case study
+
+For multi-fate-3 only, I used a fast ROP sampler in the case-study script:
+
+1. iterate over stable, feasible, nonsingular BNC regimes;
+2. call the internal `BindingAndCatalysis._regime_C_C0_nullity(rgm, :wKk)`;
+3. call the internal `BindingAndCatalysis._pullback_constraints(C, C0, nlt, constraints)`;
+4. skip regimes with residual equality rows, as the fast analogue of
+   `full_dim=true` under continuous cone sampling;
+5. sample the constrained asymptotic cone and count direct H-representation
+   membership, without constructing a CDD polyhedron for every regime.
+
+This made the multi-fate-3 exploratory scan practical and gave useful R-index
+estimates, but it depends on internal functions and is less auditable than a
+public API.
+
+### Requested package feature
+
+A public fast path would make large multistability scans much easier:
+
+```julia
+multistability_profile(
+    model;
+    constraints,
+    mode=:asymptotic_R,
+    full_dim=true,
+    pair_intersections=false,
+    restriction_backend=:hrep_membership,
+)
+```
+
+or equivalently:
+
+```julia
+restricted = restrict_regimes(
+    regimes,
+    constraints;
+    stable=true,
+    singular=false,
+    feasible=true,
+    full_dim=:nullity_only,
+    build_polyhedron=false,
+)
+```
+
+The key need is to expose a documented, package-supported way to pull BNC
+regime inequalities into a constrained parameter basis and use those
+H-representations directly for Monte Carlo cone membership, while reserving CDD
+polyhedron construction for selected regimes or validation examples.
