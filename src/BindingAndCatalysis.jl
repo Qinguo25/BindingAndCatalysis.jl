@@ -610,6 +610,7 @@ _include_src("CatalysisRegimeGraph.jl")
 _include_src("BncRegimeGraph.jl")
 
 # Higher-level workflows, rendering, and compatibility
+_include_src("FiberChamber.jl")
 _include_src("SIMO.jl")
 _include_src("symbolics.jl")
 _include_src("RegimeConstraints.jl")

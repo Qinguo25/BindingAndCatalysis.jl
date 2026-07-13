@@ -121,6 +121,30 @@
     stable_code = stability_code(regular)
     @test stable_flag === true || stable_flag === false || ismissing(stable_flag)
     @test stable_code in (-1, 0, 1)
+    stability_recalculate_error = try
+        is_stable(regular; recalculate=false)
+        nothing
+    catch error
+        sprint(showerror, error)
+    end
+    @test stability_recalculate_error ==
+        "ArgumentError: keyword `recalculate` is no longer supported; use `recompute` instead."
+    stability_return_code_error = try
+        is_stable(regular; return_code=true)
+        nothing
+    catch error
+        sprint(showerror, error)
+    end
+    @test stability_return_code_error ==
+        "ArgumentError: keyword `return_code` is no longer supported; call `stability_code(...)` instead."
+    stability_code_return_code_error = try
+        stability_code(regular; return_code=true)
+        nothing
+    catch error
+        sprint(showerror, error)
+    end
+    @test stability_code_return_code_error ==
+        "ArgumentError: keyword `return_code` is no longer supported; call `stability_code(...)` instead."
 
     @test isdefined(Main, :linear_control_model)
     @test isdefined(Main, :control_metrics)
@@ -302,7 +326,7 @@ end
     @test get_binding_perm(bnc_rgm) == [2, 1]
     @test get_catalysis_perm(bnc_rgm) == [1, 2]
     @test string.(BindingAndCatalysis.wKk_sym(bnc_rgm)) == ["tE", "K", "β", "γ"]
-    @test string.(show_condition_wKk(bnc_rgm; log_space=false)) == ["K*γ ~ tE*β", "K > tE"]
+    @test string.(show_condition_wKk(bnc_rgm; log_space=false)) == ["K*γ ~ tE*β", "tE < K"]
 
     C_wKk, C0_wKk, nlt_wKk = get_C_C0_nullity_wKk(bnc_rgm)
     @test Matrix(C_wKk) == Rational{Int}[-1 1 -1 1; -1 1 0 0]

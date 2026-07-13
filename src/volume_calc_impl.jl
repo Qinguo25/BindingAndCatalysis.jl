@@ -385,6 +385,8 @@ function calc_volume(
     batch_size::Int=100_000,
     abstol::Float64=1.0e-8,
     reltol::Float64=0.005,
+    abs_tol=_UNSET_KEYWORD,
+    rel_tol=_UNSET_KEYWORD,
     time_limit::Float64=120.0,
 
     # --- perf/UX ---
@@ -393,6 +395,7 @@ function calc_volume(
     # --- rebase---
     rebase_mat::Union{AbstractMatrix{<:Real}, Nothing}=nothing,
 )::Vector{Volume}
+    _reject_renamed_tolerance_keywords(abs_tol, rel_tol)
     problem = _prepare_hrep_volume_problem(Cs, C0s; rebase_mat=rebase_mat)
     n_regimes = length(problem.Cs)
     @info "Number of polyhedra to calc volume: $n_regimes"
@@ -685,6 +688,7 @@ function calc_volume(
     rebase_mat::Union{AbstractMatrix{<:Real}, Nothing}=nothing,
     kwargs...,
 ) # singular/ asymptotic not be put here, as dimensions could reduce and change.
+    _reject_renamed_keywords(kwargs)
     n_all = length(rgms)
     vals = zeros(Volume, n_all)
     n_all == 0 && return vals
@@ -719,6 +723,7 @@ function calc_volume(
 end
 
 function calc_volume(rgms::AbstractVector{<:BncRegime}; asymptotic::Bool=true, kwargs...)
+    _reject_renamed_keywords(kwargs)
     n_all = length(rgms)
     vals = zeros(Volume, n_all)
     n_all == 0 && return vals
@@ -742,6 +747,7 @@ function calc_volume(
     asymptotic::Bool=true,
     kwargs...,
 ) # singular/ asymptotic not be put here, as dimensions could reduce and change.
+    _reject_renamed_keywords(kwargs)
     n_all = length(rgms)
     vals = zeros(Volume, n_all)
     n_all == 0 && return vals
@@ -771,6 +777,7 @@ Return cached wKk-space volumes for Bnc regimes, computing missing entries
 from each regime's `get_C_C0_nullity_wKk` polyhedron.
 """
 function get_volumes(rgms::AbstractVector{<:BncRegime}; recompute::Bool=false, kwargs...)
+    _reject_renamed_keywords(kwargs)
     idxs =
         recompute ? collect(eachindex(rgms)) : findall(rgm -> isnothing(rgm.volume), rgms)
     if !isempty(idxs)

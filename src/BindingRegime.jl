@@ -278,6 +278,7 @@ function get_volumes(
     rebase_mat::Union{AbstractMatrix{<:Real}, Nothing}=nothing,
     kwargs...,
 )
+    _reject_renamed_keywords(kwargs)
     all_rgms = if isnothing(regimes)
         get_binding_indices(Bnc)
     else

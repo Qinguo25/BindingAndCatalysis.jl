@@ -2,6 +2,8 @@
 
 This document describes the current architecture of `BindingAndCatalysis.jl`.
 It is the canonical maintainer-facing architecture reference for the package.
+Every architecture-changing commit must update this file in the same commit;
+future designs belong in `docs/` until their code is actually present.
 
 ## Overview
 
@@ -43,7 +45,7 @@ Bnc model
   └─ Higher-level tools
       ├─ volume estimation
       ├─ symbolic rendering
-      ├─ SIMO path workflows
+      ├─ fiber/chamber geometry and SIMO path workflows
       └─ visualization extension
 ```
 
@@ -456,6 +458,11 @@ abstol
 
 Do not add new `rel_tol` or `abs_tol` keywords.
 
+The removed main-branch spellings `recalculate`, `rel_tol`, and `abs_tol`
+raise an `ArgumentError` that names `recompute`, `reltol`, or `abstol` as the
+replacement. They are not silently translated, including on cached or empty
+fast paths.
+
 ## Caches and Initialization
 
 The explicit cache-building entry points are:
@@ -629,25 +636,88 @@ show_catalysis_dynamics(...)
 
 Symbolic rendering uses `log_space::Bool` for display mode.
 
-## SIMO Path Workflow
+## Fiber/Chamber and SIMO Workflow
 
-`src/SIMO.jl` includes the SIMO implementation under `src/simo/`:
+The geometric contract and planned higher-dimensional generalization are in
+`docs/fiber_chamber_design.md`. This section describes only capabilities that
+are currently implemented.
 
-- `core.jl`: `SIMOPaths`, path enumeration, graph helpers;
-- `polyhedra.jl`: node, edge, and path polyhedron construction;
-- `reaction_order.jl`: reaction-order summaries along paths;
-- `display.jl`: printing and path formatting.
+`src/FiberChamber.jl` owns the backend-independent geometry layer:
+
+- `VariationSubspace`: a full-rank basis for allowed parameter variation;
+- `FiberChart`: a quotient map with kernel equal to that variation subspace,
+  plus a section into the ambient parameter space;
+- `FiberProblem` and `AffineFiber`: the model/chart problem and a fiber chosen
+  by a base-space point;
+- `OrderedRegimePath` and `ConditionalSliceType`: a one-dimensional slice label
+  and its closed existence condition;
+- `FiberChamber` and `ChamberComplex`: records reserved for connected exact
+  strata and their verified adjacency.
+
+The production solver currently supports a coordinate-aligned
+one-dimensional qK fiber. `SIMOPaths` is the compatibility facade: it
+enumerates ordered regime paths, attaches the corresponding `FiberProblem`,
+and lazily computes conditions and volumes. The default
+`condition_method=:pair_memo_dag` backend is the pair-memoized DAG solver
+ported from the former main implementation. It caches reusable subpath
+conditions by endpoint pair and evaluates their dependency plans bottom-up.
+Single-path and bulk requests use the same backend, and a later uncached
+endpoint request schedules another DAG plan rather than falling back to the
+recursive oracle.
+
+Caller-supplied `rgm_paths` are normalized without mutating the input and must
+follow real, correctly oriented edges of the selected SIMO graph. Empty paths,
+repeated or out-of-range regimes, fabricated interfaces, and cyclic path unions
+raise `ArgumentError` before either condition backend runs.
+
+For this coordinate-aligned specialization, the quotient chart selects the
+unchanged qK coordinates in their original order. This is the same coordinate
+order produced by eliminating `change_qK_idx`, so every stored path condition
+is expressed in the base chart recorded by its `FiberProblem`.
+
+The former vibe suffix-DAG implementation is retained as
+`condition_method=:suffix_dag` for regression comparison. It is not the
+default. The removed main keyword `condition_solver` raises an error that
+points to `condition_method`; the ambiguous value `:dag` is not accepted.
 
 `SIMOPaths` caches:
 
-- qK graph;
-- source and sink nodes;
-- regime paths;
-- node, edge, and path polyhedra;
-- path volumes.
+- its `FiberProblem`, qK graph, source/sink nodes, and candidate regime paths;
+- the internal pair-condition backend, or suffix-DAG node/edge caches;
+- path polyhedra, explicit path-feasibility flags, and path volumes.
 
-Path polyhedra and path volumes are lazy caches. Refresh them with
-`recompute=true`.
+The exported `get_sources(paths)` and `get_sinks(paths)` accessors return
+sorted copies, preserving the former one-dimensional facade contract.
+
+Each path-feasibility entry is `nothing` until its condition is computed, then
+becomes `true` or `false`. `is_feasible(paths, path)` computes the condition on
+demand and returns the Boolean result.
+
+A missing tuple path in a solved pair map is represented by an empty condition
+and `path_feasible=false`; it is not treated as an internal error. A nonempty
+condition means that the candidate path is feasible. Full-dimensional
+conditions describe generic paths, while lower-dimensional nonempty conditions
+describe boundary-only degeneracies.
+
+These path conditions are closed existence sets. They can overlap on
+degenerate boundaries and are not by themselves an exact chamber
+stratification. Connected chamber refinement, discriminant construction, and
+planar (`k=2`) slice-complex enumeration are not implemented yet. In
+particular, a future planar dual regime graph will be only a view; the labelled
+cell complex and its incidence data must remain authoritative.
+
+`src/SIMO.jl` includes the facade implementation under `src/simo/`:
+
+- `core.jl`: `SIMOPaths`, path enumeration, graph helpers, and fiber facade;
+- `polyhedra.jl`: backend routing, path conditions, feasibility, and volumes;
+- `reaction_order.jl`: reaction-order summaries along paths;
+- `display.jl`: printing and path formatting.
+
+Path conditions are lazy per-object caches and are not automatically
+recomputed. Path-volume caches can be refreshed with `recompute=true`.
+Concurrent calls that mutate caches on the same `SIMOPaths` instance must be
+serialized by the caller; one pair-DAG solve may itself use internal worker
+threads. Separate instances can be solved concurrently.
 
 ## Visualization Extension
 
@@ -721,6 +791,7 @@ Maintenance notes:
    - `CatalysisRegimeGraph.jl`
    - `BncRegimeGraph.jl`
 10. High-level APIs:
+   - `FiberChamber.jl`
    - `SIMO.jl`
    - `symbolics.jl`
    - `RegimeConstraints.jl`
@@ -769,6 +840,12 @@ files that depend on methods loaded later.
 ### Graphs, Symbolics, and Workflows
 
 - `src/*RegimeGraph.jl`: binding, catalysis, and Bnc graph construction.
+- `src/FiberChamber.jl` and `src/fiber/core.jl`: variation subspaces, quotient
+  charts, fibers, conditional slice records, and chamber records.
+- `src/fiber/axis1d_pair_memo.jl`: coordinate-aligned one-dimensional problem,
+  projection caches, path/pair keys, and recursive pair-memo oracle.
+- `src/fiber/axis1d_pair_dag.jl`: pair dependency planning, bottom-up DAG
+  evaluation, parallel scheduler, and profiling.
 - `src/SIMO.jl` and `src/simo/*`: SIMO paths and path polyhedra.
 - `src/symbolics.jl` and `src/symbolic/*`: symbolic API and rendering.
 - `src/visualize.jl`, `src/visualization/*`,
@@ -789,6 +866,11 @@ Compatibility policy:
 
 - SISO aliases are kept for notebook/report compatibility, but new code should
   use SIMO names.
+- Main-branch keyword spellings are not compatibility aliases:
+  `condition_solver`, `recalculate`, `rel_tol`, `abs_tol`, and stability's
+  `return_code` fail with a migration message. Maintained code uses
+  `condition_method`, `recompute`, `reltol`, `abstol`, and the separate
+  `stability_code(...)` function.
 - Other old aliases may call maintained APIs and issue deprecation warnings
   through the 1.x maintenance window.
 - New internal code should use maintained names, not legacy aliases.

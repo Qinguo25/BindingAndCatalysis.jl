@@ -1,7 +1,10 @@
 mutable struct SIMOPaths{T}
     bn::Bnc{T}
+    fiber_problem::FiberProblem{Bnc{T}}
     qK_grh::SimpleDiGraph
-    change_qK_idx::T
+    change_qK_idx::Int
+    condition_method::Symbol
+    condition_backend::Union{Nothing, Axis1DPairMemoBackend{T}}
 
     sources::Vector{Int}
     sinks::Vector{Int}
@@ -21,9 +24,18 @@ mutable struct SIMOPaths{T}
 
     path_volume_is_calc::BitVector
     path_polys_is_calc::BitVector
+    path_feasible::Vector{Union{Nothing, Bool}}
 
     function SIMOPaths(
-        model::Bnc{T}, qK_grh, change_qK_idx, sources, sinks, rgm_paths
+        model::Bnc{T},
+        fiber_problem,
+        qK_grh,
+        change_qK_idx,
+        condition_method,
+        condition_backend,
+        sources,
+        sinks,
+        rgm_paths,
     ) where {T}
         edge_keys, path_edge_idxs = _build_path_edge_index(rgm_paths)
         path_node_mask = falses(n_regimes(model))
@@ -40,10 +52,14 @@ mutable struct SIMOPaths{T}
         path_volume = Vector{Volume}(undef, length(rgm_paths))
         path_volume_is_calc = falses(length(rgm_paths))
         path_polys_is_calc = falses(length(rgm_paths))
+        path_feasible = Vector{Union{Nothing, Bool}}(nothing, length(rgm_paths))
         return new{T}(
             model,
+            fiber_problem,
             qK_grh,
-            change_qK_idx,
+            Int(change_qK_idx),
+            condition_method,
+            condition_backend,
             sources,
             sinks,
             nothing,
@@ -59,6 +75,7 @@ mutable struct SIMOPaths{T}
             path_volume,
             path_volume_is_calc,
             path_polys_is_calc,
+            path_feasible,
         )
     end
 end
@@ -72,17 +89,84 @@ end
            get_nullity(model, v) > 0
 end
 
-function SIMOPaths(model::Bnc{T}, change_qK; rgm_paths=nothing) where {T}
+function _normalize_simo_paths(rgm_paths, n_vertices::Integer)
+    paths = [Int.(collect(path)) for path in rgm_paths]
+    for (path_idx, path) in enumerate(paths)
+        isempty(path) && throw(ArgumentError("regime path $(path_idx) must not be empty."))
+        all(idx -> 1 <= idx <= n_vertices, path) || throw(
+            ArgumentError(
+                "regime path $(path_idx) contains an index outside 1:$(n_vertices)."
+            ),
+        )
+        length(unique(path)) == length(path) ||
+            throw(ArgumentError("regime path $(path_idx) must not repeat a regime."))
+    end
+    return paths
+end
+
+function _validate_simo_path_edges!(
+    paths::AbstractVector{<:AbstractVector{<:Integer}}, qK_graph::AbstractGraph
+)
+    for (path_idx, path) in enumerate(paths)
+        for (from, to) in zip(path, @view(path[2:end]))
+            has_edge(qK_graph, from, to) || throw(
+                ArgumentError(
+                    "regime path $(path_idx) uses $(from) -> $(to), which is not an " *
+                    "oriented edge of the SIMO graph for the selected qK coordinate.",
+                ),
+            )
+        end
+    end
+    return paths
+end
+
+function SIMOPaths(
+    model::Bnc{T},
+    change_qK;
+    rgm_paths=nothing,
+    condition_method::Symbol=:pair_memo_dag,
+    condition_solver=_UNSET_KEYWORD,
+) where {T}
+    if condition_solver !== _UNSET_KEYWORD
+        migration = if condition_solver === :dag
+            "use `condition_method=:pair_memo_dag`."
+        elseif condition_solver === :recursive
+            "the recursive solver is now an internal test oracle; use " *
+            "`condition_method=:pair_memo_dag`."
+        else
+            "use `condition_method=:pair_memo_dag` (default) or `:suffix_dag`."
+        end
+        throw(
+            ArgumentError(
+                "keyword `condition_solver` is no longer supported; use " *
+                "`condition_method` instead. For `condition_solver=$(repr(condition_solver))`, " *
+                migration,
+            ),
+        )
+    end
+    condition_method in (:pair_memo_dag, :suffix_dag) || throw(
+        ArgumentError(
+            "unsupported condition_method=$(repr(condition_method)); supported values are " *
+            "`:pair_memo_dag` and `:suffix_dag`.",
+        ),
+    )
     change_qK_idx = locate_sym_qK(model, change_qK)
 
     if rgm_paths === nothing
         qK_grh = get_SIMO_graph(model, change_qK)
         sources, sinks = get_sources_sinks(model, qK_grh)
         rgm_paths = _enumerate_paths(qK_grh; sources, sinks)
+        rgm_paths = _normalize_simo_paths(rgm_paths, n_regimes(model))
     else
+        full_qK_grh = get_SIMO_graph(model, change_qK)
+        rgm_paths = _normalize_simo_paths(rgm_paths, n_regimes(model))
+        _validate_simo_path_edges!(rgm_paths, full_qK_grh)
         qK_grh = graph_from_paths(rgm_paths, n_regimes(model))
         sources, sinks = get_sources_sinks(qK_grh)
     end
+    is_cyclic(qK_grh) && throw(
+        ArgumentError("the union of SIMO regime paths must form a directed acyclic graph."),
+    )
 
     filter!(rgm_paths) do path
         length(path) > 1 || get_nullity(model, only(path)) == 0
@@ -96,8 +180,35 @@ function SIMOPaths(model::Bnc{T}, change_qK; rgm_paths=nothing) where {T}
         sinks = unique(Int(last(p)) for p in rgm_paths)
     end
 
-    return SIMOPaths(model, qK_grh, change_qK_idx, sources, sinks, rgm_paths)
+    fiber_problem = FiberProblem(
+        model, FiberChart(model.n, change_qK_idx); parameter_chart=:qK
+    )
+    condition_backend = if condition_method === :pair_memo_dag
+        Axis1DPairMemoBackend(
+            _build_axis1d_problem(model, change_qK_idx, qK_grh, sources, sinks)
+        )
+    else
+        nothing
+    end
+
+    return SIMOPaths(
+        model,
+        fiber_problem,
+        qK_grh,
+        change_qK_idx,
+        condition_method,
+        condition_backend,
+        sources,
+        sinks,
+        rgm_paths,
+    )
 end
+
+get_fiber_problem(grh::SIMOPaths) = grh.fiber_problem
+get_slice_types(grh::SIMOPaths) = OrderedRegimePath.(grh.rgm_paths)
+get_sources(grh::SIMOPaths) = sort!(copy(grh.sources))
+get_sinks(grh::SIMOPaths) = sort!(copy(grh.sinks))
+get_change_qK_idx(grh::SIMOPaths) = grh.change_qK_idx
 
 function _ensure_paths_dict!(grh::SIMOPaths)
     isnothing(grh.paths_dict) || return grh.paths_dict

@@ -71,6 +71,7 @@ function judge_stability!(rgm::BncRegime; kwargs...)
 end
 
 function _stability_flag(rgm::BncRegime; recompute::Bool=false, kwargs...)
+    _reject_stability_keywords(kwargs)
     return if recompute || rgm.is_stable == 0
         judge_stability!(rgm; kwargs...)
     else
