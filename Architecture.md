@@ -650,9 +650,11 @@ are currently implemented.
 - `FiberProblem` and `AffineFiber`: the model/chart problem and a fiber chosen
   by a base-space point;
 - `OrderedRegimePath` and `ConditionalSliceType`: a one-dimensional slice label
-  and its closed existence condition;
-- `FiberChamber` and `ChamberComplex`: records reserved for connected exact
-  strata and their verified adjacency.
+  and its closed existence condition.
+
+Exact chamber and chamber-complex records are deliberately not part of the
+current API. They will be introduced together with connected-stratum and
+verified-adjacency algorithms, rather than as unpopulated placeholder types.
 
 The production solver currently supports a coordinate-aligned
 one-dimensional qK fiber. `SIMOPaths` is the compatibility facade: it
@@ -661,9 +663,11 @@ and lazily computes conditions and volumes. The default
 `condition_method=:pair_memo_dag` backend is the pair-memoized DAG solver
 ported from the former main implementation. It caches reusable subpath
 conditions by endpoint pair and evaluates their dependency plans bottom-up.
-Single-path and bulk requests use the same backend, and a later uncached
-endpoint request schedules another DAG plan rather than falling back to the
-recursive oracle.
+The solver has one scheduling model: dependency layers run in order,
+independent pairs within a layer may run in parallel, and a layer containing a
+single heavy middle join may parallelize that join instead. Single-path and
+bulk requests use the same backend, and a later uncached endpoint request
+schedules another DAG plan.
 
 Caller-supplied `rgm_paths` are normalized without mutating the input and must
 follow real, correctly oriented edges of the selected SIMO graph. Empty paths,
@@ -675,15 +679,16 @@ unchanged qK coordinates in their original order. This is the same coordinate
 order produced by eliminating `change_qK_idx`, so every stored path condition
 is expressed in the base chart recorded by its `FiberProblem`.
 
-The former vibe suffix-DAG implementation is retained as
-`condition_method=:suffix_dag` for regression comparison. It is not the
-default. The removed main keyword `condition_solver` raises an error that
-points to `condition_method`; the ambiguous value `:dag` is not accepted.
+`condition_method` accepts only `:pair_memo_dag`. The former suffix-DAG and
+recursive implementations have been removed from production; tests compare
+the backend against the direct edge-intersection/elimination construction.
+The removed keyword `condition_solver` and old method values raise migration
+errors that point to `condition_method=:pair_memo_dag`.
 
 `SIMOPaths` caches:
 
 - its `FiberProblem`, qK graph, source/sink nodes, and candidate regime paths;
-- the internal pair-condition backend, or suffix-DAG node/edge caches;
+- the internal pair-condition backend and its vertex/interface/pair caches;
 - path polyhedra, explicit path-feasibility flags, and path volumes.
 
 The exported `get_sources(paths)` and `get_sinks(paths)` accessors return
@@ -726,10 +731,11 @@ Visualization is implemented as an optional package extension:
 ```toml
 [weakdeps]
 GraphMakie = ...
+ImageFiltering = ...
 Makie = ...
 
 [extensions]
-BindingAndCatalysisVisualizationExt = ["GraphMakie", "Makie"]
+BindingAndCatalysisVisualizationExt = ["GraphMakie", "ImageFiltering", "Makie"]
 ```
 
 The main module defines stubs in `src/visualize.jl`. If optional visualization
@@ -741,7 +747,9 @@ The extension file is:
 ext/BindingAndCatalysisVisualizationExt.jl
 ```
 
-It includes the visualization sources into the parent module:
+It binds the already-loaded optional modules into the parent namespace without
+making the parent import weak dependencies, then includes the visualization
+sources into the parent module:
 
 - `simo_plot.jl`
 - `graphs.jl`
@@ -841,11 +849,11 @@ files that depend on methods loaded later.
 
 - `src/*RegimeGraph.jl`: binding, catalysis, and Bnc graph construction.
 - `src/FiberChamber.jl` and `src/fiber/core.jl`: variation subspaces, quotient
-  charts, fibers, conditional slice records, and chamber records.
+  charts, fibers, and conditional slice records.
 - `src/fiber/axis1d_pair_memo.jl`: coordinate-aligned one-dimensional problem,
-  projection caches, path/pair keys, and recursive pair-memo oracle.
+  projection caches, and path/pair keys.
 - `src/fiber/axis1d_pair_dag.jl`: pair dependency planning, bottom-up DAG
-  evaluation, parallel scheduler, and profiling.
+  evaluation, one layered parallel scheduler, and compact profiling.
 - `src/SIMO.jl` and `src/simo/*`: SIMO paths and path polyhedra.
 - `src/symbolics.jl` and `src/symbolic/*`: symbolic API and rendering.
 - `src/visualize.jl`, `src/visualization/*`,

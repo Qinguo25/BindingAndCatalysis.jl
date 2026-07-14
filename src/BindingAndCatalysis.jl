@@ -6,21 +6,18 @@ module BindingAndCatalysis
 #========================================================================================#
 
 using LinearAlgebra
-using Parameters
 using Symbolics
 
 import DiffEqCallbacks as CB
 import OrdinaryDiffEq as ODE
+using OrdinaryDiffEq: AutoForwardDiff, ODESolution
 
-using DataStructures: Queue, enqueue!, dequeue!, isempty
-using Distributions: Uniform, Normal
+using Distributions: Normal
 using Graphs
-using NonlinearSolve
 using Polyhedra
 using ProgressMeter
 using SparseArrays
-using StatsBase
-using Statistics: quantile
+using Statistics: mean, median!, quantile
 
 import Base: summary, show
 using CDDLib: CDDLib

@@ -9,7 +9,9 @@ export plot_binding_regime_partition, plot_bnc_regime_partition, plot_qcat_slice
 function _visualization_extension_required(name::Symbol)
     throw(
         ArgumentError(
-            "`$name` requires optional visualization packages. Add GraphMakie and a Makie backend to your active environment, then load them first, for example `using CairoMakie, GraphMakie`.",
+            "`$name` requires optional visualization packages. Add GraphMakie, " *
+            "ImageFiltering, and a Makie backend to your active environment, then load " *
+            "them first, for example `using CairoMakie, GraphMakie, ImageFiltering`.",
         ),
     )
 end

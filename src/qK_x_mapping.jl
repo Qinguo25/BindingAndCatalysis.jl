@@ -689,9 +689,19 @@ function get_homotopy_ode(Bnc::Bnc, p::HomotopyParams)
     end
 
     function (du, u, p, t)
-        @unpack startlogqK,
-        ΔlogqK, logx, logqK, logqK_max, M, M_lu, logx_M_view, logq_M_view, M_top,
-        M_top_diag = p
+        (;
+            startlogqK,
+            ΔlogqK,
+            logx,
+            logqK,
+            logqK_max,
+            M,
+            M_lu,
+            logx_M_view,
+            logq_M_view,
+            M_top,
+            M_top_diag,
+        ) = p
         #update q & x
         clamp!(u, -Inf, logqK_max) # make sure not overflow.
         @. logx = u
@@ -738,7 +748,7 @@ function _logx_traj_with_logqK_change(
         n = Bnc.n
         d = Bnc.d
         keep_manifold! = function (resid, u, p)  # Can not write to forms like log_sum_exp10!(logLx_local, Bnc.L, u) for Autodiff.
-            @unpack logq, logK = p
+            (; logq, logK) = p
             resid[1:d] .= log10.(Bnc.L * exp10.(u)) .- logq
             return resid[(d + 1):end] .= Bnc.N * u .- logK
         end

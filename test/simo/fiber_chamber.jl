@@ -17,9 +17,7 @@
     @test_throws ArgumentError VariationSubspace([1.0 2.0; 2.0 4.0])
 
     pair_paths = SIMOPaths(minimal_model(), 1; condition_method=:pair_memo_dag)
-    suffix_paths = SIMOPaths(minimal_model(), 1; condition_method=:suffix_dag)
 
-    @test pair_paths.rgm_paths == suffix_paths.rgm_paths
     @test all(isnothing, pair_paths.path_feasible)
     @test get_fiber_problem(pair_paths).model === pair_paths.bn
     @test fiber_dimension(get_fiber_problem(pair_paths)) == 1
@@ -30,42 +28,21 @@
     @test BindingAndCatalysis.get_change_qK_idx(pair_paths) == 1
 
     axis2_pair = SIMOPaths(minimal_model(), 2; condition_method=:pair_memo_dag)
-    axis2_suffix = SIMOPaths(minimal_model(), 2; condition_method=:suffix_dag)
     @test axis2_pair.fiber_problem.chart.quotient_map == [1.0 0.0 0.0; 0.0 0.0 1.0]
-    @test axis2_pair.rgm_paths == axis2_suffix.rgm_paths
+    axis2_reference = BindingAndCatalysis._calc_polyhedra_for_path(
+        axis2_pair.bn, axis2_pair.rgm_paths, axis2_pair.change_qK_idx
+    )
     @test all(
-        BindingAndCatalysis.same_polyhedron.(
-            get_polyhedra(axis2_pair), get_polyhedra(axis2_suffix)
-        ),
+        BindingAndCatalysis.same_polyhedron.(get_polyhedra(axis2_pair), axis2_reference)
     )
 
     pair_polys = get_polyhedra(pair_paths)
-    suffix_polys = get_polyhedra(suffix_paths)
-    @test all(BindingAndCatalysis.same_polyhedron.(pair_polys, suffix_polys))
+    reference_polys = BindingAndCatalysis._calc_polyhedra_for_path(
+        pair_paths.bn, pair_paths.rgm_paths, pair_paths.change_qK_idx
+    )
+    @test all(BindingAndCatalysis.same_polyhedron.(pair_polys, reference_polys))
     @test pair_paths.path_feasible == .!isempty.(pair_polys)
     @test all(is_feasible(pair_paths, idx) for idx in eachindex(pair_paths.rgm_paths))
-
-    recursive_oracle = BindingAndCatalysis.Axis1DPairMemoBackend(
-        BindingAndCatalysis._build_axis1d_problem(
-            pair_paths.bn,
-            pair_paths.change_qK_idx,
-            pair_paths.qK_grh,
-            pair_paths.sources,
-            pair_paths.sinks,
-        ),
-    )
-    endpoint_pairs = unique((first(path), last(path)) for path in pair_paths.rgm_paths)
-    for (source, sink) in endpoint_pairs
-        BindingAndCatalysis._find_pair_path_conditions!(recursive_oracle, source, sink)
-    end
-    for (idx, path) in enumerate(pair_paths.rgm_paths)
-        oracle_map = BindingAndCatalysis._pair_conditions(
-            recursive_oracle, first(path), last(path)
-        )
-        oracle_condition = get(oracle_map, BindingAndCatalysis._path_key(path), nothing)
-        @test !isnothing(oracle_condition)
-        @test BindingAndCatalysis.same_polyhedron(pair_polys[idx], oracle_condition)
-    end
 
     conditional_types = get_conditional_slice_types(pair_paths)
     @test length(conditional_types) == length(pair_paths.rgm_paths)
@@ -76,8 +53,7 @@
         conditional_types,
     )
 
-    # Requesting one endpoint pair must not make a later endpoint fall back to
-    # the recursive oracle. Each uncached request gets a fresh DAG profile.
+    # Each uncached endpoint request gets a fresh DAG profile.
     incremental = SIMOPaths(minimal_model(), 1; condition_method=:pair_memo_dag)
     @test length(incremental.rgm_paths) >= 2
     get_polyhedron(incremental, 1)
@@ -90,13 +66,12 @@
     # the two-path minimal model.
     medium_model = notebook_model2()
     medium_pair = SIMOPaths(medium_model, 1; condition_method=:pair_memo_dag)
-    medium_suffix = SIMOPaths(medium_model, 1; condition_method=:suffix_dag)
     @test length(medium_pair.rgm_paths) == 15
-    @test medium_pair.rgm_paths == medium_suffix.rgm_paths
+    medium_reference = BindingAndCatalysis._calc_polyhedra_for_path(
+        medium_pair.bn, medium_pair.rgm_paths, medium_pair.change_qK_idx
+    )
     @test all(
-        BindingAndCatalysis.same_polyhedron.(
-            get_polyhedra(medium_pair), get_polyhedra(medium_suffix)
-        ),
+        BindingAndCatalysis.same_polyhedron.(get_polyhedra(medium_pair), medium_reference)
     )
 
     # Custom paths must use real, correctly oriented SIMO edges. Fabricating
@@ -124,11 +99,11 @@
     singleton_pair = SIMOPaths(
         minimal_model(), 1; rgm_paths=[[1]], condition_method=:pair_memo_dag
     )
-    singleton_suffix = SIMOPaths(
-        minimal_model(), 1; rgm_paths=[[1]], condition_method=:suffix_dag
+    singleton_reference = BindingAndCatalysis._calc_polyhedra_for_path(
+        singleton_pair.bn, singleton_pair.rgm_paths, singleton_pair.change_qK_idx
     )
     @test BindingAndCatalysis.same_polyhedron(
-        get_polyhedron(singleton_pair, 1), get_polyhedron(singleton_suffix, 1)
+        get_polyhedron(singleton_pair, 1), only(singleton_reference)
     )
 
     @test_throws ArgumentError SIMOPaths(minimal_model(), 1; rgm_paths=[Int[]])

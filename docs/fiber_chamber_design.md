@@ -69,10 +69,13 @@ to establish chamber adjacency.
 The supported production case is a coordinate-aligned one-dimensional
 variation. `SIMOPaths` enumerates candidate ordered regime paths. Its default
 condition backend is the pair-memoized DAG solver: reusable subpath conditions
-are cached by regime pairs and solved in dependency order. The former vibe
-suffix-DAG implementation remains available as `condition_method=:suffix_dag`
-for comparison. Backend-specific source/sink, path, pair-cache, and DAG types
-remain internal to the one-dimensional implementation.
+are cached by regime pairs and solved in dependency layers. Independent pairs
+in one layer may run in parallel; when a layer has one heavy middle join, that
+join may use the worker threads instead. `condition_method` accepts only
+`:pair_memo_dag`. Tests compare it with the direct
+edge-intersection/elimination construction. Backend-specific source/sink,
+path, pair-cache, and DAG types remain internal to the one-dimensional
+implementation.
 
 Caller-supplied candidate paths must traverse real, correctly oriented edges
 of the selected SIMO regime graph. An arbitrary sequence of regime labels is

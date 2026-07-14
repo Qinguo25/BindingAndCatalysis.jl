@@ -189,7 +189,10 @@ Summarize differences between two vectors as counts of value transitions.
 """
 function vector_difference(v1::AbstractVector{T}, v2::AbstractVector{T}) where {T}
     diff_index = findall(v1 .!= v2)
-    mp = countmap(zip(v1[diff_index], v2[diff_index]))
+    mp = Dict{Tuple{T, T}, Int}()
+    for transition in zip(v1[diff_index], v2[diff_index])
+        mp[transition] = get(mp, transition, 0) + 1
+    end
     mp_sort = sort(collect(mp); by=x -> x.second, rev=true)
     return mp_sort
 end

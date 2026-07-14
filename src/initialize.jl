@@ -410,7 +410,11 @@ function _print_bnc_summary(io::IO, model::Bnc; final_newline::Bool=true)
 
     if is_bind_regimes_built(model)
         regimes = _bind_regimes_data(model)
-        regime_counts = countmap((rgm.is_asymptotic, rgm.nullity > 0) for rgm in regimes)
+        regime_counts = Dict{Tuple{Bool, Bool}, Int}()
+        for rgm in regimes
+            key = (rgm.is_asymptotic, rgm.nullity > 0)
+            regime_counts[key] = get(regime_counts, key, 0) + 1
+        end
         println(io, "Number of regimes: ", length(regimes))
         println(io, "  - Invertible + Asymptotic: ", get(regime_counts, (true, false), 0))
         println(io, "  - Singular +  Asymptotic: ", get(regime_counts, (true, true), 0))

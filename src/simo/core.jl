@@ -4,20 +4,12 @@ mutable struct SIMOPaths{T}
     qK_grh::SimpleDiGraph
     change_qK_idx::Int
     condition_method::Symbol
-    condition_backend::Union{Nothing, Axis1DPairMemoBackend{T}}
+    condition_backend::Axis1DPairMemoBackend{T}
 
     sources::Vector{Int}
     sinks::Vector{Int}
     paths_dict::Union{Nothing, Dict{Vector{Int}, Int}}
     rgm_paths::Vector{Vector{Int}}
-    path_edge_idxs::Vector{Vector{Int}}
-    edge_keys::Vector{Tuple{Int, Int}}
-    path_node_mask::BitVector
-
-    node_polys::Vector{Polyhedron}
-    node_polys_is_calc::BitVector
-    edge_polys::Vector{Polyhedron}
-    edge_polys_is_calc::BitVector
 
     path_polys::Vector{Polyhedron}
     path_volume::Vector{Volume}
@@ -37,17 +29,6 @@ mutable struct SIMOPaths{T}
         sinks,
         rgm_paths,
     ) where {T}
-        edge_keys, path_edge_idxs = _build_path_edge_index(rgm_paths)
-        path_node_mask = falses(n_regimes(model))
-        for path in rgm_paths
-            for idx in path
-                path_node_mask[Int(idx)] = true
-            end
-        end
-        node_polys = Vector{Polyhedron}(undef, n_regimes(model))
-        node_polys_is_calc = falses(length(node_polys))
-        edge_polys = Vector{Polyhedron}(undef, length(edge_keys))
-        edge_polys_is_calc = falses(length(edge_keys))
         path_polys = Vector{Polyhedron}(undef, length(rgm_paths))
         path_volume = Vector{Volume}(undef, length(rgm_paths))
         path_volume_is_calc = falses(length(rgm_paths))
@@ -64,13 +45,6 @@ mutable struct SIMOPaths{T}
             sinks,
             nothing,
             rgm_paths,
-            path_edge_idxs,
-            edge_keys,
-            path_node_mask,
-            node_polys,
-            node_polys_is_calc,
-            edge_polys,
-            edge_polys_is_calc,
             path_polys,
             path_volume,
             path_volume_is_calc,
@@ -131,10 +105,9 @@ function SIMOPaths(
         migration = if condition_solver === :dag
             "use `condition_method=:pair_memo_dag`."
         elseif condition_solver === :recursive
-            "the recursive solver is now an internal test oracle; use " *
-            "`condition_method=:pair_memo_dag`."
+            "the recursive solver was removed; use `condition_method=:pair_memo_dag`."
         else
-            "use `condition_method=:pair_memo_dag` (default) or `:suffix_dag`."
+            "use `condition_method=:pair_memo_dag`."
         end
         throw(
             ArgumentError(
@@ -144,10 +117,10 @@ function SIMOPaths(
             ),
         )
     end
-    condition_method in (:pair_memo_dag, :suffix_dag) || throw(
+    condition_method === :pair_memo_dag || throw(
         ArgumentError(
-            "unsupported condition_method=$(repr(condition_method)); supported values are " *
-            "`:pair_memo_dag` and `:suffix_dag`.",
+            "unsupported condition_method=$(repr(condition_method)); only " *
+            "`:pair_memo_dag` is supported.",
         ),
     )
     change_qK_idx = locate_sym_qK(model, change_qK)
@@ -183,13 +156,9 @@ function SIMOPaths(
     fiber_problem = FiberProblem(
         model, FiberChart(model.n, change_qK_idx); parameter_chart=:qK
     )
-    condition_backend = if condition_method === :pair_memo_dag
-        Axis1DPairMemoBackend(
-            _build_axis1d_problem(model, change_qK_idx, qK_grh, sources, sinks)
-        )
-    else
-        nothing
-    end
+    condition_backend = Axis1DPairMemoBackend(
+        _build_axis1d_problem(model, change_qK_idx, qK_grh, sources, sinks)
+    )
 
     return SIMOPaths(
         model,

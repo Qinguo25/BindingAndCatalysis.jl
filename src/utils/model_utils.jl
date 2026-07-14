@@ -39,7 +39,7 @@ function N_generator(r::Int, n::Int; min_binder::Int=2, max_binder::Int=2)::Matr
     d = n - r
     N = [zeros(r, d) -I(r)]
     Threads.@threads for i in 1:r
-        idx = sample(1:(d + i - 1), rand(min_binder:max_binder); replace=true)
+        idx = rand(1:(d + i - 1), rand(min_binder:max_binder))
         for j in idx
             N[i, j] += 1
         end

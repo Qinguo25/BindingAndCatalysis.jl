@@ -58,94 +58,13 @@ struct Axis1DProblem{T}
     dag::Axis1DDAG
 end
 
-mutable struct Axis1DDAGProfile
-    planning_ns::UInt64
-    pair_solve_ns::UInt64
-    middle_collect_ns::UInt64
-    middle_compute_ns::UInt64
-    middle_merge_ns::UInt64
-    pair_solve_calls::Int
-    planned_pairs::Int
-    middle_parallel_nodes::Int
-    middle_serial_nodes::Int
-    middle_join_pairs::Int
-    queue_pair_tasks::Int
-    queue_chunk_tasks::Int
-    queue_chunked_pairs::Int
-    queue_finalize_tasks::Int
-    queue_max_chunks_per_pair::Int
-    queue_max_chunk_estimated_entries::Int
-    queue_total_chunk_estimated_entries::Int
-    queue_max_chunk_seconds::Float64
-    queue_total_chunk_seconds::Float64
-    queue_finalize_ns::UInt64
-    queue_chunk_candidate_pairs::Int
-    queue_chunk_size_gate_skips::Int
-    queue_chunk_width_gate_skips::Int
-    queue_chunk_thread_gate_skips::Int
-    queue_estimator_entries_per_second::Float64
-    queue_estimator_target_entries::Int
-    queue_estimator_min_parallel_entries::Float64
-    queue_estimator_target_seconds::Float64
-    weighted_work_done::Float64
-    weighted_work_total::Float64
-    weighted_progress_units::Int
-    largest_pair_seconds::Float64
-    largest_pair_from::Int
-    largest_pair_to::Int
-    current_pair_from::Int
-    current_pair_to::Int
-    current_pair_branch::Symbol
-    current_pair_weight::Float64
-    current_pair_start_ns::UInt64
-    current_pair_elapsed_seconds::Float64
-    current_pair_output_entries::Int
-end
-
-function Axis1DDAGProfile()
-    return Axis1DDAGProfile(
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0.0,
-        0.0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        _axis1d_dag_fallback_entries_per_second(),
-        0,
-        0.0,
-        _axis1d_dag_target_chunk_seconds(),
-        0.0,
-        0.0,
-        0,
-        0.0,
-        0,
-        0,
-        0,
-        0,
-        :none,
-        0.0,
-        UInt64(0),
-        0.0,
-        0,
-    )
+Base.@kwdef mutable struct Axis1DDAGProfile
+    planning_ns::UInt64 = 0
+    solve_ns::UInt64 = 0
+    planned_pairs::Int = 0
+    solved_pairs::Int = 0
+    cached_pairs::Int = 0
+    layers::Int = 0
 end
 
 mutable struct Axis1DPairMemoBackend{T}
@@ -225,8 +144,6 @@ get_sinks(problem::Axis1DProblem) = copy(problem.dag.sinks)
 get_sinks(helper::Axis1DPairMemoBackend) = get_sinks(helper.problem)
 _axis1d_change_axis(problem::Axis1DProblem) = problem.change_qK_idx
 _axis1d_change_axis(helper::Axis1DPairMemoBackend) = _axis1d_change_axis(helper.problem)
-_axis1d_dag_profile(helper::Axis1DPairMemoBackend) = helper.dag_profile
-
 @inline _edge_exists(helper::Axis1DPairMemoBackend, from::Int, to::Int) =
     has_edge(_axis1d_graph(helper), from, to)
 @inline _pair_is_cached(helper::Axis1DPairMemoBackend, from::Int, to::Int) =
@@ -315,115 +232,4 @@ function _maybe_store_direct_path!(
     isempty(condition) && return nothing
     conditions[(from, to)] = condition
     return nothing
-end
-
-function _find_pair_path_conditions!(
-    helper::Axis1DPairMemoBackend, from::Int, to::Int
-)::Axis1DPathConditionMap
-    cached = _pair_conditions(helper, from, to)
-    !isnothing(cached) && return cached
-
-    conditions = Axis1DPathConditionMap()
-    if from == to
-        condition = _axis1d_vertex_condition!(helper, from)
-        isempty(condition) || (conditions[(from,)] = condition)
-        return _cache_pair_conditions!(helper, from, to, conditions)
-    end
-
-    _maybe_store_direct_path!(conditions, helper, from, to)
-
-    successors = _bridge_successors(helper, from, to)
-    predecessors = _bridge_predecessors(helper, from, to)
-    if isempty(successors) || isempty(predecessors)
-        return _cache_pair_conditions!(helper, from, to, conditions)
-    end
-
-    n_solved_successors = count(
-        successor -> _pair_is_cached(helper, successor, to), successors
-    )
-    n_solved_predecessors = count(
-        predecessor -> _pair_is_cached(helper, from, predecessor), predecessors
-    )
-    solved_successor_ratio = n_solved_successors / length(successors)
-    solved_predecessor_ratio = n_solved_predecessors / length(predecessors)
-
-    if n_solved_successors == 0 && n_solved_predecessors == 0
-        for successor in successors
-            left_condition = _axis1d_interface_condition!(helper, from, successor)
-            isempty(left_condition) && continue
-            for predecessor in predecessors
-                right_condition = _axis1d_interface_condition!(helper, predecessor, to)
-                isempty(right_condition) && continue
-                middle_conditions = _find_pair_path_conditions!(
-                    helper, successor, predecessor
-                )
-                isempty(middle_conditions) && continue
-                for (middle_path, middle_condition) in middle_conditions
-                    full_condition = _axis1d_intersect_nonempty(
-                        left_condition, middle_condition, right_condition
-                    )
-                    isnothing(full_condition) && continue
-                    conditions[_wrap_vertices(from, middle_path, to)] = full_condition
-                end
-            end
-        end
-        return _cache_pair_conditions!(helper, from, to, conditions)
-    end
-
-    if solved_successor_ratio > solved_predecessor_ratio
-        for successor in successors
-            suffix_conditions = _find_pair_path_conditions!(helper, successor, to)
-            isempty(suffix_conditions) && continue
-            left_condition = _axis1d_interface_condition!(helper, from, successor)
-            isempty(left_condition) && continue
-            for (suffix_path, suffix_condition) in suffix_conditions
-                full_condition = _axis1d_intersect_nonempty(
-                    left_condition, suffix_condition
-                )
-                isnothing(full_condition) && continue
-                conditions[_prepend_vertex(from, suffix_path)] = full_condition
-            end
-        end
-        return _cache_pair_conditions!(helper, from, to, conditions)
-    end
-
-    for predecessor in predecessors
-        prefix_conditions = _find_pair_path_conditions!(helper, from, predecessor)
-        isempty(prefix_conditions) && continue
-        right_condition = _axis1d_interface_condition!(helper, predecessor, to)
-        isempty(right_condition) && continue
-        for (prefix_path, prefix_condition) in prefix_conditions
-            full_condition = _axis1d_intersect_nonempty(prefix_condition, right_condition)
-            isnothing(full_condition) && continue
-            conditions[_append_vertex(prefix_path, to)] = full_condition
-        end
-    end
-
-    return _cache_pair_conditions!(helper, from, to, conditions)
-end
-
-"""
-    _find_all_path_conditions!(helper) -> Axis1DPairMemoBackend
-
-Solve all source-to-sink pair conditions stored in a helper, with progress.
-"""
-function _find_all_path_conditions!(helper::Axis1DPairMemoBackend)::Axis1DPairMemoBackend
-    pair_queries = [
-        (source, sink) for source in helper.problem.dag.sources for
-        sink in helper.problem.dag.sinks
-    ]
-    isempty(pair_queries) && return helper
-
-    if length(pair_queries) == 1
-        source, sink = only(pair_queries)
-        _find_pair_path_conditions!(helper, source, sink)
-        return helper
-    end
-
-    @info "Start finding all possible path conditions across $(length(pair_queries)) source-sink pairs."
-    @showprogress dt = 0.1 desc = "Finding path conditions" for (source, sink) in
-                                                                pair_queries
-        _find_pair_path_conditions!(helper, source, sink)
-    end
-    return helper
 end

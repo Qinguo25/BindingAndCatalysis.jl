@@ -5,8 +5,6 @@ export VariationSubspace,
     AbstractSliceType,
     OrderedRegimePath,
     ConditionalSliceType,
-    FiberChamber,
-    ChamberComplex,
     ambient_dimension,
     fiber_dimension,
     base_dimension,
@@ -208,30 +206,3 @@ struct ConditionalSliceType{S <: AbstractSliceType, C}
 end
 
 is_feasible(slice::ConditionalSliceType) = slice.feasible
-
-"""
-One connected stratum of an exact chamber decomposition.
-"""
-struct FiberChamber{S <: AbstractSliceType, C, W}
-    id::Int
-    slice_type::S
-    condition::C
-    witness::W
-    dimension::Int
-end
-
-"""
-Exact chamber nodes and their verified codimension-one adjacency graph.
-"""
-struct ChamberComplex{C <: FiberChamber, G <: AbstractGraph}
-    chambers::Vector{C}
-    adjacency::G
-
-    function ChamberComplex(
-        chambers::Vector{C}, adjacency::G
-    ) where {C <: FiberChamber, G <: AbstractGraph}
-        nv(adjacency) == length(chambers) ||
-            throw(DimensionMismatch("the chamber graph must have one vertex per chamber."))
-        return new{C, G}(chambers, adjacency)
-    end
-end

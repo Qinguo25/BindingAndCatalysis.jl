@@ -18,11 +18,13 @@ end
     @test captured_error_message(() -> SIMOPaths(model, 1; condition_solver=:recursive)) ==
         "ArgumentError: keyword `condition_solver` is no longer supported; use " *
           "`condition_method` instead. For `condition_solver=:recursive`, the recursive " *
-          "solver is now an internal test oracle; use `condition_method=:pair_memo_dag`."
+          "solver was removed; use `condition_method=:pair_memo_dag`."
 
     @test captured_error_message(() -> SIMOPaths(model, 1; condition_method=:dag)) ==
-        "ArgumentError: unsupported condition_method=:dag; supported values are " *
-          "`:pair_memo_dag` and `:suffix_dag`."
+        "ArgumentError: unsupported condition_method=:dag; only `:pair_memo_dag` is supported."
+    @test captured_error_message(() -> SIMOPaths(model, 1; condition_method=:suffix_dag)) ==
+        "ArgumentError: unsupported condition_method=:suffix_dag; only " *
+          "`:pair_memo_dag` is supported."
 
     paths = SIMOPaths(model, 1)
     @test captured_error_message(() -> get_volumes(paths; recalculate=false)) ==

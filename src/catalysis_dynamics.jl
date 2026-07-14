@@ -593,8 +593,7 @@ function get_catalysis_ode(model::Bnc)
     L_nzval = Float64.(helper._LN_sparse.nzval[helper._LN_top_idx])
 
     function f(du, u, p::TimecurveParam, t)
-        @unpack logk, x_scaled, q_scaled, logv, v_scaled, qdot_scaled, rhs, M, M_lu, M_top =
-            p
+        (; logk, x_scaled, q_scaled, logv, v_scaled, qdot_scaled, rhs, M, M_lu, M_top) = p
 
         mul!(logv, cn._Π_sparse, u)
         logv .+= logk
