@@ -826,6 +826,7 @@ get_affine_qKk2v(rgm::BncRegime) =
 )
     remove_h_redundancy || return C, C0, nullity
     poly = _build_polyhedron_from_C_C0(C, C0, nullity; canonicalize=true)
+    isempty(poly) && return _canonical_empty_condition(C, C0)
     return _polyhedron_to_C_C0_nullity(poly)
 end
 
@@ -928,10 +929,13 @@ function get_C_C0_nullity_xk(
     elseif kind === :combined || kind === :all
         C_bind, C0_bind = get_C_C0_xk(get_binding_regime(rgm))
         C_cat, C0_cat, nlt_cat = get_C_C0_nullity_xk(get_catalysis_regime(rgm))
+        C, C0, nlt = _stack_conditions(
+            (C_bind, C0_bind, 0), (C_cat, C0_cat, nlt_cat)
+        )
         return _maybe_remove_h_redundancy(
-            vcat(C_bind, C_cat),
-            vcat(C0_bind, C0_cat),
-            nlt_cat;
+            C,
+            C0,
+            nlt;
             remove_h_redundancy=remove_h_redundancy,
         )
     else
@@ -981,10 +985,13 @@ function get_C_C0_nullity_qKk(
     elseif kind === :combined || kind === :all
         C_bind, C0_bind, nlt_bind = get_C_C0_nullity_qKk(get_binding_regime(rgm))
         C_cat, C0_cat, nlt_cat = rgm.C_qKk_cat, rgm.C0_qKk_cat, rgm.nlt_qKk_cat
+        C, C0, nlt = _stack_conditions(
+            (C_bind, C0_bind, nlt_bind), (C_cat, C0_cat, nlt_cat)
+        )
         return _maybe_remove_h_redundancy(
-            vcat(C_bind, C_cat),
-            vcat(C0_bind, C0_cat),
-            max(nlt_bind, nlt_cat);
+            C,
+            C0,
+            nlt;
             remove_h_redundancy=remove_h_redundancy,
         )
     else

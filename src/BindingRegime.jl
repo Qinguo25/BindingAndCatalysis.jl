@@ -39,12 +39,19 @@ end
 function _affine_mapping_polyhedra(C, C0, nullity, M, M0)
     poly_x = _build_polyhedron_from_C_C0(C, C0, nullity)
 
+    if isempty(poly_x)
+        return _canonical_empty_condition(C, C0; ncols=size(M, 1))
+    end
+
     poly_elim = M * poly_x  # If for convenience, one can write `translate(M * poly_x, M0)`, and then C0qK = b
+    if isempty(poly_elim)
+        return _canonical_empty_condition(C, C0; ncols=size(M, 1))
+    end
     rlt = MixedMatHRep(hrep(poly_elim))
 
     A, b, linset = (rlt.A, rlt.b, rlt.linset)
     # @show linset
-    @assert linset == BitSet(1:maximum(linset)) "linear rows are not the first top n rows, code fix is needed"
+    @assert isempty(linset) || linset == BitSet(1:maximum(linset)) "linear rows are not the first top n rows, code fix is needed"
     # perm = [collect(linset) ; [i for i in 1:size(A,1) if i ∉ linset]]
     CqK = (x -> droptol!(x, 1e-10))(sparse(-A))
     C0qK = (b + A * M0)

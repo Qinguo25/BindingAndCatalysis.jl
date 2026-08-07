@@ -132,13 +132,21 @@ function _materialize_real_vector(v)
     return T[convert(T, x) for x in vv]
 end
 
-function _drop_trivial_true_rows(C, C0, nlt::Integer)
+function _drop_trivial_true_rows(C, C0, nlt::Integer; atol::Real=1.0e-10)
     keep = trues(size(C, 1))
     nlt_out = Int(nlt)
     for i in 1:size(C, 1)
-        if nnz(C[i, :]) == 0 && Float64(C0[i]) >= -1e-10
+        all(x -> _condition_scalar_iszero(x, atol), @view(C[i, :])) || continue
+
+        if i <= nlt
+            _condition_scalar_iszero(C0[i], atol) ||
+                return _canonical_empty_condition(C, C0)
             keep[i] = false
-            i <= nlt && (nlt_out -= 1)
+            nlt_out -= 1
+        elseif _condition_scalar_isnonnegative(C0[i], atol)
+            keep[i] = false
+        else
+            return _canonical_empty_condition(C, C0)
         end
     end
     return C[keep, :], C0[keep], nlt_out

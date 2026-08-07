@@ -313,6 +313,15 @@ constraints in the original chart and pull them back through `F,F0`.
 The older matrix constraint convention remains supported: the first `nullity`
 rows are equalities and later rows are inequalities.
 
+All flattened linear conditions use the same positional contract. For a triple
+`(C, C0, nlt)`, the first `nlt` rows mean $Cz+C_0=0$ and the remaining rows
+mean $Cz+C_0\geq 0$. Combining condition blocks first gathers and checks all
+equalities, then places every inequality after them. Dependent compatible
+equalities are reduced to an independent set; incompatible equalities produce
+the canonical empty condition $0z-1\geq 0$. Empty polyhedra are ordinary
+infeasible scientific results, while unexpected polyhedral-backend exceptions
+propagate to the caller.
+
 Default chart selection:
 
 - binding-only analysis uses `:qK`;
