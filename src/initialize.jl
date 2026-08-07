@@ -356,7 +356,7 @@ function _nonnegative_conservation_basis(L_Γ::AbstractMatrix{<:Integer}; max_co
 end
 
 @inline function _rebuild_helper!(bn::Bnc)
-    bn.direction = sign(det([bn.L; bn.N])) # recalculate the direction, since L has been changed.
+    bn.direction = _det_sign_exact([bn.L; bn.N]) # recalculate the direction, since L has been changed.
     bn.IntegrationHelper = nothing # lazily rebuild integration helper on first numerical integration.
     bn._L_helper = _build_matrix_helper(bn.L)
     return nothing
@@ -381,11 +381,11 @@ end
     end
 end
 
-@inline function _remove_regime_data!(bn::Bnc{T}) where {T}
+@inline function _remove_regime_data!(bn::Bnc)
     bn.BindRegimes = nothing
     bn.BncRegimes = nothing
     bn.vertices_graph = nothing
-    bn._vertices_Nρ_inv_dict = Dict{Vector{T}, Tuple{SparseMatrixCSC{Float64, Int}, T}}()
+    bn._vertices_Nρ_inv_dict = nothing
     bn._regimes_affine_ready = false
     empty!(bn._diagnostics)
     return nothing
@@ -402,9 +402,14 @@ function _print_bnc_summary(io::IO, model::Bnc; final_newline::Bool=true)
     println(io, "Number of reactions (r): ", model.r)
     println(io, "L matrix: ", model.L)
     println(io, "N matrix: ", model.N)
-    println(
-        io, "Direction of binding reactions: ", model.direction > 0 ? "forward" : "backward"
-    )
+    direction_label = if model.direction > 0
+        "forward"
+    elseif model.direction < 0
+        "backward"
+    else
+        "singular/undefined"
+    end
+    println(io, "Direction of binding reactions: ", direction_label)
     println(io, "Catalysis involved: ", isnothing(model.catalysis) ? "No" : "Yes")
     println(io, "Regimes constructed: ", is_bind_regimes_built(model) ? "Yes" : "No")
 

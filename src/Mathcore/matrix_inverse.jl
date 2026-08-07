@@ -751,6 +751,8 @@ function _bareiss_det_big(A::AbstractMatrix{<:Integer})::BigInt
     return sign * B[n, n]
 end
 
+@inline _det_sign_exact(A::AbstractMatrix{<:Integer})::Int = Int(sign(_bareiss_det_big(A)))
+
 function _minor_matrix(A::AbstractMatrix{<:Integer}, row::Int, col::Int)
     n = size(A, 1)
     B = Matrix{Int}(undef, n - 1, n - 1)

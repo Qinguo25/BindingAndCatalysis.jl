@@ -53,7 +53,7 @@
     @test get_catalysis_perms(model) == get_perm.(get_catalysis_regimes(model))
     @test size(get_P(cat_rgm), 1) == cn.r_v
     @test occursin("dominant mode", sprint(show, MIME"text/plain"(), cat_rgm))
-    @test occursin("nullity", sprint(show, MIME"text/plain"(), cat_rgm))
+    @test occursin("balance equality count", sprint(show, MIME"text/plain"(), cat_rgm))
     @test occursin("asymptotic", sprint(show, MIME"text/plain"(), cat_rgm))
 
     C_xk_cat, C0_xk_cat, nlt_xk_cat = get_C_C0_nullity_xk(cat_rgm)

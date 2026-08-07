@@ -431,11 +431,10 @@ end
 function assign_bnc_regime_wKk(
     model::Bnc, logwKk::AbstractVector{<:Real}; tol::Float64=1e-8, max_nullity::Integer=0
 )
-    rgms = get_bnc_regimes(model)
-    for (idx, rgm) in pairs(rgms)
+    for rgm in get_bnc_regimes(model)
         C, C0, nlt = get_C_C0_nullity_wKk(rgm)
         nlt <= max_nullity || continue
-        condition_contains(C, C0, nlt, logwKk; tol=tol) && return idx
+        condition_contains(C, C0, nlt, logwKk; tol=tol) && return get_bnc_index(rgm)
     end
     return 0
 end

@@ -136,7 +136,9 @@ function find_all_regimes!(model::Bnc{T}) where {T}
             regimes = _build_bind_regimes(
                 model, all_perms, is_asymptotic, fill(T(-1), n_regimes)
             )
-            regimes_perm_dict = Dict(perm => idx for (idx, perm) in enumerate(all_perms))
+            regimes_perm_dict = Dict{Tuple{Vararg{T}}, Int}(
+                Tuple(perm) => idx for (idx, perm) in enumerate(all_perms)
+            )
             Regimes(regimes_perm_dict, regimes)
         end
 

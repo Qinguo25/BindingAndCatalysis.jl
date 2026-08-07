@@ -421,7 +421,12 @@ Enumerate catalysis regimes:
 cat_rgms = get_catalysis_regimes(model)
 cat_ids = get_catalysis_indices(model)
 cat_perms = get_catalysis_perms(model)
+balance_rows = balance_equality_count(first(cat_rgms))
 ```
+
+`balance_equality_count` reports the number of steady-state balance
+equalities in a catalysis regime. This quantity is not a matrix nullity;
+`get_nullity` applies to binding and BNC regimes.
 
 Build Binding-and-Catalysis regimes:
 
@@ -507,6 +512,9 @@ Assign a `wKk` point to a BNC regime:
 ```julia
 idx = assign_bnc_regime_wKk(model, logwKk; tol=1e-8, max_nullity=0)
 ```
+
+The returned value is the regime's global BNC index. It remains stable when
+the default feasible-regime filter omits earlier entries.
 
 Plot a BNC partition:
 

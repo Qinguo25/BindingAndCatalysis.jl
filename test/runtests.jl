@@ -2,6 +2,8 @@ include("support/setup.jl")
 
 include("binding/basic.jl")
 include("binding/regressions.jl")
+include("binding/exact_rank_direction.jl")
+include("regime_identity.jl")
 include("concurrency/threading.jl")
 include("bnc_regime/catalysis.jl")
 include("bnc_regime/constraints.jl")

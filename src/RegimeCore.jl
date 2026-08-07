@@ -201,8 +201,6 @@ end
     _bind_regimes(args...; kwargs...).regimes_perm_dict
 @inline _catalysis_regimes_perm_dict(args...; kwargs...) =
     _catalysis_regimes(args...; kwargs...).regimes_perm_dict
-@inline _bnc_regimes_perm_dict(args...; kwargs...) =
-    _bnc_regimes(args...; kwargs...).regimes_perm_dict
 
 # Properties involving inner struct fields
 @inline _bind_regimes_perms(args...; kwargs...) =
@@ -324,11 +322,13 @@ function get_binding_regime(model::AbstractBnc, idx::Integer; kwargs...)
     return get_binding_regime(_bind_regimes_data(bn)[idx]; kwargs...)
 end
 
-function get_binding_regime(model::AbstractBnc, perm::AbstractVector; kwargs...)
+function get_binding_regime(
+    model::AbstractBnc, perm::Union{AbstractVector, Tuple}; kwargs...
+)
     bn = get_binding_network(model)
     ensure_binding_regimes!(bn)
     key = eltype(perm) <: Integer ? perm : locate_sym_x.(Ref(bn), perm)
-    idx = _bind_regimes_perm_dict(bn)[key]
+    idx = _bind_regimes_perm_dict(bn)[Tuple(key)]
     return get_binding_regime(_bind_regimes_data(bn)[idx]; kwargs...)
 end
 function get_binding_regime(model::AbstractBnc, vtx::BindRegime; kwargs...)
@@ -353,12 +353,13 @@ function get_catalysis_regime(model::AbstractBnc, idx::Integer; kwargs...)
     return get_catalysis_regime(_catalysis_regimes_data(cn)[idx]; kwargs...)
 end
 function get_catalysis_regime(
-    model::AbstractBnc, perm::AbstractVector{<:Integer}; kwargs...
+    model::AbstractBnc,
+    perm::Union{AbstractVector{<:Integer}, Tuple{Vararg{<:Integer}}};
+    kwargs...,
 )
     cn = get_catalysis_network(model)
     ensure_catalysis_regimes!(cn)
-    key = perm
-    idx = _catalysis_regimes_perm_dict(cn)[key]
+    idx = _catalysis_regimes_perm_dict(cn)[Tuple(perm)]
     return get_catalysis_regime(_catalysis_regimes_data(cn)[idx]; kwargs...)
 end
 function get_catalysis_regime(model::AbstractBnc, vtx::CatalysisRegime; kwargs...)
@@ -388,11 +389,11 @@ get_catalysis_perm(args...; kwargs...) = get_catalysis_regime(args...; kwargs...
 get_bnc_perm(args...; kwargs...) = get_bnc_regime(args...; kwargs...).perm
 get_steady_state_perm(args...; kwargs...) = get_fixed_point_perm(args...; kwargs...)
 
-function get_binding_perm(Bnc::Bnc, perm::AbstractVector; check::Bool=false)
+function get_binding_perm(Bnc::Bnc, perm::Union{AbstractVector, Tuple}; check::Bool=false)
     key = eltype(perm) <: Integer ? perm : locate_sym_x.(Ref(Bnc), perm)
     check &&
-        @assert haskey(get_binding_regimes_dict(Bnc), key) "The given perm is not in Bnc"
-    return Vector{Int}(perm)
+        @assert haskey(get_binding_regimes_dict(Bnc), Tuple(key)) "The given perm is not in Bnc"
+    return Int.(collect(key))
 end
 function get_binding_perm(Bnc::Bnc, idx::Integer; kwargs...)
     return (ensure_binding_regimes!(Bnc); _bind_regimes_data(Bnc)[idx].perm)
@@ -400,11 +401,13 @@ end
 get_bind_perm(args...; kwargs...) = get_binding_perm(args...; kwargs...)
 
 function get_catalysis_perm(
-    model::CatalysisData, perm::AbstractVector{<:Integer}; check::Bool=false
+    model::CatalysisData,
+    perm::Union{AbstractVector{<:Integer}, Tuple{Vararg{<:Integer}}};
+    check::Bool=false,
 )
     check &&
-        @assert haskey(get_catalysis_regimes_dict(model), perm) "The given catalysis perm is not in the model."
-    return Vector{Int}(perm)
+        @assert haskey(get_catalysis_regimes_dict(model), Tuple(perm)) "The given catalysis perm is not in the model."
+    return Int.(collect(perm))
 end
 function get_catalysis_perm(model::CatalysisData, idx::Integer; kwargs...)
     return (ensure_catalysis_regimes!(model); _catalysis_regimes_data(model)[idx].perm)
@@ -442,8 +445,8 @@ function get_binding_index(Bnc::Bnc, idx::T; check::Bool=false) where {T <: Inte
     @assert idx ≥ 1 && idx ≤ n_regimes(Bnc) "The given index is out of range.")
     return idx
 end
-function get_binding_index(Bnc::Bnc, perm::AbstractVector; kwargs...)
-    return get_binding_perm_dict(Bnc)[get_perm(Bnc, perm)]
+function get_binding_index(Bnc::Bnc, perm::Union{AbstractVector, Tuple}; kwargs...)
+    return get_binding_perm_dict(Bnc)[Tuple(get_perm(Bnc, perm))]
 end
 get_bind_idx(args...; kwargs...) = get_binding_index(args...; kwargs...)
 
@@ -455,8 +458,12 @@ function get_catalysis_idx(
     )
     return idx
 end
-function get_catalysis_idx(model::CatalysisData, perm::AbstractVector; kwargs...)
-    return get_catalysis_perm_dict(model)[get_perm(model, perm)]
+function get_catalysis_idx(
+    model::CatalysisData,
+    perm::Union{AbstractVector{<:Integer}, Tuple{Vararg{<:Integer}}};
+    kwargs...,
+)
+    return get_catalysis_perm_dict(model)[Tuple(get_perm(model, perm))]
 end
 function get_bnc_idx(model::Bnc, bind, cat; check::Bool=false)
     cat_idx = get_catalysis_idx(model, cat; check=check)
@@ -476,8 +483,22 @@ end
 #========================================================================================#
 
 get_nullity(rgm::BindRegime) = rgm.nullity
-get_nullity(rgm::CatalysisRegime) = get_catalysis_network(rgm).r_v
 get_nullity(rgm::BncRegime) = rgm.nlt
+
+"""
+    balance_equality_count(rgm::CatalysisRegime) -> Int
+
+Return the number of steady-state balance equalities represented by a catalysis regime.
+This count is distinct from matrix-kernel nullity.
+"""
+balance_equality_count(rgm::CatalysisRegime) = get_catalysis_network(rgm).r_v
+function get_nullity(::CatalysisRegime)
+    throw(
+        ArgumentError(
+            "CatalysisRegime does not define matrix nullity; use balance_equality_count(rgm) for its steady-state balance equality count.",
+        ),
+    )
+end
 
 function get_binding_nullity(args...; kwargs...)
     return get_nullity(get_binding_regime(args...; kwargs...))
@@ -519,13 +540,15 @@ is_bnc_asymptotic(args...; kwargs...) = is_asymptotic(get_bnc_regime(args...; kw
 """
 Check if given key is valid for regime fetching.
 """
-have_perm(model::Bnc, perm::AbstractVector) =
-    haskey(get_binding_perm_dict(model), get_binding_perm(model, perm))
+have_perm(model::Bnc, perm::Union{AbstractVector, Tuple}) =
+    haskey(get_binding_perm_dict(model), Tuple(get_binding_perm(model, perm)))
 function have_perm(model::Bnc, idx::Integer)
     return (ensure_binding_regimes!(model); 1 <= idx <= n_bind_regimes(model))
 end
-function have_perm(model::CatalysisData, perm::AbstractVector)
-    return haskey(get_catalysis_perm_dict(model), get_catalysis_perm(model, perm))
+function have_perm(
+    model::CatalysisData, perm::Union{AbstractVector{<:Integer}, Tuple{Vararg{<:Integer}}}
+)
+    return haskey(get_catalysis_perm_dict(model), Tuple(get_catalysis_perm(model, perm)))
 end
 function have_perm(model::CatalysisData, idx::Integer)
     return (ensure_catalysis_regimes!(model); idx >= 1 && idx <= n_catalysis_regimes(model))
@@ -565,9 +588,7 @@ function _get_filter(;
             true
         end
     end
-    function judge_singular(x)
-        return isnothing(singular) || (singular ? get_nullity(x) > 0 : get_nullity(x) == 0)
-    end
+    judge_singular(x) = isnothing(singular) || is_singular(x) == singular
     judge_stable(x) = isnothing(stable) || is_stable(x) === stable
     judge_feasible(x) = isnothing(feasible) || is_feasible(x) == feasible
     add_filter_func = isnothing(add_filter) ? (x -> true) : add_filter

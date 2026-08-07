@@ -6,6 +6,7 @@ export find_catalysis_regimes!,
 export get_PΠ, get_CΠ, get_P_pos_neg, get_P0_pos_neg
 export get_affine_xk2v, get_affine_v2f, get_affine_xk2f, get_affine_x2k̃, get_affine_k2k̃
 export get_C_k, get_C_C0_xk, get_C0_xk, get_C_xk, get_C_C0_nullity_xk
+export balance_equality_count
 
 # ------------------------------------------------------------------------------------------------------------------------------------
 #                            CORE FUNCTIONS FOR CATALYSIS REGIMES
@@ -31,7 +32,9 @@ function find_catalysis_regimes!(model::CatalysisData)
         @info "3.Building Regimes..."
         model.CatalysisRegimes = let
             regimes = _build_catalysis_regimes(model, all_regimes, is_asymptotic)
-            regimes_perm_dict = Dict(perm => idx for (idx, perm) in enumerate(all_regimes))
+            regimes_perm_dict = Dict{Tuple{Vararg{Int}}, Int}(
+                Tuple(perm) => idx for (idx, perm) in enumerate(all_regimes)
+            )
             Regimes(regimes_perm_dict, regimes)
         end
         return nothing
@@ -104,8 +107,8 @@ function Base.show(io::IO, rgm::CatalysisRegime)
         io,
         "CatalysisRegime(",
         "perm=$(get_perm(rgm))",
-        ", nullity=",
-        get_nullity(rgm),
+        ", balance_equalities=",
+        balance_equality_count(rgm),
         ", asymptotic=",
         is_asymptotic(rgm),
         ")",
@@ -115,6 +118,6 @@ end
 function Base.show(io::IO, ::MIME"text/plain", rgm::CatalysisRegime)
     println(io, "CatalysisRegime")
     println(io, "  dominant mode: ", "perm=$(get_perm(rgm))")
-    println(io, "  nullity: ", get_nullity(rgm))
+    println(io, "  balance equality count: ", balance_equality_count(rgm))
     return print(io, "  asymptotic: ", is_asymptotic(rgm))
 end

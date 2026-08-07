@@ -8,7 +8,7 @@ mutable struct SIMOPaths{T}
 
     sources::Vector{Int}
     sinks::Vector{Int}
-    paths_dict::Union{Nothing, Dict{Vector{Int}, Int}}
+    paths_dict::Union{Nothing, Dict{Tuple{Vararg{Int}}, Int}}
     rgm_paths::Vector{Vector{Int}}
 
     path_polys::Vector{Polyhedron}
@@ -181,7 +181,9 @@ get_change_qK_idx(grh::SIMOPaths) = grh.change_qK_idx
 
 function _ensure_paths_dict!(grh::SIMOPaths)
     isnothing(grh.paths_dict) || return grh.paths_dict
-    grh.paths_dict = Dict(p => idx for (idx, p) in enumerate(grh.rgm_paths))
+    grh.paths_dict = Dict{Tuple{Vararg{Int}}, Int}(
+        Tuple(path) => idx for (idx, path) in enumerate(grh.rgm_paths)
+    )
     return grh.paths_dict
 end
 
@@ -301,6 +303,7 @@ function get_path(grh::SIMOPaths, pth::AbstractVector; return_idx::Bool=false)
     bn = get_binding_network(grh)
     return return_idx ? get_idx.(Ref(bn), pth) : get_perm.(Ref(bn), pth)
 end
+get_path(grh::SIMOPaths, pth::Tuple; kwargs...) = get_path(grh, collect(pth); kwargs...)
 
 get_binding_network(grh::SIMOPaths, args...) = grh.bn
 function get_C_C0_nullity_qK(grh::SIMOPaths, pth_idx; remove_h_redundancy::Bool=false)
@@ -314,6 +317,7 @@ get_idx(grh::SIMOPaths, pth::AbstractVector) =
     let
         bn = get_binding_network(grh)
         idxs = get_idx.(Ref(bn), pth)
-        _ensure_paths_dict!(grh)[idxs]
+        _ensure_paths_dict!(grh)[Tuple(idxs)]
     end
+get_idx(grh::SIMOPaths, pth::Tuple) = get_idx(grh, collect(pth))
 get_idx(grh::SIMOPaths, pth::Integer) = pth

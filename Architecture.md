@@ -77,7 +77,9 @@ Regimes(regimes_perm_dict, regimes_data)
 ```
 
 - `regimes_data` stores regime objects.
-- `regimes_perm_dict` maps a permutation to its index.
+- `regimes_perm_dict` maps an immutable tuple representation of a permutation
+  to its index. Public selectors still accept vector permutations, while tuple
+  keys returned by the dictionary can be passed back to the same selectors.
 - `vertices_data` and `vertices_perm_dict` remain readable as legacy property
   aliases.
 
@@ -117,6 +119,10 @@ Key fields:
 - `C, C0`: v-space dominance conditions.
 - `PΠ, CΠ`: the same data pulled back through
   `log v = Π log x + log k`.
+
+The steady-state balance-row count is exposed as
+`balance_equality_count(rgm)`. It is not a matrix-kernel nullity, so
+`get_nullity` is reserved for binding and Bnc regimes.
 
 ### `BncRegime`
 
@@ -169,6 +175,10 @@ and
 Regular regimes have a direct affine expression `H, H0` for
 `log(q,K) -> log x`. Singular regimes keep conditions and available directional
 data instead.
+
+The orientation of the binding affine maps is the exact sign of
+`det([L; N])`. A zero determinant has direction `0` and is displayed as
+`singular/undefined` rather than as either orientation.
 
 ### Catalysis Layer
 
@@ -543,6 +553,9 @@ Assignment flow:
 `assign_regime_x_index` uses x-space dominance logic. `assign_regime_qK_index`
 with `x=...` first maps through `x2qK`.
 
+`assign_bnc_regime_wKk` returns the matched `BncRegime`'s global cached index.
+Filtering infeasible regimes does not renumber this identity.
+
 ## qK <-> x Numerical Layer
 
 `src/qK_x_mapping.jl` provides:
@@ -702,6 +715,7 @@ errors that point to `condition_method=:pair_memo_dag`.
 
 - its `FiberProblem`, qK graph, source/sink nodes, and candidate regime paths;
 - the internal pair-condition backend and its vertex/interface/pair caches;
+- an immutable tuple-key path index derived from the vector paths;
 - path polyhedra, explicit path-feasibility flags, and path volumes.
 
 The exported `get_sources(paths)` and `get_sinks(paths)` accessors return
@@ -736,6 +750,10 @@ recomputed. Path-volume caches can be refreshed with `recompute=true`.
 Concurrent calls that mutate caches on the same `SIMOPaths` instance must be
 serialized by the caller; one pair-DAG solve may itself use internal worker
 threads. Separate instances can be solved concurrently.
+
+Scalar reaction-order path deduplication is run-length based. Consecutive
+`NaN` values collapse to one explicit singular-segment marker, including at
+the beginning or end of a path.
 
 ## Visualization Extension
 

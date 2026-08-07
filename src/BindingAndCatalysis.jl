@@ -140,7 +140,7 @@ _include_src("utils", "HyperPlanes.jl")
 #========================================================================================#
 
 struct Regimes{T, R <: AbstractRegime, A <: AbstractArray{R}}
-    regimes_perm_dict::Dict{Vector{T}, Int}
+    regimes_perm_dict::Dict{Tuple{Vararg{T}}, Int}
     regimes_data::A
 end
 
@@ -545,7 +545,7 @@ mutable struct Bnc{T} <: AbstractBnc # T is the int type used for regime indices
 
         # Direction of the binding reactions.
         M = vcat(L_dense, N_dense)
-        direction = sign(det(M))
+        direction = _det_sign_exact(M)
 
         _L_helper = _build_matrix_helper(L)
         return new(

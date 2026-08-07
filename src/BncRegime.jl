@@ -17,17 +17,6 @@ function Base.getproperty(model::BncRegime, sym::Symbol)
     return getfield(model, sym)
 end
 
-@inline _det_sign_exact(A::AbstractMatrix{<:Integer}) = begin
-    detA = _bareiss_det_big(Matrix{Int}(A))
-    if detA > 0
-        1
-    elseif detA < 0
-        -1
-    else
-        0
-    end
-end
-
 function get_fixed_point_perm(args...; kwargs...)
     let
         bindperm, catalysisperm = get_bnc_perm(args...; kwargs...)

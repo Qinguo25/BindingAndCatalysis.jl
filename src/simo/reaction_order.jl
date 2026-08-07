@@ -34,26 +34,10 @@ function _calc_RO_for_single_path(
 end
 
 function _dedup(ord_path::AbstractVector{T})::Vector{T} where {T <: Real}
-    isempty(ord_path) && return T[]
-    out = T[ord_path[1]]
-    pending_nan = false
-    last_out = out[1]
-    @assert !isnan(last_out) "The first element cannot be NaN for deduplication."
-
-    for x in @view ord_path[2:end]
-        if isnan(x)
-            pending_nan = true
-            continue
-        end
-        if x != last_out
-            if pending_nan
-                push!(out, NaN)
-                pending_nan = false
-            end
+    out = T[]
+    for x in ord_path
+        if isempty(out) || !isequal(x, last(out))
             push!(out, x)
-            last_out = x
-        else
-            pending_nan = false
         end
     end
     return out

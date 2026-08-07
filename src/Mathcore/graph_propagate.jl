@@ -34,6 +34,9 @@ function _sparse_outer(
     return sparse(I, J, V, nrow, ncol)
 end
 
+@inline _rank1_denominator_iszero(a::AbstractFloat, atol::Real) = abs(a) <= atol
+@inline _rank1_denominator_iszero(a::Real, ::Real) = iszero(a)
+
 function _rank1_step_update_from_regular(
     H::SparseMatrixCSC{Tc, Int}, # source H
     H0::AbstractVector{<:Real}, # source H0
@@ -47,7 +50,7 @@ function _rank1_step_update_from_regular(
     dropzeros!(c_qK)
     a = 1 + c_qK[i]
 
-    if abs(a) <= atol # target is singular
+    if _rank1_denominator_iszero(a, atol) # target is singular
         H_to = _sparse_outer(H[:, i], c_qK, -one(Tc))
         H0_to = -H[:, i] .* c0_qK
         nlt_to = 1
