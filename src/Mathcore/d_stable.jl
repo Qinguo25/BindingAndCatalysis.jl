@@ -33,7 +33,7 @@ end
 单边测试：
 
   - 返回 `true`     : 已证实 A 不是 Hurwitz
-  - 返回 `:unknown` : 无法确定
+  - 返回 `missing`  : 无法确定
 """
 function _obvious_not_hurwitz(
     A::SparseMatrixCSC{Float64, Int};
@@ -47,7 +47,7 @@ function _obvious_not_hurwitz(
     # 小规模：直接精确（数值上）算全部特征值
     if n <= dense_exact_threshold
         α = maximum(real.(eigvals(Matrix(A))))
-        return α >= -spectral_tol
+        return α > spectral_tol ? true : missing
     end
 
     # 大规模：ARPACK 做单边筛查
@@ -73,7 +73,7 @@ function _obvious_not_hurwitz(
         # 留给后续 SDP
     end
 
-    return :unknown
+    return missing
 end
 
 """
@@ -193,13 +193,10 @@ function _strong_zero_certificate_singletons(
 end
 
 """
-    judge_dstable(A; kwargs...) -> Int
+    judge_dstable(A; kwargs...) -> Union{Bool, Missing}
 
-输出：
-
-  - 1  : 证实 D-stable（通过 diagonal stability）
-  - 0  : 证实一定不 D-stable
-  - -1 : 无法判断
+输出 `true` 表示已证实 D-stable，`false` 表示已证实不 D-stable，
+`missing` 表示当前判据无法判断。
 
 默认是“性能优先”：
 
@@ -220,12 +217,12 @@ function judge_dstable(
     margin_tol::Float64=1e-7,
     try_strong_zero::Bool=false,
     strong_zero_patterns::Int=16,
-)::Int
+)
     n, m = size(Ain)
     n == m || throw(ArgumentError("A 必须是方阵"))
 
     if n == 0
-        return 1
+        return true
     end
 
     A = sparse(Float64.(Ain))
@@ -248,7 +245,7 @@ function judge_dstable(
         eigs_maxiter=eigs_maxiter,
     )
     if rhp === true
-        return 0
+        return false
     end
 
     # Step 0.1: for lesser than 3 dim matrix, we know explicitly the d-stable conditon
@@ -262,11 +259,11 @@ function judge_dstable(
         A; optimizer_factory=optimizer_factory, p_floor=p_floor, signs=nothing
     )
     if isfinite(tpos) && tpos > margin_tol
-        return 1
+        return true
     end
 
     # Step 2: 可选的强 0 证书备份（只在谱筛查未明确时有意义）
-    if try_strong_zero && rhp === :unknown
+    if try_strong_zero && ismissing(rhp)
         if _strong_zero_certificate_singletons(
             A;
             optimizer_factory=optimizer_factory,
@@ -274,11 +271,11 @@ function judge_dstable(
             margin_tol=margin_tol,
             max_patterns=strong_zero_patterns,
         )
-            return 0
+            return false
         end
     end
 
-    return -1
+    return missing
 end
 
 """
@@ -286,10 +283,9 @@ end
 
 For real square matrices A with size n = 1, 2, or 3:
 
-Return:
-1   if A is D-stable
-0   if A is D-unstable
--1   otherwise
+Return `true` if A is D-stable, `false` if A is D-unstable, and `missing`
+when the input lies inside a numerical tolerance band or no certificate is
+available.
 
 Definition:
 D-stable:     D*A is Hurwitz for every positive diagonal D.
@@ -306,18 +302,16 @@ function d_class(A::AbstractMatrix; tol::Real=1e-10)
 
     pos(x) = x > tol
     neg(x) = x < -tol
-    nonpos(x) = x <= tol
-    nonneg(x) = x >= -tol
+    nonpos(x) = x <= 0
+    nonneg(x) = x >= 0
 
     # ---------- n = 1 ----------
     if n == 1
         a = B[1, 1]
 
-        if neg(a)
-            return 1          # always Hurwitz after positive scaling
-        else
-            return 0          # never Hurwitz
-        end
+        neg(a) && return true     # always Hurwitz after positive scaling
+        pos(a) && return false    # never Hurwitz after positive scaling
+        return missing
     end
 
     # ---------- n = 2 ----------
@@ -328,15 +322,15 @@ function d_class(A::AbstractMatrix; tol::Real=1e-10)
 
         # D-stable iff det(A)>0, a<=0, d<=0, and not both a,d are zero.
         if pos(detA) && nonpos(a) && nonpos(d) && neg(a + d)
-            return 1
+            return true
         end
 
-        # D-unstable iff det(A)<=0 or both diagonal entries are nonnegative.
-        if !pos(detA) || (nonneg(a) && nonneg(d))
-            return 0
+        # Certify D-instability only outside the determinant/trace tolerance bands.
+        if neg(detA) || (nonneg(a) && nonneg(d) && pos(a + d))
+            return false
         end
 
-        return -1
+        return missing
     end
 
     # ---------- n = 3 ----------
@@ -369,17 +363,14 @@ function d_class(A::AbstractMatrix; tol::Real=1e-10)
     # The infimum is:
     #   (sum_i sqrt(alpha_i * beta_i))^2
     #
-    alpha_ok = all(nonneg, alpha) && any(pos, alpha)
-    beta_ok = all(nonneg, beta) && any(pos, beta)
+    alpha_ok = all(nonneg, alpha) && any(x -> x > 0, alpha)
+    beta_ok = all(nonneg, beta) && any(x -> x > 0, beta)
 
     if pos(delta) && alpha_ok && beta_ok
         lower = sum(sqrt(max(alpha[i], 0.0) * max(beta[i], 0.0)) for i in 1:3)^2
 
-        # If supports differ, the infimum is not attained inside x>0.
-        support_equal = all((alpha[i] > tol) == (beta[i] > tol) for i in 1:3)
-
-        if delta < lower - tol || (abs(delta - lower) <= tol && !support_equal)
-            return 1
+        if lower - delta > tol
+            return true
         end
     end
 
@@ -392,16 +383,22 @@ function d_class(A::AbstractMatrix; tol::Real=1e-10)
     #
     #   sup_{x>0, alpha⋅x>0} (alpha⋅x)(beta⋅1/x) > delta.
     #
-    function is_d_stabilizable_3(alpha, beta, delta)
-        pos(delta) || return false
+    function d_stabilizable_3(alpha, beta, delta)
+        if !pos(delta)
+            neg(delta) && return false
+            return missing
+        end
 
-        P = findall(i -> alpha[i] > tol, 1:3)
+        any(x -> abs(x) <= tol, alpha) && return missing
+        any(x -> abs(x) <= tol, beta) && return missing
+
+        P = findall(i -> alpha[i] > 0, 1:3)
 
         # Need alpha⋅x > 0 for some positive x.
         isempty(P) && return false
 
         # Need beta⋅1/x positive somewhere.
-        any(i -> beta[i] > tol, 1:3) || return false
+        any(i -> beta[i] > 0, 1:3) || return false
 
         # If at least two alpha_i are positive and some beta_j is positive,
         # the supremum is +∞.
@@ -414,13 +411,13 @@ function d_class(A::AbstractMatrix; tol::Real=1e-10)
 
         # If some beta_j > 0 with j != k, again the supremum is +∞.
         for j in 1:3
-            if j != k && beta[j] > tol
+            if j != k && beta[j] > 0
                 return true
             end
         end
 
         # Now the only possible positive beta is beta[k].
-        beta[k] > tol || return false
+        beta[k] > 0 || return false
 
         C = alpha[k] * beta[k]
 
@@ -428,21 +425,20 @@ function d_class(A::AbstractMatrix; tol::Real=1e-10)
         for j in 1:3
             j == k && continue
 
-            if alpha[j] < -tol && beta[j] < -tol
+            if alpha[j] < 0 && beta[j] < 0
                 S += sqrt((-alpha[j]) * (-beta[j]) / C)
             end
         end
 
         M = C * max(1.0 - S, 0.0)^2
 
-        return M > delta + tol
+        M > delta + tol && return true
+        M < delta - tol && return false
+        return missing
     end
 
-    if is_d_stabilizable_3(alpha, beta, delta)
-        return -1
-    else
-        return 0
-    end
+    stabilizable = d_stabilizable_3(alpha, beta, delta)
+    return stabilizable === false ? false : missing
 end
 
 end # module DStable

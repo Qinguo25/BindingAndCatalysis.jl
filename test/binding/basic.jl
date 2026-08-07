@@ -51,6 +51,27 @@ end
     @test isapprox(logx_default, logx_explicit; atol=1e-8, rtol=1e-8)
 end
 
+@testset "Free-Energy qK2x Log Residual Without Damping" begin
+    model = minimal_model()
+    logqK = zeros(model.n)
+
+    logx = qK2x(
+        model,
+        logqK;
+        input=:log,
+        output=:log,
+        method=:free_energy,
+        robust_start=false,
+        damping=false,
+        reltol=1e-12,
+        abstol=1e-12,
+        maxiters=20,
+    )
+    residual = qK2x_residual(model, logx, logqK; input=:log)
+
+    @test norm(residual, Inf) <= 1e-12
+end
+
 @testset "Export Hygiene" begin
     undefined_exports = [
         s for

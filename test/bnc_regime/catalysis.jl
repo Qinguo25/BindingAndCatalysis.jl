@@ -436,8 +436,8 @@ end
 
     low_bnc_rgm = first(bind_high)
     @test get_H_bd(low_bnc_rgm) isa AbstractMatrix
-    @test is_stable(low_bnc_rgm) === true || is_stable(low_bnc_rgm) === false
-    @test stability_code(low_bnc_rgm) in (-1, 1)
+    @test is_stable(low_bnc_rgm) === false
+    @test stability_code(low_bnc_rgm) == -1
     @test !isempty(show_condition_qKk(low_bnc_rgm))
     @test !isempty(show_condition_wKk(low_bnc_rgm))
 
@@ -454,8 +454,8 @@ end
 
     high_bnc_rgm = first(consistency_only)
     @test get_H_bd(high_bnc_rgm) isa AbstractMatrix
-    @test is_stable(high_bnc_rgm) === true || is_stable(high_bnc_rgm) === false
-    @test stability_code(high_bnc_rgm) in (-1, 1)
+    @test ismissing(is_stable(high_bnc_rgm))
+    @test stability_code(high_bnc_rgm) == 0
     @test isnothing(high_bnc_rgm.H)
     @test isnothing(high_bnc_rgm.H0)
     @test !isempty(show_condition_qKk(high_bnc_rgm))

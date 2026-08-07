@@ -138,8 +138,8 @@ Key fields:
 - `C_qKk_cat, C0_qKk_cat`: qKk-space catalysis consistency conditions;
 - `C_wKk, C0_wKk`: wKk-space fixed-point conditions;
 - `H_bd`: matrix used by the stability classifier;
-- `is_stable`: cached stability flag, where `1` means stable, `-1` unstable,
-  `2` unknown, and `0` not computed.
+- `is_stable`: cached stability state: `nothing` means not computed, `true` or
+  `false` is a classified result, and `missing` means undetermined.
 
 ## Mathematical Layers
 
@@ -202,9 +202,11 @@ Stability is determined from `H_bd` with `judge_dstable`:
 H^{bd}=P\Pi H_{q_{cat}}.
 ```
 
-`is_stable(rgm)` returns `true`, `false`, or `missing`. `missing` means the
-algorithm could not determine stability. Use `stability_code(rgm)` to retrieve
-the underlying integer code.
+`judge_dstable(...)` and `is_stable(rgm)` return `true`, `false`, or `missing`.
+`missing` means the algorithm could not determine stability. Internally,
+`nothing` is reserved for an uncomputed cache entry. The legacy numeric view is
+available only through `stability_code(rgm)`, which maps these states to
+`1`, `-1`, and `0`, respectively.
 
 ### Linear BNC Control Layer
 
@@ -587,7 +589,9 @@ unless the quantity has a model-independent definition.
 `simulate_catalysis_trajectory(...).diagnostics` records the solver `retcode`,
 whether the integration was successful, whether it reached the requested final
 time, and the `maxiters` value used for the solve. This keeps SciML warnings
-visible while giving report scripts a structured way to audit them.
+visible while giving report scripts a structured way to audit them. A failed
+inner `qK -> x` binding solve always terminates the integration; it is never
+replaced by a zero derivative or reported as a successful plateau.
 
 ## Volume Layer
 

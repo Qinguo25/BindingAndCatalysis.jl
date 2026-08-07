@@ -354,7 +354,10 @@ function _logqK2logx_free_energy(
 
         J .= (L * Diagonal(x) * transpose(L))
         @inbounds for i in axes(J, 1)
-            J[i, :] ./= (log(10.0) * q[i])
+            # For F_i = log10(q_i) - logq_i and
+            # x = 10^(L' * λ - G), the ln(10) factors from d(log10(q_i))
+            # and dx/dλ cancel exactly.
+            J[i, :] ./= q[i]
         end
         Δ = J \ F
 

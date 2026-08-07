@@ -109,6 +109,9 @@ Simulate reduced catalysis dynamics for `qcat` while `w`, `K`, and `k` are
 held fixed or supplied by a time-dependent `logwKk(t)` function. The ODE state
 is `log10(qcat)`. `states` is a vector of saved state vectors. Use
 `trajectory_matrix(states)` for matrix-shaped plotting data.
+
+A failed `qK -> x` binding solve terminates the integration with an exception;
+it is never converted into a zero derivative.
 """
 function qcat_traj_cat(
     model::Bnc,
@@ -128,13 +131,19 @@ function qcat_traj_cat(
     maxiters::Integer=100_000,
     saveat=range(Float64(tspan[1]), Float64(tspan[2]); length=500),
     max_log10_scale::Real=300.0,
-    fail_on_binding_error::Bool=false,
+    fail_on_binding_error=_UNSET_KEYWORD,
     homotopy_fallback::Bool=true,
     fallback_reltol::Real=reltol,
     fallback_abstol::Real=abstol,
     return_solution::Bool=false,
     kwargs...,
 )
+    fail_on_binding_error === _UNSET_KEYWORD || throw(
+        ArgumentError(
+            "keyword `fail_on_binding_error` is no longer supported; " *
+            "binding solve failures now always terminate the integration.",
+        ),
+    )
     have_catalysis(model) || throw(ArgumentError("model has no catalysis data."))
     cn = model.catalysis
     input = _resolve_space_mode(input, input_logspace, :input_logspace)
@@ -196,9 +205,7 @@ function qcat_traj_cat(
             )
         end
         if isnothing(logx)
-            fail_on_binding_error && error("qK -> x solve failed at t=$t.")
-            fill!(du, 0.0)
-            return nothing
+            error("qK -> x solve failed at t=$t.")
         end
         last_logqK[] = Vector{Float64}(logqK)
         last_logx[] = Vector{Float64}(logx)
@@ -383,7 +390,8 @@ simulate_catalysis_trajectory(model; qcat0, w=t -> w(t), K=K0, k=k0, tspan)
 The returned named tuple includes `t`, `logqcat`, `qcat`, `states`, `output`,
 and `diagnostics`. `logqcat` and `qcat` are matrices with one column per saved
 time. `diagnostics` records the solver `retcode`, success flag, final-time
-reachability, saved-point count, and `maxiters`.
+reachability, saved-point count, and `maxiters`. A failed inner binding solve
+throws instead of returning a trajectory with successful diagnostics.
 """
 function simulate_catalysis_trajectory(
     model::Bnc;

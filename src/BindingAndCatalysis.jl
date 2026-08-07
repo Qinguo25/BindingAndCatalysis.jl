@@ -281,7 +281,7 @@ mutable struct BncRegime <: AbstractRegime
 
     # Fixed point information:
     H_bd::Union{SparseMatrixCSC{Float64, Int}, Nothing}
-    is_stable::Int8 # 1 for stable, -1 for unstable, 0 for unknown # mapped from d_stable
+    is_stable::Union{Nothing, Missing, Bool} # nothing=uncomputed, missing=undetermined
     is_feasible::Bool
 
     # wKk̃2x mapping, the core matrix
@@ -328,7 +328,7 @@ mutable struct BncRegime <: AbstractRegime
             bind_rgm,
             catalysis_rgm,
             H_bd,
-            Int8(0), #is_stable
+            nothing, # is_stable: not computed
             true, # is_feasible
             nothing, # H_inner
             nothing, # H0_inner

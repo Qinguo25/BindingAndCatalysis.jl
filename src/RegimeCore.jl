@@ -568,7 +568,7 @@ function _get_filter(;
     function judge_singular(x)
         return isnothing(singular) || (singular ? get_nullity(x) > 0 : get_nullity(x) == 0)
     end
-    judge_stable(x) = isnothing(stable) || is_stable(x) == stable
+    judge_stable(x) = isnothing(stable) || is_stable(x) === stable
     judge_feasible(x) = isnothing(feasible) || is_feasible(x) == feasible
     add_filter_func = isnothing(add_filter) ? (x -> true) : add_filter
     return x ->

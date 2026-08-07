@@ -465,6 +465,10 @@ is_stable(bnc_rgm)
 stability_code(bnc_rgm)
 ```
 
+`is_stable` and the lower-level `judge_dstable` return `true`, `false`, or
+`missing`; `missing` means that no numerical certificate was obtained.
+`stability_code` is the explicit legacy numeric view (`1`, `-1`, or `0`).
+
 BNC condition getters:
 
 ```julia
@@ -982,7 +986,8 @@ traj = simulate_catalysis_trajectory(
 The lower-level `qcat_traj_cat(model, logqcat0, logwKk, tspan; ...)` remains
 available and returns `(t, states)`, where `states` is a vector of state vectors.
 Use `trajectory_matrix(states)` to convert those states into a matrix with one
-column per saved time point.
+column per saved time point. If its inner `qK -> x` binding solve fails, the
+integration throws; it never substitutes a zero derivative.
 
 Always inspect `traj.diagnostics` for long report-generation runs.  It records
 the SciML `retcode`, whether the solve was successful, whether the saved

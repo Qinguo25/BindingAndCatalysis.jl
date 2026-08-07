@@ -55,24 +55,16 @@ function judge_stability!(rgm::BncRegime; kwargs...)
     isnothing(rgm.H_bd) && (rgm.H_bd = get_H_bd_numerically(rgm))
     H_bd = rgm.H_bd
 
-    code = judge_dstable(H_bd; kwargs...)
-
-    flag = if code == 1  # d-stable
-        Int8(1)
-    elseif code == 0 # d-unstable
-        Int8(-1)
-    else # undetermined
-        Int8(2)
-    end
-
-    rgm.is_stable = flag
-
+    state = judge_dstable(H_bd; kwargs...)
+    (state isa Bool || ismissing(state)) ||
+        error("judge_dstable returned unsupported result $(repr(state)).")
+    rgm.is_stable = state
     return rgm.is_stable
 end
 
-function _stability_flag(rgm::BncRegime; recompute::Bool=false, kwargs...)
+function _stability_state(rgm::BncRegime; recompute::Bool=false, kwargs...)
     _reject_stability_keywords(kwargs)
-    return if recompute || rgm.is_stable == 0
+    return if recompute || isnothing(rgm.is_stable)
         judge_stability!(rgm; kwargs...)
     else
         rgm.is_stable
@@ -80,10 +72,10 @@ function _stability_flag(rgm::BncRegime; recompute::Bool=false, kwargs...)
 end
 
 function stability_code(rgm::BncRegime; recompute::Bool=false, kwargs...)
-    flag = _stability_flag(rgm; recompute=recompute, kwargs...)
-    return if flag == 1
+    state = _stability_state(rgm; recompute=recompute, kwargs...)
+    return if state === true
         1
-    elseif flag == -1
+    elseif state === false
         -1
     else
         0
@@ -95,14 +87,7 @@ function stability_code(model::Bnc, bind, cat; kwargs...)
 end
 
 function is_stable(rgm::BncRegime; recompute::Bool=false, kwargs...)
-    flag = _stability_flag(rgm; recompute=recompute, kwargs...)
-    return if flag == 1
-        true
-    elseif flag == -1
-        false
-    else
-        missing
-    end
+    return _stability_state(rgm; recompute=recompute, kwargs...)
 end
 
 function is_stable(model::Bnc, bind, cat; kwargs...)
