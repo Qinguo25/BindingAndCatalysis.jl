@@ -154,10 +154,7 @@ function _factor_Nρ(
     if r == c
         F = lu(Nρ; check=false)
         if issuccess(F)
-            # X = F \ Matrix{Float64}(I, r, r)
-            # Xsp = sparse(X)
-            Xsp = luFac(F) \ spdiagm(0 => ones(Float64, r))
-            # return  H, 0
+            Xsp = sparse(F \ Matrix{eltype(F)}(I, r, r))
             drop_tol > 0 && droptol!(Xsp, drop_tol)
             return _entry_inv(Xsp)
         end
@@ -863,7 +860,7 @@ function direct_inverse_or_adjugate(
     @assert n == m "A must be square"
     F = lu(sparse(A); check=false)
     if issuccess(F)
-        H = luFac(F) \ spdiagm(0 => ones(Float64, n))
+        H = sparse(F \ Matrix{eltype(F)}(I, n, n))
         return H, 0
     else
         adj_A, nullity = _adj_singular_matrix(A; atol=atol)

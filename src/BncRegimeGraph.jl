@@ -366,7 +366,7 @@ function get_bnc_regimes_graph!(model::Bnc)
     n_cat = n_catalysis_regimes(model)
     n_nodes = length(rgms)
 
-    bind_grh = get_regimes_graph!(model; full=true)
+    bind_grh = get_regimes_graph!(model)
     cat_grh = get_catalysis_regimes_graph!(model)
 
     hp_xk = RegimeToHyperplanePool(model.n + cn.n_k)

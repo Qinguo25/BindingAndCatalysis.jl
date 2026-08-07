@@ -267,7 +267,7 @@ end
 get_neighbor_graph_qK(grh::SIMOPaths; kwargs...) = grh.qK_grh
 get_SIMO_graph(grh::SIMOPaths) = grh.qK_grh
 function get_SIMO_graph(model::Bnc, change_qK)
-    return get_SIMO_graph(get_regimes_graph!(model; full=true), change_qK)
+    return get_SIMO_graph(get_regimes_graph!(model), change_qK)
 end
 
 function get_SIMO_graph(grh::RegimeGraph, change_qK)::SimpleDiGraph

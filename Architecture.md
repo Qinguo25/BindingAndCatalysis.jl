@@ -360,11 +360,12 @@ R-index denominator explicit: `denominator=:constraint_region`.
 `multistability_profile(...; mode=:asymptotic_R)` strips offsets and samples
 recession-cone membership, returning `denominator=:constraint_cone`.
 `multistability_R_index` is the report-oriented wrapper that defaults to
-`mode=:asymptotic_R` and returns deterministic regime counts together with the
-conditional `R_multistability`. Its `full_dim_regimes` field is a broad
-diagnostic count of all feasible full-dimensional restricted BNC regimes;
-candidate counts, pair intersections, and `R_multistability` use the stable and
-singular filters.
+`mode=:asymptotic_R`. It returns deterministic regime counts together with
+`stable_count_histogram`, `R_exact_stable_count`,
+`R_atleast_stable_count`, and `stderr_atleast_stable_count`. Its
+`full_dim_regimes` field is a broad diagnostic count of all feasible
+full-dimensional restricted BNC regimes; stable counts, pair intersections,
+and stable-count R-index fields use the stable and singular filters.
 
 `bnc_regime_diagnostics(model)` reports BNC initialization diagnostics after
 `match_regimes!`, including singular inner-affine propagation inconsistencies.
@@ -530,6 +531,11 @@ Relevant files:
 - `src/BncRegimeGraph.jl`
 - `src/Mathcore/perm_graph_core.jl`
 
+`get_regimes_graph!(model)` always returns the fulfilled binding graph with its
+available x- and qK-space interface data. `get_edge(graph, from, to)` reads the
+same graph. Neither API has a `full` mode; supplying the retired keyword raises
+a migration error that tells the caller to remove it.
+
 ## Compiled Classifiers and Assignment
 
 `src/regime_assign.jl` compiles qK hyperplane incidence data into a
@@ -543,8 +549,7 @@ Important fields:
 
 Assignment flow:
 
-1. `get_regimes_graph!(model; full=true)` builds the qK graph and hyperplane
-   data.
+1. `get_regimes_graph!(model)` builds the qK graph and hyperplane data.
 2. `_build_qK_hyperplane_classifier` builds the classifier from incidence data.
 3. `assign_regime_qK_index` classifies a logqK point.
 4. If the classifier finds no candidate, `_assign_regime_qK_fallback_index`
@@ -563,7 +568,8 @@ Filtering infeasible regimes does not renumber this identity.
 - `x2qK`: direct map from x to qK;
 - `qK2x`: numerical inverse map from qK to x;
 - `qK2x_residual`: log-coordinate residual check;
-- homotopy trajectories in qK/x coordinates.
+- `x_traj_with_qK_change`: a homotopy trajectory between two complete qK
+  points.
 
 `qK2x` supports:
 
@@ -808,7 +814,6 @@ Maintenance notes:
    - `find_matrix_vertex.jl`
    - `d_stable.jl`
    - `perm_graph_core.jl`
-   - `SparseSparse_modified.jl`
    - `matrix_inverse.jl`
    - `graph_propagate.jl`
 6. Numerical and assignment layers:
@@ -864,6 +869,9 @@ files that depend on methods loaded later.
 - `src/Mathcore/matrix_inverse.jl`: exact / sparse affine inverse helpers.
 - `src/Mathcore/graph_propagate.jl`: graph propagation of affine data.
 
+Sparse factorizations are invoked explicitly inside `matrix_inverse.jl`. The
+package does not extend Base's sparse `\`, `/`, or `inv` methods globally.
+
 ### Numerical and Assignment
 
 - `src/qK_x_mapping.jl`: qK/x maps and homotopy trajectories.
@@ -910,6 +918,8 @@ Compatibility policy:
   `return_code` fail with a migration message. Maintained code uses
   `condition_method`, `recompute`, `reltol`, `abstol`, and the separate
   `stability_code(...)` function.
+- The retired graph keyword `full` also fails with a migration message; callers
+  simply omit it because the maintained graph has one fulfillment state.
 - Other old aliases may call maintained APIs and issue deprecation warnings
   through the 1.x maintenance window.
 - New internal code should use maintained names, not legacy aliases.

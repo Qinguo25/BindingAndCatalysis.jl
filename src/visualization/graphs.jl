@@ -66,7 +66,7 @@ end
 function get_edge_weight_vec(
     Bnc::Bnc, change_qK_idx
 )::Vector{Tuple{Edge, Dict{Symbol, Any}}}
-    vg = get_regimes_graph!(Bnc; full=true)
+    vg = get_regimes_graph!(Bnc)
     weight_vec = Vector{Tuple{Edge, Dict{Symbol, Any}}}()
     for (i, edges) in enumerate(vg.neighbors)
         get_nullity(Bnc, i) > 1 && continue
@@ -137,7 +137,7 @@ function get_edge_labels(
     log_space::Bool=false,
     lhs_idx::Union{Nothing, Integer}=nothing,
 )::Dict{Edge, String}
-    vg = get_regimes_graph!(Bnc; full=true)
+    vg = get_regimes_graph!(Bnc)
     labels = Dict{Edge, String}()
     render = if isnothing(f)
         (from, to) ->
@@ -905,33 +905,3 @@ end
 
 draw_vertices_neighbor_graph(args...; kwargs...) = draw_graph(args...; kwargs...)
 draw_qK_neighbor_grh(args...; kwargs...) = draw_graph(args...; kwargs...)
-
-function draw_binding_network_grh(
-    Bnc::Bnc,
-    grh::Union{AbstractGraph, Nothing}=nothing;
-    figsize=(800, 800),
-    q_color="#A2A544",
-    x_color="#DBCC8C",
-)
-    f = Figure(; size=figsize)
-    grh = isnothing(grh) ? get_binding_network_grh(Bnc) : grh
-    ax = Axis(f[1, 1])
-    node_labels = [
-        i <= Bnc.d ? repr(Bnc.q_sym[i]) : repr(Bnc.x_sym[i - Bnc.d]) for
-        i in 1:(Bnc.d + Bnc.n)
-    ]
-    node_colors = [i <= Bnc.d ? q_color : x_color for i in 1:(Bnc.d + Bnc.n)]
-    p = graphplot!(
-        ax,
-        grh;
-        node_color=node_colors,
-        edge_color=(:black, 0.7),
-        ilabels=node_labels,
-        arrow_size=20,
-        arrow_shift=0.8,
-        layout=Spring(; dim=2),
-    )
-    hidedecorations!(ax)
-    hidespines!(ax)
-    return f, ax, p
-end

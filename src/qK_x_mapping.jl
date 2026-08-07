@@ -1,5 +1,5 @@
 export x2qK, qK2x, qK2x_residual
-export x_traj_with_qK_change, x_traj_with_q_change, x_traj_cat, qK_traj_cat, q_traj_cat
+export x_traj_with_qK_change, x_traj_cat, qK_traj_cat, q_traj_cat
 
 #========================================================================================#
 # Public qK/x mappings
@@ -570,32 +570,6 @@ function x_traj_with_qK_change(
     end
 
     return _ode_solution_wrapper(solution)
-end
-
-"""
-    x_traj_with_q_change(bnc::Bnc, start_q, end_q; K=nothing, logK=nothing, input=:linear, kwargs...)
-
-Compute an `x` trajectory for a change in `q` while holding `K` fixed.
-"""
-function x_traj_with_q_change(
-    Bnc::Bnc,
-    start_q::Vector{<:Real},
-    end_q::Vector{<:Real};
-    K::Union{Vector{<:Real}, Nothing}=nothing,
-    logK::Union{Vector{<:Real}, Nothing}=nothing,
-    input::Symbol=:linear,
-    input_logspace::Union{Bool, Nothing}=nothing,
-    kwargs...,
-)
-    input = _resolve_space_mode(input, input_logspace, :input_logspace)
-    K_prepared = if input === :log
-        (isnothing(logK) ? log10.(K) : logK)
-    else
-        (isnothing(K) ? K : exp10.(K))
-    end
-    return x_traj_with_qK_change(
-        Bnc, [start_q; K_prepared], [end_q; K_prepared]; input=input, kwargs...
-    )
 end
 
 """

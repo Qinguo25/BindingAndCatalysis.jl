@@ -69,10 +69,10 @@ end
 @testset "qK Classifier Sign Info" begin
     model = minimal_model()
     find_all_regimes!(model)
-    grh = get_regimes_graph!(model; full=true)
+    grh = get_regimes_graph!(model)
 
     info = BindingAndCatalysis._get_regime_qK_hyperplane_id_signs(grh, 1)
-    edge_12 = get_edge(grh, 1, 2; full=true)
+    edge_12 = get_edge(grh, 1, 2)
     qK_12 = BindingAndCatalysis._edge_idx_sign(edge_12, grh, :qK)
     @test haskey(info, qK_12[1])
     @test info[qK_12[1]] == -qK_12[2]

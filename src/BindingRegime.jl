@@ -253,7 +253,7 @@ end
 Return the x-space adjacency matrix of the regime graph.
 """
 function get_regimes_neighbor_mat_x(Bnc::Bnc)
-    grh = get_regimes_graph!(Bnc; full=false)
+    grh = get_regimes_graph!(Bnc)
     spmat = _regime_graph_to_sparse(grh; weight_fn=e -> 1)
     return spmat
 end
@@ -264,7 +264,7 @@ end
 Return the qK-space adjacency matrix of the regime graph.
 """
 function get_regimes_neighbor_mat_qK(Bnc::Bnc)
-    grh = get_regimes_graph!(Bnc; full=true)
+    grh = get_regimes_graph!(Bnc)
     f(x::RegimeEdge) = _edge_has_qK_interface(grh, x) ? 1 : 0
     spmat = _regime_graph_to_sparse(grh; weight_fn=f)
     return spmat
@@ -351,8 +351,8 @@ end
 Return the interface hyperplane between two regimes in qK space.
 """
 function get_interface_qK(Bnc, from, to)::Tuple{SparseVector{Float64, Int}, Float64}
-    grh = get_regimes_graph!(Bnc; full=true)
-    edge = get_edge(grh, from, to; full=true)
+    grh = get_regimes_graph!(Bnc)
+    edge = get_edge(grh, from, to)
     if edge === nothing
         @info "No direct regime-graph edge found; falling back to direct interface reconstruction."
         return get_interface_direct(Bnc, from, to)
@@ -417,7 +417,7 @@ function get_interface_x(Bnc::Bnc, from, to)
             "Regimes $get_perm(Bnc, from) and $get_perm(Bnc, to) are not neighbors in x space."
         )
     else
-        grh = get_regimes_graph!(Bnc; full=false)
+        grh = get_regimes_graph!(Bnc)
         x_space = _space(grh, :x)
         x_idx, x_sign = _edge_idx_sign(edge, x_space)
         hp = get_hyperplane(grh.hp_data[x_space], x_idx)
@@ -446,7 +446,7 @@ Return neighbors of a regime filtered by singularity and asymptotic flags.
 """
 function get_neighbors(args...; return_idx::Bool=false, kwargs...)
     model = get_binding_network(args...)
-    grh = get_regimes_graph!(model; full=true)
+    grh = get_regimes_graph!(model)
     rgm_idx = get_idx(args...)
 
     idx = collect(keys(grh.edge_pos[rgm_idx]))

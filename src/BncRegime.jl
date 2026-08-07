@@ -324,7 +324,7 @@ function _initialize_inner_affine_by_graph!(rgms::AbstractVector{BncRegime})
     cn = get_catalysis_network(bn)
     n_bind = n_bind_regimes(bn)
     n_cat = n_catalysis_regimes(bn)
-    bind_grh = get_regimes_graph!(bn; full=false)
+    bind_grh = get_regimes_graph!(bn)
     cat_grh = get_catalysis_regimes_graph!(bn)
     r_v = cn.r_v
 

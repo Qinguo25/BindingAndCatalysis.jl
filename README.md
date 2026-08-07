@@ -73,7 +73,7 @@ for path-following when the path itself matters.
 
 ```julia
 rgms = get_regimes(binding)
-grh = get_regimes_graph!(binding; full=true)
+grh = get_regimes_graph!(binding)
 
 draw_graph(grh; chart=:x)
 draw_graph(grh; chart=:qK)

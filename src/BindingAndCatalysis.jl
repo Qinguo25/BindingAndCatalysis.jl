@@ -583,7 +583,6 @@ using .DStable: judge_dstable
 export judge_dstable
 
 _include_mathcore("perm_graph_core.jl")
-_include_mathcore("SparseSparse_modified.jl")
 _include_mathcore("matrix_inverse.jl")
 _include_mathcore("graph_propagate.jl")
 

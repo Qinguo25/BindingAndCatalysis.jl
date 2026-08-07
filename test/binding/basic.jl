@@ -236,15 +236,15 @@ end
     @test feas isa Bool
     @test all(i -> i in idxs, feas_list)
 
-    vg = get_regimes_graph!(model; full=true)
+    vg = get_regimes_graph!(model)
     @test length(vg.neighbors) == n_regimes(model)
     @test size(get_regimes_neighbor_mat(model), 1) == n_regimes(model)
     @test BindingAndCatalysis.Graphs.nv(get_neighbor_graph_x(model)) == n_regimes(model)
 
     @test get_edge(vg, r2_perm, r1_perm) !== nothing
     @test get_edge(vg, r2_perm, r3_perm) === nothing
-    edge_21 = get_edge(vg, r2_perm, r1_perm; full=true)
-    edge_12 = get_edge(vg, r1_perm, r2_perm; full=true)
+    edge_21 = get_edge(vg, r2_perm, r1_perm)
+    edge_12 = get_edge(vg, r1_perm, r2_perm)
     qK_21 = BindingAndCatalysis._edge_idx_sign(edge_21, vg, :qK)
     qK_12 = BindingAndCatalysis._edge_idx_sign(edge_12, vg, :qK)
     @test qK_21[1] == qK_12[1] != 0
@@ -363,7 +363,7 @@ end
     H0 = get_H0(model, 1)
     CqK = get_C_qK(model, 1)
     poly = get_polyhedron(model, 1)
-    vg = get_regimes_graph!(model; full=true)
+    vg = get_regimes_graph!(model)
     perms = get_perms(model)
     rational_singular_idx = only(
         filter(i -> get_nullity(model, i) == 1, get_indices(model))
@@ -378,8 +378,8 @@ end
     @test eltype(Hs) <: Rational
     @test eltype(H0s) == ExactLogExpr
 
-    edge_21 = get_edge(vg, perms[2], perms[1]; full=true)
-    edge_12 = get_edge(vg, perms[1], perms[2]; full=true)
+    edge_21 = get_edge(vg, perms[2], perms[1])
+    edge_12 = get_edge(vg, perms[1], perms[2])
     qK_21 = BindingAndCatalysis._edge_idx_sign(edge_21, vg, :qK)
     qK_12 = BindingAndCatalysis._edge_idx_sign(edge_12, vg, :qK)
     @test qK_21[1] == qK_12[1] != 0

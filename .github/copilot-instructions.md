@@ -13,8 +13,7 @@ document: a capability is planned, rather than implemented, unless
 
 For the current one-dimensional SIMO implementation:
 
-- `condition_method=:pair_memo_dag` is the production default;
-- `condition_method=:suffix_dag` is the comparison backend;
+- `condition_method=:pair_memo_dag` is the only supported backend;
 - maintained keywords include `recompute`, `reltol`, and `abstol`;
 - removed main-branch keywords must fail with their guided migration errors.
 

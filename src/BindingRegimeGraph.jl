@@ -5,36 +5,23 @@ export get_sources, get_sinks, get_sources_sinks
 export get_RO_path, group_sum, get_RO_paths, summary_RO_path
 export get_volume
 
-#---------------------------------------------------------------------------
-#              Binding Network Graph
-#-------------------------------------------------------------------------
-"""
-    get_binding_network_grh(bnc::Bnc) -> SimpleGraph
-
-Build the bipartite binding network graph between q and x symbols.
-"""
-function get_binding_network_grh(Bnc::Bnc)::SimpleGraph
-    g = SimpleGraph(Bnc.d + Bnc.n)
-    for vi in eachindex(Bnc._valid_L_idx)
-        for vj in Bnc._valid_L_idx[vi]
-            add_edge!(g, vi, vj + Bnc.d)
-        end
-    end
-    return g # get first d nodes as total, last n nodes as x
-end
-
 #------------------------------------------------------------------------------
 #                  Getting the Graph of of regimes
 #----------------------------------------------------------------------------
 """
-    get_regimes_graph!(bnc::Bnc; full=false) -> RegimeGraph
+    get_regimes_graph!(bnc::Bnc) -> RegimeGraph
 
 Ensure the vertex graph is built and return the fulfilled graph.
-`full` is kept for API compatibility.
+The former no-op `full` keyword is no longer supported; remove it from calls.
 """
 get_regimes_graph!(args...; kwargs...) =
     get_regimes_graph!(get_binding_network(args...); kwargs...)
-function get_regimes_graph!(model::Bnc; full::Bool=false)::RegimeGraph
+function get_regimes_graph!(model::Bnc; full=_UNSET_KEYWORD)::RegimeGraph
+    full === _UNSET_KEYWORD || throw(
+        ArgumentError(
+            "keyword `full` is no longer supported by `get_regimes_graph!`; remove the keyword.",
+        ),
+    )
     return _with_regime_cache_lock(model) do
         if isnothing(model.vertices_graph)
             find_all_regimes!(model)
@@ -44,11 +31,19 @@ function get_regimes_graph!(model::Bnc; full::Bool=false)::RegimeGraph
 end
 
 """
-    get_edge(grh::RegimeGraph, from, to; full=false) -> Union{Nothing, RegimeEdge}
+    get_edge(grh::RegimeGraph, from, to) -> Union{Nothing, RegimeEdge}
 
-Return the edge between two vertices, optionally computing qK directions.
+Return the edge between two vertices. The former no-op `full` keyword is no
+longer supported; remove it from calls.
 """
-function get_edge(grh::RegimeGraph, from, to; kwargs...)::Union{Nothing, RegimeEdge}
+function get_edge(
+    grh::RegimeGraph, from, to; full=_UNSET_KEYWORD
+)::Union{Nothing, RegimeEdge}
+    full === _UNSET_KEYWORD || throw(
+        ArgumentError(
+            "keyword `full` is no longer supported by `get_edge`; remove the keyword."
+        ),
+    )
     from = get_idx(get_binding_network(grh), from)
     to = get_idx(get_binding_network(grh), to)
 
@@ -61,7 +56,7 @@ function get_edge(grh::RegimeGraph, from, to; kwargs...)::Union{Nothing, RegimeE
 end
 
 """
-    get_edge(bnc, from, to; kwargs...) -> Union{Nothing, RegimeEdge}
+    get_edge(bnc, from, to) -> Union{Nothing, RegimeEdge}
 
 Convenience wrapper to fetch an edge from a model.
 """
@@ -135,7 +130,7 @@ get_neighbor_graph_x(args...) = get_neighbor_graph_x(get_regimes_graph!(args...)
 Return the qK neighbor graph for a model.
 """
 get_neighbor_graph_qK(Bnc::Bnc; kwargs...) =
-    get_neighbor_graph_qK(get_regimes_graph!(Bnc; full=true); kwargs...)
+    get_neighbor_graph_qK(get_regimes_graph!(Bnc); kwargs...)
 """
     get_neighbor_graph(args...; kwargs...) -> SimpleDiGraph
 

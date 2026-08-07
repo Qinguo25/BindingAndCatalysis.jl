@@ -10,6 +10,27 @@ end
 @testset "Renamed Keyword Errors" begin
     model = minimal_model()
 
+    removed_full_message =
+        "ArgumentError: keyword `full` is no longer supported by " *
+        "`get_regimes_graph!`; remove the keyword."
+    @test captured_error_message(() -> get_regimes_graph!(model; full=true)) ==
+        removed_full_message
+    @test captured_error_message(() -> get_regimes_graph!(model; full=false)) ==
+        removed_full_message
+    @test captured_error_message(() -> get_vertices_graph!(model; full=true)) ==
+        removed_full_message
+
+    graph = get_regimes_graph!(model)
+    removed_edge_full_message =
+        "ArgumentError: keyword `full` is no longer supported by " *
+        "`get_edge`; remove the keyword."
+    @test captured_error_message(() -> get_edge(graph, 1, 2; full=true)) ==
+        removed_edge_full_message
+    @test captured_error_message(() -> get_edge(model, 1, 2; full=false)) ==
+        removed_edge_full_message
+    @test !isdefined(BindingAndCatalysis, :x_traj_with_q_change)
+    @test !isdefined(BindingAndCatalysis, :get_binding_network_grh)
+
     @test captured_error_message(() -> SIMOPaths(model, 1; condition_solver=:dag)) ==
         "ArgumentError: keyword `condition_solver` is no longer supported; use " *
           "`condition_method` instead. For `condition_solver=:dag`, use " *

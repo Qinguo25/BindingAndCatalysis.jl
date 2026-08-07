@@ -560,7 +560,7 @@ function _calc_volume_via_classifier(
         Float64.(rebase_mat)
     end
 
-    grh = get_regimes_graph!(Bnc; full=true)
+    grh = get_regimes_graph!(Bnc)
     qK_hp_data = grh.hp_data[_space(grh, :qK)]
     classifier = compile_classifier(
         qK_hp_data.hyperplanes,

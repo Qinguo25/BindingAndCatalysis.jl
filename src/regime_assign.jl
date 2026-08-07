@@ -224,7 +224,7 @@ function _build_qK_hyperplane_classifier(
 end
 
 function _get_qK_hyperplane_classifier(Bnc::Bnc)
-    grh = get_regimes_graph!(Bnc; full=true)
+    grh = get_regimes_graph!(Bnc)
     classifier = grh.qK_classifier_full
     if isnothing(classifier)
         classifier = _build_qK_hyperplane_classifier(grh)

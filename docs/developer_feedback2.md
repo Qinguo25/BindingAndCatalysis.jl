@@ -53,9 +53,9 @@ constraints.  There are two concrete reasons:
   the old analysis used named biological identified-parameter coordinates, for
   example one shared degradation coordinate copied into several original rate
   positions;
-- `multistability_profile.R_atleast_2` samples membership in the full restricted
-  inequalities, including offsets `C0`, while the old R-index stripped offsets
-  and measured the recession cone.
+- `get(profile.R_atleast_stable_count, 2, 0.0)` is the at-least-two-regime
+  estimate; its meaning is selected explicitly by `profile.mode` and recorded
+  by `profile.denominator`.
 
 The main development request is therefore not more regime enumeration.  That
 part works.  The remaining request is an explicit constrained asymptotic
@@ -65,9 +65,9 @@ multistability estimator that:
   versus `basis=:identified_parameters`;
 - preserves biological reduced-coordinate labels when parameters are grouped;
 - exposes `mode=:asymptotic_R` separately from finite-region sampling;
-- returns the old report-style summary fields: `full_dim_regimes`,
-  `stable_full_dim_regimes`, `pair_intersections`, and conditional asymptotic
-  `R_multistability`.
+- returns the report-style regime counts together with
+  `R_exact_stable_count`, `R_atleast_stable_count`, and
+  `stderr_atleast_stable_count`.
 
 ## Implementation Response, 2026-06-08
 
@@ -130,10 +130,10 @@ Implemented return shape for constrained multistability:
 ```julia
 profile = multistability_profile(model; constraints, samples=...)
 
-profile.R_atleast_1
-profile.R_atleast_2
-profile.R_atleast_3
-profile.max_hit_count
+profile.stable_count_histogram
+profile.R_exact_stable_count
+profile.R_atleast_stable_count
+profile.max_stable_count
 profile.combination_counts
 profile.pair_table
 profile.denominator
@@ -168,7 +168,7 @@ especially for equality-heavy constrained families.  The table below used 50,000
 samples per scenario, so small differences are Monte Carlo noise; large
 differences are semantic.
 
-| scenario | previous R-index | current `R_atleast_2` | comment |
+| scenario | previous R-index | finite-region $R_{\ge 2}$ | comment |
 | --- | ---: | ---: | --- |
 | monomer unconstrained | 0.02762 | 0.02714 | matches within sampling error |
 | monomer paired loss | 0.03886 | 0.03818 | close |
@@ -244,7 +244,7 @@ checks membership using the full restricted regime inequalities, including
 `C0`.  In many scenarios these agree, but not always.  For example, in the
 50,000-sample reproduction test, monomer fully symmetric gave about `0.36376`
 when I sampled the stable-pair recession cones but only `0.25036` from
-`multistability_profile.R_atleast_2`.
+`get(profile.R_atleast_stable_count, 2, 0.0)`.
 
 This should be made explicit in the API.  Possible fixes:
 
@@ -255,9 +255,9 @@ multistability_profile(model; constraints, mode=:finite_region)
 multistability_profile(model; constraints, mode=:asymptotic_R)
 ```
 
-At minimum, the user guide should state that the current `R_atleast_2` is not
-necessarily the same as the asymptotic R-index used by `calc_volume(...;
-asymptotic=true)` or by the earlier toggle-switch report.
+The user guide distinguishes this finite-region value from the asymptotic
+R-index through `mode` and `denominator`; downstream reports should retain both
+fields.
 
 ### Usability feedback from the reproduction
 
@@ -276,9 +276,8 @@ The remaining uncomfortable parts are:
   labels unless the user separately tracks the equality groups;
 - the default equality basis silently changes the measure compared with the
   intuitive "merge these parameters into one biological parameter" workflow;
-- `multistability_profile.R_atleast_2` sounds like the requested R-index, but it
-  may be a finite-offset sampling probability instead of the asymptotic cone
-  volume;
+- `profile.mode` and `profile.denominator` must be carried into reports so the
+  finite-region probability and asymptotic cone R-index remain distinct;
 - there is still no direct one-call replacement for the earlier report's exact
   summary table: `full_dim_regimes`, `stable_full_dim_regimes`,
   `pair_intersections`, and asymptotic conditional R-index.
@@ -349,8 +348,9 @@ mode=:asymptotic_R
   - `full_dim_regimes`,
   - `stable_full_dim_regimes`,
   - `pair_intersections`,
-  - `R_multistability`,
-  - `stderr`,
+  - `R_exact_stable_count`,
+  - `R_atleast_stable_count`,
+  - `stderr_atleast_stable_count`,
   - `samples`,
   - `basis_kind`,
   - `denominator`,
@@ -426,10 +426,10 @@ full-dimensional regimes were singular.  Examples from the retest:
 | dimer fully symmetric | 38 | 35 | matches | matches |
 | dimer fully symmetric + `K_i<Kp_i` | 35 | 32 | matches | matches |
 
-This does not affect `R_multistability`, because the stable nonsingular regimes
-and pair intersections still match.  But for a report-oriented wrapper intended
-to reproduce the earlier table, the filters used for summary columns should be
-separated:
+This does not affect the values in `R_atleast_stable_count`, because the stable
+nonsingular regimes and pair intersections still match.  But for a
+report-oriented wrapper intended to reproduce the earlier table, the filters
+used for summary columns should be separated:
 
 ```julia
 full_dim_regimes = count all feasible full-dimensional restricted regimes
@@ -439,8 +439,8 @@ pair_intersections = stable nonsingular full-dimensional pair intersections
 
 This has been patched: `full_dim_regimes` now counts all feasible
 full-dimensional restricted BNC regimes, while `stable_full_dim_regimes`,
-`pair_intersections`, and `R_multistability` continue to use the candidate
-filter controlled by `singular=false` by default.
+`pair_intersections`, and the stable-count R-index fields continue to use the
+candidate filter controlled by `singular=false` by default.
 
 Second, passing `map=Dict{Symbol,Symbol}()` marked the chart as
 `basis_kind=:identified_parameters`, even though the map was empty and the chart
@@ -703,14 +703,16 @@ summary = multistability_R_index(
 
 Expected fields:
 
-- `ambient_dim`;
-- `reduced_parameters`;
+- `reduced_symbols`;
 - `total_bnc_regimes`;
 - `full_dim_regimes`;
 - `stable_full_dim_regimes`;
-- `multistable_pair_intersections`;
-- `R_multistability`;
-- `stderr`;
+- `pair_intersections`;
+- `stable_count_histogram`;
+- `R_exact_stable_count`;
+- `R_atleast_stable_count`;
+- `stderr_atleast_stable_count`;
+- `max_stable_count`;
 - `samples`;
 - `notes`;
 - `pair_table`.
