@@ -106,6 +106,14 @@ struct HyperplaneKey{C}
     c0::C
 end
 
+function Base.:(==)(a::HyperplaneKey, b::HyperplaneKey)
+    return a.nzind == b.nzind && a.nzval == b.nzval && a.c0 == b.c0
+end
+function Base.isequal(a::HyperplaneKey, b::HyperplaneKey)
+    return isequal(a.nzind, b.nzind) && isequal(a.nzval, b.nzval) && isequal(a.c0, b.c0)
+end
+Base.hash(key::HyperplaneKey, h::UInt) = hash((key.nzind, key.nzval, key.c0), h)
+
 function get_hp_key(c::SparseVector{<:Rational}, c0)
     return HyperplaneKey(Tuple(c.nzind), Tuple(c.nzval), c0)
 end

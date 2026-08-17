@@ -558,6 +558,20 @@ Maintenance rules:
   symbols, regime permutations, or path vectors bypasses cache invalidation;
   catalysis changes must use `update_catalysis!`.
 
+## Exact Numeric and Hyperplane Identity
+
+`ExactLogExpr` stores a rational constant and a normalized, immutable map from
+prime factors to rational coefficients. Construction removes zero terms and
+copies caller-owned dictionaries into a canonical key order. Its value
+equality, `isequal`, and hash therefore remain stable for the object's entire
+lifetime.
+
+`RegimeToHyperplanePool` deduplicates hyperplanes with a structured
+`HyperplaneKey` containing sparse indices, rational coefficients, and the
+`ExactLogExpr` intercept. The key has explicit value equality, `isequal`, and
+hash semantics; independently constructed but identical hyperplanes receive
+the same pool identifier.
+
 ## Regime Graphs
 
 `RegimeGraph` stores adjacency between regimes. Each node is a regime; each edge

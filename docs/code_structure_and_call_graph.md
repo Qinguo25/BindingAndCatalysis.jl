@@ -644,10 +644,10 @@ Monte Carlo volume and numerical dynamics
 
 这是可接受的工程边界，但 tolerance 与“exact identity”不应混在同一层解释。
 
-`ExactLogExpr` 自身是 shallow immutable：其内部 coefficient storage 是公开 mutable
-`Dict`，见 [`src/ExactTypes.jl`](../src/ExactTypes.jl#L31-L47)。当它参与
-`HyperplaneKey` hashing 时，外部修改该 Dict 可能破坏 key/hash 稳定性。长期应采用真正
-冻结的规范化表示，或至少不暴露可变 storage。
+`ExactLogExpr` 将 coefficient storage 规范化为不可变映射，构造时复制输入并删除零项；
+它的 value equality、`isequal` 和 hash 在对象生命周期内保持稳定。`HyperplaneKey` 同样
+按 sparse indices、rational coefficients 和 exact intercept 定义结构化的相等与 hash，
+因此独立构造的相同超平面会在 `RegimeToHyperplanePool` 中复用同一个 id。
 
 ## 9. 公共 API、dispatch 与 compatibility
 
@@ -716,39 +716,34 @@ wrapper。旧关键词 `condition_solver`、`recalculate`、`rel_tol`、`abs_tol
 
 ## 11. 已确认问题与维护风险
 
-### 11.1 应优先修复
+### 中优先级架构债务
 
-1. **`ExactLogExpr` 的 hash 内容可变。**
-   应冻结 coefficient representation，避免 hyperplane dictionary key 被破坏。
-
-### 11.2 中优先级架构债务
-
-5. **BNC graph 的 API 名字、成本与缓存语义不匹配。**
+1. **BNC graph 的 API 名字、成本与缓存语义不匹配。**
    需要明确二选一：增加带失效规则的 graph cache，或将 API 改成不暗示 memoization 的
    build 名字。带非平凡 `F/F0` 的 $O(V^2)$ 路径尤其需要这一决定。
 
-6. **lazy cache 的线程安全策略不统一。**
+2. **lazy cache 的线程安全策略不统一。**
    classifier、regime conditions、stability、volume、SIMO 部分 cache 都没有统一锁。
    与其给每个字段随意加锁，更适合先声明“首次 materialization 串行、冻结后只读并发”
    或集中式 cache policy。
 
-7. **graph chart schema 是运行时约定。**
+3. **graph chart schema 是运行时约定。**
    可用 typed chart record 封装 `space symbol + hyperplane pool + edge slot`，减少
    `Vector{Any}`、裸整数 slot 和 magic `(0,0)` 的组合风险。
 
-8. **`Bnc` 的 mutable input 与 cache ownership 混合。**
+4. **`Bnc` 的 mutable input 与 cache ownership 混合。**
    中期可以把 immutable model specification、compiled regime complex、runtime cache
    分离；在此之前至少明确 freeze contract 和正式 setter/invalidator。
 
-9. **多义 generic 与 legacy surface 仍然很宽。**
+5. **多义 generic 与 legacy surface 仍然很宽。**
    新内部代码应使用 chart-specific、type-specific API，不继续扩大 `old_api.jl` 的
    fallback 方法表。
 
-10. **可视化 extension 动态注入父模块。**
+6. **可视化 extension 动态注入父模块。**
     `Core.eval` 加 `Base.include(parent_module, ...)` 使方法来源和预编译更难分析。它不是
     当前核心算法 blocker，但未来整理 extension 时应把实现留在 extension namespace。
 
-### 11.3 当前不建议增加的功能
+### 当前不建议增加的功能
 
 - 不恢复已删除的 recursive/suffix SIMO solver；pair-memo DAG 已是唯一生产 backend。
 - 不先创建空的 `Chamber`、`ChamberComplex` 类型。应在 connected-stratum refinement 和
@@ -783,7 +778,7 @@ wrapper。旧关键词 `condition_solver`、`recalculate`、`rel_tol`、`abs_tol
 
 建议的演进顺序是：
 
-1. 先统一模型/graph identity、freeze 和 cache contract；
+1. 维持已经收紧的 identity/freeze contract，并统一其余 cache contract；
 2. 为一般 `FiberChart` 实现真正的坐标变换 seam，让条件统一经过
    `z = chart.section * b + chart.variation.basis * u`（即 $z=Sb+Uu$）一类
    pullback，而不是直接删某个坐标；
@@ -796,25 +791,20 @@ wrapper。旧关键词 `condition_solver`、`recalculate`、`rel_tol`、`abs_tol
 
 ## 13. 建议的清理顺序
 
-### 阶段 A：低风险正确性与契约
-
-- 冻结 `ExactLogExpr` 的 key representation；
-- 为上述行为补针对性回归测试。
-
-### 阶段 B：缓存语义
+### 阶段 A：缓存语义
 
 - 决定 BNC graph 是 cache 还是 pure rebuild，并让名字、字段、文档一致；
 - 明确 classifier、stability、volume、SIMO 的首次 materialization 线程策略；
 - 把 model-freeze 和 cache invalidation contract 写入 public docs。
 
-### 阶段 C：内部结构减耦
+### 阶段 B：内部结构减耦
 
 - 把 `RegimeCore.jl` 按 identity/cache/accessor 拆分；
 - 给 graph chart data 建立 typed schema；
 - 缩小内部代码对多义 generic 和 legacy wrapper 的依赖；
 - 逐步减少 `Bnc` 与 graph 中的 `Any` 字段。
 
-### 阶段 D：一般 fiber，再到二维 chamber
+### 阶段 C：一般 fiber，再到二维 chamber
 
 - 先实现任意 `FiberChart` 的 condition pullback 和验证；
 - 保持 `Axis1DPairMemoBackend` 为专门的一维求解器；

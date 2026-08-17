@@ -6,6 +6,7 @@ import Base:
     *,
     /,
     ==,
+    isequal,
     hash,
     show,
     zero,
@@ -30,7 +31,7 @@ export ExactLogExpr, exact_log10, exact_log10_ratio
 
 struct ExactLogExpr <: Real
     constant::Rational{Int}
-    coeffs::Dict{Int, Rational{Int}}
+    coeffs::Base.ImmutableDict{Int, Rational{Int}}
 
     function ExactLogExpr(
         constant::Rational{Int}=0//1,
@@ -43,7 +44,12 @@ struct ExactLogExpr <: Real
             cleaned[Int(p)] = get(cleaned, Int(p), 0//1) + ci
             iszero(cleaned[Int(p)]) && delete!(cleaned, Int(p))
         end
-        return new(constant, cleaned)
+
+        frozen = Base.ImmutableDict{Int, Rational{Int}}()
+        for p in sort!(collect(keys(cleaned)); rev=true)
+            frozen = Base.ImmutableDict(frozen, p => cleaned[p])
+        end
+        return new(constant, frozen)
     end
 end
 
@@ -134,6 +140,7 @@ promote_rule(::Type{ExactLogExpr}, ::Type{<:AbstractFloat}) = Float64
 ==(a::ExactLogExpr, b::ExactLogExpr) = a.constant == b.constant && a.coeffs == b.coeffs
 ==(a::ExactLogExpr, b::Integer) = a == ExactLogExpr(b)
 ==(a::Integer, b::ExactLogExpr) = ExactLogExpr(a) == b
+isequal(a::ExactLogExpr, b::ExactLogExpr) = a == b
 hash(x::ExactLogExpr, h::UInt) = hash((x.constant, sort!(collect(x.coeffs); by=first)), h)
 
 function Float64(x::ExactLogExpr)
