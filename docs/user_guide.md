@@ -828,9 +828,10 @@ constraints = parameter_constraints(
 )
 ```
 
-Strict inequalities are represented as closed halfspaces for volume/R-index
-calculations.  This does not affect full-dimensional asymptotic volume because
-the boundary has zero measure.
+The `<` and `>` operators supplied to `parameter_constraints` are represented
+as closed user halfspaces for volume/R-index calculations. They are ordinary
+analysis bounds, not selected regime-dominance comparisons, and therefore do
+not participate in the regime strictness test.
 
 Restrict regimes under the constraints:
 
@@ -854,7 +855,54 @@ rr.feasible
 rr.dim
 rr.ambient_dim
 rr.full_dim
+rr.strict_feasible
+rr.strict_asymptotic
+rr.boundary_only
 rr.reason
+```
+
+The existing feasibility and dimension fields retain weak-closure semantics:
+`rr.feasible`, `rr.dim`, `rr.ambient_dim`, and `rr.full_dim` describe the
+intersection of the parent regime closure with the selected parameter chart.
+A closure can remain full-dimensional even when the chart forces one selected
+dominance comparison to be tied everywhere. In that case
+`rr.strict_feasible == false`,
+`rr.strict_asymptotic == false`, and `rr.boundary_only == true`.
+
+Strict dominance is checked after the parameter pullback while preserving the
+provenance of the original binding and catalysis dominance rows. Fixed-point
+and balance equalities, user inequalities, and redundant polyhedral rows are
+not made strict. Finite feasibility requires one point where every selected
+dominance margin is positive. Asymptotic feasibility separately requires one
+recession direction where all of those margins grow together.
+`restrict_regime(...; strict_atol=1e-8)` controls the numerical threshold used
+to accept the optimized finite common margin.
+
+`restrict_regimes` keeps weak-closure-compatible defaults. Use strict filters
+when the scientific question concerns open dominance cells:
+
+```julia
+weak_closures = restrict_regimes(
+    get_bnc_regimes(model),
+    constraints;
+    full_dim = true,
+    strict_feasible = nothing,
+    strict_asymptotic = nothing,
+)
+
+finite_strict_cells = restrict_regimes(
+    get_bnc_regimes(model),
+    constraints;
+    full_dim = true,
+    strict_feasible = true,
+)
+
+asymptotic_strict_cells = restrict_regimes(
+    get_bnc_regimes(model),
+    constraints;
+    full_dim = true,
+    strict_asymptotic = true,
+)
 ```
 
 Find full-dimensional stable pair intersections:
@@ -880,10 +928,12 @@ profile = multistability_profile(
 
 The denominator is the constraint region: sampling first accepts points that
 satisfy `constraints`, then counts how many stable restricted BNC regimes contain
-each accepted point.
+each accepted point. Boundary-only closures are excluded by requiring
+`strict_feasible=true`.
 
 Use `mode=:asymptotic_R` for the asymptotic solid-angle R-index convention. This
-strips offsets and samples recession-cone membership:
+strips offsets, requires `strict_asymptotic=true`, and samples recession-cone
+membership:
 
 ```julia
 profile = multistability_profile(
@@ -905,13 +955,16 @@ summary = multistability_R_index(
 ```
 
 `multistability_R_index` defaults to `mode=:asymptotic_R` and returns
-`full_dim_regimes`, `stable_full_dim_regimes`, `pair_intersections`,
-`stable_count_histogram`, `R_exact_stable_count`, `R_atleast_stable_count`,
+`closure_full_dim_regimes`, `full_dim_regimes`,
+`stable_full_dim_regimes`, `pair_intersections`, `stable_count_histogram`,
+`R_exact_stable_count`, `R_atleast_stable_count`,
 `stderr_atleast_stable_count`, `basis_kind`, and `denominator`.
 
-`full_dim_regimes` is a broad diagnostic count of all feasible full-dimensional
-restricted BNC regimes. The stable candidate counts, pair intersections, and
-stable-count R-index estimates use the candidate filter controlled by
+`closure_full_dim_regimes` is the clearly named diagnostic count of all feasible
+full-dimensional restricted BNC closures. `full_dim_regimes` is retained as a
+backward-compatible alias for the same closure count. The stable candidate
+counts, pair intersections, and stable-count R-index estimates use the
+mode-appropriate strict filter together with the candidate filter controlled by
 `singular`, which defaults to nonsingular regimes.
 
 Empty `map` or `groups` inputs are normalized to the identity chart. This is

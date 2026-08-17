@@ -4,6 +4,10 @@ export parameter_constraints, restrict_polyhedron, restrict_regime, restrict_reg
 export is_full_dimensional, stable_regime_intersections, multistability_profile
 export multistability_R_index
 
+using Clarabel: Clarabel
+using JuMP: JuMP
+import MathOptInterface as MOI
+
 """
     ParameterChart
 
@@ -76,6 +80,12 @@ end
     RestrictedRegime
 
 Diagnostic result for a regime restricted by `ParameterConstraints`.
+
+`feasible`, `dim`, and `full_dim` describe the weak closure obtained by
+intersecting the parent regime closure with the parameter chart.
+`strict_feasible` and `strict_asymptotic` retain the open dominance-cell
+semantics. They are `nothing` only when restricting a raw `Polyhedron`, whose
+rows do not carry dominance provenance.
 """
 struct RestrictedRegime
     regime::Any
@@ -89,7 +99,44 @@ struct RestrictedRegime
     dim::Int
     ambient_dim::Int
     full_dim::Bool
+    strict_feasible::Union{Bool, Nothing}
+    strict_asymptotic::Union{Bool, Nothing}
+    boundary_only::Union{Bool, Nothing}
     reason::Symbol
+end
+
+# Preserve the positional constructor that predates strict-dominance diagnostics.
+function RestrictedRegime(
+    regime,
+    constraints::ParameterConstraints,
+    chart::Symbol,
+    C::Matrix{Float64},
+    C0::Vector{Float64},
+    nullity::Int,
+    poly::Union{Polyhedron, Nothing},
+    feasible::Bool,
+    dim::Int,
+    ambient_dim::Int,
+    full_dim::Bool,
+    reason::Symbol,
+)
+    return RestrictedRegime(
+        regime,
+        constraints,
+        chart,
+        C,
+        C0,
+        nullity,
+        poly,
+        feasible,
+        dim,
+        ambient_dim,
+        full_dim,
+        nothing,
+        nothing,
+        nothing,
+        reason,
+    )
 end
 
 function _has_catalysis(model::Bnc)
@@ -723,13 +770,235 @@ function _pullback_constraints(C, C0, nullity::Integer, constraints::ParameterCo
     )
 end
 
+struct _StrictJointSystem
+    link_state::Matrix{Float64}
+    link_parameter::Matrix{Float64}
+    link_offset::Vector{Float64}
+    nonstrict_parameter::Matrix{Float64}
+    nonstrict_offset::Vector{Float64}
+    dominance_state::Matrix{Float64}
+    dominance_offset::Vector{Float64}
+end
+
+function _strict_joint_system(
+    state_map,
+    state_offset,
+    parameter_map,
+    parameter_offset,
+    dominance_state,
+    dominance_offset,
+    constraints::ParameterConstraints,
+)
+    A = Float64.(Matrix(state_map))
+    A0 = Float64.(vec(state_offset))
+    Z = Float64.(Matrix(parameter_map))
+    Z0 = Float64.(vec(parameter_offset))
+    D = Float64.(Matrix(dominance_state))
+    D0 = Float64.(vec(dominance_offset))
+
+    size(A, 1) == length(A0) ||
+        throw(DimensionMismatch("State-link offsets must match state-link rows."))
+    size(Z, 1) == size(A, 1) ||
+        throw(DimensionMismatch("State and parameter link maps must have the same rows."))
+    size(Z, 1) == length(Z0) ||
+        throw(DimensionMismatch("Parameter-link offsets must match parameter-link rows."))
+    size(Z, 2) == size(constraints.basis, 1) || throw(
+        DimensionMismatch("The parameter-link map does not match the constraint chart.")
+    )
+    size(D, 2) == size(A, 2) ||
+        throw(DimensionMismatch("Dominance rows must use the joint-system state chart."))
+    size(D, 1) == length(D0) ||
+        throw(DimensionMismatch("Dominance offsets must match dominance rows."))
+
+    link_parameter = Z * constraints.basis
+    link_offset = A0 - (Z * constraints.offset + Z0)
+    return _StrictJointSystem(
+        A,
+        link_parameter,
+        link_offset,
+        Matrix{Float64}(constraints.reduced_inequality_C),
+        Float64.(constraints.reduced_inequality_C0),
+        D,
+        D0,
+    )
+end
+
+function _strict_joint_system(
+    rgm::BindRegime, constraints::ParameterConstraints, chart::Symbol
+)
+    chart === :qK ||
+        throw(ArgumentError("Binding strictness is only defined in the `:qK` chart."))
+    state_map, state_offset = get_affine_x2qK(rgm)
+    dominance_state, dominance_offset = get_C_C0_x(rgm)
+    n_parameter = size(state_map, 1)
+    parameter_map = Matrix{Float64}(I, n_parameter, n_parameter)
+    return _strict_joint_system(
+        state_map,
+        state_offset,
+        parameter_map,
+        zeros(n_parameter),
+        dominance_state,
+        dominance_offset,
+        constraints,
+    )
+end
+
+function _strict_joint_system(
+    rgm::BncRegime, constraints::ParameterConstraints, chart::Symbol
+)
+    binding = get_binding_regime(rgm)
+    catalysis = get_catalysis_regime(rgm)
+    C_binding, C0_binding = get_C_C0_xk(binding)
+    C_catalysis, C0_catalysis = get_C_C0_xk(catalysis)
+    dominance_state = vcat(C_binding, C_catalysis)
+    dominance_offset = vcat(C0_binding, C0_catalysis)
+
+    state_map, state_offset, parameter_map, parameter_offset = if chart === :qKk
+        M, M0 = get_affine_xk2qKk(binding)
+        n_parameter = size(M, 1)
+        M, M0, Matrix{Float64}(I, n_parameter, n_parameter), zeros(n_parameter)
+    elseif chart === :wKk
+        M, M0 = get_affine_xk2wKk̃k(rgm)
+        Z, Z0 = get_affine_wKk2wKk̃k(rgm)
+        M, M0, Z, Z0
+    else
+        throw(ArgumentError("BNC strictness is only defined in the `:wKk` and `:qKk` charts."))
+    end
+
+    return _strict_joint_system(
+        state_map,
+        state_offset,
+        parameter_map,
+        parameter_offset,
+        dominance_state,
+        dominance_offset,
+        constraints,
+    )
+end
+
+function _strict_lp_model()
+    optimizer = JuMP.optimizer_with_attributes(Clarabel.Optimizer, "verbose" => false)
+    model = JuMP.Model(optimizer)
+    JuMP.set_silent(model)
+    return model
+end
+
+function _strict_row_expression(coefficients, variables, offset::Real=0.0)
+    expression = JuMP.AffExpr(Float64(offset))
+    for j in eachindex(coefficients)
+        coefficient = Float64(coefficients[j])
+        iszero(coefficient) ||
+            JuMP.add_to_expression!(expression, coefficient, variables[j])
+    end
+    return expression
+end
+
+function _strict_termination_result(model::JuMP.Model)
+    status = JuMP.termination_status(model)
+    if status in (MOI.OPTIMAL, MOI.ALMOST_OPTIMAL)
+        primal_status = JuMP.primal_status(model)
+        primal_status in (MOI.FEASIBLE_POINT, MOI.NEARLY_FEASIBLE_POINT) || throw(
+            ErrorException(
+                "Strict-dominance LP terminated with $status but no feasible primal point (primal status $primal_status).",
+            ),
+        )
+        return true
+    elseif status in (
+        MOI.INFEASIBLE,
+        MOI.ALMOST_INFEASIBLE,
+        MOI.LOCALLY_INFEASIBLE,
+        MOI.INFEASIBLE_OR_UNBOUNDED,
+    )
+        return false
+    end
+    throw(ErrorException("Strict-dominance LP terminated with unexpected status $status."))
+end
+
+function _strict_tolerance(atol::Real)
+    tolerance = Float64(atol)
+    isfinite(tolerance) && tolerance >= 0 ||
+        throw(ArgumentError("strict_atol must be finite and nonnegative."))
+    return tolerance
+end
+
+function _strict_joint_feasible(
+    system::_StrictJointSystem; asymptotic::Bool, atol::Real=1.0e-8
+)
+    tolerance = _strict_tolerance(atol)
+
+    model = _strict_lp_model()
+    n_state = size(system.link_state, 2)
+    n_parameter = size(system.link_parameter, 2)
+    JuMP.@variable(model, state[1:n_state])
+    JuMP.@variable(model, parameter[1:n_parameter])
+
+    for i in axes(system.link_state, 1)
+        offset = asymptotic ? 0.0 : system.link_offset[i]
+        expression = _strict_row_expression(@view(system.link_state[i, :]), state, offset)
+        for j in axes(system.link_parameter, 2)
+            coefficient = system.link_parameter[i, j]
+            iszero(coefficient) ||
+                JuMP.add_to_expression!(expression, -coefficient, parameter[j])
+        end
+        JuMP.@constraint(model, expression == 0)
+    end
+
+    for i in axes(system.nonstrict_parameter, 1)
+        offset = asymptotic ? 0.0 : system.nonstrict_offset[i]
+        expression = _strict_row_expression(
+            @view(system.nonstrict_parameter[i, :]), parameter, offset
+        )
+        JuMP.@constraint(model, expression >= 0)
+    end
+
+    if asymptotic
+        for i in axes(system.dominance_state, 1)
+            expression = _strict_row_expression(@view(system.dominance_state[i, :]), state)
+            JuMP.@constraint(model, expression >= 1)
+        end
+        JuMP.@objective(model, Min, 0)
+        JuMP.optimize!(model)
+        return _strict_termination_result(model)
+    end
+
+    JuMP.@variable(model, 0 <= margin <= 1)
+    for i in axes(system.dominance_state, 1)
+        expression = _strict_row_expression(
+            @view(system.dominance_state[i, :]), state, system.dominance_offset[i]
+        )
+        JuMP.@constraint(model, expression >= margin)
+    end
+    JuMP.@objective(model, Max, margin)
+    JuMP.optimize!(model)
+    _strict_termination_result(model) || return false
+    optimum = JuMP.value(margin)
+    return isfinite(optimum) && optimum > tolerance
+end
+
+function _strict_joint_status(system::_StrictJointSystem; atol::Real=1.0e-8)
+    strict_feasible = _strict_joint_feasible(system; asymptotic=false, atol=atol)
+    strict_asymptotic =
+        strict_feasible && _strict_joint_feasible(system; asymptotic=true, atol=atol)
+    return (; strict_feasible, strict_asymptotic)
+end
+
 function _restriction_result(
-    regime, constraints, chart, C, C0, nullity, poly, reason::Symbol
+    regime,
+    constraints,
+    chart,
+    C,
+    C0,
+    nullity,
+    poly,
+    reason::Symbol;
+    strict_feasible::Union{Bool, Nothing}=nothing,
+    strict_asymptotic::Union{Bool, Nothing}=nothing,
 )
     ambient_dim = size(constraints.basis, 2)
     feasible = !isnothing(poly) && !isempty(poly)
     dim_val = feasible ? dim(poly) : -1
     full_dim = feasible && dim_val == ambient_dim
+    boundary_only = isnothing(strict_feasible) ? nothing : feasible && !strict_feasible
     return RestrictedRegime(
         regime,
         constraints,
@@ -742,6 +1011,9 @@ function _restriction_result(
         dim_val,
         ambient_dim,
         full_dim,
+        strict_feasible,
+        strict_asymptotic,
+        boundary_only,
         reason,
     )
 end
@@ -788,15 +1060,19 @@ function restrict_polyhedron(
 end
 
 """
-    restrict_regime(rgm, constraints; chart=:auto, canonicalize=true)
+    restrict_regime(rgm, constraints; chart=:auto, canonicalize=true, strict_atol=1e-8)
 
-Restrict a binding or BNC regime by analysis-time parameter constraints.
+Restrict a binding or BNC regime by analysis-time parameter constraints. The
+closed polyhedron and dimension fields retain closure semantics. Strict
+dominance is tested in the joint state--parameter system after the parameter
+chart pullback, before projection can erase row provenance.
 """
 function restrict_regime(
     rgm::Union{BindRegime, BncRegime},
     constraints::ParameterConstraints;
     chart::Symbol=:auto,
     canonicalize::Bool=true,
+    strict_atol::Real=1.0e-8,
 )
     resolved_chart = _resolve_constraint_chart(rgm, chart)
     resolved_chart === constraints.chart || throw(
@@ -804,6 +1080,7 @@ function restrict_regime(
             "Regime chart $(repr(resolved_chart)) does not match constraints chart $(repr(constraints.chart)).",
         ),
     )
+    strict_tolerance = _strict_tolerance(strict_atol)
 
     if !constraints.compatible
         C_empty, C0_empty = _empty_constraint_matrix(size(constraints.basis, 2))
@@ -815,16 +1092,35 @@ function restrict_regime(
             C0_empty,
             0,
             nothing,
-            :incompatible_constraints,
+            :incompatible_constraints;
+            strict_feasible=false,
+            strict_asymptotic=false,
         )
     end
 
     C, C0, nlt = _regime_C_C0_nullity(rgm, resolved_chart)
     C_reduced, C0_reduced, nlt_reduced = _pullback_constraints(C, C0, nlt, constraints)
     poly = get_polyhedron(C_reduced, C0_reduced, nlt_reduced; canonicalize=canonicalize)
-    reason = isempty(poly) ? :empty : :ok
+    closure_feasible = !isempty(poly)
+    reason = closure_feasible ? :ok : :empty
+    strict_status = if closure_feasible
+        _strict_joint_status(
+            _strict_joint_system(rgm, constraints, resolved_chart);
+            atol=strict_tolerance,
+        )
+    else
+        (; strict_feasible=false, strict_asymptotic=false)
+    end
     return _restriction_result(
-        rgm, constraints, resolved_chart, C_reduced, C0_reduced, nlt_reduced, poly, reason
+        rgm,
+        constraints,
+        resolved_chart,
+        C_reduced,
+        C0_reduced,
+        nlt_reduced,
+        poly,
+        reason;
+        strict_status...,
     )
 end
 
@@ -843,9 +1139,12 @@ end
 
 """
     restrict_regimes(rgms, constraints; stable=nothing, singular=nothing,
-                     feasible=true, full_dim=true)
+                     feasible=true, full_dim=true, strict_feasible=nothing,
+                     strict_asymptotic=nothing, boundary_only=nothing)
 
-Return restricted regime diagnostics after optional regime-level filters.
+Return restricted regime diagnostics after optional regime-level and restricted
+cell filters. Strict filters default to `nothing`, so callers can continue to
+request weak closures explicitly.
 """
 function restrict_regimes(
     rgms::AbstractVector{<:Union{BindRegime, BncRegime}},
@@ -854,6 +1153,9 @@ function restrict_regimes(
     singular=nothing,
     feasible=true,
     full_dim=true,
+    strict_feasible=nothing,
+    strict_asymptotic=nothing,
+    boundary_only=nothing,
     kwargs...,
 )
     out = RestrictedRegime[]
@@ -862,6 +1164,9 @@ function restrict_regimes(
             continue
         restricted = restrict_regime(rgm, constraints; kwargs...)
         _matches_filter(restricted.full_dim, full_dim) || continue
+        _matches_filter(restricted.strict_feasible, strict_feasible) || continue
+        _matches_filter(restricted.strict_asymptotic, strict_asymptotic) || continue
+        _matches_filter(restricted.boundary_only, boundary_only) || continue
         push!(out, restricted)
     end
     return out
@@ -889,9 +1194,11 @@ function _intersect_restricted(
 end
 
 """
-    stable_regime_intersections(rgms; constraints, full_dim=true)
+    stable_regime_intersections(rgms; constraints, full_dim=true, strict_feasible=true)
 
-Compute pair intersections among stable restricted BNC regimes.
+Compute pair intersections among stable restricted BNC regimes. By default,
+boundary-only closures are excluded from the candidate set. Pass
+`strict_feasible=nothing` to inspect weak-closure intersections.
 """
 function stable_regime_intersections(
     rgms::AbstractVector{<:BncRegime};
@@ -899,6 +1206,8 @@ function stable_regime_intersections(
     full_dim=true,
     singular=false,
     feasible=true,
+    strict_feasible=true,
+    strict_asymptotic=nothing,
     canonicalize::Bool=true,
 )
     restricted = restrict_regimes(
@@ -908,36 +1217,50 @@ function stable_regime_intersections(
         singular=singular,
         feasible=feasible,
         full_dim=true,
+        strict_feasible=strict_feasible,
+        strict_asymptotic=strict_asymptotic,
         canonicalize=canonicalize,
     )
     return stable_regime_intersections(
-        restricted; full_dim=full_dim, canonicalize=canonicalize
+        restricted;
+        full_dim=full_dim,
+        strict_feasible=strict_feasible,
+        strict_asymptotic=strict_asymptotic,
+        canonicalize=canonicalize,
     )
 end
 
 function stable_regime_intersections(
-    restricted::AbstractVector{<:RestrictedRegime}; full_dim=true, canonicalize::Bool=true
+    restricted::AbstractVector{<:RestrictedRegime};
+    full_dim=true,
+    strict_feasible=true,
+    strict_asymptotic=nothing,
+    canonicalize::Bool=true,
 )
+    selected = filter(restricted) do rr
+        _matches_filter(rr.strict_feasible, strict_feasible) &&
+            _matches_filter(rr.strict_asymptotic, strict_asymptotic)
+    end
     rows = NamedTuple[]
-    n = length(restricted)
+    n = length(selected)
     for i in 1:(n - 1)
         for j in (i + 1):n
             poly, dim_val, is_fulldim = _intersect_restricted(
-                restricted[i], restricted[j]; canonicalize=canonicalize
+                selected[i], selected[j]; canonicalize=canonicalize
             )
             _matches_filter(is_fulldim, full_dim) || continue
             push!(
                 rows,
                 (;
-                    regime_i=get_idx(restricted[i].regime),
-                    regime_j=get_idx(restricted[j].regime),
-                    binding_i=get_idx(get_binding_regime(restricted[i].regime)),
-                    binding_j=get_idx(get_binding_regime(restricted[j].regime)),
-                    catalysis_i=get_idx(get_catalysis_regime(restricted[i].regime)),
-                    catalysis_j=get_idx(get_catalysis_regime(restricted[j].regime)),
+                    regime_i=get_idx(selected[i].regime),
+                    regime_j=get_idx(selected[j].regime),
+                    binding_i=get_idx(get_binding_regime(selected[i].regime)),
+                    binding_j=get_idx(get_binding_regime(selected[j].regime)),
+                    catalysis_i=get_idx(get_catalysis_regime(selected[i].regime)),
+                    catalysis_j=get_idx(get_catalysis_regime(selected[j].regime)),
                     poly=poly,
                     dim=dim_val,
-                    ambient_dim=restricted[i].ambient_dim,
+                    ambient_dim=selected[i].ambient_dim,
                     full_dim=is_fulldim,
                 ),
             )
@@ -1040,7 +1363,9 @@ each sampled point.
 
 `mode=:finite_region` uses the full restricted inequalities, including offsets.
 `mode=:asymptotic_R` strips offsets and samples the recession-cone membership
-used by asymptotic solid-angle R-index calculations.
+used by asymptotic solid-angle R-index calculations. Finite profiles include
+only `strict_feasible` regimes; asymptotic profiles include only
+`strict_asymptotic` regimes.
 """
 function multistability_profile(
     model::Bnc;
@@ -1053,7 +1378,7 @@ function multistability_profile(
     log_upper=6.0,
     rng_seed::Integer=0x12345678,
     stable::Bool=true,
-    singular::Bool=false,
+    singular::Union{Bool, Nothing}=false,
     feasible::Bool=true,
     full_dim::Bool=true,
     hit_tol::Real=0.0,
@@ -1070,6 +1395,8 @@ function multistability_profile(
         singular=singular,
         feasible=feasible,
         full_dim=full_dim,
+        strict_feasible=asymptotic ? nothing : true,
+        strict_asymptotic=asymptotic ? true : nothing,
     )
 
     rng = Random.MersenneTwister(rng_seed)
@@ -1111,7 +1438,12 @@ function multistability_profile(
     R_exact_stable_count = _exact_stable_count_R(hit_hist, accepted, max_stable_count)
     R_atleast_stable_count = _atleast_stable_count_R(hit_hist, accepted, max_stable_count)
     pairs = if pair_intersections
-        stable_regime_intersections(restricted; full_dim=true)
+        stable_regime_intersections(
+            restricted;
+            full_dim=true,
+            strict_feasible=true,
+            strict_asymptotic=asymptotic ? true : nothing,
+        )
     else
         NamedTuple[]
     end
@@ -1143,10 +1475,11 @@ Report-oriented constrained multistability summary. This wraps
 `multistability_profile` and returns deterministic regime counts together with
 stable-count R-index histograms.
 
-`full_dim_regimes` counts all feasible full-dimensional restricted BNC regimes.
+`closure_full_dim_regimes` counts all feasible full-dimensional restricted BNC
+closures; `full_dim_regimes` is its backward-compatible alias.
 `stable_full_dim_regimes`, pair intersections, and stable-count R-index
 histograms use the candidate filter controlled by `singular`, which defaults to
-nonsingular regimes.
+nonsingular regimes, together with the strict filter selected by `mode`.
 """
 function multistability_R_index(
     model::Bnc;
@@ -1158,7 +1491,7 @@ function multistability_R_index(
     log_lower=-6.0,
     log_upper=6.0,
     rng_seed::Integer=0x12345678,
-    singular::Bool=false,
+    singular::Union{Bool, Nothing}=false,
     feasible::Bool=true,
     full_dim::Bool=true,
     hit_tol::Real=0.0,
@@ -1210,6 +1543,7 @@ function multistability_R_index(
         basis_kind=constraints.basis_kind,
         reduced_symbols=constraints.reduced_symbols,
         total_bnc_regimes=length(regimes),
+        closure_full_dim_regimes=length(full_dim_restricted),
         full_dim_regimes=length(full_dim_restricted),
         stable_full_dim_regimes=length(stable_full_dim_restricted),
         pair_intersections=length(profile.pair_table),

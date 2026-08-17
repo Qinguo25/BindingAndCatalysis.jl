@@ -329,11 +329,12 @@ constrained multistability summaries. This layer does not mutate `Bnc` or
 replace the model's regime caches. A constraint family is passed explicitly to
 restriction, overlap, and sampling functions.
 
-The constrained analysis layer has two central objects:
+The constrained analysis layer has three central objects:
 
 ```julia
 ParameterChart
 ParameterConstraints
+RestrictedRegime
 ```
 
 `ParameterChart` stores the affine relation from reduced analysis coordinates
@@ -353,6 +354,14 @@ available for advanced affine charts.
 chart has been chosen. By default, constraints attached to a `ParameterChart`
 are interpreted in the reduced coordinates. Use `symbols=:original` to write
 constraints in the original chart and pull them back through `F,F0`.
+
+`RestrictedRegime` separates weak-closure geometry from open-cell dominance
+semantics. Its existing `feasible`, `dim`, and `full_dim` fields describe
+$\overline R\cap S$, preserving their original meaning. The fields
+`strict_feasible`, `strict_asymptotic`, and `boundary_only` describe whether the
+selected open dominance cell survives the restricted chart. These fields are
+`nothing` for `restrict_polyhedron`, because an arbitrary polyhedron has no
+dominance-row provenance.
 
 The older matrix constraint convention remains supported: the first `nullity`
 rows are equalities and later rows are inequalities.
@@ -388,6 +397,31 @@ multistability_R_index
 is_full_dimensional
 ```
 
+Strictness is checked after the parameter-chart pullback in a joint
+state--parameter system. Binding `:qK` restrictions use the state variable
+`x`, the dominance rows `C_x*x + C0_x`, and the link
+`get_affine_x2qK(x) = z`. BNC `:qKk` and `:wKk` restrictions use `xk` and the
+original binding/catalysis dominance rows. The `:qKk` link is
+`get_affine_xk2qKk(xk) = z`; the `:wKk` link equates
+`get_affine_xk2wKk̃k(xk)` with `get_affine_wKk2wKk̃k(z)`. This formulation
+also covers singular regimes without reconstructing provenance from projected
+closure rows. Catalysis balance and fixed-point relations enter the `:wKk`
+link; the established `:qKk` contract remains dominance consistency without
+additional catalysis-balance equalities. User inequalities remain non-strict.
+
+Finite strict feasibility maximizes one shared margin `delta` in `[0,1]` over
+all selected dominance rows. Strict asymptotic feasibility is a separate
+homogeneous problem: offsets are removed and every dominance margin must be at
+least one along the same recession direction. Clarabel solves both LPs
+silently; only optimal/near-optimal feasible statuses are accepted, infeasible
+statuses return `false`, and unexpected solver statuses are errors.
+
+`restrict_regimes` keeps closure-compatible defaults: its strict filters are
+`nothing` unless requested. `stable_regime_intersections` excludes
+boundary-only candidates by default. `multistability_profile` uses
+`strict_feasible=true` in `mode=:finite_region` and
+`strict_asymptotic=true` in `mode=:asymptotic_R`.
+
 `multistability_profile` samples the constraint region first, then counts how
 many stable restricted BNC regimes contain each accepted sample. This makes the
 R-index denominator explicit: `denominator=:constraint_region`.
@@ -398,9 +432,10 @@ recession-cone membership, returning `denominator=:constraint_cone`.
 `mode=:asymptotic_R`. It returns deterministic regime counts together with
 `stable_count_histogram`, `R_exact_stable_count`,
 `R_atleast_stable_count`, and `stderr_atleast_stable_count`. Its
-`full_dim_regimes` field is a broad diagnostic count of all feasible
-full-dimensional restricted BNC regimes; stable counts, pair intersections,
-and stable-count R-index fields use the stable and singular filters.
+`closure_full_dim_regimes` field is a broad diagnostic count of all feasible
+full-dimensional restricted BNC closures; `full_dim_regimes` remains its
+backward-compatible alias. Stable counts, pair intersections, and stable-count
+R-index fields also use the mode-appropriate strict filter.
 
 `bnc_regime_diagnostics(model)` reports BNC initialization diagnostics after
 `match_regimes!`, including singular inner-affine propagation inconsistencies.
