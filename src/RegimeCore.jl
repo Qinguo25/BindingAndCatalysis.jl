@@ -380,8 +380,8 @@ end
 # Regime identity helpers: permutations and indices
 #========================================================================================#
 
-get_binding_perm(args...; kwargs...) = get_binding_regime(args...; kwargs...).perm
-get_catalysis_perm(args...; kwargs...) = get_catalysis_regime(args...; kwargs...).perm
+get_binding_perm(args...; kwargs...) = copy(get_binding_regime(args...; kwargs...).perm)
+get_catalysis_perm(args...; kwargs...) = copy(get_catalysis_regime(args...; kwargs...).perm)
 get_bnc_perm(args...; kwargs...) = get_bnc_regime(args...; kwargs...).perm
 get_steady_state_perm(args...; kwargs...) = get_fixed_point_perm(args...; kwargs...)
 
@@ -392,7 +392,7 @@ function get_binding_perm(Bnc::Bnc, perm::Union{AbstractVector, Tuple}; check::B
     return Int.(collect(key))
 end
 function get_binding_perm(Bnc::Bnc, idx::Integer; kwargs...)
-    return (ensure_binding_regimes!(Bnc); _bind_regimes_data(Bnc)[idx].perm)
+    return (ensure_binding_regimes!(Bnc); copy(_bind_regimes_data(Bnc)[idx].perm))
 end
 get_bind_perm(args...; kwargs...) = get_binding_perm(args...; kwargs...)
 
@@ -406,7 +406,9 @@ function get_catalysis_perm(
     return Int.(collect(perm))
 end
 function get_catalysis_perm(model::CatalysisData, idx::Integer; kwargs...)
-    return (ensure_catalysis_regimes!(model); _catalysis_regimes_data(model)[idx].perm)
+    return (
+        ensure_catalysis_regimes!(model); copy(_catalysis_regimes_data(model)[idx].perm)
+    )
 end
 
 get_binding_index(args...; kwargs...) = get_binding_regime(args...; kwargs...).idx

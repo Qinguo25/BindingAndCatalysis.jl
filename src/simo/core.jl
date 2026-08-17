@@ -296,7 +296,7 @@ end
 
 function get_path(grh::SIMOPaths, pth_idx::Integer; return_idx::Bool=false)
     rgm_idxs = grh.rgm_paths[pth_idx]
-    return return_idx ? rgm_idxs : get_perm.(Ref(get_binding_network(grh)), rgm_idxs)
+    return return_idx ? copy(rgm_idxs) : get_perm.(Ref(get_binding_network(grh)), rgm_idxs)
 end
 
 function get_path(grh::SIMOPaths, pth::AbstractVector; return_idx::Bool=false)

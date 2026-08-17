@@ -207,7 +207,7 @@ catalysis 后的幂等语义，调用方不应假定它是对原始 binding basi
 
 `Regimes` 本身是 immutable wrapper，但内部 `Dict`、array 和 regime 都是 mutable。
 `BncRegime` 没有真实的 `network`、`idx` 或 `perm` 字段；`.perm` 由 `getproperty`
-动态合成为 `(binding_perm, catalysis_perm)`。
+动态合成为 `(binding_perm, catalysis_perm)`，其中两个 vector 都是 identity snapshots。
 
 ### 3.5 graph 数据结构
 
@@ -307,10 +307,10 @@ regimes_perm_dict[Tuple(regime.perm)] == regime.idx
   重建后可比较的语义标签；
 - graph node ID 使用全局 catalog index，不能换成过滤后的局部位置。
 
-当前 getter 可直接返回内部 mutable `Vector`，例如
-[`get_binding_perm`](../src/RegimeCore.jl#L387-L413)。调用方原地修改该 vector 会导致
-regime 内容与 tuple dictionary、graph 和 affine cache 不一致。SIMO 的
-[`get_path(...; return_idx=true)`](../src/simo/core.jl#L297-L305) 也有相同问题。
+Public `get_*_perm`/`get_perm` getter 返回 vector snapshot；BNC 合成 perm 的两个分量、
+neighbor perms、assignment 结果和 SIMO path/permutation 结果也沿同一边界复制。调用方
+修改返回值不会改变 catalog 或 path cache。Regime 的 `.perm` field 和
+`SIMOPaths.rgm_paths` 仍是内部 mutable storage，直接字段修改不属于受支持的 API。
 
 ### 4.3 BNC Cartesian index
 
@@ -707,7 +707,6 @@ wrapper。旧关键词 `condition_solver`、`recalculate`、`rel_tol`、`abs_tol
 - 同一个 `SIMOPaths` 实例的并发 cache 行为没有测试；
 - visualization 默认关闭，只有环境开关启用时才运行；
 - BNC graph 有 edge-count fixture，但没有测试重复调用必然重建的成本/对象语义；
-- mutable identity getter 被修改后的失败模式没有保护性测试；
 - qK assignment 全部 condition 失败时静默 best-fit 的产品语义没有单独测试；
 - `update_catalysis!` 重复调用/替换后的 basis 与完整 cache invalidation 没有测试；
 - canonical empty 与 `nothing`/unsupported chart 的语义边界缺少直接测试；
@@ -719,11 +718,7 @@ wrapper。旧关键词 `condition_solver`、`recalculate`、`rel_tol`、`abs_tol
 
 ### 11.1 应优先修复
 
-1. **identity getter 暴露内部 mutable vector。**
-   `perm` 或 path 被外部修改后，dictionary、graph 和 cache 不会同步。短期返回 copy 或
-   tuple；长期把 identity storage 改成 immutable value。
-
-2. **`ExactLogExpr` 的 hash 内容可变。**
+1. **`ExactLogExpr` 的 hash 内容可变。**
    应冻结 coefficient representation，避免 hyperplane dictionary key 被破坏。
 
 ### 11.2 中优先级架构债务
@@ -803,7 +798,6 @@ wrapper。旧关键词 `condition_solver`、`recalculate`、`rel_tol`、`abs_tol
 
 ### 阶段 A：低风险正确性与契约
 
-- identity/path getter 返回 immutable snapshot；
 - 冻结 `ExactLogExpr` 的 key representation；
 - 为上述行为补针对性回归测试。
 

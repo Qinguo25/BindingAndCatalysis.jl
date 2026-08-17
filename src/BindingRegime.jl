@@ -455,7 +455,7 @@ function get_neighbors(args...; return_idx::Bool=false, kwargs...)
     rgms = regime_data[idx]
     idx = get_indices(rgms; kwargs...)
     sort!(idx)
-    return return_idx ? idx : getfield.(regime_data[idx], :perm)
+    return return_idx ? idx : [copy(getfield(rgm, :perm)) for rgm in regime_data[idx]]
 end
 
 #-------------------------------------------------------------

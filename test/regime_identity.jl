@@ -26,12 +26,40 @@
 
     stored_perm = get_binding_regime(model, binding_idx).perm
     original_perm = copy(stored_perm)
-    try
-        stored_perm[1] += 10_000
+    binding_snapshots = (
+        get_binding_perm(model, binding_idx),
+        get_binding_perm(get_binding_regime(model, binding_idx)),
+        get_perm(model, binding_idx),
+        get_perm(get_binding_regime(model, binding_idx)),
+        get_binding_perms(model)[binding_idx],
+    )
+    for snapshot in binding_snapshots
+        @test snapshot == original_perm
+        @test snapshot !== stored_perm
+        snapshot[1] += 10_000
+        @test stored_perm == original_perm
         @test binding_dict[Tuple(original_perm)] == binding_idx
-    finally
-        copyto!(stored_perm, original_perm)
     end
+
+    neighbor_perms = get_neighbors(model, binding_idx)
+    @test !isempty(neighbor_perms)
+    neighbor_idx = get_binding_index(model, first(neighbor_perms))
+    stored_neighbor_perm = get_binding_regime(model, neighbor_idx).perm
+    @test first(neighbor_perms) !== stored_neighbor_perm
+    neighbor_original = copy(stored_neighbor_perm)
+    first(neighbor_perms)[1] += 10_000
+    @test stored_neighbor_perm == neighbor_original
+
+    assigned_idx = assign_regime_x(
+        model, ones(model.n); asymptotic_only=false, return_idx=true
+    )
+    assigned_perm = assign_regime_x(model, ones(model.n); asymptotic_only=false)
+    stored_assigned_perm = get_binding_regime(model, assigned_idx).perm
+    assigned_original = copy(stored_assigned_perm)
+    @test assigned_perm == assigned_original
+    @test assigned_perm !== stored_assigned_perm
+    assigned_perm[1] += 10_000
+    @test get_binding_regime(model, assigned_idx).perm == assigned_original
 
     catalysis = get_catalysis_network(model)
     catalysis_dict = get_catalysis_regimes_dict(catalysis)
@@ -45,6 +73,39 @@
         get_catalysis_regime(catalysis, catalysis_idx)
     @test have_perm(catalysis, catalysis_key)
 
+    stored_catalysis_perm = get_catalysis_regime(catalysis, catalysis_idx).perm
+    catalysis_original = copy(stored_catalysis_perm)
+    catalysis_snapshots = (
+        get_catalysis_perm(catalysis, catalysis_idx),
+        get_catalysis_perm(get_catalysis_regime(catalysis, catalysis_idx)),
+        get_perm(catalysis, catalysis_idx),
+        get_perm(get_catalysis_regime(catalysis, catalysis_idx)),
+        get_catalysis_perms(catalysis)[catalysis_idx],
+    )
+    for snapshot in catalysis_snapshots
+        @test snapshot == catalysis_original
+        @test snapshot !== stored_catalysis_perm
+        snapshot[1] += 10_000
+        @test stored_catalysis_perm == catalysis_original
+        @test catalysis_dict[Tuple(catalysis_original)] == catalysis_idx
+    end
+
+    bnc_regime = first(get_bnc_regimes(model))
+    binding_snapshot, catalysis_snapshot = get_perm(bnc_regime)
+    @test binding_snapshot !== bnc_regime.bind_rgm.perm
+    @test catalysis_snapshot !== bnc_regime.catalysis_rgm.perm
+    collection_binding_snapshot, collection_catalysis_snapshot = first(get_bnc_perms(model))
+    @test collection_binding_snapshot !== bnc_regime.bind_rgm.perm
+    @test collection_catalysis_snapshot !== bnc_regime.catalysis_rgm.perm
+    binding_snapshot[1] += 10_000
+    catalysis_snapshot[1] += 10_000
+    @test bnc_regime.bind_rgm.perm == get_binding_perm(model, bnc_regime.bind_rgm.idx)
+    @test bnc_regime.catalysis_rgm.perm ==
+        get_catalysis_perm(catalysis, bnc_regime.catalysis_rgm.idx)
+
+    _, steady_catalysis_snapshot = get_steady_state_perm(bnc_regime)
+    @test steady_catalysis_snapshot !== bnc_regime.catalysis_rgm.perm
+
     paths = SIMOPaths(minimal_model(), 1)
     path_dict = BindingAndCatalysis._ensure_paths_dict!(paths)
     path = paths.rgm_paths[1]
@@ -57,11 +118,21 @@
     @test get_idx(paths, path_key) == path_dict[path_key]
     @test get_path(paths, path_key; return_idx=true) == path_copy
 
-    try
-        path[1] += 10_000
-        @test path_dict[path_key] == 1
-    finally
-        copyto!(path, path_copy)
+    returned_path = get_path(paths, 1; return_idx=true)
+    @test returned_path == path_copy
+    @test returned_path !== path
+    returned_path[1] += 10_000
+    @test path == path_copy
+    @test path_dict[path_key] == 1
+
+    returned_perm_path = get_path(paths, 1)
+    for (snapshot, regime_idx) in zip(returned_perm_path, path)
+        stored_path_perm = get_binding_regime(paths.bn, regime_idx).perm
+        @test snapshot == stored_path_perm
+        @test snapshot !== stored_path_perm
+        original = copy(stored_path_perm)
+        snapshot[1] += 10_000
+        @test stored_path_perm == original
     end
 end
 

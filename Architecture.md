@@ -88,6 +88,9 @@ Regimes(regimes_perm_dict, regimes_data)
 - `regimes_perm_dict` maps an immutable tuple representation of a permutation
   to its index. Public selectors still accept vector permutations, while tuple
   keys returned by the dictionary can be passed back to the same selectors.
+- Public `get_*_perm`/`get_perm` accessors return vector snapshots, including
+  the two vectors synthesized for `BncRegime.perm`. Mutating a returned
+  identity therefore does not change the regime catalog.
 - `vertices_data` and `vertices_perm_dict` remain readable as legacy property
   aliases.
 
@@ -803,6 +806,8 @@ errors that point to `condition_method=:pair_memo_dag`.
 
 The exported `get_sources(paths)` and `get_sinks(paths)` accessors return
 sorted copies, preserving the former one-dimensional facade contract.
+`get_path(paths, index; return_idx=true)` likewise returns an index-vector
+snapshot; default path results contain permutation snapshots.
 
 Each path-feasibility entry is `nothing` until its condition is computed, then
 becomes `true` or `false`. `is_feasible(paths, path)` computes the condition on
