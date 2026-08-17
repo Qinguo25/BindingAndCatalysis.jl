@@ -5,6 +5,11 @@ It is the canonical maintainer-facing architecture reference for the package.
 Every architecture-changing commit must update this file in the same commit;
 future designs belong in `docs/` until their code is actually present.
 
+The detailed source-audit snapshot in
+[`docs/code_structure_and_call_graph.md`](docs/code_structure_and_call_graph.md)
+maps data ownership, call chains, cache boundaries, and test coverage. This
+file remains the canonical description of the current architecture.
+
 ## Overview
 
 `BindingAndCatalysis.jl` analyzes biochemical systems with a fast binding
@@ -16,7 +21,9 @@ equilibrium layer and an optional slower catalysis layer. The central object is
 - model matrices and symbols: `L`, `N`, `x_sym`, `q_sym`, `K_sym`;
 - optional catalysis data attached by `update_catalysis!`;
 - lazily built binding, catalysis, and Bnc-regime caches;
-- regime graphs, compiled classifiers, and numerical integration helpers.
+- cached binding and catalysis regime graphs, compiled classifiers, and
+  numerical integration helpers. Bnc regime graphs are currently rebuilt on
+  every request rather than stored on the model.
 
 At a high level:
 
@@ -61,7 +68,8 @@ Responsibilities:
 - Store sparse `L` and `N` matrices.
 - Store `x_sym`, `q_sym`, `K_sym`, and catalysis-related symbols.
 - Store `catalysis::Union{Nothing,CatalysisData}`.
-- Cache `BindRegimes`, `BncRegimes`, and regime graphs.
+- Cache `BindRegimes`, `BncRegimes`, and the binding regime graph. Attached
+  `CatalysisData` owns the catalysis graph; Bnc regime graphs are ephemeral.
 - Cache numerical integration helpers and low-rank matrix helpers.
 
 Some fields still use legacy names, such as `vertices_graph` and
@@ -124,6 +132,13 @@ The steady-state balance-row count is exposed as
 `balance_equality_count(rgm)`. It is not a matrix-kernel nullity, so
 `get_nullity` is reserved for binding and Bnc regimes.
 
+Attaching catalysis is a model-changing operation: `update_catalysis!` may
+reorder or replace the parent `Bnc.L` rows and `q_sym`, then clears the model's
+binding/Bnc-derived caches. Previously returned regimes, graphs, classifiers,
+and `SIMOPaths` are not generation-checked and must be discarded after this
+update. Repeated attachment/replacement semantics are not currently guaranteed
+by a dedicated regression test.
+
 ### `BncRegime`
 
 `BncRegime` pairs one binding regime with one catalysis regime:
@@ -141,11 +156,25 @@ Key fields:
 - `is_feasible`;
 - `nlt`: Bnc-regime nullity;
 - `H, H0`: regular Bnc-regime affine map from `log(w,K,k)` to `log x`;
-- `C_qKk_cat, C0_qKk_cat`: qKk-space catalysis consistency conditions;
+- `C_qKk_cat, C0_qKk_cat`: qKk-space catalysis dominance consistency
+  conditions; this block intentionally omits flux-balance equalities;
 - `C_wKk, C0_wKk`: wKk-space fixed-point conditions;
 - `H_bd`: matrix used by the stability classifier;
 - `is_stable`: cached stability state: `nothing` means not computed, `true` or
   `false` is a classified result, and `missing` means undetermined.
+
+`BncRegime` has no stored `idx` or `perm` field. Its permutation is a computed
+property, and its cache-local global index is the Cartesian position
+`bind_idx + (cat_idx - 1) * n_bind`. Binding is the fastest-varying index;
+filtering infeasible regimes does not renumber these positions.
+
+`is_feasible` currently records dominance-pair feasibility under the catalysis
+rate-parameter map. With an identity `F/F0` map all Cartesian pairs are marked
+feasible; with a nontrivial map it means that the conditions pass the
+strict-dominance zero-row guard (`C[i, :] == 0` with `C0[i] <= 1e-10` is
+rejected) and that the resulting closed xk polyhedron is full-dimensional. It
+is not a separate numerical test that a wKk fixed point exists at a supplied
+parameter point.
 
 ## Mathematical Layers
 
@@ -332,7 +361,10 @@ equalities, then places every inequality after them. Dependent compatible
 equalities are reduced to an independent set; incompatible equalities produce
 the canonical empty condition $0z-1\geq 0$. Empty polyhedra are ordinary
 infeasible scientific results, while unexpected polyhedral-backend exceptions
-propagate to the caller.
+propagate to the caller. A canonical empty condition is different from
+`nothing`: the former is a computed empty scientific set, while the latter can
+mean unmaterialized data or that a chart/interface representation is not
+available for the current nullity.
 
 Default chart selection:
 
@@ -509,7 +541,16 @@ Maintenance rules:
 - Expensive recomputation should be guarded by `recompute` or explicit function
   calls.
 - Regime objects cache expensive affine and condition fields.
-- Graph and classifier caches live on the model or graph object.
+- The binding graph lives on `Bnc`; the catalysis graph lives on
+  `CatalysisData`; the Bnc graph is not cached. The binding qK classifier lives
+  on its graph object.
+- `Bnc._regimes_affine_lock` protects top-level binding, catalysis, and Bnc
+  regime construction. Regime-level condition, stability, and volume caches do
+  not have a uniform object lock. Concurrent first materialization therefore
+  requires the subsystem-specific contract documented below.
+- A constructed model is treated as frozen. Direct mutation of `N`, `L`,
+  symbols, regime permutations, or path vectors bypasses cache invalidation;
+  catalysis changes must use `update_catalysis!`.
 
 ## Regime Graphs
 
@@ -523,6 +564,15 @@ Common charts:
 - Bnc graph: `:xk`, `:qKk`, `:wKk`.
 
 Callers use Symbol chart names rather than fixed integer slots.
+Chart availability is edge-local: `(0, 0)` in an edge's chart slot means that
+no valid interface representation exists in that chart. For Bnc graphs, xk is
+the authoritative adjacency. A qKk interface can be absent because the
+underlying binding map is singular or lacks a qK interface, and a wKk
+interface can be absent when neither endpoint has nullity at most one.
+Although Bnc `neighbors` are built from xk adjacency, the generic
+`get_neighbor_graph(grh)` prefers qKk for a Bnc graph and therefore omits
+xk-only edges. Use `get_neighbor_graph_xk(grh)` for the complete stored Bnc
+adjacency.
 
 Relevant files:
 
@@ -535,6 +585,12 @@ Relevant files:
 available x- and qK-space interface data. `get_edge(graph, from, to)` reads the
 same graph. Neither API has a `full` mode; supplying the retired keyword raises
 a migration error that tells the caller to remove it.
+
+`get_catalysis_regimes_graph!` caches the catalysis graph on `CatalysisData`.
+`get_bnc_regimes_graph!` is different: it creates and returns a new graph on
+every call. With a nontrivial catalysis `F/F0` map, it builds feasible xk
+polyhedra and tests all candidate node pairs for codimension-one intersection,
+so that branch contains an explicit quadratic pair loop.
 
 ## Compiled Classifiers and Assignment
 
@@ -554,6 +610,12 @@ Assignment flow:
 3. `assign_regime_qK_index` classifies a logqK point.
 4. If the classifier finds no candidate, `_assign_regime_qK_fallback_index`
    falls back to condition checking.
+
+The compiled classifier covers nonsingular binding regimes. If no compiled
+candidate and no condition passes the `record >= -eps` margin test, the current
+public path silently returns the regime with the largest minimum condition
+margin. This is a best-fit assignment, not proof that the point is contained in
+that regime.
 
 `assign_regime_x_index` uses x-space dominance logic. `assign_regime_qK_index`
 with `x=...` first maps through `x2qK`.
@@ -684,6 +746,14 @@ are currently implemented.
 - `OrderedRegimePath` and `ConditionalSliceType`: a one-dimensional slice label
   and its closed existence condition.
 
+This generality is currently a data-model boundary, not a generic computation
+backend. The production solver does not transform arbitrary regime conditions
+through a supplied `FiberChart`; it eliminates the single coordinate recorded
+by `change_qK_idx` directly.
+`VariationSubspace` and `FiberChart` are shallow immutable records containing
+mutable matrices; their `basis`, `quotient_map`, and `section` must be treated
+as frozen after validation.
+
 Exact chamber and chamber-complex records are deliberately not part of the
 current API. They will be introduced together with connected-stratum and
 verified-adjacency algorithms, rather than as unpopulated placeholder types.
@@ -705,6 +775,10 @@ Caller-supplied `rgm_paths` are normalized without mutating the input and must
 follow real, correctly oriented edges of the selected SIMO graph. Empty paths,
 repeated or out-of-range regimes, fabricated interfaces, and cyclic path unions
 raise `ArgumentError` before either condition backend runs.
+
+The SIMO DAG is not a complete orientation of the binding x graph. Edges with
+no qK interface, edges skipped by the high-nullity policy, and interfaces whose
+coefficient on the selected coordinate is numerically zero are absent.
 
 For this coordinate-aligned specialization, the quotient chart selects the
 unchanged qK coordinates in their original order. This is the same coordinate
@@ -737,6 +811,11 @@ condition means that the candidate path is feasible. Full-dimensional
 conditions describe generic paths, while lower-dimensional nonempty conditions
 describe boundary-only degeneracies.
 
+Returned SIMO path polyhedra are borrowed mutable cache objects; bulk getters
+copy the outer vector, not each `Polyhedron`. Callers must not apply mutating
+Polyhedra operations to them unless they intentionally accept changing the
+cache.
+
 These path conditions are closed existence sets. They can overlap on
 degenerate boundaries and are not by themselves an exact chamber
 stratification. Connected chamber refinement, discriminant construction, and
@@ -755,7 +834,9 @@ Path conditions are lazy per-object caches and are not automatically
 recomputed. Path-volume caches can be refreshed with `recompute=true`.
 Concurrent calls that mutate caches on the same `SIMOPaths` instance must be
 serialized by the caller; one pair-DAG solve may itself use internal worker
-threads. Separate instances can be solved concurrently.
+threads. Separate instances are safe to solve concurrently when they use
+different `Bnc` models, or when all shared binding qK conditions have already
+been materialized and subsequent access is read-only.
 
 Scalar reaction-order path deduplication is run-length based. Consecutive
 `NaN` values collapse to one explicit singular-segment marker, including at
