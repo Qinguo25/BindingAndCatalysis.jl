@@ -165,6 +165,7 @@ mutable struct SeedAnalysisState
     cache_lock::ReentrantLock
     analyzed::Vector{Threads.Atomic{Int}}
     perm_keys::Vector{Any}
+    entries::Vector{Union{Nothing, NρCacheEntry}}
     perm_defs::Vector{Int}
     total_nullities::Vector{Int}
     statuses::Vector{Int8}
@@ -184,6 +185,7 @@ function SeedAnalysisState(n_vertices::Int, n_components::Int)
         ReentrantLock(),
         [Threads.Atomic{Int}(0) for _ in 1:n_vertices],
         fill(nothing, n_vertices),
+        Vector{Union{Nothing, NρCacheEntry}}(nothing, n_vertices),
         fill(-1, n_vertices),
         fill(-1, n_vertices),
         fill(_SEED_STATUS_UNKNOWN, n_vertices),
@@ -198,9 +200,9 @@ function _store_Nρ_entry_threadsafe!(
     built::NρCacheEntry,
 )
     tkey = Tuple(Int.(key))
-    lock(cache_lock)
-    entry = get!(cache, tkey, built)
-    unlock(cache_lock)
+    entry = lock(cache_lock) do
+        get!(cache, tkey, built)
+    end
     return entry, tkey
 end
 
@@ -215,9 +217,9 @@ function _get_or_build_Nρ_entry_threadsafe!(
 ) where {Tv <: Real}
     tkey = Tuple(Int.(key))
 
-    lock(cache_lock)
-    entry = get(cache, tkey, nothing)
-    unlock(cache_lock)
+    entry = lock(cache_lock) do
+        get(cache, tkey, nothing)
+    end
     !isnothing(entry) && return entry, tkey
 
     built = _factor_Nρ(sparse(N[:, collect(key)]); atol=atol, rtol=rtol, drop_tol=drop_tol)
@@ -226,7 +228,7 @@ end
 
 @inline function _load_seed_analysis(state::SeedAnalysisState, idx::Int)
     key = state.perm_keys[idx]
-    entry = key === nothing ? nothing : get(state.cache, key, nothing)
+    entry = state.entries[idx]
     return state.statuses[idx], state.perm_defs[idx], key, entry
 end
 
@@ -236,10 +238,12 @@ end
     status::Int8,
     pdef::Int,
     stored_key,
+    entry::Union{Nothing, NρCacheEntry},
     total_nullity::Int,
 )
     state.perm_defs[idx] = pdef
     state.perm_keys[idx] = stored_key
+    state.entries[idx] = entry
     state.total_nullities[idx] = total_nullity
     state.statuses[idx] = status
     Threads.atomic_xchg!(state.analyzed[idx], 2)
@@ -328,7 +332,7 @@ function _ensure_seed_analysis!(
         status, pdef, stored_key, total_nullity, entry = _analyze_seed!(
             state, regimes[idx], N; drop_tol=drop_tol
         )
-        _store_seed_analysis!(state, idx, status, pdef, stored_key, total_nullity)
+        _store_seed_analysis!(state, idx, status, pdef, stored_key, entry, total_nullity)
         return status, pdef, stored_key, entry
     end
 

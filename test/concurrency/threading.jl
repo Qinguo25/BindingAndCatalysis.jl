@@ -1,3 +1,34 @@
+@testset "Seed Analysis Publishes Per-Vertex Entries" begin
+    model = minimal_model()
+    find_all_regimes!(model)
+    regimes = get_binding_regimes(model)
+
+    idx = findfirst(eachindex(regimes)) do i
+        _, pdef = BindingAndCatalysis._get_Nρ_key_and_perm_nullity(
+            regimes[i].perm, model.n
+        )
+        return pdef == 0
+    end
+    @test !isnothing(idx)
+
+    state = BindingAndCatalysis.SeedAnalysisState(length(regimes), 1)
+    first_result = BindingAndCatalysis._ensure_seed_analysis!(
+        state, idx, regimes, model.N
+    )
+    second_result = BindingAndCatalysis._ensure_seed_analysis!(
+        state, idx, regimes, model.N
+    )
+
+    @test first_result[1] == BindingAndCatalysis._SEED_STATUS_REGULAR
+    @test first_result[1:3] == second_result[1:3]
+    @test !isnothing(first_result[4])
+    @test !isnothing(second_result[4])
+    @test first_result[4].deficiency == second_result[4].deficiency == 0
+    @test first_result[4].kind == second_result[4].kind
+    @test first_result[4].inv === second_result[4].inv
+    @test !haskey(state.cache, first_result[3])
+end
+
 @testset "Nested Threaded Regime Propagation" begin
     if Threads.nthreads() > 1
         model = sparse_singular_model()

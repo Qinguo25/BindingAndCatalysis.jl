@@ -386,10 +386,9 @@ binding qK conditions。只有使用不同模型，或共享模型已经串行�
 相关 regime/graph/affine cache；重复 attachment 的语义尚未由测试锁定。除此之外，
 公共字段的手工修改没有自动失效机制。
 
-另有一处需要专门核查的线程安全风险：Nρ cache 的插入在锁内完成，但
-[`_load_seed_analysis`](../src/Mathcore/graph_propagate.jl#L227-L230) 无锁读取同一个
-`Dict`。如果其他 worker 同时插入，Julia `Dict` 不提供 concurrent read/write 保证。
-应让 lookup 也走锁，或把已经解析的 `NρCacheEntry` 直接保存到 per-vertex state。
+Affine seed analysis 将每个 vertex 的解析结果发布到独立 `entries` slot；threaded build
+期间共享 Nρ `Dict` 只经加锁 helper 访问。所有 threaded loops 完成后，静止的 cache 才
+写回 `Bnc._vertices_Nρ_inv_dict` 供后续只读使用。
 
 ## 7. 主要调用关系
 
@@ -720,15 +719,11 @@ wrapper。旧关键词 `condition_solver`、`recalculate`、`rel_tol`、`abs_tol
 
 ### 11.1 应优先修复
 
-1. **Nρ seed cache 存在潜在 concurrent Dict read/write。**
-   写入路径加锁，读取路径没有同锁。应先补并发回归测试，再让 lookup 同步或消除共享
-   Dict 的二次 lookup。
-
-2. **identity getter 暴露内部 mutable vector。**
+1. **identity getter 暴露内部 mutable vector。**
    `perm` 或 path 被外部修改后，dictionary、graph 和 cache 不会同步。短期返回 copy 或
    tuple；长期把 identity storage 改成 immutable value。
 
-3. **`ExactLogExpr` 的 hash 内容可变。**
+2. **`ExactLogExpr` 的 hash 内容可变。**
    应冻结 coefficient representation，避免 hyperplane dictionary key 被破坏。
 
 ### 11.2 中优先级架构债务
@@ -808,8 +803,6 @@ wrapper。旧关键词 `condition_solver`、`recalculate`、`rel_tol`、`abs_tol
 
 ### 阶段 A：低风险正确性与契约
 
-- 删除或修复两个 broken private BNC helper；
-- 修复 Nρ cache 的并发读取边界；
 - identity/path getter 返回 immutable snapshot；
 - 冻结 `ExactLogExpr` 的 key representation；
 - 为上述行为补针对性回归测试。

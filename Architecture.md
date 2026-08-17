@@ -548,6 +548,9 @@ Maintenance rules:
   regime construction. Regime-level condition, stability, and volume caches do
   not have a uniform object lock. Concurrent first materialization therefore
   requires the subsystem-specific contract documented below.
+- During threaded affine seed analysis, each vertex publishes its resolved
+  `NρCacheEntry` through a per-vertex slot. The shared Nρ dictionary is accessed
+  only through locked helpers until the threaded build has completed.
 - A constructed model is treated as frozen. Direct mutation of `N`, `L`,
   symbols, regime permutations, or path vectors bypasses cache invalidation;
   catalysis changes must use `update_catalysis!`.
