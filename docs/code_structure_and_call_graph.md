@@ -720,22 +720,15 @@ wrapper。旧关键词 `condition_solver`、`recalculate`、`rel_tol`、`abs_tol
 
 ### 11.1 应优先修复
 
-1. **两个 BNC 私有 helper 读取不存在的真实字段。**
-   [`src/RegimeCore.jl`](../src/RegimeCore.jl#L205-L218) 中
-   `_bnc_regimes_perms` 使用 `getfield(..., :perm)`，
-   `_bnc_regimes_asymptotic_flag` 使用 `getfield(..., :is_asymptotic)`；而
-   `BncRegime` 没有这两个字段。它们当前看起来是死代码，但一旦调用会报错。最小维护
-   方案是删除死 helper；若确有调用需求，则改走正式 accessor 并加测试。
-
-2. **Nρ seed cache 存在潜在 concurrent Dict read/write。**
+1. **Nρ seed cache 存在潜在 concurrent Dict read/write。**
    写入路径加锁，读取路径没有同锁。应先补并发回归测试，再让 lookup 同步或消除共享
    Dict 的二次 lookup。
 
-3. **identity getter 暴露内部 mutable vector。**
+2. **identity getter 暴露内部 mutable vector。**
    `perm` 或 path 被外部修改后，dictionary、graph 和 cache 不会同步。短期返回 copy 或
    tuple；长期把 identity storage 改成 immutable value。
 
-4. **`ExactLogExpr` 的 hash 内容可变。**
+3. **`ExactLogExpr` 的 hash 内容可变。**
    应冻结 coefficient representation，避免 hyperplane dictionary key 被破坏。
 
 ### 11.2 中优先级架构债务

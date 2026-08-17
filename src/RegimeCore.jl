@@ -207,15 +207,11 @@ end
     getfield.(_bind_regimes_data(args...; kwargs...), :perm)
 @inline _catalysis_regimes_perms(args...; kwargs...) =
     getfield.(_catalysis_regimes_data(args...; kwargs...), :perm)
-@inline _bnc_regimes_perms(args...; kwargs...) =
-    getfield.(_bnc_regimes_data(args...; kwargs...), :perm)
 
 @inline _bind_regimes_asymptotic_flag(args...; kwargs...) =
     getfield.(_bind_regimes_data(args...; kwargs...), :is_asymptotic)
 @inline _catalysis_regimes_asymptotic_flag(args...; kwargs...) =
     getfield.(_catalysis_regimes_data(args...; kwargs...), :is_asymptotic)
-@inline _bnc_regimes_asymptotic_flag(args...; kwargs...) =
-    getfield.(_bnc_regimes_data(args...; kwargs...), :is_asymptotic)
 
 function get_binding_perm_dict(args...; kwargs...)
     bn = get_binding_network(args...; kwargs...)
