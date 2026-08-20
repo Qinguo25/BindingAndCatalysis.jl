@@ -1,25 +1,159 @@
 export find_all_regimes
 
+"""
+Helper struct for managing matrix operations.
 
+  - `J[i]`: positive columns in row i
+  - `choice_slot[i][p]`: local slot of column p inside J[i], or 0 if p ∉ J[i]
+  - `choice_map[i][t]`: all oriented inequalities for choosing p = J[i][t]
+  - `hyperplanes`: global deduplicated hyperplane pool
+  - `asymptotic`: all asymptotic regimes
+  - `feasible`: all regimes feasible under the weighted constraints
+"""
+struct MatrixHelper{Tv <: Integer, To <: Real} <: AbstractHelper
+    n::Int # number of columns
+    J::Vector{Vector{Int}} # positive columns idx for each row
 
+    # Fast access from column index to "local slot" in J[i]/ choice_logcoeff[i]
+    choice_slot::Vector{Vector{Int}} # k = choice_slot[i][p] denotes p is the k th positive column in row i, or 0 if p ∉ J[i]
+    choice_logcoeff::Vector{Vector{To}} # choice_logcoeff[i] = [log10(L[i, j]) for j in Ji]
 
+    rowptr::Vector{Int} # rowptr[i] gives the starting index of constraints for row i in the global constraint list
 
+    total_constraints::Int # total number of constraints across all rows
 
-@inline function _reduced_ratio(a::T, b::T) where {T<:Integer}
+    choice_map::Vector{Vector{Vector{Tuple{Int, Int8}}}} # choice_map[i][t] gives the list of oriented inequalities for choosing p = J[i][t]
+    hyperplanes::Vector{Hyperplane_perm{Tv, To}} # global deduplicated hyperplane pool
+end
+
+# MatrixHelper Will act exact as RegimeToHyperplanePool, the only difference is that 
+# you won't need to add new hyperplanes
+
+function _calc_P_P0(
+    perm::Vector{<:Integer}, helper::MatrixHelper{Tv, To}
+) where {Tv <: Integer, To <: Real}
+    d = length(perm)
+    n = helper.n
+    P0 = Vector{To}(undef, d)
+    @inbounds for i in 1:d
+        p = perm[i]
+        t = helper.choice_slot[i][p]
+        P0[i] = helper.choice_logcoeff[i][t]
+    end
+    I = collect(1:d)
+    J = copy(perm)
+    V = ones(Int8, d)
+    P = sparse(I, J, V, d, n)
+    return P, P0
+end
+
+function _calc_C_C0(
+    perm::Vector{<:Integer}, helper::MatrixHelper{Tv, To}
+) where {Tv <: Integer, To <: Real}
+    d = length(perm)
+    m = helper.total_constraints
+    n = helper.n
+
+    # 稀疏矩阵三元组
+    I = Vector{Int}(undef, 2m)
+    J = Vector{Int}(undef, 2m)
+    V = Vector{Int8}(undef, 2m)
+
+    C0 = Vector{To}(undef, m)
+
+    ptr = 1
+    @inbounds for i in 1:d
+        p = perm[i]
+        t = helper.choice_slot[i][p]
+
+        refs = helper.choice_map[i][t]
+        block_start = helper.rowptr[i]
+
+        for s in eachindex(refs)
+            row = block_start + s - 1
+            hid, sign = refs[s]
+            h = helper.hyperplanes[hid]
+
+            if sign == 1
+                I[ptr] = row
+                J[ptr] = h.u
+                V[ptr] = Int8(1)
+                ptr += 1
+                I[ptr] = row
+                J[ptr] = h.v
+                V[ptr] = Int8(-1)
+                ptr += 1
+                C0[row] = h.c0
+            else
+                I[ptr] = row
+                J[ptr] = h.v
+                V[ptr] = Int8(1)
+                ptr += 1
+                I[ptr] = row
+                J[ptr] = h.u
+                V[ptr] = Int8(-1)
+                ptr += 1
+                C0[row] = -h.c0
+            end
+        end
+    end
+
+    C = sparse(I, J, V, m, n)
+    return C, C0
+end
+
+@inline function _calc_perm_nullity(perm)
+    perm_nullity = 0
+    seen = falses(length(perm))
+    @inbounds for p in perm
+        if seen[p]
+            perm_nullity += 1
+        else
+            seen[p] = true
+        end
+    end
+    return perm_nullity
+end
+
+function _perm_process(
+    perm::Vector{<:Integer}, helper::MatrixHelper{Tv, To}
+) where {Tv <: Integer, To <: Real}
+    d = length(helper.J)
+    # n = helper.n
+    P0 = Vector{To}(undef, d)
+    hyperplane_id_signs = Vector{Tuple{Int, Int8}}(undef, helper.total_constraints)
+    # signs = Vector{Int8}(undef, helper.total_constraints)
+
+    @inbounds for i in 1:d
+        p = perm[i]
+        t = helper.choice_slot[i][p]
+        P0[i] = helper.choice_logcoeff[i][t]
+
+        refs = helper.choice_map[i][t]
+        block_start = helper.rowptr[i]
+        for s in eachindex(refs)
+            hyperplane_id_signs[block_start + s - 1] = refs[s]
+        end
+    end
+
+    return P0, hyperplane_id_signs
+end
+
+@inline function _reduced_ratio(a::T, b::T) where {T <: Integer}
     g = gcd(a, b)
     return div(a, g), div(b, g)
 end
 
-function _build_matrix_helper(L::AbstractMatrix{Tv}) where {Tv<:Integer}
+function _build_matrix_helper(L::AbstractMatrix{Tv}) where {Tv <: Integer}
     d, n = size(L)
     J = Vector{Vector{Int}}(undef, d)
     choice_slot = [zeros(Int, n) for _ in 1:d]
-    choice_logcoeff = Vector{Vector{Float64}}(undef, d)
-    choice_map = Vector{Vector{Vector{ChoiceIneq}}}(undef, d)
+    choice_logcoeff = Vector{Vector{ExactLogExpr}}(undef, d)
+    choice_map = Vector{Vector{Vector{Tuple{Int, Int8}}}}(undef, d)
 
     # Global deduplicated hyperplane pool
-    key_to_id = Dict{Tuple{Int,Int,Tv,Tv}, Int}()
-    hyperplanes = Hyperplane_perm{Tv}[]
+    key_to_id = Dict{Tuple{Int, Int, Tv, Tv}, Int}()
+    hyperplanes = Hyperplane_perm{Tv, ExactLogExpr}[]
 
     # First build J / choice_map
     @inbounds for i in 1:d
@@ -33,14 +167,14 @@ function _build_matrix_helper(L::AbstractMatrix{Tv}) where {Tv<:Integer}
         isempty(Ji) && throw(ArgumentError("row $i of L has no positive entry"))
 
         J[i] = Ji
-        choice_logcoeff[i] = [log10(Float64(L[i, j])) for j in Ji]
+        choice_logcoeff[i] = [exact_log10(L[i, j]) for j in Ji]
 
-        row_choices = Vector{Vector{ChoiceIneq}}(undef, length(Ji))
+        row_choices = Vector{Vector{Tuple{Int, Int8}}}(undef, length(Ji))
 
         for (t, p) in pairs(Ji)
             choice_slot[i][p] = t
 
-            refs = Vector{ChoiceIneq}(undef, max(length(Ji) - 1, 0))
+            refs = Vector{Tuple{Int, Int8}}(undef, max(length(Ji) - 1, 0))
             ptr = 1
             Lp = L[i, p]
 
@@ -63,15 +197,15 @@ function _build_matrix_helper(L::AbstractMatrix{Tv}) where {Tv<:Integer}
                 hid = get(key_to_id, key, 0)
 
                 if hid == 0
-                    # crow = sparsevec([u, v], Int8[1, -1], n)
-                    # crow_neg = sparsevec([v, u], Int8[1, -1], n)
-                    c0 = log10(Float64(num)) - log10(Float64(den))
-                    push!(hyperplanes, Hyperplane_perm{Tv}(u, v, num, den, c0))
+                    c0 = exact_log10_ratio(num, den)
+                    push!(
+                        hyperplanes, Hyperplane_perm{Tv, ExactLogExpr}(u, v, num, den, c0)
+                    )
                     hid = length(hyperplanes)
                     key_to_id[key] = hid
                 end
 
-                refs[ptr] = ChoiceIneq(hid,sign)
+                refs[ptr] = (hid, sign)
                 ptr += 1
             end
 
@@ -89,25 +223,24 @@ function _build_matrix_helper(L::AbstractMatrix{Tv}) where {Tv<:Integer}
         rowptr[i + 1] = rowptr[i] + (length(J[i]) - 1)
     end
     total_constraints = rowptr[end] - 1
-    
+
     return MatrixHelper(
-        n, J, choice_slot, choice_logcoeff, rowptr, total_constraints,choice_map,hyperplanes
+        n,
+        J,
+        choice_slot,
+        choice_logcoeff,
+        rowptr,
+        total_constraints,
+        choice_map,
+        hyperplanes,
     )
 end
-
-function sparsevec(hp::Hyperplane_perm{Tv}, n::Int, sign::Int8) where {Tv<:Integer}
-    I = [hp.u, hp.v]
-    J = [1, 1]
-    V = Int8[sign, -sign]
-    return sparse(I, J, V, n, 1)
-end
-
 
 function _enumerate_asymptotic_regimes(helper::MatrixHelper)
     d = length(helper.J)
     n = helper.n
 
-    order = sortperm(helper.J; by = length, rev = true)
+    order = sortperm(helper.J; by=length, rev=true)
 
     # Asymptotic graph: for choosing v in a row, add k -> v for all competitors k != v.
     graph = [Int[] for _ in 1:n]
@@ -144,8 +277,8 @@ function _enumerate_asymptotic_regimes(helper::MatrixHelper)
 
     function dfs(r::Int)
         if r > d
-            push!(regimes,copy(chosen))
-            return
+            push!(regimes, copy(chosen))
+            return nothing
         end
 
         i = order[r]
@@ -185,25 +318,22 @@ end
 # Feasible-regime enumeration
 # ============================================================
 
-function _enumerate_all_regimes(
-    helper::MatrixHelper,
-    eps::Float64 = 1e-9,
-)
+function _enumerate_all_regimes(helper::MatrixHelper, eps::Float64=1e-9)
     d = length(helper.J)
     n = helper.n
-    order = sortperm(helper.J; by = length, rev = true)
+    order = sortperm(helper.J; by=length, rev=true)
 
-    weighted_edges = Vector{Vector{Vector{Tuple{Int,Float64}}}}(undef, d)
+    weighted_edges = Vector{Vector{Vector{Tuple{Int, Float64}}}}(undef, d)
     @inbounds for i in 1:d
-        by_choice = Vector{Vector{Tuple{Int,Float64}}}(undef, length(helper.J[i]))
+        by_choice = Vector{Vector{Tuple{Int, Float64}}}(undef, length(helper.J[i]))
         for t in eachindex(helper.J[i])
             refs = helper.choice_map[i][t]
-            edges = Vector{Tuple{Int,Float64}}(undef, length(refs))
+            edges = Vector{Tuple{Int, Float64}}(undef, length(refs))
             for s in eachindex(refs)
-                ref = refs[s]
-                h = helper.hyperplanes[ref.hid]
-                competitor = ref.sign == 1 ? h.v : h.u
-                oriented_c0 = ref.sign == 1 ? h.c0 : -h.c0
+                hid, sign = refs[s]
+                h = helper.hyperplanes[hid]
+                competitor = sign == 1 ? h.v : h.u
+                oriented_c0 = sign == 1 ? h.c0 : -h.c0
                 edges[s] = (competitor, oriented_c0 - eps)
             end
             by_choice[t] = edges
@@ -211,13 +341,12 @@ function _enumerate_all_regimes(
         weighted_edges[i] = by_choice
     end
 
-    adj = [Vector{Tuple{Int,Float64}}() for _ in 1:n]
+    adj = [Vector{Tuple{Int, Float64}}() for _ in 1:n]
     dag_adj = [Int[] for _ in 1:n]
 
     chosen = Vector{Int}(undef, d)
     regimes = Vector{Int}[]
     asymptotic = Bool[]
-    
 
     stack = Vector{Int}(undef, n)
     visited_stamp = zeros(Int, n)
@@ -293,7 +422,7 @@ function _enumerate_all_regimes(
         if r > d
             push!(regimes, copy(chosen))
             push!(asymptotic, still_acyclic)
-            return
+            return nothing
         end
 
         i = order[r]
@@ -339,113 +468,6 @@ function _enumerate_all_regimes(
     return regimes, asymptotic
 end
 
-
-
-
-function _perm_process(
-    perm::Vector{<:Integer},
-    helper::MatrixHelper{Tv},
-) where {Tv<:Integer}
-    d = length(helper.J)
-    # n = helper.n
-    P0 = Vector{Float64}(undef, d)
-    hyperplane_id_signs = Vector{Tuple{Int,Int8}}(undef, helper.total_constraints)
-    # signs = Vector{Int8}(undef, helper.total_constraints)
-
-    @inbounds for i in 1:d
-        p = perm[i]
-        t = helper.choice_slot[i][p]
-        P0[i] = helper.choice_logcoeff[i][t]
-
-        refs = helper.choice_map[i][t]
-        block_start = helper.rowptr[i]
-        for s in eachindex(refs)
-            hyperplane_id_signs[block_start + s - 1] = (refs[s].hid, refs[s].sign)
-        end
-    end
-
-    return P0, hyperplane_id_signs
-end
-
-
-function _calc_P_P0(perm::Vector{<:Integer},
-    helper::MatrixHelper{Tv},
-) where {Tv<:Integer}
-    d = length(perm)
-    n = helper.n
-    P0 = Vector{Float64}(undef, d)
-    @inbounds for i in 1:d
-        p = perm[i]
-        t = helper.choice_slot[i][p]
-        P0[i] = helper.choice_logcoeff[i][t]
-    end
-    I = collect(1:d)
-    J = copy(perm)
-    V = ones(Int8, d)
-    P = sparse(I, J, V, d, n)
-    return P, P0
-end
-
-function _calc_C_C0(
-    perm::Vector{<:Integer},
-    helper::MatrixHelper{Tv},
-) where {Tv<:Integer}
-    d = length(perm)
-    m = helper.total_constraints
-    n = helper.n
-
-    # 稀疏矩阵三元组
-    I = Vector{Int}(undef, 2m)
-    J = Vector{Int}(undef, 2m)
-    V = Vector{Int8}(undef, 2m)
-
-    C0 = Vector{Float64}(undef, m)
-
-    ptr = 1
-    @inbounds for i in 1:d
-        p = perm[i]
-        t = helper.choice_slot[i][p]
-
-        refs = helper.choice_map[i][t]
-        block_start = helper.rowptr[i]
-
-        for s in eachindex(refs)
-            row = block_start + s - 1
-            ref = refs[s]
-            h = helper.hyperplanes[ref.hid]
-
-            if ref.sign == 1
-                I[ptr] = row; J[ptr] = h.u; V[ptr] = Int8(1);  ptr += 1
-                I[ptr] = row; J[ptr] = h.v; V[ptr] = Int8(-1); ptr += 1
-                C0[row] = h.c0
-            else
-                I[ptr] = row; J[ptr] = h.v; V[ptr] = Int8(1);  ptr += 1
-                I[ptr] = row; J[ptr] = h.u; V[ptr] = Int8(-1); ptr += 1
-                C0[row] = -h.c0
-            end
-        end
-    end
-
-    C = sparse(I, J, V, m, n)
-    return C, C0
-end
-
-@inline function _calc_perm_nullity(perm)
-    perm_nullity = 0
-    seen = falses(length(perm))
-    @inbounds for p in perm
-        if seen[p]
-            perm_nullity += 1
-        else
-            seen[p] = true
-        end
-    end
-    return perm_nullity
-end
-
-
-
-
 # ============================================================
 # Top-level compiler
 # ============================================================
@@ -458,31 +480,30 @@ Compile all regime-related structures from a nonnegative integer matrix `L`.
 
 Returns a `RegimeCatalog` containing:
 
-1. `hyperplanes`:
-   global deduplicated hyperplane pool
+ 1. `hyperplanes`:
+    global deduplicated hyperplane pool
 
-2. `choice_map` + `choice_slot`:
-   from `(i,p)` to the corresponding hyperplanes and orientations
-
-3. `asymptotic`:
-   all regimes whose recession cone is full-dimensional
-
-4. `feasible`:
-   all regimes feasible under the weighted difference constraints
+ 2. `choice_map` + `choice_slot`:
+    from `(i,p)` to the corresponding hyperplanes and orientations
+ 3. `asymptotic`:
+    all regimes whose recession cone is full-dimensional
+ 4. `feasible`:
+    all regimes feasible under the weighted difference constraints
 
 Notes:
-- `dominance_ratio == Inf` means use `eps` directly
-- otherwise, feasible mode uses `eps_eff = log10(dominance_ratio)`
+
+  - `dominance_ratio == Inf` means use `eps` directly
+  - otherwise, feasible mode uses `eps_eff = log10(dominance_ratio)`
 """
 function find_all_regimes(
     L::AbstractMatrix{Tv};
-    eps::Real = 1e-9,
-    dominance_ratio::Real = Inf,
-    enumerate_asymptotic_only::Bool = false,
-) where {Tv<:Integer}
+    eps::Real=1e-9,
+    dominance_ratio::Real=Inf,
+    enumerate_asymptotic_only::Bool=false,
+) where {Tv <: Integer}
     L_helper = _build_matrix_helper(L)
     if enumerate_asymptotic_only
-        perms =  _enumerate_asymptotic_regimes(L_helper)
+        perms = _enumerate_asymptotic_regimes(L_helper)
         asymptotic = [true for _ in perms]
     else
         if dominance_ratio != Inf && dominance_ratio < 1
@@ -492,21 +513,17 @@ function find_all_regimes(
         perms, asymptotic = _enumerate_all_regimes(L_helper, eps_eff)
     end
     return perms, asymptotic
-
 end
-
 
 #=============================================================#
 # Utils
 #==============================================================#
-@inline function choiceineq_between(helper::MatrixHelper, i::Int, j2::Int, j1::Int)
+get_hyperplane(helper::MatrixHelper, idx::Int) = helper.hyperplanes[idx]
+
+# locate (e^j2 - e^j1)^\top z + log10(L[i,j2]/L[i,j1]) > 0 are which hyperplane and its sign.
+@inline function locate_halfspace(helper::MatrixHelper, i::Int, j2::Int, j1::Int)
     tp = helper.choice_slot[i][j2]
     tk = helper.choice_slot[i][j1]
-
-    # tp == 0 && throw(ArgumentError("p=$j2 ∉ J[$i]"))
-    # tk == 0 && throw(ArgumentError("k=$j1 ∉ J[$i]"))
-    # j2 == j1 && throw(ArgumentError("p and k must be different"))
-
     s = tk < tp ? tk : tk - 1
     return helper.choice_map[i][tp][s]
 end
